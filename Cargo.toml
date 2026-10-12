@@ -1,0 +1,29 @@
+[package]
+name = "axiomata-harness"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Axiomata-OS's own agent harness: a lean tool-calling loop over an OpenAI-compatible model API, with guarded file tools. No axiomata-core/Tauri dependency, so it can be lifted out into an app of its own (docs/plans/harness.md)."
+
+[[bin]]
+name = "axh"
+path = "src/bin/axh.rs"
+
+[dependencies]
+axiomata-files = { path = "../axiomata-files" }
+# HTTPS for remote model APIs (OpenRouter); rustls rather than the platform stack, like the rest of the tree would
+# want it — no Security.framework link for a crate meant to stand alone.
+reqwest = { workspace = true, features = ["rustls-tls"] }
+# `signal`: the `axh` binary ends a run cleanly on Ctrl-C.
+tokio = { workspace = true, features = ["signal"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+globset.workspace = true
+chrono.workspace = true
+clap.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+# The fake model server of the tests listens on the loopback.
+tokio = { workspace = true, features = ["net"] }
