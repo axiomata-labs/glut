@@ -714,6 +714,12 @@ pub struct Gate {
     /// would mix their answers.
     asking: tokio::sync::Mutex<()>,
     log: Mutex<Vec<Judgement>>,
+    /// The `allowed-tools` of the command a run was started with (HS4, C3): only the calls these rules name are
+    /// judged as usual, everything else is refused — and such a rule never allows anything by itself. `None` (or an
+    /// empty list) means no narrowing. Set together with [`Gate::restrict_name`], which the refusal names.
+    pub restrict: Option<Vec<Rule>>,
+    /// The name of the command that narrowed this run, without its slash — for the refusal's text.
+    pub restrict_name: Option<String>,
 }
 
 impl Gate {
@@ -724,11 +730,32 @@ impl Gate {
             asker,
             asking: tokio::sync::Mutex::new(()),
             log: Mutex::new(Vec::new()),
+            restrict: None,
+            restrict_name: None,
         }
     }
 
     pub fn mode(&self) -> Mode {
         self.mode
+    }
+
+    /// The mode as the flags and settings spell it (`plan`, `accept_edits`, …).
+    pub fn mode_name(&self) -> &'static str {
+        match self.mode {
+            Mode::Default => "default",
+            Mode::AcceptEdits => "accept_edits",
+            Mode::Plan => "plan",
+            Mode::DontAsk => "dont_ask",
+            Mode::Auto => "auto",
+        }
+    }
+
+    /// The rules this run is judged by, as written — for `/permissions` (HS4).
+    pub fn rules(&self) -> RuleSet {
+        self.rules
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone()
     }
 
     /// Whether a rule refuses or asks about reading `path`: a search leaves such files out of what it shows.
@@ -745,6 +772,30 @@ impl Gate {
         let target = describe(access);
         if *access == Access::Own {
             return Ok(());
+        }
+        // C3: a command's `allowed-tools` only narrows. What it does not name is refused here, before any rule or
+        // mode is even asked; what it does name goes on to the normal judgement below, where such a rule never
+        // allows anything by itself.
+        if let Some(restrict) = self.restrict.as_ref().filter(|rules| !rules.is_empty())
+            && !restrict_allows(restrict, tool, access)
+        {
+            let rules = restrict
+                .iter()
+                .map(Rule::text)
+                .collect::<Vec<_>>()
+                .join(", ");
+            let name = self.restrict_name.as_deref().unwrap_or_default();
+            let reason = format!("the command /{name} allows only: {rules}");
+            self.log
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .push(Judgement {
+                    tool: tool.to_owned(),
+                    target,
+                    allowed: false,
+                    reason: reason.clone(),
+                });
+            return Err(format!("not permitted: {reason}"));
         }
         let said = self
             .rules
@@ -825,16 +876,6 @@ impl Gate {
     /// The judgements since the last call, oldest first.
     pub fn take_log(&self) -> Vec<Judgement> {
         std::mem::take(&mut *self.log.lock().unwrap_or_else(|poison| poison.into_inner()))
-    }
-
-    fn mode_name(&self) -> &'static str {
-        match self.mode {
-            Mode::Default => "default",
-            Mode::AcceptEdits => "accept_edits",
-            Mode::Plan => "plan",
-            Mode::DontAsk => "dont_ask",
-            Mode::Auto => "auto",
-        }
     }
 }
 
@@ -930,6 +971,18 @@ fn describe(access: &Access) -> String {
         Access::Network { host } => host.clone(),
         Access::Own | Access::Other => String::new(),
     }
+}
+
+/// Whether a command's `allowed-tools` rules name this call (HS4, C3): the matching the allow rules get, on a set
+/// with nothing in it but these rules — so they can only ever say "that call is in the list", never allow it. A
+/// compound command is named only when every part of it is, a write only when an `Edit` rule names it too.
+fn restrict_allows(rules: &[Rule], tool: &str, access: &Access) -> bool {
+    let only = RuleSet {
+        allow: rules.to_vec(),
+        ask: Vec::new(),
+        deny: Vec::new(),
+    };
+    matches!(only.verdict(tool, access), Said::Verdict(Verdict::Allow, _))
 }
 
 #[cfg(test)]
@@ -1592,5 +1645,51 @@ mod tests {
         }
         let always = always_rule("network", &host("pypi.org")).unwrap();
         assert!(always.matches_path("network", &host("pypi.org")));
+    }
+
+    /// A command's `allowed-tools` narrows the gate (HS4, C3): what it does not name is refused before any rule or
+    /// mode speaks, what it names is judged as usual — and such a rule never allows anything by itself.
+    #[tokio::test]
+    async fn a_commands_allowed_tools_only_narrows_and_never_allows() {
+        let narrowed = |mode: Mode, restrict: &[&str]| {
+            let mut gate = Gate::new(RuleSet::default(), mode, Arc::new(Nobody));
+            gate.restrict = Some(
+                restrict
+                    .iter()
+                    .map(|text| Rule::parse(text).unwrap())
+                    .collect(),
+            );
+            gate.restrict_name = Some("review".into());
+            gate
+        };
+        let read = Access::Read {
+            path: "src/lib.rs".into(),
+        };
+        let edit = Access::Edit {
+            path: "src/lib.rs".into(),
+        };
+        let git_status = bash("git status");
+
+        let only_read = narrowed(Mode::Default, &["Read"]);
+        assert!(
+            only_read.judge("read_file", &read).await.is_ok(),
+            "a call the command allows is judged as usual"
+        );
+        for (tool, access) in [("bash", &git_status), ("write_file", &edit)] {
+            let refused = only_read.judge(tool, access).await.unwrap_err();
+            assert!(
+                refused.contains("the command /review allows only: Read"),
+                "{refused}"
+            );
+        }
+        assert!(
+            only_read.judge("bash_output", &Access::Own).await.is_ok(),
+            "the run's own state stays always allowed"
+        );
+
+        // A command rule in `allowed-tools` does not free a command from the mode (C3).
+        let plan = narrowed(Mode::Plan, &["Bash(git status:*)"]);
+        let refused = plan.judge("bash", &git_status).await.unwrap_err();
+        assert!(refused.contains("mode plan"), "{refused}");
     }
 }

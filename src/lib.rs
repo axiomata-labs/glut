@@ -8,6 +8,7 @@
 //! in and the instructions come from the caller as plain values, so the harness can later stand on its own. File
 //! access goes through `axiomata-files`' guarded [`axiomata_files::Root`], never through a raw path.
 
+pub mod commands;
 pub mod config;
 pub mod error;
 pub mod event;

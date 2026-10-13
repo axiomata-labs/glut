@@ -11,12 +11,14 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
+use axiomata_harness::commands::{Expanded, PermissionsView, Registry, Source};
 use axiomata_harness::permissions::settings::Trust;
 use axiomata_harness::permissions::{GateOptions, Mode, Nobody, build_gate};
 use axiomata_harness::tools::files::file_tools;
 use axiomata_harness::tools::shell::{ShellOptions, shell_tools};
 use axiomata_harness::{
-    Cancel, Event, EventSink, FinishReason, ModelEndpoint, OpenAiCompat, RunConfig, Toolbox, run,
+    Cancel, Event, EventSink, FinishReason, ModelEndpoint, OpenAiCompat, RunConfig, Toolbox, Usage,
+    run,
 };
 use clap::{Parser, Subcommand};
 
@@ -63,7 +65,8 @@ enum Command {
         /// A rule the run refuses; repeatable.
         #[arg(long)]
         deny: Vec<String>,
-        /// The prompt.
+        /// The prompt — or a slash command (`/review src/`), read from `~/.axh/commands/` and, in a trusted
+        /// folder, the project's `.axh/commands/` (HS4).
         prompt: String,
     },
 }
@@ -127,10 +130,6 @@ async fn main() -> ExitCode {
         api_key: std::env::var(KEY_ENV).ok().filter(|key| !key.is_empty()),
         model,
     };
-    let model = match OpenAiCompat::new(endpoint) {
-        Ok(model) => model,
-        Err(err) => return fail(err.to_string()),
-    };
     let mut tools = Toolbox::new();
     match file_tools(&cwd) {
         Ok(files) => tools.extend(files),
@@ -163,21 +162,74 @@ async fn main() -> ExitCode {
         trusted,
     };
     // Headless: nobody to ask (P6).
-    let sandbox = match build_gate(&home, &cwd, options, Arc::new(Nobody)) {
-        Ok((gate, untrusted, sandbox)) => {
-            if untrusted {
-                eprintln!(
-                    "axh: the project's .axh/ allow rules and mode are left out: this folder is not trusted"
-                );
-            }
-            tools.set_gate(Arc::new(gate));
-            if !sandbox.enabled || !axiomata_harness::sandbox::available() {
-                eprintln!(
-                    "axh: commands run without a sandbox: only the permission rules hold them"
-                );
-            }
-            sandbox
+    let (mut gate, untrusted, sandbox) = match build_gate(&home, &cwd, options, Arc::new(Nobody)) {
+        Ok(parts) => parts,
+        Err(err) => return fail(err.to_string()),
+    };
+    if untrusted {
+        eprintln!(
+            "axh: the project's .axh/ allow rules and mode are left out: this folder is not trusted"
+        );
+    }
+    if !sandbox.enabled || !axiomata_harness::sandbox::available() {
+        eprintln!("axh: commands run without a sandbox: only the permission rules hold them");
+    }
+
+    // Slash commands (HS4), built after the gate with the same home, folder and trust it was built with (C1).
+    let mut registry = match Registry::load(&home, &cwd, trusted) {
+        Ok(registry) => registry,
+        Err(err) => return fail(err.to_string()),
+    };
+    registry.set_permissions(PermissionsView::of(&gate, &sandbox));
+    let mut prompt = prompt;
+    let endpoint = match registry.expand(&prompt) {
+        // An ordinary prompt: no command was named (C6).
+        None => endpoint,
+        Some(Err(message)) => return fail(message),
+        // A built-in is answered without a model: its text is the answer (C5).
+        Some(Ok(Expanded::Builtin { name, text })) => {
+            JsonLines.emit(Event::Command {
+                name,
+                source: Source::Builtin.as_str().to_owned(),
+                prompt_chars: 0,
+            });
+            JsonLines.emit(Event::AssistantText { turn: 0, text });
+            JsonLines.emit(Event::Finished {
+                reason: FinishReason::Answered,
+                turns: 0,
+                usage: Usage::default(),
+            });
+            return ExitCode::SUCCESS;
         }
+        Some(Ok(Expanded::Prompt {
+            name,
+            prompt: expanded,
+            allowed_tools,
+            model,
+        })) => {
+            let source = registry.source(&name).unwrap_or(Source::User);
+            JsonLines.emit(Event::Command {
+                source: source.as_str().to_owned(),
+                name: name.clone(),
+                prompt_chars: expanded.chars().count(),
+            });
+            // C3: the command's tools narrow the gate on top of its rules, never in their place.
+            if !allowed_tools.is_empty() {
+                gate.restrict_name = Some(name);
+                gate.restrict = Some(allowed_tools);
+            }
+            prompt = expanded;
+            match model {
+                Some(model) => ModelEndpoint { model, ..endpoint },
+                None => endpoint,
+            }
+        }
+    };
+    // The gate enters the toolbox only after the command had its say about it (C3).
+    tools.set_gate(Arc::new(gate));
+    // The model is built after the commands: one of them may name its own (C2).
+    let model = match OpenAiCompat::new(endpoint) {
+        Ok(model) => model,
         Err(err) => return fail(err.to_string()),
     };
     // The shell after the gate: the settings that built it also say how the sandbox runs (HS3b).

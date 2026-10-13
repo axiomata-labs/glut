@@ -34,6 +34,14 @@ pub enum Event {
         cwd: String,
         tools: Vec<String>,
     },
+    /// A slash command became the run's prompt (HS4): its name, where the command came from and how many characters
+    /// the prompt it became holds. For a built-in, which is answered without a model, `prompt_chars` is `0` — its
+    /// text never becomes a prompt.
+    Command {
+        name: String,
+        source: String,
+        prompt_chars: usize,
+    },
     /// Text the model wrote, its final answer or a remark beside tool calls.
     AssistantText {
         turn: u32,
@@ -157,6 +165,20 @@ mod tests {
         .unwrap();
         assert_eq!(done["reason"], "max_turns");
         assert_eq!(done["usage"]["input_tokens"], 5);
+    }
+
+    #[test]
+    fn a_command_event_is_a_tagged_line_like_the_others() {
+        let line = serde_json::to_value(Event::Command {
+            name: "review".into(),
+            source: "user".into(),
+            prompt_chars: 12,
+        })
+        .unwrap();
+        assert_eq!(
+            line,
+            json!({"event": "command", "name": "review", "source": "user", "prompt_chars": 12})
+        );
     }
 
     #[test]
