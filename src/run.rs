@@ -50,6 +50,32 @@ impl Cancel {
     }
 }
 
+/// Cancels the run on Ctrl-C, on SIGTERM (a supervisor ending the process) and on SIGHUP (its terminal closed), so the
+/// run still ends with its last event and its toolbox is dropped — which ends every background job of the shell.
+/// For a program that runs the harness as its main work (`axh`, the CLI); call it from inside the tokio runtime.
+pub fn cancel_on_signals(cancel: &Cancel) {
+    use tokio::signal::unix::{SignalKind, signal};
+    let cancel = cancel.clone();
+    tokio::spawn(async move {
+        let (Ok(mut term), Ok(mut hup)) = (
+            signal(SignalKind::terminate()),
+            signal(SignalKind::hangup()),
+        ) else {
+            // Without the handlers the process ends the default way; Ctrl-C alone is still watched.
+            if tokio::signal::ctrl_c().await.is_ok() {
+                cancel.cancel();
+            }
+            return;
+        };
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = term.recv() => {}
+            _ = hup.recv() => {}
+        }
+        cancel.cancel();
+    });
+}
+
 /// How a run ended.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RunOutcome {

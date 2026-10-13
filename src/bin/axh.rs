@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use axiomata_harness::tools::files::file_tools;
+use axiomata_harness::tools::shell::{ShellOptions, shell_tools};
 use axiomata_harness::{
     Cancel, Event, EventSink, FinishReason, ModelEndpoint, OpenAiCompat, RunConfig, Toolbox, run,
 };
@@ -46,6 +47,10 @@ enum Command {
         /// The run's time limit in seconds.
         #[arg(long)]
         timeout_secs: Option<u64>,
+        /// Offer the shell tools (bash, bash_output, kill_shell). Until the permissions of HS3 exist the shell reaches
+        /// whatever your user reaches, so it is off unless asked for.
+        #[arg(long)]
+        allow_bash: bool,
         /// The prompt.
         prompt: String,
     },
@@ -77,6 +82,7 @@ async fn main() -> ExitCode {
         instructions_file,
         max_turns,
         timeout_secs,
+        allow_bash,
         prompt,
     } = Cli::parse().command;
 
@@ -115,15 +121,16 @@ async fn main() -> ExitCode {
         Ok(files) => tools.extend(files),
         Err(err) => return fail(err.to_string()),
     }
-
-    // Ctrl-C ends the run cleanly, with its `finished` line, instead of killing it mid-line.
-    let cancel = Cancel::new();
-    let on_signal = cancel.clone();
-    tokio::spawn(async move {
-        if tokio::signal::ctrl_c().await.is_ok() {
-            on_signal.cancel();
+    if allow_bash {
+        match shell_tools(&cwd, ShellOptions::from_environment()) {
+            Ok(shell) => tools.extend(shell),
+            Err(err) => return fail(err.to_string()),
         }
-    });
+    }
+
+    // Ctrl-C, SIGTERM and SIGHUP end the run cleanly, with its `finished` line and every background job stopped.
+    let cancel = Cancel::new();
+    axiomata_harness::run::cancel_on_signals(&cancel);
 
     let outcome = run(&config, &model, &tools, &prompt, &mut JsonLines, &cancel).await;
     ExitCode::from(match outcome.reason {
