@@ -29,7 +29,14 @@ pub enum Access {
     Edit { path: String },
     /// A shell command, and the folder the shell is in (relative to the working folder; empty for the folder
     /// itself) — where a relative path the command writes lands.
-    Bash { command: String, folder: String },
+    Bash {
+        command: String,
+        folder: String,
+        /// The model asked to run it outside the sandbox (HS3b): never allowed by a rule nor by `auto`, always asked.
+        unsandboxed: bool,
+    },
+    /// A sandboxed command reaching a host through the run's proxy (HS3b): the host name, lowercased.
+    Network { host: String },
     /// Only the run's own state (`bash_output`, `kill_shell`): always allowed.
     Own,
     /// A tool the rules know only by its name.
@@ -42,12 +49,14 @@ enum RuleKind {
     Read,
     Edit,
     Bash,
+    /// `Network(crates.io)`, `Network(*.github.com)`: a host the run's proxy lets a sandboxed command reach.
+    Network,
     /// A tool named directly (`grep`, a future MCP tool).
     Tool,
 }
 
 /// The names Claude Code's format gives meaning to; anything spelled like one but not exactly is a typo (P4).
-const KNOWN_KINDS: [&str; 4] = ["Read", "Edit", "Write", "Bash"];
+const KNOWN_KINDS: [&str; 5] = ["Read", "Edit", "Write", "Bash", "Network"];
 
 /// Path globs ignore case where the file system does: on macOS `src/A.rs` and `src/a.rs` are one file.
 const CASE_INSENSITIVE_PATHS: bool = cfg!(target_os = "macos");
@@ -70,6 +79,8 @@ enum Pattern {
     Wild(String),
     /// A path glob below the working folder; `*` stays within one folder, `**` crosses them.
     Path(GlobMatcher),
+    /// A host: exactly this name, or with a leading `*.` any name below it (not the name itself).
+    Host(String),
 }
 
 impl fmt::Debug for Rule {
@@ -111,10 +122,12 @@ impl Rule {
             "Read" => RuleKind::Read,
             "Edit" | "Write" => RuleKind::Edit,
             "Bash" => RuleKind::Bash,
+            "Network" => RuleKind::Network,
             _ => RuleKind::Tool,
         };
         let pattern = match pattern.filter(|p| !p.is_empty() && *p != "*" && *p != "**") {
             None => None,
+            Some(p) if kind == RuleKind::Network => Some(Pattern::Host(host_pattern(p)?)),
             Some(p) if kind == RuleKind::Bash => Some(match p.strip_suffix(":*") {
                 Some(prefix) => Pattern::Prefix(rule_words(prefix)),
                 None => Pattern::Wild(rule_words(p).join(" ")),
@@ -173,7 +186,7 @@ impl Rule {
                 wildcard(&pattern, &text)
                     || pattern.strip_suffix(" *").is_some_and(|bare| bare == text)
             }
-            Some(Pattern::Path(_)) => false,
+            Some(Pattern::Path(_) | Pattern::Host(_)) => false,
         }
     }
 
@@ -182,6 +195,14 @@ impl Rule {
         let (path, kind) = match access {
             Access::Read { path } => (path, RuleKind::Read),
             Access::Edit { path } => (path, RuleKind::Edit),
+            Access::Network { host } => {
+                return self.kind == RuleKind::Network
+                    && match &self.pattern {
+                        None => true,
+                        Some(Pattern::Host(pattern)) => host_matches(pattern, host),
+                        Some(_) => false,
+                    };
+            }
             _ => return self.kind == RuleKind::Tool && self.tool == tool && self.pattern.is_none(),
         };
         if self.kind != kind && !(self.kind == RuleKind::Tool && self.tool == tool) {
@@ -196,6 +217,32 @@ impl Rule {
             }
             Some(_) => false,
         }
+    }
+}
+
+/// A host pattern as written in `Network(…)`: a name, or `*.` and a name; letters, digits, dots and dashes only.
+fn host_pattern(text: &str) -> Result<String, String> {
+    let lower = text.trim().to_ascii_lowercase();
+    let name = lower.strip_prefix("*.").unwrap_or(&lower);
+    if name.is_empty()
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+    {
+        return Err(format!(
+            "Network({text}): a host is a name like crates.io or *.github.com"
+        ));
+    }
+    Ok(lower)
+}
+
+/// Whether `host` (lowercased) is what `pattern` names.
+fn host_matches(pattern: &str, host: &str) -> bool {
+    match pattern.strip_prefix("*.") {
+        Some(domain) => host
+            .strip_suffix(domain)
+            .is_some_and(|rest| rest.ends_with('.') && rest.len() > 1),
+        None => host == pattern,
     }
 }
 
@@ -355,8 +402,21 @@ impl RuleSet {
     /// What the rules say about `access` of `tool`.
     fn verdict(&self, tool: &str, access: &Access) -> Said {
         match access {
-            Access::Bash { command, folder } => {
-                self.command_verdict(tool, &analyze(command), folder)
+            Access::Bash {
+                command,
+                folder,
+                unsandboxed,
+            } => {
+                let said = self.command_verdict(tool, &analyze(command), folder);
+                match said {
+                    // Outside the sandbox the operating system holds nothing back: only a deny stays a deny, everything
+                    // else is the owner's to answer.
+                    Said::Verdict(Verdict::Deny, _) => said,
+                    _ if *unsandboxed => {
+                        Said::Unsure("the command asks to run outside the sandbox".into())
+                    }
+                    _ => said,
+                }
             }
             Access::Own => Said::Verdict(Verdict::Allow, "the run's own state".into()),
             other => {
@@ -650,6 +710,9 @@ pub struct Gate {
     rules: Mutex<RuleSet>,
     mode: Mode,
     asker: Arc<dyn Asker>,
+    /// One question at a time: the proxy's connections can ask while a command runs, and two prompts in one terminal
+    /// would mix their answers.
+    asking: tokio::sync::Mutex<()>,
     log: Mutex<Vec<Judgement>>,
 }
 
@@ -659,6 +722,7 @@ impl Gate {
             rules: Mutex::new(rules),
             mode,
             asker,
+            asking: tokio::sync::Mutex::new(()),
             log: Mutex::new(Vec::new()),
         }
     }
@@ -718,6 +782,7 @@ impl Gate {
                     tool: tool.to_owned(),
                     target: target.clone(),
                 };
+                let _one_at_a_time = self.asking.lock().await;
                 match self.asker.ask(&request).await {
                     Answer::Allow => {
                         reason = "allowed when asked".into();
@@ -785,8 +850,8 @@ pub struct GateOptions {
     pub trusted: bool,
 }
 
-/// The gate of a run in `project`: the owner's settings below `home`, the project's if trusted, then `options`; and
-/// whether project settings were left out for lack of trust.
+/// The gate of a run in `project`: the owner's settings below `home`, the project's if trusted, then `options`;
+/// whether project settings were left out for lack of trust; and what the settings say about the sandbox.
 ///
 /// # Errors
 ///
@@ -796,7 +861,7 @@ pub fn build_gate(
     project: &std::path::Path,
     options: GateOptions,
     asker: Arc<dyn Asker>,
-) -> Result<(Gate, bool), crate::HarnessError> {
+) -> Result<(Gate, bool, settings::SandboxSettings), crate::HarnessError> {
     let loaded = settings::load(home, project, options.trusted)?;
     let mut rules = loaded.rules;
     let flag = |name: &str, list: &[String]| -> Result<Vec<Rule>, crate::HarnessError> {
@@ -815,7 +880,11 @@ pub fn build_gate(
         deny: flag("deny", &options.deny)?,
     });
     let mode = options.mode.or(loaded.mode).unwrap_or_default();
-    Ok((Gate::new(rules, mode, asker), loaded.untrusted_project))
+    Ok((
+        Gate::new(rules, mode, asker),
+        loaded.untrusted_project,
+        loaded.sandbox,
+    ))
 }
 
 /// The rule an "always" answer adds: exactly this command, this path, or this tool.
@@ -837,6 +906,7 @@ fn always_rule(tool: &str, access: &Access) -> Option<Rule> {
         Access::Bash { .. } => return None,
         Access::Edit { path } => format!("Edit({})", glob_escape(&normal_path(path))),
         Access::Read { path } => format!("Read({})", glob_escape(&normal_path(path))),
+        Access::Network { host } => format!("Network({host})"),
         Access::Own | Access::Other => tool.to_owned(),
     };
     Rule::parse(&text).ok()
@@ -857,6 +927,7 @@ fn describe(access: &Access) -> String {
     match access {
         Access::Read { path } | Access::Edit { path } => normal_path(path),
         Access::Bash { command, .. } => command.clone(),
+        Access::Network { host } => host.clone(),
         Access::Own | Access::Other => String::new(),
     }
 }
@@ -878,6 +949,7 @@ mod tests {
         Access::Bash {
             command: command.into(),
             folder: String::new(),
+            unsandboxed: false,
         }
     }
 
@@ -1162,8 +1234,9 @@ mod tests {
             deny: vec!["Edit(secrets/**)".into()],
             ..GateOptions::default()
         };
-        let (gate, untrusted) =
+        let (gate, untrusted, sandbox) =
             build_gate(&home, &project, options.clone(), Arc::new(Nobody)).unwrap();
+        assert!(sandbox.enabled, "on unless the owner switches it off");
         assert_eq!(gate.mode(), Mode::Plan);
         assert!(!untrusted);
         let flagged = GateOptions {
@@ -1387,6 +1460,7 @@ mod tests {
         let inside = Access::Bash {
             command: "echo x > f.txt".into(),
             folder: "secrets".into(),
+            unsandboxed: false,
         };
         assert_eq!(said(&set, "bash", inside), Some(Verdict::Deny));
         assert_eq!(
@@ -1464,5 +1538,59 @@ mod tests {
             shown.ends_with("rm -rf ~") && shown.contains("characters left out"),
             "{shown}"
         );
+    }
+
+    #[test]
+    fn a_command_outside_the_sandbox_is_always_asked_unless_denied() {
+        let set = rules(&["Bash(npm install:*)"], &[], &["Bash(rm:*)"]);
+        let out = |command: &str| Access::Bash {
+            command: command.into(),
+            folder: String::new(),
+            unsandboxed: true,
+        };
+        assert_eq!(
+            said(&set, "bash", out("npm install")),
+            Some(Verdict::Ask),
+            "the allow rule does not carry over"
+        );
+        assert_eq!(said(&set, "bash", out("rm x")), Some(Verdict::Deny));
+    }
+
+    #[test]
+    fn network_rules_name_a_host_or_everything_below_a_domain() {
+        let set = rules(
+            &["Network(crates.io)", "Network(*.github.com)"],
+            &[],
+            &["Network(evil.github.com)"],
+        );
+        let host = |name: &str| Access::Network { host: name.into() };
+        assert_eq!(
+            said(&set, "network", host("crates.io")),
+            Some(Verdict::Allow)
+        );
+        assert_eq!(
+            said(&set, "network", host("static.crates.io")),
+            None,
+            "a name is only itself"
+        );
+        assert_eq!(
+            said(&set, "network", host("api.github.com")),
+            Some(Verdict::Allow)
+        );
+        assert_eq!(
+            said(&set, "network", host("github.com")),
+            None,
+            "*. means below, not the name itself"
+        );
+        assert_eq!(
+            said(&set, "network", host("evil.github.com")),
+            Some(Verdict::Deny)
+        );
+        assert_eq!(said(&set, "network", host("notgithub.com")), None);
+        for bad in ["Network(http://x)", "Network(a b)", "network(x)"] {
+            assert!(Rule::parse(bad).is_err(), "{bad}");
+        }
+        let always = always_rule("network", &host("pypi.org")).unwrap();
+        assert!(always.matches_path("network", &host("pypi.org")));
     }
 }

@@ -30,6 +30,61 @@ const MAX_RULES: usize = 1_000;
 struct File {
     #[serde(default)]
     permissions: Permissions,
+    #[serde(default)]
+    sandbox: Option<SandboxSection>,
+}
+
+/// The `sandbox` section of one settings file (HS3b), as written: paths are still text, `~/…` or relative.
+#[derive(Debug, Default, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SandboxSection {
+    /// `enabled`: whether commands run in the sandbox.
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    /// `allowWrite`: extra places a command may write.
+    #[serde(default)]
+    pub allow_write: Vec<String>,
+    /// `denyRead`: extra places no command reads.
+    #[serde(default)]
+    pub deny_read: Vec<String>,
+    /// `allowLocalBinding`: commands may listen on and connect to anything on localhost (a dev server, a test's own
+    /// socket) — which also opens every local service to them.
+    #[serde(default)]
+    pub allow_local_binding: Option<bool>,
+}
+
+/// What the settings say about the sandbox. Writable places and switching it off are the owner's alone (their own
+/// settings file); a project may only add secrets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SandboxSettings {
+    /// Commands run in the sandbox (where the system has one).
+    pub enabled: bool,
+    /// Extra places a command may write, resolved.
+    pub allow_write: Vec<PathBuf>,
+    /// Extra places no command reads, resolved.
+    pub deny_read: Vec<PathBuf>,
+    /// Localhost is open to commands beyond the proxy (see [`SandboxSection::allow_local_binding`]).
+    pub allow_local_binding: bool,
+}
+
+impl Default for SandboxSettings {
+    fn default() -> Self {
+        SandboxSettings {
+            enabled: true,
+            allow_write: Vec::new(),
+            deny_read: Vec::new(),
+            allow_local_binding: false,
+        }
+    }
+}
+
+/// A path from a settings file: `~/…` below the home folder, a relative one below `base`.
+fn settings_path(text: &str, home: &Path, base: &Path) -> PathBuf {
+    match text.strip_prefix("~/") {
+        Some(rest) => home.join(rest),
+        None if text == "~" => home.to_path_buf(),
+        None => base.join(text),
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -50,6 +105,8 @@ struct Permissions {
 pub struct Settings {
     pub rules: RuleSet,
     pub mode: Option<Mode>,
+    /// The `sandbox` section, as written.
+    pub sandbox: SandboxSection,
 }
 
 /// Reads one settings file; a missing file says nothing.
@@ -108,6 +165,7 @@ pub fn read(path: &Path) -> Result<Settings, HarnessError> {
             deny: parse(file.permissions.deny)?,
         },
         mode,
+        sandbox: file.sandbox.unwrap_or_default(),
     })
 }
 
@@ -119,6 +177,7 @@ pub struct Loaded {
     pub mode: Option<Mode>,
     /// The project has allow rules or a mode of its own that were left out because the folder is not trusted.
     pub untrusted_project: bool,
+    pub sandbox: SandboxSettings,
 }
 
 /// The project's settings files.
@@ -163,13 +222,37 @@ pub fn project_summary(project: &Path) -> Result<(Vec<String>, Option<Mode>), Ha
 pub fn load(home: &Path, project: &Path, trusted: bool) -> Result<Loaded, HarnessError> {
     let user = read(&home.join(USER_DIR).join(SETTINGS_FILE))?;
     let ceiling = user.mode.unwrap_or_default().looseness();
+    let owner = &user.sandbox;
+    let mut sandbox = SandboxSettings {
+        enabled: owner.enabled.unwrap_or(true),
+        allow_write: owner
+            .allow_write
+            .iter()
+            .map(|path| settings_path(path, home, home))
+            .collect(),
+        deny_read: owner
+            .deny_read
+            .iter()
+            .map(|path| settings_path(path, home, home))
+            .collect(),
+        allow_local_binding: owner.allow_local_binding.unwrap_or(false),
+    };
     let mut loaded = Loaded {
         mode: user.mode,
         rules: user.rules,
         untrusted_project: false,
+        sandbox: SandboxSettings::default(),
     };
     for file in project_files(project) {
         let settings = read(&file)?;
+        // A project may keep more secret; it may not open places to write, localhost, or switch the sandbox off.
+        sandbox.deny_read.extend(
+            settings
+                .sandbox
+                .deny_read
+                .iter()
+                .map(|path| settings_path(path, home, project)),
+        );
         loaded.rules.deny.extend(settings.rules.deny);
         loaded.rules.ask.extend(settings.rules.ask);
         if !trusted {
@@ -181,6 +264,7 @@ pub fn load(home: &Path, project: &Path, trusted: bool) -> Result<Loaded, Harnes
             loaded.mode = Some(mode);
         }
     }
+    loaded.sandbox = sandbox;
     Ok(loaded)
 }
 
@@ -379,5 +463,36 @@ mod tests {
         trust.add(&home, &project).unwrap();
         assert!(Trust::load(&home).unwrap().contains(&project));
         assert!(!Trust::load(&home).unwrap().contains(&home));
+    }
+
+    #[test]
+    fn the_sandbox_section_is_the_owners_and_a_project_may_only_keep_more_secret() {
+        let (home, project) = (temp("sbx-home"), temp("sbx-project"));
+        write(
+            &home.join(".axh/settings.json"),
+            r#"{"sandbox": {"enabled": true, "allowWrite": ["~/.gradle"], "denyRead": ["~/notes/private"]}}"#,
+        );
+        write(
+            &project.join(".axh/settings.json"),
+            r#"{"sandbox": {"enabled": false, "allowWrite": ["/"], "denyRead": ["fixtures/keys"], "allowLocalBinding": true}}"#,
+        );
+        let loaded = load(&home, &project, true).unwrap().sandbox;
+        assert!(loaded.enabled, "a project cannot switch it off");
+        assert!(!loaded.allow_local_binding, "nor open localhost");
+        assert_eq!(
+            loaded.allow_write,
+            [home.join(".gradle")],
+            "nor open places to write"
+        );
+        assert_eq!(
+            loaded.deny_read,
+            [home.join("notes/private"), project.join("fixtures/keys")]
+        );
+        write(
+            &home.join(".axh/settings.json"),
+            r#"{"sandbox": {"enabled": false, "allowLocalBinding": true}}"#,
+        );
+        let owner = load(&home, &project, false).unwrap().sandbox;
+        assert!(!owner.enabled && owner.allow_local_binding, "the owner can");
     }
 }

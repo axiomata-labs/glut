@@ -15,6 +15,7 @@ pub mod model;
 pub mod permissions;
 pub mod prompt;
 pub mod run;
+pub mod sandbox;
 pub mod tools;
 
 pub use config::{ModelEndpoint, RunConfig};

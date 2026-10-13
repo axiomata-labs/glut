@@ -28,7 +28,8 @@ use tokio::sync::OnceCell;
 use super::{CallContext, StopFlag, Tool, ToolFuture};
 use crate::error::HarnessError;
 use crate::model::ToolSpec;
-use crate::permissions::Access;
+use crate::permissions::{Access, Gate};
+use crate::sandbox::proxy::Proxy;
 
 /// A command's time limit when the model names none.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
@@ -62,6 +63,9 @@ pub struct ShellOptions {
     /// The environment the cleaned one is made from (S5) — the process's own, unless a test or an embedder says
     /// otherwise.
     pub ambient: Vec<(OsString, OsString)>,
+    /// Run commands in the sandbox (HS3b) with these settings; `None`, or a system without one, runs them as they
+    /// are, judged by the rules alone.
+    pub sandbox: Option<crate::permissions::settings::SandboxSettings>,
 }
 
 impl ShellOptions {
@@ -76,6 +80,7 @@ impl ShellOptions {
             shell,
             profile: true,
             ambient: std::env::vars_os().collect(),
+            sandbox: Some(Default::default()),
         }
     }
 }
@@ -161,6 +166,20 @@ fn command_script(family: Family) -> String {
     )
 }
 
+/// Whether a command runs in the sandbox, and then with the gate its proxy asks about hosts.
+enum Sandboxing {
+    On(Option<Arc<Gate>>),
+    /// The escape (`dangerously_disable_sandbox`), already asked for by the gate.
+    Off,
+}
+
+/// A run's sandbox once its first command needs it.
+struct Sandbox {
+    proxy: Option<Proxy>,
+    /// The Seatbelt profile, with the proxy's port as the one way to the network.
+    profile: String,
+}
+
 /// What the shell tools of one run share.
 struct Session {
     root: PathBuf,
@@ -173,6 +192,10 @@ struct Session {
     scratch: PathBuf,
     snapshot: OnceCell<Option<PathBuf>>,
     cwd: Mutex<PathBuf>,
+    /// What the sandbox allows (HS3b); `None` without one.
+    policy: Option<crate::sandbox::Policy>,
+    /// The proxy and the profile naming its port, made with the first sandboxed command.
+    sandbox: OnceCell<Sandbox>,
     jobs: Mutex<Vec<Job>>,
     next_job: AtomicU32,
     next_note: AtomicU64,
@@ -214,13 +237,41 @@ impl Session {
         } else {
             options.shell
         };
+        let home = options
+            .ambient
+            .iter()
+            .find(|(key, _)| key == "HOME")
+            .map(|(_, value)| PathBuf::from(value))
+            .filter(|home| home.is_absolute());
+        let policy = match (&options.sandbox, home) {
+            (Some(settings), Some(home)) if settings.enabled && crate::sandbox::available() => {
+                let mut policy = crate::sandbox::Policy::new(
+                    &root,
+                    &home,
+                    &settings.allow_write,
+                    &settings.deny_read,
+                );
+                policy.local_binding = settings.allow_local_binding;
+                Some(policy)
+            }
+            // A sandbox asked for and possible here, but no home to keep the secrets of: refused, never run without.
+            (Some(settings), None) if settings.enabled && crate::sandbox::available() => {
+                return Err(HarnessError::Workspace {
+                    path: root.display().to_string(),
+                    reason: "the sandbox needs an absolute HOME in the environment".into(),
+                });
+            }
+            _ => None,
+        };
         Ok(Session {
+            policy,
             family,
             shell,
             profile: options.profile,
             env,
             scratch,
             snapshot: OnceCell::new(),
+            sandbox: OnceCell::new(),
             cwd: Mutex::new(root.clone()),
             root,
             jobs: Mutex::new(Vec::new()),
@@ -263,15 +314,58 @@ impl Session {
             .clone()
     }
 
+    /// The run's proxy and profile, made on first use with the run's gate (one gate per run, so the first caller's
+    /// is everyone's). `None` without a sandbox.
+    async fn sandbox(&self, gate: Option<Arc<Gate>>) -> Option<&Sandbox> {
+        let policy = self.policy.as_ref()?;
+        let sandbox = self
+            .sandbox
+            .get_or_init(|| async move {
+                // Without a proxy a command still runs, it just reaches no network: the profile then opens no port.
+                let proxy = Proxy::start(gate).await.ok();
+                let mut policy = policy.clone();
+                policy.proxy_port = proxy.as_ref().map(Proxy::port);
+                Sandbox {
+                    profile: policy.profile(),
+                    proxy,
+                }
+            })
+            .await;
+        Some(sandbox)
+    }
+
     /// A command ready to spawn: the shell running [`command_script`] for `command` in `cwd`.
-    async fn command(&self, command: &str, cwd: &Path, cwd_file: Option<&Path>) -> Command {
+    async fn command(
+        &self,
+        command: &str,
+        cwd: &Path,
+        cwd_file: Option<&Path>,
+        sandbox: Sandboxing,
+    ) -> Command {
         let snapshot = self.snapshot().await;
-        let mut process = Command::new(&self.shell);
+        let mut proxy_env = Vec::new();
+        let sandbox = match sandbox {
+            Sandboxing::On(gate) => self.sandbox(gate).await,
+            Sandboxing::Off => None,
+        };
+        let mut process = match sandbox {
+            // The profile goes in as an argument: nothing on disk for a command to change between two calls.
+            Some(sandbox) => {
+                if let Some(proxy) = &sandbox.proxy {
+                    proxy_env = proxy.environment();
+                }
+                let mut process = Command::new(crate::sandbox::SANDBOX_EXEC);
+                process.arg("-p").arg(&sandbox.profile).arg(&self.shell);
+                process
+            }
+            None => Command::new(&self.shell),
+        };
         process
             .arg("-c")
             .arg(command_script(self.family))
             .env_clear()
             .envs(self.env.iter().cloned())
+            .envs(proxy_env)
             .env("AXH_COMMAND", command)
             .env("AXH_CWD", cwd)
             .env("AXH_SNAPSHOT", snapshot.as_deref().unwrap_or(Path::new("")))
@@ -302,14 +396,20 @@ impl Session {
     }
 
     /// Runs `command` to its end or its time limit, and carries over the folder it ended in (S3).
-    async fn run(&self, command: &str, limit: Duration, stop: &StopFlag) -> Result<String, String> {
+    async fn run(
+        &self,
+        command: &str,
+        limit: Duration,
+        stop: &StopFlag,
+        sandbox: Sandboxing,
+    ) -> Result<String, String> {
         let (cwd, moved_back) = self.start_dir();
         let note = self.scratch.join(format!(
             "cwd-{}",
             self.next_note.fetch_add(1, Ordering::Relaxed)
         ));
         let mut child = self
-            .command(command, &cwd, Some(&note))
+            .command(command, &cwd, Some(&note), sandbox)
             .await
             .spawn()
             .map_err(|err| format!("could not start {}: {err}", self.shell.display()))?;
@@ -398,14 +498,14 @@ impl Session {
     }
 
     /// Starts `command` as a background job (S6) and returns its id.
-    async fn start_job(&self, command: &str) -> Result<String, String> {
+    async fn start_job(&self, command: &str, sandbox: Sandboxing) -> Result<String, String> {
         let full = || format!("{MAX_JOBS} jobs are running already; end one with kill_shell first");
         if self.running_jobs() >= MAX_JOBS {
             return Err(full());
         }
         let (cwd, _) = self.start_dir();
         let mut child = self
-            .command(command, &cwd, None)
+            .command(command, &cwd, None, sandbox)
             .await
             .spawn()
             .map_err(|err| format!("could not start {}: {err}", self.shell.display()))?;
@@ -758,6 +858,9 @@ struct BashArgs {
     timeout_secs: Option<u64>,
     #[serde(default)]
     run_in_background: bool,
+    /// Run outside the sandbox (HS3b) — always asked.
+    #[serde(default)]
+    dangerously_disable_sandbox: bool,
 }
 
 #[derive(Deserialize)]
@@ -770,6 +873,14 @@ struct Bash(Arc<Session>);
 impl Tool for Bash {
     fn spec(&self) -> ToolSpec {
         let shell = self.0.shell.display().to_string();
+        let sandbox = if self.0.policy.is_some() {
+            " Commands run in a sandbox: they write only in the working folder, the temporary folders and the package \
+             caches, read no secrets (keys, credentials, .env files) and reach the network only through the run's \
+             proxy, which allows a domain only by the owner's rules. If a command fails because of the sandbox and \
+             truly needs more, run it again with dangerously_disable_sandbox — the owner is asked every time."
+        } else {
+            ""
+        };
         ToolSpec {
             name: "bash".into(),
             description: format!(
@@ -777,14 +888,15 @@ impl Tool for Bash {
                  command ends in is where the next one starts (inside the working folder); variables do not carry \
                  over. Time limit {} s unless timeout_secs says otherwise (at most {} s). Whatever a command leaves \
                  running (`server &`) is stopped when it ends: for a server or a watcher, set run_in_background and \
-                 read it later with bash_output.",
+                 read it later with bash_output.{sandbox}",
                 DEFAULT_TIMEOUT.as_secs(),
                 MAX_TIMEOUT.as_secs()
             ),
             parameters: json!({"type": "object", "properties": {
                 "command": {"type": "string"},
                 "timeout_secs": {"type": "integer", "minimum": 1},
-                "run_in_background": {"type": "boolean"}
+                "run_in_background": {"type": "boolean"},
+                "dangerously_disable_sandbox": {"type": "boolean"}
             }, "required": ["command"]}),
         }
     }
@@ -795,6 +907,10 @@ impl Tool for Bash {
             .strip_prefix(&self.0.root)
             .map(|rel| rel.to_string_lossy().into_owned())
             .unwrap_or_default();
+        let escape = arguments
+            .get("dangerously_disable_sandbox")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         Access::Bash {
             command: arguments
                 .get("command")
@@ -802,6 +918,8 @@ impl Tool for Bash {
                 .unwrap_or("")
                 .to_owned(),
             folder,
+            // Without a sandbox there is nothing to leave: the rules alone judge, as before HS3b.
+            unsandboxed: escape && self.0.policy.is_some(),
         }
     }
 
@@ -812,8 +930,13 @@ impl Tool for Bash {
             if args.command.trim().is_empty() {
                 return Err("the command is empty".into());
             }
+            let sandbox = if args.dangerously_disable_sandbox {
+                Sandboxing::Off
+            } else {
+                Sandboxing::On(context.gate)
+            };
             if args.run_in_background {
-                let id = self.0.start_job(&args.command).await?;
+                let id = self.0.start_job(&args.command, sandbox).await?;
                 return Ok(format!(
                     "started background job {id}; read it with bash_output, end it with kill_shell"
                 ));
@@ -822,7 +945,7 @@ impl Tool for Bash {
                 .timeout_secs
                 .map_or(DEFAULT_TIMEOUT, Duration::from_secs)
                 .clamp(Duration::from_secs(1), MAX_TIMEOUT);
-            self.0.run(&args.command, limit, &stop).await
+            self.0.run(&args.command, limit, &stop, sandbox).await
         })
     }
 }
@@ -897,6 +1020,7 @@ mod tests {
             shell: PathBuf::from(shell),
             profile: false,
             ambient,
+            sandbox: None,
         };
         let mut tools = Toolbox::new();
         tools.extend(shell_tools(&dir, options).unwrap());
@@ -1064,6 +1188,7 @@ mod tests {
                 ("HOME".into(), home.clone().into_os_string()),
                 ("PATH".into(), "/usr/bin:/bin".into()),
             ],
+            sandbox: None,
         };
         let mut tools = Toolbox::new();
         tools.extend(shell_tools(&dir, options).unwrap());
@@ -1237,5 +1362,69 @@ mod tests {
                 (true, "zsh\n".into())
             );
         }
+    }
+
+    #[tokio::test]
+    async fn a_sandboxed_command_cannot_write_outside_and_the_escape_runs_unsandboxed() {
+        if !crate::sandbox::available() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!(
+            "axh-shell-sandbox-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        std::fs::create_dir_all(dir.join("work")).unwrap();
+        // Outside every writable place: the workspace's `target/`.
+        let outside =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/axh-shell-sandbox-outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        let target = outside
+            .canonicalize()
+            .unwrap()
+            .join(format!("probe-{}", std::process::id()));
+        let ambient: Vec<(OsString, OsString)> = std::env::vars_os()
+            .filter(|(key, _)| key == "PATH" || key == "TMPDIR")
+            .chain(std::iter::once((
+                "HOME".into(),
+                dir.clone().into_os_string(),
+            )))
+            .collect();
+        let options = ShellOptions {
+            shell: PathBuf::from("/bin/bash"),
+            profile: false,
+            ambient,
+            sandbox: Some(Default::default()),
+        };
+        let mut tools = Toolbox::new();
+        tools.extend(shell_tools(&dir.join("work"), options).unwrap());
+
+        let (ok, text) = bash(&tools, &format!("echo x > {}", target.display())).await;
+        assert!(!ok && text.contains("Operation not permitted"), "{text}");
+        assert!(!target.exists());
+        assert_eq!(
+            bash(&tools, "echo inside > a.txt && cat a.txt").await,
+            (true, "inside\n".into())
+        );
+
+        let escape = json!({"command": format!("echo x > {}", target.display()), "dangerously_disable_sandbox": true});
+        let (ok, text) = tools.call("bash", &escape.to_string()).await;
+        assert!(ok, "{text}");
+        assert!(target.exists(), "outside the sandbox it ran");
+        std::fs::remove_file(&target).unwrap();
+
+        // The network goes through the run's proxy, which only sandboxed commands are pointed at.
+        let (ok, text) = bash(&tools, "echo \"$HTTPS_PROXY|$no_proxy|\"").await;
+        assert!(ok, "{text}");
+        assert!(
+            text.starts_with("http://127.0.0.1:") && text.ends_with("||\n"),
+            "{text}"
+        );
+        let escape =
+            json!({"command": "echo \"[$HTTPS_PROXY]\"", "dangerously_disable_sandbox": true});
+        assert_eq!(
+            tools.call("bash", &escape.to_string()).await,
+            (true, "[]\n".into())
+        );
     }
 }

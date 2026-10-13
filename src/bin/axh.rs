@@ -136,10 +136,6 @@ async fn main() -> ExitCode {
         Ok(files) => tools.extend(files),
         Err(err) => return fail(err.to_string()),
     }
-    match shell_tools(&cwd, ShellOptions::from_environment()) {
-        Ok(shell) => tools.extend(shell),
-        Err(err) => return fail(err.to_string()),
-    }
     let mode = match permission_mode
         .as_deref()
         .map(|text| (text, Mode::parse(text)))
@@ -167,15 +163,30 @@ async fn main() -> ExitCode {
         trusted,
     };
     // Headless: nobody to ask (P6).
-    match build_gate(&home, &cwd, options, Arc::new(Nobody)) {
-        Ok((gate, untrusted)) => {
+    let sandbox = match build_gate(&home, &cwd, options, Arc::new(Nobody)) {
+        Ok((gate, untrusted, sandbox)) => {
             if untrusted {
                 eprintln!(
                     "axh: the project's .axh/ allow rules and mode are left out: this folder is not trusted"
                 );
             }
             tools.set_gate(Arc::new(gate));
+            if !sandbox.enabled || !axiomata_harness::sandbox::available() {
+                eprintln!(
+                    "axh: commands run without a sandbox: only the permission rules hold them"
+                );
+            }
+            sandbox
         }
+        Err(err) => return fail(err.to_string()),
+    };
+    // The shell after the gate: the settings that built it also say how the sandbox runs (HS3b).
+    let shell = ShellOptions {
+        sandbox: Some(sandbox),
+        ..ShellOptions::from_environment()
+    };
+    match shell_tools(&cwd, shell) {
+        Ok(shell) => tools.extend(shell),
         Err(err) => return fail(err.to_string()),
     }
 
