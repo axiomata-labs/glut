@@ -46,6 +46,10 @@ pub struct RunConfig {
     pub timeout: Duration,
     /// Passed to the model as `max_tokens`; `None` leaves it to the API.
     pub max_output_tokens: Option<u32>,
+    /// More folders of skills beside the owner's `~/.axh/skills` and, in a trusted folder, the project's
+    /// `.axh/skills` (HS6, K2): `<folder>/<name>/SKILL.md` each. `axh` fills them from its repeatable
+    /// `--skill-dir`; a caller loads the catalog with them (`skills::Catalog::load`).
+    pub skill_dirs: Vec<PathBuf>,
 }
 
 impl RunConfig {
@@ -57,6 +61,7 @@ impl RunConfig {
             max_turns: DEFAULT_MAX_TURNS,
             timeout: DEFAULT_TIMEOUT,
             max_output_tokens: None,
+            skill_dirs: Vec::new(),
         }
     }
 }

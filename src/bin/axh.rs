@@ -15,11 +15,13 @@ use axiomata_harness::commands::{Expanded, PermissionsView, Registry, Source};
 use axiomata_harness::mcp;
 use axiomata_harness::permissions::settings::Trust;
 use axiomata_harness::permissions::{GateOptions, Mode, Nobody, build_gate};
-use axiomata_harness::tools::files::file_tools;
+use axiomata_harness::skills::{self, SkillTool};
+use axiomata_harness::tools::Tool;
+use axiomata_harness::tools::files::{SkillRoots, file_tools};
 use axiomata_harness::tools::shell::{ShellOptions, shell_tools};
 use axiomata_harness::{
-    Cancel, Event, EventSink, FinishReason, ModelEndpoint, OpenAiCompat, RunConfig, Toolbox, Usage,
-    run,
+    Cancel, Event, EventSink, FinishReason, ModelEndpoint, OpenAiCompat, RunConfig, SharedSink,
+    SkillHow, Toolbox, Usage, run,
 };
 use clap::{Parser, Subcommand};
 
@@ -66,9 +68,17 @@ enum Command {
         /// A rule the run refuses; repeatable.
         #[arg(long)]
         deny: Vec<String>,
-        /// The prompt — or a slash command (`/review src/`), read from `~/.axh/commands/` and, in a trusted
-        /// folder, the project's `.axh/commands/` (HS4).
-        prompt: String,
+        /// Run a skill as the run's task (HS6, K1.1): its SKILL.md body becomes the run's instructions, and its
+        /// frontmatter may narrow the tools, pick the model and set the time limit (K5).
+        #[arg(long)]
+        skill: Option<String>,
+        /// A folder of skills beside `~/.axh/skills` (HS6, K2); repeatable.
+        #[arg(long)]
+        skill_dir: Vec<PathBuf>,
+        /// The prompt — extra text beside `--skill`, or a slash command (`/review src/`), read from
+        /// `~/.axh/commands/` and, in a trusted folder, the project's `.axh/commands/` (HS4). Without `--skill` a
+        /// prompt is required; with one it defaults to "Run the skill.".
+        prompt: Option<String>,
     },
 }
 
@@ -102,6 +112,8 @@ async fn main() -> ExitCode {
         allow,
         ask,
         deny,
+        skill,
+        skill_dir,
         prompt,
     } = Cli::parse().command;
 
@@ -109,11 +121,16 @@ async fn main() -> ExitCode {
         JsonLines.emit(Event::Error { message });
         ExitCode::from(1)
     };
+    if prompt.is_none() && skill.is_none() {
+        return fail("name a prompt, or run a skill with --skill <name>".into());
+    }
     let cwd = match cwd.canonicalize() {
         Ok(cwd) => cwd,
         Err(err) => return fail(format!("cannot use {}: {err}", cwd.display())),
     };
     let mut config = RunConfig::new(&cwd);
+    // The folders the run reads skills from, beside the owner's and the project's (HS6, K2).
+    config.skill_dirs = skill_dir;
     if let Some(path) = instructions_file {
         match std::fs::read_to_string(&path) {
             Ok(text) => config.instructions = Some(text),
@@ -126,16 +143,11 @@ async fn main() -> ExitCode {
     if let Some(secs) = timeout_secs {
         config.timeout = std::time::Duration::from_secs(secs);
     }
-    let endpoint = ModelEndpoint {
+    let mut endpoint = ModelEndpoint {
         base_url,
         api_key: std::env::var(KEY_ENV).ok().filter(|key| !key.is_empty()),
         model,
     };
-    let mut tools = Toolbox::new();
-    match file_tools(&cwd) {
-        Ok(files) => tools.extend(files),
-        Err(err) => return fail(err.to_string()),
-    }
     let mode = match permission_mode
         .as_deref()
         .map(|text| (text, Mode::parse(text)))
@@ -155,6 +167,28 @@ async fn main() -> ExitCode {
         Ok(trust) => trust.contains(&cwd),
         Err(err) => return fail(err.to_string()),
     };
+    // Skills (HS6, K1/K2): the owner's `~/.axh/skills`, the folders of `--skill-dir` and — in a folder the owner
+    // trusted once, the same trust the project's allow rules need — the project's `.axh/skills`. A skill that
+    // cannot be used is a note on stderr, never an error (K3).
+    let (catalog, notes) = skills::Catalog::load(&home, &cwd, trusted, &config.skill_dirs);
+    for note in notes {
+        eprintln!("axh: skill left out: {note}");
+    }
+    let catalog = Arc::new(catalog);
+    // Every event through one shared sink: the loop writes to it, and the `skill` tool reports from inside a call
+    // (HS6, K1.2).
+    let mut sink = SharedSink::new(Box::new(JsonLines));
+    let mut tools = Toolbox::new();
+    match file_tools(&cwd, SkillRoots::new(&catalog.folders())) {
+        Ok(files) => tools.extend(files),
+        Err(err) => return fail(err.to_string()),
+    }
+    // The `skill` tool only while there is at least one skill to load (K1.2).
+    if !catalog.is_empty() {
+        tools.extend([
+            Box::new(SkillTool::new(Arc::clone(&catalog), sink.clone())) as Box<dyn Tool>
+        ]);
+    }
     let options = GateOptions {
         mode,
         allow,
@@ -182,20 +216,20 @@ async fn main() -> ExitCode {
         Err(err) => return fail(err.to_string()),
     };
     registry.set_permissions(PermissionsView::of(&gate, &sandbox));
-    let mut prompt = prompt;
-    let endpoint = match registry.expand(&prompt) {
+    let mut prompt = prompt.unwrap_or_default();
+    endpoint = match registry.expand(&prompt) {
         // An ordinary prompt: no command was named (C6).
         None => endpoint,
         Some(Err(message)) => return fail(message),
         // A built-in is answered without a model: its text is the answer (C5).
         Some(Ok(Expanded::Builtin { name, text })) => {
-            JsonLines.emit(Event::Command {
+            sink.emit(Event::Command {
                 name,
                 source: Source::Builtin.as_str().to_owned(),
                 prompt_chars: 0,
             });
-            JsonLines.emit(Event::AssistantText { turn: 0, text });
-            JsonLines.emit(Event::Finished {
+            sink.emit(Event::AssistantText { turn: 0, text });
+            sink.emit(Event::Finished {
                 reason: FinishReason::Answered,
                 turns: 0,
                 usage: Usage::default(),
@@ -209,7 +243,7 @@ async fn main() -> ExitCode {
             model,
         })) => {
             let source = registry.source(&name).unwrap_or(Source::User);
-            JsonLines.emit(Event::Command {
+            sink.emit(Event::Command {
                 source: source.as_str().to_owned(),
                 name: name.clone(),
                 prompt_chars: expanded.chars().count(),
@@ -226,7 +260,28 @@ async fn main() -> ExitCode {
             }
         }
     };
-    // The gate enters the toolbox only after the command had its say about it (C3).
+    // A skill as the run (HS6, K1.1): its body is the run's instructions, its frontmatter may narrow the tools,
+    // pick the model and set the time limit (K5). After the commands, so a command's own word wins where both
+    // name one.
+    if let Some(name) = skill {
+        let Some(chosen) = catalog.get(&name) else {
+            return fail(format!(
+                "no skill named {name:?}; known: {}",
+                catalog.known()
+            ));
+        };
+        if let Err(err) = chosen.start_run(&cwd, &mut config, &mut endpoint, &mut gate) {
+            return fail(err.to_string());
+        }
+        sink.send(Event::Skill {
+            name,
+            how: SkillHow::Run,
+        });
+        if prompt.trim().is_empty() {
+            prompt = skills::DEFAULT_PROMPT.to_owned();
+        }
+    }
+    // The gate enters the toolbox only after the command and the skill had their say about it (C3, K5).
     tools.set_gate(Arc::new(gate));
     // The model is built after the commands: one of them may name its own (C2).
     let model = match OpenAiCompat::new(endpoint) {
@@ -243,7 +298,7 @@ async fn main() -> ExitCode {
         Ok(entries) => entries,
         Err(err) => return fail(err.to_string()),
     };
-    tools.extend(mcp::start(entries, &mut JsonLines).await);
+    tools.extend(mcp::start(entries, &mut sink).await);
     // The shell after the gate: the settings that built it also say how the sandbox runs (HS3b).
     let shell = ShellOptions {
         sandbox: Some(sandbox),
@@ -258,7 +313,7 @@ async fn main() -> ExitCode {
     let cancel = Cancel::new();
     axiomata_harness::run::cancel_on_signals(&cancel);
 
-    let outcome = run(&config, &model, &tools, &prompt, &mut JsonLines, &cancel).await;
+    let outcome = run(&config, &model, &tools, &prompt, &mut sink, &cancel).await;
     ExitCode::from(match outcome.reason {
         FinishReason::Answered => 0,
         FinishReason::Failed => 1,

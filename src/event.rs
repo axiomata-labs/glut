@@ -1,6 +1,8 @@
 //! What a run reports, step by step: the contract between the harness and whatever shows it — a log, the `axh`
 //! binary's JSON lines, later a TUI, the Studio or an app of its own.
 
+use std::sync::{Arc, Mutex};
+
 use serde::Serialize;
 
 use crate::model::Usage;
@@ -33,6 +35,16 @@ pub enum McpStatus {
     Connected,
     /// It could not be started or did not speak the protocol: left out, the run goes on without it.
     Failed,
+}
+
+/// Whether a skill became a run or was loaded while one went on (HS6, K5/K1.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillHow {
+    /// The run started with the skill: its body is the run's instructions (K1.1).
+    Run,
+    /// The model called the `skill` tool and got the skill's body back (K1.2).
+    Loaded,
 }
 
 /// One step of a run.
@@ -94,6 +106,11 @@ pub enum Event {
         tools: usize,
         reason: Option<String>,
     },
+    /// A skill was used (HS6): as the run itself (K1.1) or loaded by the model through the `skill` tool (K1.2).
+    Skill {
+        name: String,
+        how: SkillHow,
+    },
     Error {
         message: String,
     },
@@ -151,6 +168,35 @@ pub trait EventSink: Send {
 impl EventSink for Vec<Event> {
     fn emit(&mut self, event: Event) {
         self.push(event);
+    }
+}
+
+/// One sink behind shared handles (HS6): the run loop holds one, and a tool that reports from inside a call — the
+/// `skill` tool — holds a clone. Their lines reach the same place, in the order they were sent.
+///
+/// The inner sink sits behind a [`std::sync::Mutex`], so every send is one whole event's write (a JSON line's, a
+/// human-readable line's), never half of two.
+#[derive(Clone)]
+pub struct SharedSink(Arc<Mutex<Box<dyn EventSink>>>);
+
+impl SharedSink {
+    /// Wraps `sink` so more than one place can send to it.
+    pub fn new(sink: Box<dyn EventSink>) -> Self {
+        SharedSink(Arc::new(Mutex::new(sink)))
+    }
+
+    /// An event through the shared sink — takes a shared handle, so a tool with only `&self` can report too. A sink
+    /// that panicked while writing leaves the lock poisoned; the events behind it are lost either way, so the next
+    /// send carries on rather than taking the run down with it.
+    pub fn send(&self, event: Event) {
+        let mut sink = self.0.lock().unwrap_or_else(|poison| poison.into_inner());
+        sink.emit(event);
+    }
+}
+
+impl EventSink for SharedSink {
+    fn emit(&mut self, event: Event) {
+        self.send(event);
     }
 }
 
@@ -221,6 +267,61 @@ mod tests {
         .unwrap();
         assert_eq!(failed["status"], "failed");
         assert_eq!(failed["reason"], "it never answered");
+    }
+
+    #[test]
+    fn a_skill_event_is_a_tagged_line_like_the_others() {
+        let line = serde_json::to_value(Event::Skill {
+            name: "demo".into(),
+            how: SkillHow::Run,
+        })
+        .unwrap();
+        // Tagged `event` like every event; the `{"type": …}` in the HS6 plan was the slip of the pen the HS4 and
+        // HS5 plans made too (`docs/plans/harness.md`, "HS5 — what exists").
+        assert_eq!(
+            line,
+            json!({"event": "skill", "name": "demo", "how": "run"})
+        );
+        let loaded = serde_json::to_value(Event::Skill {
+            name: "demo".into(),
+            how: SkillHow::Loaded,
+        })
+        .unwrap();
+        assert_eq!(loaded["how"], "loaded");
+    }
+
+    #[test]
+    fn one_shared_sink_reaches_the_sink_of_every_handle() {
+        let kept = Arc::new(Mutex::new(Vec::new()));
+        #[derive(Clone)]
+        struct Collector(Arc<Mutex<Vec<Event>>>);
+        impl EventSink for Collector {
+            fn emit(&mut self, event: Event) {
+                self.0.lock().unwrap().push(event);
+            }
+        }
+        let sink = SharedSink::new(Box::new(Collector(Arc::clone(&kept))));
+        let tool_side = sink.clone();
+        tool_side.send(Event::Skill {
+            name: "demo".into(),
+            how: SkillHow::Loaded,
+        });
+        let mut run_side = sink;
+        run_side.emit(Event::Finished {
+            reason: FinishReason::Answered,
+            turns: 1,
+            usage: Usage::default(),
+        });
+        let events = kept.lock().unwrap();
+        assert_eq!(events.len(), 2);
+        assert!(matches!(
+            events[0],
+            Event::Skill {
+                how: SkillHow::Loaded,
+                ..
+            }
+        ));
+        assert!(matches!(events[1], Event::Finished { .. }));
     }
 
     #[test]

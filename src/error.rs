@@ -31,4 +31,8 @@ pub enum HarnessError {
         server: String,
         timeout: std::time::Duration,
     },
+    /// A skill cannot be started (HS6, K5): a `prepend_files` path that is absolute or climbs out of the working
+    /// folder, or a file along the way that cannot be read.
+    #[error("skill {name}: {message}")]
+    Skill { name: String, message: String },
 }

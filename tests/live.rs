@@ -3,7 +3,7 @@
 //! `AXH_LIVE_BASE_URL=https://openrouter.ai/api AXH_LIVE_MODEL=deepseek/deepseek-chat AXH_API_KEY=… \
 //!  cargo test -p axiomata-harness --test live -- --ignored --nocapture`
 
-use axiomata_harness::tools::files::file_tools;
+use axiomata_harness::tools::files::{SkillRoots, file_tools};
 use axiomata_harness::{
     Cancel, Event, FinishReason, ModelEndpoint, OpenAiCompat, RunConfig, Toolbox, run,
 };
@@ -24,7 +24,7 @@ async fn a_real_model_reads_a_file_and_answers() {
     })
     .unwrap();
     let mut tools = Toolbox::new();
-    tools.extend(file_tools(&dir).unwrap());
+    tools.extend(file_tools(&dir, SkillRoots::default()).unwrap());
     let mut events = Vec::new();
     let outcome = run(
         &RunConfig::new(&dir),

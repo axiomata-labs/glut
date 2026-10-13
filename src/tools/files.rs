@@ -5,6 +5,7 @@
 //! refused there, not here. The file system work is blocking, so each call runs on tokio's blocking pool.
 
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use axiomata_files::{
@@ -139,19 +140,102 @@ fn guard_resolved(root: &Root, path: &str, dirs: &[&str], files: &[&str]) -> Res
 /// # Errors
 ///
 /// [`HarnessError::Workspace`] if `cwd` is not a folder that can be used as a root.
-pub fn file_tools(cwd: &std::path::Path) -> Result<Vec<Box<dyn Tool>>, HarnessError> {
+pub fn file_tools(
+    cwd: &std::path::Path,
+    skills: SkillRoots,
+) -> Result<Vec<Box<dyn Tool>>, HarnessError> {
     let root = Root::dir(cwd, LinkPolicy::Contained).map_err(|err| HarnessError::Workspace {
         path: cwd.display().to_string(),
         reason: err.to_string(),
     })?;
     Ok(vec![
-        Box::new(FileTool::new(&root, Kind::Read)),
-        Box::new(FileTool::new(&root, Kind::Write)),
-        Box::new(FileTool::new(&root, Kind::Edit)),
-        Box::new(FileTool::new(&root, Kind::List)),
-        Box::new(FileTool::new(&root, Kind::Grep)),
-        Box::new(FileTool::new(&root, Kind::Glob)),
+        Box::new(FileTool::new(&root, skills.clone(), Kind::Read)),
+        Box::new(FileTool::new(&root, skills.clone(), Kind::Write)),
+        Box::new(FileTool::new(&root, skills.clone(), Kind::Edit)),
+        Box::new(FileTool::new(&root, skills.clone(), Kind::List)),
+        Box::new(FileTool::new(&root, skills.clone(), Kind::Grep)),
+        Box::new(FileTool::new(&root, skills, Kind::Glob)),
     ])
+}
+
+/// How a run names a skill's folder: `skill:<name>/<rel>`, read-only (HS6, K4).
+const SKILL_PREFIX: &str = "skill:";
+
+/// The skill folders a run may read beside the working folder (HS6, K4): each skill's own folder is a root of its
+/// own, reached as `skill:<name>/<rel>` — a skill's scripts and references are another tool's files, never the
+/// run's to change. Built from the run's catalog; a folder that cannot be opened is left out (the skill's body is
+/// in memory already).
+#[derive(Clone, Default)]
+pub struct SkillRoots(Arc<[(String, Root)]>);
+
+impl SkillRoots {
+    /// Every folder of `folders` (name, folder) as a root, through the same guard the working folder gets.
+    pub fn new(folders: &[(String, std::path::PathBuf)]) -> Self {
+        let roots: Vec<(String, Root)> = folders
+            .iter()
+            .filter_map(|(name, dir)| {
+                Root::dir(dir, LinkPolicy::Contained)
+                    .ok()
+                    .map(|root| (name.clone(), root))
+            })
+            .collect();
+        SkillRoots(roots.into())
+    }
+
+    /// The root of the skill named `name` and the path inside its folder.
+    ///
+    /// # Errors
+    ///
+    /// A `skill:` path naming no skill of the run: the message lists the ones there are.
+    fn find<'a>(&'a self, name: &str, rel: &'a str) -> Result<(&'a Root, &'a str), String> {
+        match self.0.iter().find(|(skill, _)| skill == name) {
+            Some((_, root)) => Ok((root, rel)),
+            None => Err(format!(
+                "there is no skill named {name:?}; known: {}",
+                self.known()
+            )),
+        }
+    }
+
+    /// The skill names, for that message.
+    fn known(&self) -> String {
+        let names: Vec<&str> = self.0.iter().map(|(name, _)| name.as_str()).collect();
+        if names.is_empty() {
+            "no skills are loaded".into()
+        } else {
+            names.join(", ")
+        }
+    }
+}
+
+/// `skill:<name>/<rel>` as the skill's name and the path inside its folder; `None` for an ordinary path. The model
+/// learns these paths from the `skill` tool's result (K4).
+fn skill_path(path: &str) -> Option<(&str, &str)> {
+    let rest = path.strip_prefix(SKILL_PREFIX)?;
+    match rest.split_once('/') {
+        Some((name, rel)) if !name.is_empty() => Some((name, rel)),
+        Some(_) => None,
+        None if !rest.is_empty() => Some((rest, "")),
+        None => None,
+    }
+}
+
+/// Where a path leads, as the rules see it: the working folder, or a skill's folder with its `skill:<name>/`
+/// prefix kept — a link inside a skill folder resolved to where it really leads.
+fn rule_path(working: &Root, skills: &SkillRoots, path: &str) -> String {
+    let path = rel(path);
+    let Some((name, inside)) = skill_path(path) else {
+        return real_path(working, path);
+    };
+    let Ok((root, inside)) = skills.find(name, inside) else {
+        return path.to_owned();
+    };
+    let real = real_path(root, inside);
+    if real.is_empty() {
+        format!("skill:{name}")
+    } else {
+        format!("skill:{name}/{real}")
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -166,13 +250,15 @@ enum Kind {
 
 struct FileTool {
     root: Root,
+    skills: SkillRoots,
     kind: Kind,
 }
 
 impl FileTool {
-    fn new(root: &Root, kind: Kind) -> Self {
+    fn new(root: &Root, skills: SkillRoots, kind: Kind) -> Self {
         FileTool {
             root: root.clone(),
+            skills,
             kind,
         }
     }
@@ -255,29 +341,45 @@ impl Tool for FileTool {
                 .unwrap_or("")
                 .to_owned()
         };
-        // The rules see where a path really leads: `link/x` through a link to `secrets/` is `secrets/x`.
-        let path = |key: &str| real_path(&self.root, &path(key));
         match self.kind {
-            Kind::Read => Access::Read { path: path("path") },
-            Kind::List => Access::Read { path: path("path") },
-            // A search reads the whole folder; what the read rules hold back is left out of its results (`shown`).
-            Kind::Grep | Kind::Glob => Access::Read { path: ".".into() },
-            Kind::Write | Kind::Edit => Access::Edit { path: path("path") },
+            // A `skill:` path is judged as `skill:<name>/<rel>` (K4); anything else the rules see where it really
+            // leads: `link/x` through a link to `secrets/` is `secrets/x`.
+            Kind::Read | Kind::List => Access::Read {
+                path: rule_path(&self.root, &self.skills, &path("path")),
+            },
+            // A search reads a whole folder; what the read rules hold back is left out of its results (`shown`).
+            // An `include`/`pattern` naming a skill searches that skill's folder, not the working folder (K4).
+            Kind::Grep => Access::Read {
+                path: match skill_path(rel(&path("include"))) {
+                    Some((name, _)) => format!("skill:{name}"),
+                    None => ".".into(),
+                },
+            },
+            Kind::Glob => Access::Read {
+                path: match skill_path(rel(&path("pattern"))) {
+                    Some((name, _)) => format!("skill:{name}"),
+                    None => ".".into(),
+                },
+            },
+            Kind::Write | Kind::Edit => Access::Edit {
+                path: rule_path(&self.root, &self.skills, &path("path")),
+            },
         }
     }
 
     fn call(&self, arguments: Value, context: CallContext) -> ToolFuture<'_> {
         let CallContext { stop, gate } = context;
         let root = self.root.clone();
+        let skills = self.skills.clone();
         let kind = self.kind;
         Box::pin(async move {
             tokio::task::spawn_blocking(move || match kind {
-                Kind::Read => read(&root, parse(arguments)?),
+                Kind::Read => read(&root, &skills, parse(arguments)?),
                 Kind::Write => write(&root, parse(arguments)?),
                 Kind::Edit => edit(&root, parse(arguments)?),
-                Kind::List => list(&root, parse(arguments)?),
-                Kind::Grep => grep(&root, parse(arguments)?, &stop, gate.as_deref()),
-                Kind::Glob => glob(&root, parse(arguments)?, gate.as_deref()),
+                Kind::List => list(&root, &skills, parse(arguments)?),
+                Kind::Grep => grep(&root, &skills, parse(arguments)?, &stop, gate.as_deref()),
+                Kind::Glob => glob(&root, &skills, parse(arguments)?, gate.as_deref()),
             })
             .await
             .unwrap_or_else(|err| Err(format!("the tool failed: {err}")))
@@ -307,9 +409,21 @@ struct ReadArgs {
     limit: Option<usize>,
 }
 
-fn read(root: &Root, args: ReadArgs) -> Result<String, String> {
-    guard_resolved(root, rel(&args.path), &PRIVATE_DIRS, &[])?;
-    let file = read_text(root, rel(&args.path), MAX_READ_BYTES).map_err(describe)?;
+fn read(working: &Root, skills: &SkillRoots, args: ReadArgs) -> Result<String, String> {
+    // K4: a skill's folder is a read-only root beside the working folder.
+    let (root, path) = match skill_path(rel(&args.path)) {
+        Some((name, inside)) => {
+            let (root, inside) = skills.find(name, inside)?;
+            guard_resolved(root, inside, &PRIVATE_DIRS, &[])?;
+            (root, inside)
+        }
+        None => {
+            let path = rel(&args.path);
+            guard_resolved(working, path, &PRIVATE_DIRS, &[])?;
+            (working, path)
+        }
+    };
+    let file = read_text(root, path, MAX_READ_BYTES).map_err(describe)?;
     let first = args.offset.unwrap_or(1).max(1);
     let limit = args.limit.unwrap_or(DEFAULT_READ_LINES).max(1);
     let lines: Vec<&str> = file.content.lines().collect();
@@ -346,6 +460,8 @@ struct WriteArgs {
 
 fn write(root: &Root, args: WriteArgs) -> Result<String, String> {
     let path = rel(&args.path);
+    // K4: a skill's folder is read-only for the run, whatever its rules say.
+    refuse_skill_path(path)?;
     guard_resolved(root, path, &PROTECTED_DIRS, &PROTECTED_FILES)?;
     refuse_hard_links(root, path)?;
     make_parents(root, path)?;
@@ -382,6 +498,8 @@ struct EditArgs {
 
 fn edit(root: &Root, args: EditArgs) -> Result<String, String> {
     let path = rel(&args.path);
+    // K4: a skill's folder is read-only for the run, whatever its rules say.
+    refuse_skill_path(path)?;
     guard_resolved(root, path, &PROTECTED_DIRS, &PROTECTED_FILES)?;
     refuse_hard_links(root, path)?;
     if args.old_string.is_empty() {
@@ -413,9 +531,20 @@ struct ListArgs {
     path: String,
 }
 
-fn list(root: &Root, args: ListArgs) -> Result<String, String> {
-    guard_resolved(root, rel(&args.path), &PRIVATE_DIRS, &[])?;
-    let listing = list_dir(root, rel(&args.path)).map_err(describe)?;
+fn list(working: &Root, skills: &SkillRoots, args: ListArgs) -> Result<String, String> {
+    let (root, path) = match skill_path(rel(&args.path)) {
+        Some((name, inside)) => {
+            let (root, inside) = skills.find(name, inside)?;
+            guard_resolved(root, inside, &PRIVATE_DIRS, &[])?;
+            (root, inside)
+        }
+        None => {
+            let path = rel(&args.path);
+            guard_resolved(working, path, &PRIVATE_DIRS, &[])?;
+            (working, path)
+        }
+    };
+    let listing = list_dir(root, path).map_err(describe)?;
     let mut entries = listing.entries;
     entries.sort_by(|a, b| a.name.cmp(&b.name));
     let mut out: Vec<String> = entries
@@ -456,37 +585,53 @@ fn shown(gate: Option<&Gate>, rel: &str) -> bool {
     gate.is_none_or(|gate| !gate.read_held_back(rel) && guard(rel, &PRIVATE_DIRS, &[]).is_ok())
 }
 
+/// Refuses a write to a skill's folder (K4): its files belong to the skill, not to the run.
+fn refuse_skill_path(path: &str) -> Result<(), String> {
+    if skill_path(path).is_some() {
+        return Err(
+            "a skill's files are read-only for the run; change them outside the harness".into(),
+        );
+    }
+    Ok(())
+}
+
 fn grep(
-    root: &Root,
+    working: &Root,
+    skills: &SkillRoots,
     args: GrepArgs,
     stop: &AtomicBool,
     gate: Option<&Gate>,
 ) -> Result<String, String> {
+    // K4: an `include` naming a skill searches that skill's folder, and its hits keep the `skill:<name>/` prefix
+    // the rules and `read_file` speak.
+    let (root, prefix, include) = match skill_path(args.include.as_deref().unwrap_or("")) {
+        Some((name, inside)) => {
+            let (root, _) = skills.find(name, "")?;
+            (root, format!("skill:{name}/"), Some(inside.to_owned()))
+        }
+        None => (working, String::new(), args.include.clone()),
+    };
     let query = SearchQuery {
         pattern: args.pattern,
         regex: true,
         case_sensitive: args.case_sensitive,
         whole_word: false,
-        include: args.include.into_iter().collect(),
+        include: include.into_iter().collect(),
         exclude: Vec::new(),
     };
     let mut lines = Vec::new();
     let mut more = false;
     let mut held_back = 0usize;
     let summary = search(root, &query, stop, |found| {
-        if !shown(gate, &found.rel) {
+        let path = format!("{prefix}{}", found.rel);
+        if !shown(gate, &path) {
             held_back += 1;
             return;
         }
         for hit in found.matches {
             if lines.len() < MAX_GREP_LINES {
                 // One-based, like `read_file`'s numbers, so the model can read on at that line.
-                lines.push(format!(
-                    "{}:{}: {}",
-                    found.rel,
-                    hit.line + 1,
-                    hit.text.trim_end()
-                ));
+                lines.push(format!("{path}:{}: {}", hit.line + 1, hit.text.trim_end()));
             } else {
                 more = true;
             }
@@ -514,26 +659,39 @@ struct GlobArgs {
     pattern: String,
 }
 
-fn glob(root: &Root, args: GlobArgs, gate: Option<&Gate>) -> Result<String, String> {
-    let matcher = Glob::new(rel(&args.pattern))
+fn glob(
+    working: &Root,
+    skills: &SkillRoots,
+    args: GlobArgs,
+    gate: Option<&Gate>,
+) -> Result<String, String> {
+    // K4: a pattern naming a skill searches that skill's folder, and its paths keep the `skill:<name>/` prefix the
+    // rules and `read_file` speak.
+    let (root, prefix, pattern) = match skill_path(rel(&args.pattern)) {
+        Some((name, inside)) => {
+            let (root, _) = skills.find(name, "")?;
+            (root, format!("skill:{name}/"), inside.to_owned())
+        }
+        None => (working, String::new(), rel(&args.pattern).to_owned()),
+    };
+    let matcher = Glob::new(&pattern)
         .map_err(|err| format!("bad glob: {err}"))?
         .compile_matcher();
     let index = index_files(root).map_err(describe)?;
-    let mut found: Vec<&String> = index
+    let mut found: Vec<String> = index
         .files
         .iter()
-        .filter(|path| matcher.is_match(path) && shown(gate, path))
+        .filter(|path| matcher.is_match(path))
+        .map(|path| format!("{prefix}{path}"))
+        .filter(|path| shown(gate, path))
         .collect();
     found.sort();
     if found.is_empty() {
         return Ok("no files match".into());
     }
-    let mut out: Vec<String> = found
-        .iter()
-        .take(MAX_GLOB_PATHS)
-        .map(|path| (*path).clone())
-        .collect();
-    if found.len() > MAX_GLOB_PATHS || index.truncated {
+    let more = found.len() > MAX_GLOB_PATHS;
+    let mut out: Vec<String> = found.into_iter().take(MAX_GLOB_PATHS).collect();
+    if more || index.truncated {
         out.push(format!("[more files than the {MAX_GLOB_PATHS} shown]"));
     }
     Ok(out.join("\n"))
@@ -547,14 +705,33 @@ mod tests {
 
     /// A fresh folder with a toolbox of the file tools on it.
     fn setup() -> (std::path::PathBuf, Toolbox) {
+        setup_with(&[])
+    }
+
+    /// [`setup`] with skill folders beside the working folder (HS6, K4): each entry is a skill's name and the files
+    /// to write into its folder.
+    fn setup_with(skills: &[(&str, &[(&str, &str)])]) -> (std::path::PathBuf, Toolbox) {
         let dir = std::env::temp_dir().join(format!(
             "axh-files-{}-{}",
             std::process::id(),
             chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
         ));
         std::fs::create_dir_all(&dir).unwrap();
+        let mut folders = Vec::new();
+        for (name, files) in skills {
+            let folder = dir.join("skills-folder").join(name);
+            std::fs::create_dir_all(&folder).unwrap();
+            for (path, content) in *files {
+                let full = folder.join(path);
+                if let Some(parent) = full.parent() {
+                    std::fs::create_dir_all(parent).unwrap();
+                }
+                std::fs::write(full, content).unwrap();
+            }
+            folders.push((name.to_string(), folder));
+        }
         let mut toolbox = Toolbox::new();
-        toolbox.extend(file_tools(&dir).unwrap());
+        toolbox.extend(file_tools(&dir, SkillRoots::new(&folders)).unwrap());
         (dir, toolbox)
     }
 
@@ -670,7 +847,10 @@ mod tests {
     #[test]
     fn a_folder_that_does_not_exist_is_no_root() {
         assert!(matches!(
-            file_tools(std::path::Path::new("/definitely/not/here")),
+            file_tools(
+                std::path::Path::new("/definitely/not/here"),
+                SkillRoots::default()
+            ),
             Err(HarnessError::Workspace { .. })
         ));
     }
@@ -811,11 +991,97 @@ mod tests {
         std::fs::hard_link(dir.join("a.txt"), dir.join("b.txt")).unwrap();
         // Without a gate, so the write reaches the tool and its own refusal is what answers.
         let mut plain = crate::tools::Toolbox::new();
-        plain.extend(file_tools(&dir).unwrap());
+        plain.extend(file_tools(&dir, SkillRoots::default()).unwrap());
         let (ok, text) = plain
             .call("write_file", r#"{"path":"b.txt","content":"x"}"#)
             .await;
         assert!(!ok && text.contains("hard links"), "{text}");
         assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "a");
+    }
+
+    #[tokio::test]
+    async fn a_skills_files_are_read_only_roots_of_their_own() {
+        let (dir, tools) = setup_with(&[(
+            "demo",
+            &[
+                ("ref.md", "the reference\n"),
+                ("scripts/run.sh", "echo hi\n"),
+            ],
+        )]);
+        // Read, list and search through the skill's own root, its paths kept as `skill:<name>/<rel>` (K4).
+        let (ok, text) = tools
+            .call("read_file", r#"{"path":"skill:demo/ref.md"}"#)
+            .await;
+        assert!(ok, "{text}");
+        assert!(text.contains("the reference"), "{text}");
+        let (_, text) = tools.call("list_dir", r#"{"path":"skill:demo"}"#).await;
+        assert_eq!(text, "ref.md (14 bytes)\nscripts/");
+        let (_, text) = tools
+            .call("glob", r#"{"pattern":"skill:demo/**/*.md"}"#)
+            .await;
+        assert_eq!(text, "skill:demo/ref.md");
+        let (_, text) = tools
+            .call(
+                "grep",
+                r#"{"pattern":"reference","include":"skill:demo/**"}"#,
+            )
+            .await;
+        assert_eq!(text, "skill:demo/ref.md:1: the reference");
+
+        // A skill's files are never written, whatever the run's rules allow.
+        for (tool, args) in [
+            ("write_file", r#"{"path":"skill:demo/x.md","content":"x"}"#),
+            (
+                "edit_file",
+                r#"{"path":"skill:demo/ref.md","old_string":"the","new_string":"a"}"#,
+            ),
+        ] {
+            let (ok, text) = tools.call(tool, args).await;
+            assert!(!ok && text.contains("read-only"), "{tool}: {text}");
+        }
+        assert_eq!(
+            std::fs::read_to_string(dir.join("skills-folder/demo/ref.md")).unwrap(),
+            "the reference\n"
+        );
+
+        // Climbing out of the skill's folder, a link out of it and an unknown name are all refused.
+        let skill_dir = dir.join("skills-folder").join("demo");
+        std::os::unix::fs::symlink(std::env::temp_dir(), skill_dir.join("out")).unwrap();
+        for path in [
+            "skill:demo/../../etc/passwd",
+            "skill:demo/out/anything",
+            "skill:unknown/ref.md",
+        ] {
+            let (ok, text) = tools
+                .call("read_file", &json!({"path": path}).to_string())
+                .await;
+            assert!(!ok, "{path}: {text}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_search_of_a_skill_folder_leaves_out_what_the_read_rules_hold_back() {
+        use crate::permissions::{Gate, Mode, Nobody, Rule, RuleSet};
+        let (_dir, mut tools) = setup_with(&[(
+            "demo",
+            &[("open.md", "TOKEN here\n"), ("secret.md", "TOKEN=abc\n")],
+        )]);
+        let rules = RuleSet {
+            deny: vec![Rule::parse("Read(skill:demo/secret.md)").unwrap()],
+            ..RuleSet::default()
+        };
+        tools.set_gate(std::sync::Arc::new(Gate::new(
+            rules,
+            Mode::Default,
+            std::sync::Arc::new(Nobody),
+        )));
+        let (_, text) = tools
+            .call("glob", r#"{"pattern":"skill:demo/**/*.md"}"#)
+            .await;
+        assert_eq!(text, "skill:demo/open.md");
+        let (ok, text) = tools
+            .call("read_file", r#"{"path":"skill:demo/secret.md"}"#)
+            .await;
+        assert!(!ok && text.contains("skill:demo/secret.md"), "{text}");
     }
 }
