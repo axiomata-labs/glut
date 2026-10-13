@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use serde_json::Value;
 
 use crate::model::ToolSpec;
+use crate::permissions::{Access, Gate};
 
 /// The most characters of one tool result the model gets. A bigger result (a huge file, a broad search) would eat the
 /// context window in one step; the model is told it was cut and can narrow its call.
@@ -27,23 +28,45 @@ pub type ToolFuture<'a> = Pin<Box<dyn Future<Output = Result<String, String>> + 
 /// blocking thread — one file write — still finishes; nothing new begins after it.
 pub type StopFlag = Arc<AtomicBool>;
 
+/// What a tool call gets besides its arguments: the run's stop signal and, if the run has one, its gate (a search
+/// leaves out what the read rules hold back).
+#[derive(Clone, Default)]
+pub struct CallContext {
+    pub stop: StopFlag,
+    pub gate: Option<Arc<Gate>>,
+}
+
 /// A tool the model can call.
 pub trait Tool: Send + Sync {
     /// The name, description and argument schema the model is shown.
     fn spec(&self) -> ToolSpec;
-    /// Runs the tool with the model's arguments (a JSON object); `stop` is the run's [`StopFlag`].
-    fn call(&self, arguments: Value, stop: StopFlag) -> ToolFuture<'_>;
+    /// What a call with these arguments would touch, for the run's [`Gate`] to judge before it runs. Required, not
+    /// defaulted: a new tool must say what it does before any rule can speak about it.
+    fn access(&self, arguments: &Value) -> Access;
+    /// Runs the tool with the model's arguments (a JSON object).
+    fn call(&self, arguments: Value, context: CallContext) -> ToolFuture<'_>;
 }
 
 /// The tools of a run.
 #[derive(Default)]
 pub struct Toolbox {
     tools: Vec<Box<dyn Tool>>,
+    /// Judges every call; without one, every call runs (a library caller that checks on its own, the tests).
+    gate: Option<Arc<Gate>>,
 }
 
 impl Toolbox {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Puts every call under `gate` (HS3a).
+    pub fn set_gate(&mut self, gate: Arc<Gate>) {
+        self.gate = Some(gate);
+    }
+
+    pub fn gate(&self) -> Option<&Arc<Gate>> {
+        self.gate.as_ref()
     }
 
     /// Adds `tools`.
@@ -90,7 +113,16 @@ impl Toolbox {
                 );
             }
         };
-        let (ok, text) = match tool.call(parsed, Arc::clone(stop)).await {
+        if let Some(gate) = &self.gate
+            && let Err(refused) = gate.judge(name, &tool.access(&parsed)).await
+        {
+            return (false, format!("error: {refused}"));
+        }
+        let context = CallContext {
+            stop: Arc::clone(stop),
+            gate: self.gate.clone(),
+        };
+        let (ok, text) = match tool.call(parsed, context).await {
             Ok(text) => (true, text),
             Err(text) => (false, format!("error: {text}")),
         };
@@ -126,7 +158,11 @@ mod tests {
             }
         }
 
-        fn call(&self, arguments: Value, _stop: StopFlag) -> ToolFuture<'_> {
+        fn access(&self, _arguments: &Value) -> Access {
+            Access::Other
+        }
+
+        fn call(&self, arguments: Value, _context: CallContext) -> ToolFuture<'_> {
             Box::pin(async move {
                 match arguments.get("text").and_then(Value::as_str) {
                     Some(text) => Ok(text.to_owned()),

@@ -4,6 +4,7 @@
 //! Studio already use: a path that climbs out (`..`), is absolute, or follows a link to a place outside the folder is
 //! refused there, not here. The file system work is blocking, so each call runs on tokio's blocking pool.
 
+use std::path::Path;
 use std::sync::atomic::AtomicBool;
 
 use axiomata_files::{
@@ -14,9 +15,10 @@ use globset::Glob;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::{StopFlag, Tool, ToolFuture};
+use super::{CallContext, Tool, ToolFuture};
 use crate::error::HarnessError;
 use crate::model::ToolSpec;
+use crate::permissions::{Access, Gate};
 
 /// Lines `read_file` gives out when the model does not say how many.
 const DEFAULT_READ_LINES: usize = 2_000;
@@ -35,8 +37,9 @@ const PRIVATE_DIRS: [&str; 3] = [".git", ".hg", ".jj"];
 
 /// What a run never writes: the version control's store and the configuration a later program obeys. A line written
 /// into `.git/config` (`core.fsmonitor`, an alias with `!`) runs as the owner at their next `git status`; a role, a
-/// task file or an agent's settings would be obeyed by the next session. Security audit of HS1, 2026-10-13.
-const PROTECTED_DIRS: [&str; 7] = [
+/// task file or an agent's settings — the harness's own rules in `.axh/` included — would be obeyed by the next
+/// session. Security audit of HS1, 2026-10-13.
+const PROTECTED_DIRS: [&str; 10] = [
     ".git",
     ".hg",
     ".jj",
@@ -44,16 +47,89 @@ const PROTECTED_DIRS: [&str; 7] = [
     ".claude",
     ".opencode",
     ".vscode",
+    ".axh",
+    // Run code at the owner's next build or commit: cargo's runner and flags, git hooks of husky.
+    ".cargo",
+    ".husky",
 ];
-const PROTECTED_FILES: [&str; 2] = [".mcp.json", "opencode.json"];
+/// `.envrc` runs when the owner next enters the folder (direnv).
+const PROTECTED_FILES: [&str; 3] = [".mcp.json", "opencode.json", ".envrc"];
 
-/// Refuses a path whose folders include one of `dirs`, or whose name is one of `files`.
+/// Refuses a path whose folders include one of `dirs`, or whose name is one of `files` — whatever its case: macOS
+/// volumes do not tell `.git` from `.GIT`.
 fn guard(path: &str, dirs: &[&str], files: &[&str]) -> Result<(), String> {
+    let is = |part: &str, names: &[&str]| names.iter().any(|name| part.eq_ignore_ascii_case(name));
     let parts: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
-    if parts.iter().any(|part| dirs.contains(part))
-        || parts.last().is_some_and(|name| files.contains(name))
-    {
+    if parts.iter().any(|part| is(part, dirs)) || parts.last().is_some_and(|name| is(name, files)) {
         return Err(format!("{path} is protected: the run may not touch it"));
+    }
+    Ok(())
+}
+
+/// `path` as the rules should see it: relative to the root, through any link inside it to where it really leads; as
+/// written when it cannot be resolved (it does not exist yet, or leads outside — then the tool refuses it anyway).
+fn real_path(root: &Root, path: &str) -> String {
+    let path = rel(path);
+    let full = root.path().join(path);
+    let mut existing = full.as_path();
+    while !existing.exists() {
+        match existing.parent() {
+            Some(parent) => existing = parent,
+            None => return path.to_owned(),
+        }
+    }
+    match existing
+        .canonicalize()
+        .ok()
+        .and_then(|real| real.strip_prefix(root.path()).ok().map(Path::to_path_buf))
+    {
+        Some(inside) => {
+            let rest = full.strip_prefix(existing).unwrap_or(Path::new(""));
+            let joined = inside.join(rest);
+            let text = joined.to_string_lossy();
+            if text.is_empty() {
+                ".".to_owned()
+            } else {
+                text.into_owned()
+            }
+        }
+        None => path.to_owned(),
+    }
+}
+
+/// Refuses to change a file with more than one name: through a hard link, a change here is also a change to a file
+/// elsewhere — perhaps in a protected folder — that no rule was asked about.
+fn refuse_hard_links(root: &Root, path: &str) -> Result<(), String> {
+    use std::os::unix::fs::MetadataExt;
+    match std::fs::symlink_metadata(root.path().join(path)) {
+        Ok(meta) if meta.is_file() && meta.nlink() > 1 => Err(format!(
+            "{path} has {} names (hard links): change it outside the run",
+            meta.nlink()
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// [`guard`] on the path as written and on where it really leads: a link inside the folder (`docs -> .axh`) must not
+/// open a protected folder under another name.
+fn guard_resolved(root: &Root, path: &str, dirs: &[&str], files: &[&str]) -> Result<(), String> {
+    guard(path, dirs, files)?;
+    let full = root.path().join(path);
+    // The deepest part of the path that exists, resolved; what lies below it does not exist yet and cannot be a link.
+    let mut existing = full.as_path();
+    while !existing.exists() {
+        match existing.parent() {
+            Some(parent) => existing = parent,
+            None => return Ok(()),
+        }
+    }
+    if let Ok(real) = existing.canonicalize()
+        && let Ok(inside) = real.strip_prefix(root.path())
+    {
+        let rest = full
+            .strip_prefix(existing)
+            .unwrap_or(std::path::Path::new(""));
+        guard(&inside.join(rest).to_string_lossy(), dirs, files)?;
     }
     Ok(())
 }
@@ -171,7 +247,27 @@ impl Tool for FileTool {
         }
     }
 
-    fn call(&self, arguments: Value, stop: StopFlag) -> ToolFuture<'_> {
+    fn access(&self, arguments: &Value) -> Access {
+        let path = |key: &str| {
+            arguments
+                .get(key)
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_owned()
+        };
+        // The rules see where a path really leads: `link/x` through a link to `secrets/` is `secrets/x`.
+        let path = |key: &str| real_path(&self.root, &path(key));
+        match self.kind {
+            Kind::Read => Access::Read { path: path("path") },
+            Kind::List => Access::Read { path: path("path") },
+            // A search reads the whole folder; what the read rules hold back is left out of its results (`shown`).
+            Kind::Grep | Kind::Glob => Access::Read { path: ".".into() },
+            Kind::Write | Kind::Edit => Access::Edit { path: path("path") },
+        }
+    }
+
+    fn call(&self, arguments: Value, context: CallContext) -> ToolFuture<'_> {
+        let CallContext { stop, gate } = context;
         let root = self.root.clone();
         let kind = self.kind;
         Box::pin(async move {
@@ -180,8 +276,8 @@ impl Tool for FileTool {
                 Kind::Write => write(&root, parse(arguments)?),
                 Kind::Edit => edit(&root, parse(arguments)?),
                 Kind::List => list(&root, parse(arguments)?),
-                Kind::Grep => grep(&root, parse(arguments)?, &stop),
-                Kind::Glob => glob(&root, parse(arguments)?),
+                Kind::Grep => grep(&root, parse(arguments)?, &stop, gate.as_deref()),
+                Kind::Glob => glob(&root, parse(arguments)?, gate.as_deref()),
             })
             .await
             .unwrap_or_else(|err| Err(format!("the tool failed: {err}")))
@@ -212,7 +308,7 @@ struct ReadArgs {
 }
 
 fn read(root: &Root, args: ReadArgs) -> Result<String, String> {
-    guard(rel(&args.path), &PRIVATE_DIRS, &[])?;
+    guard_resolved(root, rel(&args.path), &PRIVATE_DIRS, &[])?;
     let file = read_text(root, rel(&args.path), MAX_READ_BYTES).map_err(describe)?;
     let first = args.offset.unwrap_or(1).max(1);
     let limit = args.limit.unwrap_or(DEFAULT_READ_LINES).max(1);
@@ -250,7 +346,8 @@ struct WriteArgs {
 
 fn write(root: &Root, args: WriteArgs) -> Result<String, String> {
     let path = rel(&args.path);
-    guard(path, &PROTECTED_DIRS, &PROTECTED_FILES)?;
+    guard_resolved(root, path, &PROTECTED_DIRS, &PROTECTED_FILES)?;
+    refuse_hard_links(root, path)?;
     make_parents(root, path)?;
     write_text(root, path, &args.content, None, MAX_WRITE_BYTES).map_err(describe)?;
     Ok(format!("wrote {} bytes to {path}", args.content.len()))
@@ -285,7 +382,8 @@ struct EditArgs {
 
 fn edit(root: &Root, args: EditArgs) -> Result<String, String> {
     let path = rel(&args.path);
-    guard(path, &PROTECTED_DIRS, &PROTECTED_FILES)?;
+    guard_resolved(root, path, &PROTECTED_DIRS, &PROTECTED_FILES)?;
+    refuse_hard_links(root, path)?;
     if args.old_string.is_empty() {
         return Err("old_string is empty; use write_file to fill a file".into());
     }
@@ -316,7 +414,7 @@ struct ListArgs {
 }
 
 fn list(root: &Root, args: ListArgs) -> Result<String, String> {
-    guard(rel(&args.path), &PRIVATE_DIRS, &[])?;
+    guard_resolved(root, rel(&args.path), &PRIVATE_DIRS, &[])?;
     let listing = list_dir(root, rel(&args.path)).map_err(describe)?;
     let mut entries = listing.entries;
     entries.sort_by(|a, b| a.name.cmp(&b.name));
@@ -352,7 +450,18 @@ fn yes() -> bool {
     true
 }
 
-fn grep(root: &Root, args: GrepArgs, stop: &AtomicBool) -> Result<String, String> {
+/// Whether a search shows `rel`: not when a read rule holds it back (the file would be asked about or refused by
+/// `read_file`; a search must not hand out its lines instead).
+fn shown(gate: Option<&Gate>, rel: &str) -> bool {
+    gate.is_none_or(|gate| !gate.read_held_back(rel) && guard(rel, &PRIVATE_DIRS, &[]).is_ok())
+}
+
+fn grep(
+    root: &Root,
+    args: GrepArgs,
+    stop: &AtomicBool,
+    gate: Option<&Gate>,
+) -> Result<String, String> {
     let query = SearchQuery {
         pattern: args.pattern,
         regex: true,
@@ -363,7 +472,12 @@ fn grep(root: &Root, args: GrepArgs, stop: &AtomicBool) -> Result<String, String
     };
     let mut lines = Vec::new();
     let mut more = false;
+    let mut held_back = 0usize;
     let summary = search(root, &query, stop, |found| {
+        if !shown(gate, &found.rel) {
+            held_back += 1;
+            return;
+        }
         for hit in found.matches {
             if lines.len() < MAX_GREP_LINES {
                 // One-based, like `read_file`'s numbers, so the model can read on at that line.
@@ -379,6 +493,11 @@ fn grep(root: &Root, args: GrepArgs, stop: &AtomicBool) -> Result<String, String
         }
     })
     .map_err(describe)?;
+    if held_back > 0 {
+        lines.push(format!(
+            "[{held_back} matching file(s) left out: the read rules hold them back]"
+        ));
+    }
     if lines.is_empty() {
         return Ok("no matches".into());
     }
@@ -395,7 +514,7 @@ struct GlobArgs {
     pattern: String,
 }
 
-fn glob(root: &Root, args: GlobArgs) -> Result<String, String> {
+fn glob(root: &Root, args: GlobArgs, gate: Option<&Gate>) -> Result<String, String> {
     let matcher = Glob::new(rel(&args.pattern))
         .map_err(|err| format!("bad glob: {err}"))?
         .compile_matcher();
@@ -403,7 +522,7 @@ fn glob(root: &Root, args: GlobArgs) -> Result<String, String> {
     let mut found: Vec<&String> = index
         .files
         .iter()
-        .filter(|path| matcher.is_match(path))
+        .filter(|path| matcher.is_match(path) && shown(gate, path))
         .collect();
     found.sort();
     if found.is_empty() {
@@ -423,6 +542,7 @@ fn glob(root: &Root, args: GlobArgs) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tools::StopFlag;
     use crate::tools::Toolbox;
 
     /// A fresh folder with a toolbox of the file tools on it.
@@ -620,5 +740,82 @@ mod tests {
         stop.store(true, std::sync::atomic::Ordering::SeqCst);
         let (ok, text) = tools.call_until("list_dir", "{}", &stop).await;
         assert!(!ok && text.contains("stopped"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn protected_folders_hold_in_any_case_and_behind_a_link() {
+        let (dir, tools) = setup();
+        std::fs::create_dir_all(dir.join(".axh")).unwrap();
+        std::os::unix::fs::symlink(dir.join(".axh"), dir.join("docs")).unwrap();
+        for path in [".AXH/settings.json", ".Git/config", "docs/settings.json"] {
+            let (ok, text) = tools
+                .call(
+                    "write_file",
+                    &json!({"path": path, "content": "{}"}).to_string(),
+                )
+                .await;
+            assert!(!ok && text.contains("protected"), "{path}: {text}");
+        }
+        assert!(!dir.join(".axh/settings.json").exists());
+    }
+
+    #[tokio::test]
+    async fn a_search_leaves_out_what_the_read_rules_hold_back() {
+        use crate::permissions::{Gate, Mode, Nobody, Rule, RuleSet};
+        let (dir, mut tools) = setup();
+        std::fs::create_dir_all(dir.join("secrets")).unwrap();
+        std::fs::write(dir.join("secrets/key.txt"), "TOKEN=abc\n").unwrap();
+        std::fs::write(dir.join("app.txt"), "TOKEN from env\n").unwrap();
+        let rules = RuleSet {
+            deny: vec![Rule::parse("Read(secrets/**)").unwrap()],
+            ..RuleSet::default()
+        };
+        tools.set_gate(std::sync::Arc::new(Gate::new(
+            rules,
+            Mode::Default,
+            std::sync::Arc::new(Nobody),
+        )));
+
+        let (ok, text) = tools.call("grep", r#"{"pattern":"TOKEN"}"#).await;
+        assert!(ok, "{text}");
+        assert!(text.contains("app.txt") && !text.contains("abc"), "{text}");
+        assert!(text.contains("1 matching file(s) left out"), "{text}");
+        let (_, text) = tools.call("glob", r#"{"pattern":"**/*.txt"}"#).await;
+        assert_eq!(text, "app.txt");
+        let (ok, _) = tools
+            .call("read_file", r#"{"path":"secrets/key.txt"}"#)
+            .await;
+        assert!(!ok);
+    }
+
+    #[tokio::test]
+    async fn rules_see_the_real_path_behind_a_link_and_hard_links_are_not_changed() {
+        use crate::permissions::{Gate, Mode, Nobody, Rule, RuleSet};
+        let (dir, mut tools) = setup();
+        std::fs::create_dir_all(dir.join("secrets")).unwrap();
+        std::fs::write(dir.join("secrets/key.txt"), "k").unwrap();
+        std::os::unix::fs::symlink(dir.join("secrets"), dir.join("link")).unwrap();
+        let rules = RuleSet {
+            deny: vec![Rule::parse("Read(secrets/**)").unwrap()],
+            ..RuleSet::default()
+        };
+        tools.set_gate(std::sync::Arc::new(Gate::new(
+            rules,
+            Mode::Default,
+            std::sync::Arc::new(Nobody),
+        )));
+        let (ok, text) = tools.call("read_file", r#"{"path":"link/key.txt"}"#).await;
+        assert!(!ok && text.contains("Read(secrets/**)"), "{text}");
+
+        std::fs::write(dir.join("a.txt"), "a").unwrap();
+        std::fs::hard_link(dir.join("a.txt"), dir.join("b.txt")).unwrap();
+        // Without a gate, so the write reaches the tool and its own refusal is what answers.
+        let mut plain = crate::tools::Toolbox::new();
+        plain.extend(file_tools(&dir).unwrap());
+        let (ok, text) = plain
+            .call("write_file", r#"{"path":"b.txt","content":"x"}"#)
+            .await;
+        assert!(!ok && text.contains("hard links"), "{text}");
+        assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "a");
     }
 }

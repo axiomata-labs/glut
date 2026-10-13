@@ -190,6 +190,11 @@ pub async fn run<M: ChatModel>(
                 () = tokio::time::sleep_until(deadline) => { stopped = Some(FinishReason::Timeout); break }
                 () = cancel.cancelled() => { stopped = Some(FinishReason::Cancelled); break }
             };
+            if let Some(gate) = tools.gate() {
+                for judged in gate.take_log() {
+                    sink.emit(Event::permission(turns, &call.id, &judged));
+                }
+            }
             sink.emit(Event::tool_result(
                 turns,
                 &call.id,
@@ -321,7 +326,11 @@ mod tests {
             }
         }
 
-        fn call(&self, arguments: Value, _stop: crate::tools::StopFlag) -> ToolFuture<'_> {
+        fn access(&self, _arguments: &Value) -> crate::permissions::Access {
+            crate::permissions::Access::Other
+        }
+
+        fn call(&self, arguments: Value, _context: crate::tools::CallContext) -> ToolFuture<'_> {
             Box::pin(async move { Ok(arguments["text"].as_str().unwrap_or_default().to_owned()) })
         }
     }
@@ -548,5 +557,82 @@ mod tests {
             bodies[1]["messages"][2]["tool_calls"][0]["function"]["name"],
             "echo"
         );
+    }
+
+    #[tokio::test]
+    async fn a_gated_call_is_judged_reported_and_only_run_when_allowed() {
+        use crate::permissions::{Gate, Mode, Nobody, Rule, RuleSet};
+        let reply = || {
+            Script::new(vec![
+                Ok(calls(&[("c1", "echo", r#"{"text":"ran"}"#)])),
+                Ok(text("done")),
+            ])
+        };
+
+        // Headless, default mode: the call is asked, nobody answers, it is refused and never runs.
+        let mut tools = toolbox();
+        tools.set_gate(Arc::new(Gate::new(
+            RuleSet::default(),
+            Mode::Default,
+            Arc::new(Nobody),
+        )));
+        let model = reply();
+        let mut events = Vec::new();
+        run(
+            &RunConfig::new("/w"),
+            &model,
+            &tools,
+            "go",
+            &mut events,
+            &Cancel::new(),
+        )
+        .await;
+        let answer = tool_answer(&model);
+        assert!(answer.contains("not permitted"), "{answer}");
+        assert!(events.iter().any(
+            |e| matches!(e, Event::Permission { allowed: false, tool, .. } if tool == "echo")
+        ));
+
+        // An allow rule by the tool's name lets it run.
+        let mut tools = toolbox();
+        let rules = RuleSet {
+            allow: vec![Rule::parse("echo").unwrap()],
+            ..RuleSet::default()
+        };
+        tools.set_gate(Arc::new(Gate::new(rules, Mode::Default, Arc::new(Nobody))));
+        let model = reply();
+        let mut events = Vec::new();
+        run(
+            &RunConfig::new("/w"),
+            &model,
+            &tools,
+            "go",
+            &mut events,
+            &Cancel::new(),
+        )
+        .await;
+        assert_eq!(tool_answer(&model), "ran");
+        let reasons: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Permission {
+                    allowed: true,
+                    reason,
+                    ..
+                } => Some(reason.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(reasons, ["rule echo"]);
+    }
+
+    /// The tool answer the model was sent on its second turn; the lock is let go before anything awaits again.
+    fn tool_answer(model: &Script) -> String {
+        let seen = model.seen.lock().unwrap();
+        seen[1]
+            .iter()
+            .find(|m| m.role == Role::Tool)
+            .and_then(|m| m.content.clone())
+            .unwrap_or_default()
     }
 }

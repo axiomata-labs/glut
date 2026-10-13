@@ -59,6 +59,15 @@ pub enum Event {
         input_tokens: u64,
         output_tokens: u64,
     },
+    /// How a tool call was judged (P8): allowed or refused, and why — a rule, the mode, the owner's answer.
+    Permission {
+        turn: u32,
+        id: String,
+        tool: String,
+        target: String,
+        allowed: bool,
+        reason: String,
+    },
     Error {
         message: String,
     },
@@ -70,6 +79,18 @@ pub enum Event {
 }
 
 impl Event {
+    /// A judgement of the run's gate as an event; the target cut like a tool call's arguments.
+    pub fn permission(turn: u32, id: &str, judged: &crate::permissions::Judgement) -> Self {
+        Event::Permission {
+            turn,
+            id: id.to_owned(),
+            tool: judged.tool.clone(),
+            target: judged.target.chars().take(EVENT_RESULT_CHARS).collect(),
+            allowed: judged.allowed,
+            reason: judged.reason.clone(),
+        }
+    }
+
     /// A tool call for an event: its arguments cut to [`EVENT_RESULT_CHARS`] (a whole file's content in a
     /// `write_file` call is for the tool, not for the event).
     pub fn tool_call(turn: u32, id: &str, name: &str, arguments: &str) -> Self {

@@ -25,9 +25,10 @@ use tokio::io::AsyncReadExt;
 use tokio::process::{Child, Command};
 use tokio::sync::OnceCell;
 
-use super::{StopFlag, Tool, ToolFuture};
+use super::{CallContext, StopFlag, Tool, ToolFuture};
 use crate::error::HarnessError;
 use crate::model::ToolSpec;
+use crate::permissions::Access;
 
 /// A command's time limit when the model names none.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
@@ -788,7 +789,24 @@ impl Tool for Bash {
         }
     }
 
-    fn call(&self, arguments: Value, stop: StopFlag) -> ToolFuture<'_> {
+    fn access(&self, arguments: &Value) -> Access {
+        let (cwd, _) = self.0.start_dir();
+        let folder = cwd
+            .strip_prefix(&self.0.root)
+            .map(|rel| rel.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        Access::Bash {
+            command: arguments
+                .get("command")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_owned(),
+            folder,
+        }
+    }
+
+    fn call(&self, arguments: Value, context: CallContext) -> ToolFuture<'_> {
+        let stop = context.stop;
         Box::pin(async move {
             let args: BashArgs = parse(arguments)?;
             if args.command.trim().is_empty() {
@@ -822,7 +840,12 @@ impl Tool for BashOutput {
         }
     }
 
-    fn call(&self, arguments: Value, _stop: StopFlag) -> ToolFuture<'_> {
+    fn access(&self, _arguments: &Value) -> Access {
+        // Only the run's own jobs.
+        Access::Own
+    }
+
+    fn call(&self, arguments: Value, _context: CallContext) -> ToolFuture<'_> {
         Box::pin(async move { self.0.job_output(&parse::<JobArgs>(arguments)?.id) })
     }
 }
@@ -838,7 +861,12 @@ impl Tool for KillShell {
         }
     }
 
-    fn call(&self, arguments: Value, _stop: StopFlag) -> ToolFuture<'_> {
+    fn access(&self, _arguments: &Value) -> Access {
+        // Only the run's own jobs.
+        Access::Own
+    }
+
+    fn call(&self, arguments: Value, _context: CallContext) -> ToolFuture<'_> {
         Box::pin(async move { self.0.kill_job(&parse::<JobArgs>(arguments)?.id) })
     }
 }

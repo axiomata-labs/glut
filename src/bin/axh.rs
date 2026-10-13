@@ -9,7 +9,10 @@
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::Arc;
 
+use axiomata_harness::permissions::settings::Trust;
+use axiomata_harness::permissions::{GateOptions, Mode, Nobody, build_gate};
 use axiomata_harness::tools::files::file_tools;
 use axiomata_harness::tools::shell::{ShellOptions, shell_tools};
 use axiomata_harness::{
@@ -47,10 +50,19 @@ enum Command {
         /// The run's time limit in seconds.
         #[arg(long)]
         timeout_secs: Option<u64>,
-        /// Offer the shell tools (bash, bash_output, kill_shell). Until the permissions of HS3 exist the shell reaches
-        /// whatever your user reaches, so it is off unless asked for.
+        /// default, accept_edits, plan, dont_ask or auto; otherwise the settings files', else default. Headless, an
+        /// ask is refused: name what the run may do with --allow, or pick a mode.
         #[arg(long)]
-        allow_bash: bool,
+        permission_mode: Option<String>,
+        /// A rule the run allows, in Claude Code's format (`Bash(cargo test:*)`, `Edit(src/**)`); repeatable.
+        #[arg(long)]
+        allow: Vec<String>,
+        /// A rule the run asks about (refused headless); repeatable.
+        #[arg(long)]
+        ask: Vec<String>,
+        /// A rule the run refuses; repeatable.
+        #[arg(long)]
+        deny: Vec<String>,
         /// The prompt.
         prompt: String,
     },
@@ -82,7 +94,10 @@ async fn main() -> ExitCode {
         instructions_file,
         max_turns,
         timeout_secs,
-        allow_bash,
+        permission_mode,
+        allow,
+        ask,
+        deny,
         prompt,
     } = Cli::parse().command;
 
@@ -121,11 +136,47 @@ async fn main() -> ExitCode {
         Ok(files) => tools.extend(files),
         Err(err) => return fail(err.to_string()),
     }
-    if allow_bash {
-        match shell_tools(&cwd, ShellOptions::from_environment()) {
-            Ok(shell) => tools.extend(shell),
-            Err(err) => return fail(err.to_string()),
+    match shell_tools(&cwd, ShellOptions::from_environment()) {
+        Ok(shell) => tools.extend(shell),
+        Err(err) => return fail(err.to_string()),
+    }
+    let mode = match permission_mode
+        .as_deref()
+        .map(|text| (text, Mode::parse(text)))
+    {
+        None => None,
+        Some((_, Some(mode))) => Some(mode),
+        Some((text, None)) => return fail(format!("unknown permission mode {text:?}")),
+    };
+    // Without a home there is no owner's settings file: a relative `.axh/` would be the project's, read as the owner's.
+    let Some(home) = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|home| home.is_absolute())
+    else {
+        return fail("HOME is not set to an absolute folder".into());
+    };
+    let trusted = match Trust::load(&home) {
+        Ok(trust) => trust.contains(&cwd),
+        Err(err) => return fail(err.to_string()),
+    };
+    let options = GateOptions {
+        mode,
+        allow,
+        ask,
+        deny,
+        trusted,
+    };
+    // Headless: nobody to ask (P6).
+    match build_gate(&home, &cwd, options, Arc::new(Nobody)) {
+        Ok((gate, untrusted)) => {
+            if untrusted {
+                eprintln!(
+                    "axh: the project's .axh/ allow rules and mode are left out: this folder is not trusted"
+                );
+            }
+            tools.set_gate(Arc::new(gate));
         }
+        Err(err) => return fail(err.to_string()),
     }
 
     // Ctrl-C, SIGTERM and SIGHUP end the run cleanly, with its `finished` line and every background job stopped.
