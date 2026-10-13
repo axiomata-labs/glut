@@ -21,4 +21,14 @@ pub enum HarnessError {
     /// The folder the run should work in cannot be used.
     #[error("cannot work in {path}: {reason}")]
     Workspace { path: String, reason: String },
+    /// An MCP server could not be started or answered against the protocol (HS5); it is left out, the run goes on
+    /// without it.
+    #[error("MCP server {server}: {message}")]
+    Mcp { server: String, message: String },
+    /// An MCP server said nothing within the limit — a handshake that hangs, a call nobody answers.
+    #[error("MCP server {server} did not answer within {timeout:?}")]
+    McpTimeout {
+        server: String,
+        timeout: std::time::Duration,
+    },
 }

@@ -292,7 +292,10 @@ impl ChatModel for OpenAiCompat {
 }
 
 /// Whether a key may go to `base_url`: over https, or over http to the machine itself.
-fn secure_enough(base_url: &str) -> bool {
+///
+/// `pub(crate)` for the MCP client's HTTP transport (HS5, M3): an MCP URL carries headers with credentials, so it
+/// is held to the same rule as a key.
+pub(crate) fn secure_enough(base_url: &str) -> bool {
     if base_url.starts_with("https://") {
         return true;
     }
@@ -459,8 +462,9 @@ pub(crate) mod fake {
         }
     }
 
-    /// Reads one request whole: the head up to the blank line, then `content-length` bytes of body.
-    async fn read_request(socket: &mut tokio::net::TcpStream) -> (String, Vec<u8>) {
+    /// Reads one request whole: the head up to the blank line, then `content-length` bytes of body. Reused by
+    /// the MCP client's own HTTP tests (HS5).
+    pub(crate) async fn read_request(socket: &mut tokio::net::TcpStream) -> (String, Vec<u8>) {
         let mut buffer = Vec::new();
         let mut chunk = [0u8; 4096];
         let head_end = loop {

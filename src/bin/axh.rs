@@ -12,6 +12,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use axiomata_harness::commands::{Expanded, PermissionsView, Registry, Source};
+use axiomata_harness::mcp;
 use axiomata_harness::permissions::settings::Trust;
 use axiomata_harness::permissions::{GateOptions, Mode, Nobody, build_gate};
 use axiomata_harness::tools::files::file_tools;
@@ -232,6 +233,17 @@ async fn main() -> ExitCode {
         Ok(model) => model,
         Err(err) => return fail(err.to_string()),
     };
+    // MCP servers (HS5): after the gate, before the shell (M1–M3). `axh` has no terminal, so a project's server
+    // nobody approved is left out and said so on stderr rather than asked about (M2).
+    let entries = match mcp::config::load(&home, &cwd) {
+        Ok(entries) => entries,
+        Err(err) => return fail(err.to_string()),
+    };
+    let entries = match mcp::approval::permitted(entries, &home, &cwd, false) {
+        Ok(entries) => entries,
+        Err(err) => return fail(err.to_string()),
+    };
+    tools.extend(mcp::start(entries, &mut JsonLines).await);
     // The shell after the gate: the settings that built it also say how the sandbox runs (HS3b).
     let shell = ShellOptions {
         sandbox: Some(sandbox),

@@ -12,6 +12,7 @@ pub mod commands;
 pub mod config;
 pub mod error;
 pub mod event;
+pub mod mcp;
 pub mod model;
 pub mod permissions;
 pub mod prompt;
@@ -21,7 +22,7 @@ pub mod tools;
 
 pub use config::{ModelEndpoint, RunConfig};
 pub use error::HarnessError;
-pub use event::{Event, EventSink, FinishReason};
+pub use event::{Event, EventSink, FinishReason, McpStatus};
 pub use model::{ChatModel, Message, OpenAiCompat, Reply, ToolCall, ToolSpec, Usage};
 pub use permissions::{Access, Gate, Mode, Rule, RuleSet};
 pub use run::{Cancel, RunOutcome, run};

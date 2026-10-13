@@ -37,6 +37,9 @@ pub enum Access {
     },
     /// A sandboxed command reaching a host through the run's proxy (HS3b): the host name, lowercased.
     Network { host: String },
+    /// An MCP tool call (HS5): the server's name and the tool's own name on it. The model sees it as
+    /// `mcp__<server>__<tool>`, which is what the rules are written as.
+    Mcp { server: String, tool: String },
     /// Only the run's own state (`bash_output`, `kill_shell`): always allowed.
     Own,
     /// A tool the rules know only by its name.
@@ -51,12 +54,18 @@ enum RuleKind {
     Bash,
     /// `Network(crates.io)`, `Network(*.github.com)`: a host the run's proxy lets a sandboxed command reach.
     Network,
+    /// `mcp__mail` (every tool of that server) or `mcp__mail__send` (one tool) (HS5, M5): a name the model sees
+    /// for an MCP tool, with no pattern — there is nothing a pattern could add to it.
+    Mcp,
     /// A tool named directly (`grep`, a future MCP tool).
     Tool,
 }
 
 /// The names Claude Code's format gives meaning to; anything spelled like one but not exactly is a typo (P4).
 const KNOWN_KINDS: [&str; 5] = ["Read", "Edit", "Write", "Bash", "Network"];
+
+/// How a rule names an MCP tool (HS5, M5): `mcp__<server>` for a whole server, `mcp__<server>__<tool>` for one.
+const MCP_PREFIX: &str = "mcp__";
 
 /// Path globs ignore case where the file system does: on macOS `src/A.rs` and `src/a.rs` are one file.
 const CASE_INSENSITIVE_PATHS: bool = cfg!(target_os = "macos");
@@ -123,6 +132,18 @@ impl Rule {
             "Edit" | "Write" => RuleKind::Edit,
             "Bash" => RuleKind::Bash,
             "Network" => RuleKind::Network,
+            // M5: an MCP rule is written the way the model is shown the tool, and says everything in its name.
+            // `mcp__mail(send)` would be a rule about a tool called "mail(send)" that never matches — a deny that
+            // silently does nothing — so a pattern here is refused rather than kept.
+            _ if name.starts_with(MCP_PREFIX) => {
+                if pattern.is_some() {
+                    return Err(format!("rule {text:?}: an MCP rule takes no pattern"));
+                }
+                if name == MCP_PREFIX {
+                    return Err(format!("rule {text:?} names no server"));
+                }
+                RuleKind::Mcp
+            }
             _ => RuleKind::Tool,
         };
         let pattern = match pattern.filter(|p| !p.is_empty() && *p != "*" && *p != "**") {
@@ -203,6 +224,14 @@ impl Rule {
                         Some(_) => false,
                     };
             }
+            // M5: `mcp__mail` speaks about every tool of `mail`, `mcp__mail__send` about that one tool. The tool
+            // the model called is in the rule's name already, so `tool` (the model-facing name) is not asked.
+            Access::Mcp {
+                server,
+                tool: called,
+            } => {
+                return self.kind == RuleKind::Mcp && mcp_matches(&self.tool, server, called);
+            }
             _ => return self.kind == RuleKind::Tool && self.tool == tool && self.pattern.is_none(),
         };
         if self.kind != kind && !(self.kind == RuleKind::Tool && self.tool == tool) {
@@ -244,6 +273,20 @@ fn host_matches(pattern: &str, host: &str) -> bool {
             .is_some_and(|rest| rest.ends_with('.') && rest.len() > 1),
         None => host == pattern,
     }
+}
+
+/// Whether an MCP rule names this call (M5): `mcp__<server>` every tool of the server, `mcp__<server>__<tool>`
+/// exactly one. The rule text is what the model is shown, so the comparison runs against the server's own names —
+/// a server called `mail` with a tool `send` is `mcp__mail__send`, and a server whose name itself holds `__` is
+/// still read correctly (the whole rest after `mcp__` is the server, or the server up to the next `__`).
+fn mcp_matches(rule: &str, server: &str, tool: &str) -> bool {
+    let Some(rest) = rule.strip_prefix(MCP_PREFIX) else {
+        return false;
+    };
+    rest == server
+        || rest
+            .strip_prefix(&format!("{server}__"))
+            .is_some_and(|called| called == tool)
 }
 
 /// A rule's command, read by the same lexer as the commands it is held against, so `Bash(git  status:*)` and
@@ -948,6 +991,8 @@ fn always_rule(tool: &str, access: &Access) -> Option<Rule> {
         Access::Edit { path } => format!("Edit({})", glob_escape(&normal_path(path))),
         Access::Read { path } => format!("Read({})", glob_escape(&normal_path(path))),
         Access::Network { host } => format!("Network({host})"),
+        // "always" for an MCP call is the tool's own rule, which names it exactly (M5).
+        Access::Mcp { server, tool } => format!("mcp__{server}__{tool}"),
         Access::Own | Access::Other => tool.to_owned(),
     };
     Rule::parse(&text).ok()
@@ -969,6 +1014,8 @@ fn describe(access: &Access) -> String {
         Access::Read { path } | Access::Edit { path } => normal_path(path),
         Access::Bash { command, .. } => command.clone(),
         Access::Network { host } => host.clone(),
+        // For an ask and the events: server and tool, the way the rule names them (M5).
+        Access::Mcp { server, tool } => format!("{server}/{tool}"),
         Access::Own | Access::Other => String::new(),
     }
 }
@@ -1691,5 +1738,108 @@ mod tests {
         let plan = narrowed(Mode::Plan, &["Bash(git status:*)"]);
         let refused = plan.judge("bash", &git_status).await.unwrap_err();
         assert!(refused.contains("mode plan"), "{refused}");
+    }
+
+    /// An MCP call as the model makes it (M5): the server's own names.
+    fn mcp(server: &str, tool: &str) -> Access {
+        Access::Mcp {
+            server: server.into(),
+            tool: tool.into(),
+        }
+    }
+
+    #[test]
+    fn an_mcp_rule_names_a_server_or_one_of_its_tools() {
+        // `mcp__mail` speaks about every tool of `mail`, `mcp__mail__send` about that one (M5).
+        let every = rules(&["mcp__mail"], &[], &[]);
+        assert_eq!(
+            said(&every, "mcp__mail__send", mcp("mail", "send")),
+            Some(Verdict::Allow)
+        );
+        assert_eq!(
+            said(&every, "mcp__mail__list", mcp("mail", "list")),
+            Some(Verdict::Allow)
+        );
+        assert_eq!(
+            said(&every, "mcp__notes__list", mcp("notes", "list")),
+            None,
+            "another server is not spoken about"
+        );
+
+        let one = rules(&["mcp__mail__send"], &[], &[]);
+        assert_eq!(
+            said(&one, "mcp__mail__send", mcp("mail", "send")),
+            Some(Verdict::Allow)
+        );
+        assert_eq!(
+            said(&one, "mcp__mail__list", mcp("mail", "list")),
+            None,
+            "another tool of the same server is not named"
+        );
+
+        // deny beats allow, across the two spellings (M5).
+        let both = rules(&["mcp__mail"], &[], &["mcp__mail__send"]);
+        assert_eq!(
+            said(&both, "mcp__mail__send", mcp("mail", "send")),
+            Some(Verdict::Deny)
+        );
+        assert_eq!(
+            said(&both, "mcp__mail__list", mcp("mail", "list")),
+            Some(Verdict::Allow)
+        );
+
+        // A server whose own name holds `__` is still read right: the rule is the whole rest after `mcp__`, or
+        // the server up to the next `__`.
+        let nested = rules(&["mcp__a__b"], &[], &[]);
+        assert_eq!(
+            said(&nested, "mcp__a__b", mcp("a__b", "c")),
+            Some(Verdict::Allow),
+            "the whole rest after mcp__ is the server"
+        );
+        assert_eq!(
+            said(&nested, "mcp__a__b__c", mcp("a", "b")),
+            Some(Verdict::Allow),
+            "or the server up to the next __"
+        );
+        assert_eq!(
+            said(&nested, "mcp__a__b__c", mcp("a__b", "c")),
+            Some(Verdict::Allow)
+        );
+
+        // A pattern has nothing to add to an MCP rule: `mcp__mail(send)` would be a rule about a tool called
+        // `mail(send)` that never matches — a deny that silently does nothing (M5).
+        for bad in ["mcp__mail(send)", "mcp__mail(*)", "mcp__"] {
+            assert!(Rule::parse(bad).is_err(), "{bad}");
+        }
+        assert!(Rule::parse("mcp__mail__send").is_ok());
+    }
+
+    #[tokio::test]
+    async fn without_a_rule_the_mode_decides_an_mcp_call() {
+        let access = mcp("mail", "send");
+        let judge = |mode: Mode| Gate::new(RuleSet::default(), mode, Arc::new(Nobody));
+        // `default` and `accept_edits` ask, and nobody to ask means refused — never run (M5).
+        for mode in [Mode::Default, Mode::AcceptEdits] {
+            let refused = judge(mode).judge("mcp__mail__send", &access).await;
+            assert!(refused.is_err(), "{mode:?} must not run it: {refused:?}");
+        }
+        // `auto` allows, `plan` and `dont_ask` refuse (M5).
+        assert!(
+            judge(Mode::Auto)
+                .judge("mcp__mail__send", &access)
+                .await
+                .is_ok()
+        );
+        for mode in [Mode::Plan, Mode::DontAsk] {
+            let refused = judge(mode).judge("mcp__mail__send", &access).await;
+            assert!(refused.is_err(), "{mode:?} must refuse it: {refused:?}");
+        }
+        // A rule still speaks first: `auto` does not save a denied tool.
+        let denied = Gate::new(
+            rules(&[], &[], &["mcp__mail__send"]),
+            Mode::Auto,
+            Arc::new(Nobody),
+        );
+        assert!(denied.judge("mcp__mail__send", &access).await.is_err());
     }
 }

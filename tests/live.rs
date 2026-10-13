@@ -46,3 +46,38 @@ async fn a_real_model_reads_a_file_and_answers() {
     );
     assert!(outcome.answer.unwrap().to_lowercase().contains("hexagon"));
 }
+
+/// A real MCP server over stdio (HS5). Ignored by default: it runs whatever command `AXH_LIVE_MCP` names, and a
+/// test never names one of the owner's real app servers (`apple-mail`, `apple-reminders`) on its own — those are
+/// reached from the app, not from a test.
+///
+/// `AXH_LIVE_MCP="npx -y @modelcontextprotocol/server-everything" \
+///  cargo test -p axiomata-harness --test live -- --ignored --nocapture`
+#[tokio::test]
+#[ignore = "needs AXH_LIVE_MCP"]
+async fn a_real_stdio_server_connects_and_lists_its_tools() {
+    use std::collections::BTreeMap;
+
+    use axiomata_harness::mcp::{Client, config::ServerConfig};
+
+    let command = std::env::var("AXH_LIVE_MCP").expect("AXH_LIVE_MCP");
+    let mut parts = command.split_whitespace();
+    let config = ServerConfig::Stdio {
+        command: parts
+            .next()
+            .expect("AXH_LIVE_MCP names a command")
+            .to_owned(),
+        args: parts.map(str::to_owned).collect(),
+        env: BTreeMap::new(),
+    };
+    let client = Client::connect("live", &config)
+        .await
+        .expect("the server speaks the protocol");
+    let names: Vec<&str> = client
+        .tools()
+        .iter()
+        .map(|tool| tool.name.as_str())
+        .collect();
+    println!("{} tools: {names:?}", names.len());
+    assert!(!names.is_empty(), "a real server offers at least one tool");
+}

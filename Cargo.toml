@@ -25,6 +25,8 @@ rustix = { workspace = true, features = ["process"] }
 chrono.workspace = true
 clap.workspace = true
 tracing-subscriber.workspace = true
+# The fingerprint of an MCP server's config, which a project's server is approved by (HS5, M2).
+sha2.workspace = true
 
 [dev-dependencies]
 # The fake model server of the tests listens on the loopback.

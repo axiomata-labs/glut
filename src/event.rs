@@ -25,6 +25,16 @@ pub enum FinishReason {
     Failed,
 }
 
+/// Whether an MCP server of the run came up (HS5, M3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum McpStatus {
+    /// Handshake and tool list done: its tools are offered to the model.
+    Connected,
+    /// It could not be started or did not speak the protocol: left out, the run goes on without it.
+    Failed,
+}
+
 /// One step of a run.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
@@ -75,6 +85,14 @@ pub enum Event {
         target: String,
         allowed: bool,
         reason: String,
+    },
+    /// An MCP server of this run came up or failed to (HS5). `tools` is how many tools it offered; `reason` is
+    /// why it failed, on a failure.
+    McpServer {
+        name: String,
+        status: McpStatus,
+        tools: usize,
+        reason: Option<String>,
     },
     Error {
         message: String,
@@ -179,6 +197,30 @@ mod tests {
             line,
             json!({"event": "command", "name": "review", "source": "user", "prompt_chars": 12})
         );
+    }
+
+    #[test]
+    fn an_mcp_server_event_is_a_tagged_line_like_the_others() {
+        let line = serde_json::to_value(Event::McpServer {
+            name: "mail".into(),
+            status: McpStatus::Connected,
+            tools: 27,
+            reason: None,
+        })
+        .unwrap();
+        assert_eq!(
+            line,
+            json!({"event": "mcp_server", "name": "mail", "status": "connected", "tools": 27, "reason": null})
+        );
+        let failed = serde_json::to_value(Event::McpServer {
+            name: "broken".into(),
+            status: McpStatus::Failed,
+            tools: 0,
+            reason: Some("it never answered".into()),
+        })
+        .unwrap();
+        assert_eq!(failed["status"], "failed");
+        assert_eq!(failed["reason"], "it never answered");
     }
 
     #[test]
