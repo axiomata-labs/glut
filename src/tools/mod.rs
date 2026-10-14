@@ -130,8 +130,9 @@ impl Toolbox {
     }
 }
 
-/// `text` cut to [`MAX_TOOL_OUTPUT_CHARS`], with a note for the model when it was.
-fn cap(text: String) -> String {
+/// `text` cut to [`MAX_TOOL_OUTPUT_CHARS`], with a note for the model when it was. `pub(crate)` since HS8: the
+/// loop's own `task` arm caps a subagent's answer with it, like every tool result.
+pub(crate) fn cap(text: String) -> String {
     if text.chars().count() <= MAX_TOOL_OUTPUT_CHARS {
         return text;
     }

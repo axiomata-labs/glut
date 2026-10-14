@@ -19,6 +19,20 @@ pub fn system_prompt(cwd: &Path, date: &str, instructions: Option<&str>) -> Stri
     prompt
 }
 
+/// The system prompt of a subagent (HS8, D5): its own, because isolation is the point of one — it works on a
+/// single task handed to it and returns the result; the parent's instructions are never repeated here, the
+/// parent's model passes along whatever context the subagent needs.
+pub fn subagent_prompt(cwd: &Path, date: &str) -> String {
+    format!(
+        "You are a subagent: one worker inside a larger run on the user's machine.\n\
+         Do only the task in the user message; use the tools, and read a file before you change it.\n\
+         When the task is done, answer with its result alone — no preamble, no account of how you worked. \
+         The agent that sent you continues from your answer.\n\
+         Working folder: {}\nToday: {date}",
+        cwd.display()
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -39,5 +53,13 @@ mod tests {
     fn the_base_prompt_stays_small() {
         // A guard against the prompt growing back into a page: it is paid on every turn.
         assert!(system_prompt(Path::new("/w"), "d", None).len() < 600);
+    }
+
+    #[test]
+    fn the_subagent_prompt_says_subagent_and_carries_folder_and_date() {
+        let prompt = subagent_prompt(Path::new("/w"), "2026-10-14");
+        assert!(prompt.contains("subagent"));
+        assert!(prompt.contains("result alone"));
+        assert!(prompt.contains("Working folder: /w\nToday: 2026-10-14"));
     }
 }

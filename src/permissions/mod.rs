@@ -175,6 +175,13 @@ impl Rule {
         &self.text
     }
 
+    /// Whether this rule names `tool` as a tool call of its own (HS8, D10): a plain tool rule without a
+    /// pattern — exactly the call [`restrict_allows`] would pass for that name. The core reads a skill's
+    /// `allowed_tools` with it to decide whether the run offers `task` at all (HS8, B3).
+    pub fn names_tool(&self, tool: &str) -> bool {
+        self.kind == RuleKind::Tool && self.tool == tool && self.pattern.is_none()
+    }
+
     /// Whether this rule is about commands of `tool`.
     fn is_command_rule(&self, tool: &str) -> bool {
         self.kind == RuleKind::Bash || (self.kind == RuleKind::Tool && self.tool == tool)
@@ -1083,6 +1090,20 @@ mod tests {
         for bad in ["", "Bash(cargo", "(x)", "Edit([)"] {
             assert!(Rule::parse(bad).is_err(), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn names_tool_is_a_plain_tool_rule_without_a_pattern() {
+        // HS8, D10: what the core asks of a skill's `allowed_tools` to decide whether `task` is offered.
+        assert!(Rule::parse("task").unwrap().names_tool("task"));
+        assert!(!Rule::parse("task").unwrap().names_tool("other"));
+        assert!(
+            !Rule::parse("task(x)").unwrap().names_tool("task"),
+            "a patterned rule never matches a bare tool call"
+        );
+        assert!(!Rule::parse("Read").unwrap().names_tool("task"));
+        assert!(!Rule::parse("read_file").unwrap().names_tool("task"));
+        assert!(Rule::parse("read_file").unwrap().names_tool("read_file"));
     }
 
     #[test]

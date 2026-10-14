@@ -122,6 +122,14 @@ pub enum Event {
         context_chars: usize,
         note: Option<String>,
     },
+    /// One event of a nested run (HS8, D8): everything a subagent reports arrives wrapped in its depth —
+    /// nothing dropped, the parent's own `ToolCall(task)` … `ToolResult(task)` bracketing the whole stream.
+    /// The inner event serialises as `inner`, because the outer tag already owns the field name `event`.
+    Sub {
+        depth: u32,
+        #[serde(rename = "inner")]
+        event: Box<Event>,
+    },
     Error {
         message: String,
     },
@@ -328,6 +336,24 @@ mod tests {
         })
         .unwrap();
         assert_eq!(start["turn"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn a_sub_event_holds_its_inner_event_under_inner() {
+        let line = serde_json::to_value(Event::Sub {
+            depth: 1,
+            event: Box::new(Event::AssistantText {
+                turn: 1,
+                text: "found".into(),
+            }),
+        })
+        .unwrap();
+        // Tagged `event` like every event; the nested one arrives as `inner` — one field may not claim the
+        // tag's name twice.
+        assert_eq!(line["event"], "sub");
+        assert_eq!(line["depth"], 1);
+        assert_eq!(line["inner"]["event"], "assistant_text");
+        assert_eq!(line["inner"]["text"], "found");
     }
 
     #[test]

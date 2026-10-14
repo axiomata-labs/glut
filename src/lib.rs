@@ -20,6 +20,7 @@ pub mod prompt;
 pub mod run;
 pub mod sandbox;
 pub mod skills;
+mod task;
 pub mod tools;
 
 pub use config::{ModelEndpoint, RunConfig};

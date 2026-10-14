@@ -11,8 +11,8 @@ use crate::config::RunConfig;
 use crate::event::{EVENT_RESULT_CHARS, Event, EventSink, FinishReason};
 use crate::hooks::{self, HookEvent, HookOutcome};
 use crate::model::{ChatModel, Message, Usage};
-use crate::permissions::Gate;
-use crate::prompt::system_prompt;
+use crate::permissions::{Access, Gate};
+use crate::prompt::{subagent_prompt, system_prompt};
 use crate::tools::shell::{Session, ShellOptions};
 use crate::tools::{StopFlag, Toolbox};
 
@@ -102,22 +102,54 @@ pub async fn run<M: ChatModel>(
     sink: &mut dyn EventSink,
     cancel: &Cancel,
 ) -> RunOutcome {
+    run_inner(config, model, tools, prompt, sink, cancel, 0).await
+}
+
+/// The loop at nesting `depth` (HS8, D3): depth 0 is the run itself — it offers the `task` tool, runs
+/// `SessionStart` and speaks the caller's system prompt; depth ≥ 1 is a subagent, which gets the prompt of
+/// `prompt::subagent_prompt` (D5), no `task` tool and no `SessionStart` (D4). Everything else — hooks, gate,
+/// tools, events — is identical on every level.
+async fn run_inner<M: ChatModel>(
+    config: &RunConfig,
+    model: &M,
+    tools: &Toolbox,
+    prompt: &str,
+    sink: &mut dyn EventSink,
+    cancel: &Cancel,
+    depth: u32,
+) -> RunOutcome {
     let started = Instant::now();
     let deadline = started + config.timeout;
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
-    let mut messages = vec![
-        Message::system(system_prompt(
-            &config.cwd,
-            &today,
-            config.instructions.as_deref(),
-        )),
-        Message::user(prompt),
-    ];
-    let specs = tools.specs();
+    let mut messages = if depth == 0 {
+        vec![
+            Message::system(system_prompt(
+                &config.cwd,
+                &today,
+                config.instructions.as_deref(),
+            )),
+            Message::user(prompt),
+        ]
+    } else {
+        vec![
+            Message::system(subagent_prompt(&config.cwd, &today)),
+            Message::user(prompt),
+        ]
+    };
+    // HS8, D1/D3: `task` exists at depth 0 only, and only for a run that offers subagents at all (D7) — a
+    // subagent never sees the tool, so nesting deeper than one cannot start; and its name is in the run's
+    // tool list from the first turn on.
+    let offer_task = depth == 0 && config.subagents;
+    let mut specs = tools.specs();
+    let mut offered = tools.names();
+    if offer_task {
+        specs.push(crate::task::spec());
+        offered.push(crate::task::NAME.to_owned());
+    }
     sink.emit(Event::Started {
         model: model.name().to_owned(),
         cwd: config.cwd.display().to_string(),
-        tools: tools.names(),
+        tools: offered,
     });
 
     let mut usage = Usage::default();
@@ -132,9 +164,10 @@ pub async fn run<M: ChatModel>(
         std::process::id(),
         chrono::Local::now().timestamp_millis()
     );
-    // HS7, D3: SessionStart once, after `Started` and before the first model call. Its context becomes a
+    // HS7, D3: SessionStart once, after `Started` and before the first model call — at depth 0 only (HS8,
+    // D4: it belongs to the run, not to each subagent). Its context becomes a
     // system message right behind the harness's own; it can never block.
-    if !config.hooks.is_empty() {
+    if depth == 0 && !config.hooks.is_empty() {
         let outcome = hooks_event(
             &mut hook_session,
             config,
@@ -303,11 +336,34 @@ pub async fn run<M: ChatModel>(
                     }
                 }
             }
-            let (ok, output) = tokio::select! {
-                result = tools.call_until(&call.function.name, &call.function.arguments, &stop) => result,
-                () = tokio::time::sleep_until(deadline) => { stopped = Some(FinishReason::Timeout); break }
-                () = cancel.cancelled() => { stopped = Some(FinishReason::Cancelled); break }
+            // HS8, D2: `task` starts a nested run — only this step differs from an ordinary call; the
+            // events, the hooks and the message around it stay what they are for any other tool.
+            let (ok, output, sub_usage) = if offer_task && call.function.name == crate::task::NAME {
+                run_task(
+                    config,
+                    model,
+                    tools,
+                    &call.function.arguments,
+                    sink,
+                    cancel,
+                    deadline,
+                    depth,
+                    turns,
+                    &call.id,
+                )
+                .await
+            } else {
+                let (ok, output) = tokio::select! {
+                    result = tools.call_until(&call.function.name, &call.function.arguments, &stop) => result,
+                    () = tokio::time::sleep_until(deadline) => { stopped = Some(FinishReason::Timeout); break }
+                    () = cancel.cancelled() => { stopped = Some(FinishReason::Cancelled); break }
+                };
+                (ok, output, None)
             };
+            // The subagent's tokens are this run's tokens (HS8, D2.4): the spend metering sees them.
+            if let Some(sub) = sub_usage {
+                usage += sub;
+            }
             if let Some(gate) = tools.gate() {
                 for judged in gate.take_log() {
                     sink.emit(Event::permission(turns, &call.id, &judged));
@@ -384,6 +440,116 @@ pub async fn run<M: ChatModel>(
         answer,
         turns,
         usage,
+    }
+}
+
+/// The `task` arm of the loop (HS8, D2): judge the call, run the subagent, hand its answer back as the
+/// tool's result — and its tokens, summed into the run's own usage so the spend stays honest (D2.4).
+/// Returns what [`Toolbox::call_until`] returns, plus the usage of a nested run that really happened.
+#[allow(clippy::too_many_arguments)]
+async fn run_task<M: ChatModel>(
+    config: &RunConfig,
+    model: &M,
+    tools: &Toolbox,
+    arguments: &str,
+    sink: &mut dyn EventSink,
+    cancel: &Cancel,
+    deadline: Instant,
+    depth: u32,
+    turn: u32,
+    id: &str,
+) -> (bool, String, Option<Usage>) {
+    let parsed = match serde_json::from_str::<Value>(arguments) {
+        Ok(value @ Value::Object(_)) => value,
+        Ok(_) => {
+            return (
+                false,
+                "error: the arguments must be a JSON object".to_owned(),
+                None,
+            );
+        }
+        Err(err) => {
+            return (
+                false,
+                format!("error: the arguments are not valid JSON: {err}"),
+                None,
+            );
+        }
+    };
+    let prompt = match crate::task::prompt_of(&parsed) {
+        Ok(prompt) => prompt,
+        Err(reason) => return (false, format!("error: {reason}"), None),
+    };
+    // The judgement and its event belong to the parent (D2.2): the nested run drains this very log in its
+    // own loop, so what the parent judged is read here, before the subagent starts — never inside its
+    // stream, never lost. B1: `task` is judged like any other call of a name the rules know.
+    if let Some(gate) = tools.gate() {
+        let judged = gate.judge(crate::task::NAME, &Access::Other).await;
+        for entry in gate.take_log() {
+            sink.emit(Event::permission(turn, id, &entry));
+        }
+        if let Err(refused) = judged {
+            return (false, format!("error: {refused}"), None);
+        }
+    }
+    let mut sub = config.clone();
+    // D5: the caller's instructions are the parent's contract; the subagent gets its own prompt and
+    // whatever the parent's model put into `prompt`.
+    sub.instructions = None;
+    sub.max_turns = config.subagent_max_turns;
+    // The subagent never outlives the run that started it (D2.3).
+    sub.timeout = config
+        .subagent_timeout
+        .min(deadline.saturating_duration_since(Instant::now()));
+    let mut wrapped = SubSink {
+        depth: depth + 1,
+        inner: sink,
+    };
+    let outcome = Box::pin(run_inner(
+        &sub,
+        model,
+        tools,
+        &prompt,
+        &mut wrapped,
+        cancel,
+        depth + 1,
+    ))
+    .await;
+    // What the subagent judged but did not get to report (it was cancelled mid-call) still belongs to its
+    // stream: drained here, wrapped, before the parent's `ToolResult(task)` brackets it (D2.4).
+    if let Some(gate) = tools.gate() {
+        for entry in gate.take_log() {
+            wrapped.emit(Event::permission(turn, id, &entry));
+        }
+    }
+    let (ok, output) = match outcome.reason {
+        FinishReason::Answered => match outcome.answer {
+            // Cut like every tool result — the model gets the whole, already capped, answer.
+            Some(answer) => (true, crate::tools::cap(answer)),
+            None => (true, "the subagent finished without text".to_owned()),
+        },
+        reason => (
+            false,
+            format!("error: the subagent stopped without answering: {reason:?}"),
+        ),
+    };
+    (ok, output, Some(outcome.usage))
+}
+
+/// The nested run's view of the parent's sink (HS8, D8): every event it emits arrives wrapped in
+/// [`Event::Sub`] at the depth it happened at — nothing dropped. Accounting never counts events; the
+/// parent sums `RunOutcome`s (D2.4), so a viewer may count each run's own `Finished` and no other's.
+struct SubSink<'a> {
+    depth: u32,
+    inner: &'a mut dyn EventSink,
+}
+
+impl EventSink for SubSink<'_> {
+    fn emit(&mut self, event: Event) {
+        self.inner.emit(Event::Sub {
+            depth: self.depth,
+            event: Box::new(event),
+        });
     }
 }
 
@@ -474,6 +640,9 @@ mod tests {
     struct Script {
         replies: Mutex<Vec<Result<Reply, HarnessError>>>,
         seen: Mutex<Vec<Vec<Message>>>,
+        /// The tool names each request offered, in call order (HS8): the parent's turns carry `task`, a
+        /// subagent's never do (B2/D3).
+        offered: Mutex<Vec<Vec<String>>>,
         delay: Duration,
     }
 
@@ -482,6 +651,7 @@ mod tests {
             Script {
                 replies: Mutex::new(replies),
                 seen: Mutex::new(Vec::new()),
+                offered: Mutex::new(Vec::new()),
                 delay: Duration::ZERO,
             }
         }
@@ -491,10 +661,14 @@ mod tests {
         async fn complete(
             &self,
             messages: &[Message],
-            _tools: &[ToolSpec],
+            tools: &[ToolSpec],
             _max: Option<u32>,
         ) -> Result<Reply, HarnessError> {
             self.seen.lock().unwrap().push(messages.to_vec());
+            self.offered
+                .lock()
+                .unwrap()
+                .push(tools.iter().map(|spec| spec.name.clone()).collect());
             tokio::time::sleep(self.delay).await;
             let mut replies = self.replies.lock().unwrap();
             if replies.is_empty() {
@@ -545,6 +719,37 @@ mod tests {
                 input_tokens: 7,
                 output_tokens: 1,
             },
+        }
+    }
+
+    /// A reply whose single call is `task` (HS8), with the arguments as JSON.
+    fn task_call(id: &str, arguments: Value) -> Reply {
+        let arguments = arguments.to_string();
+        calls(&[(id, "task", arguments.as_str())])
+    }
+
+    /// A tool that calls the run off (HS8's cancel test: fired from *inside* the subagent).
+    struct CancelRun(Cancel);
+
+    impl Tool for CancelRun {
+        fn spec(&self) -> ToolSpec {
+            ToolSpec {
+                name: "cancel_run".into(),
+                description: "c".into(),
+                parameters: json!({"type": "object"}),
+            }
+        }
+
+        fn access(&self, _arguments: &Value) -> crate::permissions::Access {
+            crate::permissions::Access::Other
+        }
+
+        fn call(&self, _arguments: Value, _context: crate::tools::CallContext) -> ToolFuture<'_> {
+            let cancel = self.0.clone();
+            Box::pin(async move {
+                cancel.cancel();
+                Ok("the run was called off".to_owned())
+            })
         }
     }
 
@@ -1076,5 +1281,582 @@ mod tests {
                 |e| matches!(e, Event::Error { message } if message.contains("hooks left out"))
             )
         );
+    }
+
+    // ── HS8: subagents ────────────────────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn a_task_without_a_description_or_a_prompt_is_a_tool_error_and_no_subagent() {
+        let model = Script::new(vec![
+            Ok(task_call("c1", json!({"description": "x"}))),
+            Ok(text("done")),
+        ]);
+        let mut events = Vec::new();
+        let outcome = run(
+            &RunConfig::new("/w"),
+            &model,
+            &toolbox(),
+            "go",
+            &mut events,
+            &Cancel::new(),
+        )
+        .await;
+        assert_eq!(outcome.reason, FinishReason::Answered);
+        let answer = tool_answer(&model);
+        assert!(answer.contains("description and prompt"), "{answer}");
+        assert_eq!(
+            model.seen.lock().unwrap().len(),
+            2,
+            "the parent's two turns and nothing else: no subagent started"
+        );
+
+        // Arguments that are not even an object are the tool's own error, too.
+        let model = Script::new(vec![
+            Ok(task_call("c1", json!(["not", "an", "object"]))),
+            Ok(text("done")),
+        ]);
+        run(
+            &RunConfig::new("/w"),
+            &model,
+            &toolbox(),
+            "go",
+            &mut Vec::new(),
+            &Cancel::new(),
+        )
+        .await;
+        let answer = tool_answer(&model);
+        assert!(answer.contains("JSON object"), "{answer}");
+    }
+
+    #[tokio::test]
+    async fn a_task_runs_a_subagent_and_brings_its_answer_and_tokens_back() {
+        let model = Script::new(vec![
+            Ok(task_call(
+                "c1",
+                json!({"description": "find it", "prompt": "Look up the thing."}),
+            )),
+            Ok(text("found it")),
+            Ok(text("All done.")),
+        ]);
+        let mut config = RunConfig::new("/w");
+        config.instructions = Some("parent's instructions".into());
+        let mut events = Vec::new();
+        let outcome = run(
+            &config,
+            &model,
+            &toolbox(),
+            "go",
+            &mut events,
+            &Cancel::new(),
+        )
+        .await;
+
+        assert_eq!(outcome.reason, FinishReason::Answered);
+        assert_eq!(outcome.answer.as_deref(), Some("All done."));
+        assert_eq!(
+            outcome.turns, 2,
+            "a subagent's turns are its own, not the parent's"
+        );
+        // 7/1 (the task call) + 10/2 (the subagent) + 10/2 (the parent's answer): the subagent's
+        // tokens summed into the run's usage, counted once (D2.4).
+        assert_eq!(
+            outcome.usage,
+            Usage {
+                input_tokens: 27,
+                output_tokens: 5
+            }
+        );
+
+        let seen = model.seen.lock().unwrap();
+        // The parent's tool result is the subagent's answer.
+        assert!(
+            seen[2]
+                .iter()
+                .any(|m| m.role == Role::Tool && m.content.as_deref() == Some("found it"))
+        );
+        // The subagent's own conversation: its own prompt (D5), the parent's instructions nowhere.
+        assert_eq!(seen[1].len(), 2, "[system, user] and nothing else");
+        assert_eq!(seen[1][0].role, Role::System);
+        let sub_system = seen[1][0].content.as_deref().unwrap();
+        assert!(sub_system.contains("subagent"));
+        assert!(
+            !sub_system.contains("parent's instructions"),
+            "the parent's instructions are not the subagent's (D5)"
+        );
+        assert_eq!(seen[1][1].content.as_deref(), Some("Look up the thing."));
+        // The parent keeps them; `task` is offered to the parent only (D3/B2).
+        assert!(
+            seen[0][0]
+                .content
+                .as_deref()
+                .unwrap()
+                .contains("parent's instructions")
+        );
+        let offered = model.offered.lock().unwrap();
+        assert!(offered[0].contains(&"task".to_owned()));
+        assert!(
+            !offered[1].contains(&"task".to_owned()),
+            "a subagent is never offered `task` itself (B2)"
+        );
+        assert!(offered[2].contains(&"task".to_owned()));
+        drop(offered);
+        drop(seen);
+
+        // The subagent's stream arrives wrapped at depth 1: its answer and its own `Finished` …
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, Event::Sub { depth: 1, event, .. }
+                if matches!(&**event, Event::AssistantText { .. })))
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, Event::Sub { depth: 1, event, .. }
+                if matches!(&**event, Event::Finished { .. })))
+        );
+        // … and exactly one unwrapped `Finished` — the run's own, with the summed tokens.
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| matches!(e, Event::Finished { .. }))
+                .count(),
+            1
+        );
+        assert!(matches!(
+            events.last(),
+            Some(Event::Finished {
+                reason: FinishReason::Answered,
+                turns: 2,
+                usage: Usage {
+                    input_tokens: 27,
+                    output_tokens: 5
+                },
+            })
+        ));
+        // The stream opens with `task` in the run's own tool list (D3).
+        assert!(matches!(
+            events.first(),
+            Some(Event::Started { tools, .. }) if tools.contains(&"task".to_owned())
+        ));
+    }
+
+    #[tokio::test]
+    async fn task_is_judged_like_a_change_deny_refuses_it_allow_runs_it() {
+        use crate::permissions::{Mode, Nobody, Rule, RuleSet};
+        let refused_script = || {
+            Script::new(vec![
+                Ok(task_call(
+                    "c1",
+                    json!({"description": "x", "prompt": "Do it."}),
+                )),
+                Ok(text("done")),
+            ])
+        };
+
+        // B1: no rule, mode default, nobody there — an ask nobody answers is a refusal, and the
+        // subagent never starts. (An interactive run answers it; `allow task` or
+        // `--permission-mode auto` switches it on without asking.)
+        let mut tools = toolbox();
+        tools.set_gate(Arc::new(Gate::new(
+            RuleSet::default(),
+            Mode::Default,
+            Arc::new(Nobody),
+        )));
+        let model = refused_script();
+        let mut events = Vec::new();
+        run(
+            &RunConfig::new("/w"),
+            &model,
+            &tools,
+            "go",
+            &mut events,
+            &Cancel::new(),
+        )
+        .await;
+        let answer = tool_answer(&model);
+        assert!(answer.contains("no one to ask"), "{answer}");
+        assert!(events.iter().any(
+            |e| matches!(e, Event::Permission { allowed: false, tool, .. } if tool == "task")
+        ));
+        assert!(
+            !events.iter().any(|e| matches!(e, Event::Sub { .. })),
+            "a refused task never starts a subagent"
+        );
+
+        // `deny task` refuses it: the rules speak first.
+        let mut tools = toolbox();
+        let rules = RuleSet {
+            deny: vec![Rule::parse("task").unwrap()],
+            ..RuleSet::default()
+        };
+        tools.set_gate(Arc::new(Gate::new(rules, Mode::Default, Arc::new(Nobody))));
+        let model = refused_script();
+        let mut events = Vec::new();
+        run(
+            &RunConfig::new("/w"),
+            &model,
+            &tools,
+            "go",
+            &mut events,
+            &Cancel::new(),
+        )
+        .await;
+        assert!(tool_answer(&model).contains("not permitted"));
+        assert!(!events.iter().any(|e| matches!(e, Event::Sub { .. })));
+
+        // `allow task` runs it — judged, reported, then the subagent.
+        let mut tools = toolbox();
+        let rules = RuleSet {
+            allow: vec![Rule::parse("task").unwrap()],
+            ..RuleSet::default()
+        };
+        tools.set_gate(Arc::new(Gate::new(rules, Mode::Default, Arc::new(Nobody))));
+        let model = Script::new(vec![
+            Ok(task_call(
+                "c1",
+                json!({"description": "x", "prompt": "Do it."}),
+            )),
+            Ok(text("the subagent's answer")),
+            Ok(text("done")),
+        ]);
+        let mut events = Vec::new();
+        let outcome = run(
+            &RunConfig::new("/w"),
+            &model,
+            &tools,
+            "go",
+            &mut events,
+            &Cancel::new(),
+        )
+        .await;
+        assert_eq!(outcome.answer.as_deref(), Some("done"));
+        assert!(events.iter().any(|e| matches!(e, Event::Sub { .. })));
+        assert!(
+            events.iter().any(
+                |e| matches!(e, Event::Permission { allowed: true, tool, .. } if tool == "task")
+            )
+        );
+        let seen = model.seen.lock().unwrap();
+        assert!(
+            seen[2]
+                .iter()
+                .any(|m| m.role == Role::Tool
+                    && m.content.as_deref() == Some("the subagent's answer"))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_narrowed_run_needs_task_declared_and_still_judges_it_afterwards() {
+        use crate::permissions::{Gate, Mode, Nobody, Rule, RuleSet};
+        let script = || {
+            Script::new(vec![
+                Ok(task_call(
+                    "c1",
+                    json!({"description": "x", "prompt": "Do it."}),
+                )),
+                Ok(text("done")),
+            ])
+        };
+        let narrowed = |allowed: Vec<Rule>, allow: Vec<Rule>| {
+            let mut gate = Gate::new(
+                RuleSet {
+                    allow,
+                    ..RuleSet::default()
+                },
+                Mode::Default,
+                Arc::new(Nobody),
+            );
+            gate.restrict_name = Some("demo".into());
+            gate.restrict = Some(allowed);
+            gate
+        };
+
+        // Not declared: refused before any rule or mode, naming the command (HS6b-B3).
+        let mut tools = toolbox();
+        tools.set_gate(Arc::new(narrowed(
+            vec![Rule::parse("Read").unwrap()],
+            Vec::new(),
+        )));
+        let model = script();
+        let mut events = Vec::new();
+        run(
+            &RunConfig::new("/w"),
+            &model,
+            &tools,
+            "go",
+            &mut events,
+            &Cancel::new(),
+        )
+        .await;
+        let answer = tool_answer(&model);
+        assert!(answer.contains("demo"), "{answer}");
+        assert!(answer.contains("allows only"), "{answer}");
+        assert!(!events.iter().any(|e| matches!(e, Event::Sub { .. })));
+
+        // Declared: the narrowing lets it through, the gate still judges it (B1) — a declaration
+        // alone never allows anything (C3).
+        let mut tools = toolbox();
+        tools.set_gate(Arc::new(narrowed(
+            vec![Rule::parse("task").unwrap()],
+            Vec::new(),
+        )));
+        let model = script();
+        let mut events = Vec::new();
+        run(
+            &RunConfig::new("/w"),
+            &model,
+            &tools,
+            "go",
+            &mut events,
+            &Cancel::new(),
+        )
+        .await;
+        let answer = tool_answer(&model);
+        assert!(answer.contains("no one to ask"), "{answer}");
+        assert!(!events.iter().any(|e| matches!(e, Event::Sub { .. })));
+
+        // Declared and allowed by the run's own rules: the subagent runs.
+        let mut tools = toolbox();
+        tools.set_gate(Arc::new(narrowed(
+            vec![Rule::parse("task").unwrap()],
+            vec![Rule::parse("task").unwrap()],
+        )));
+        let model = Script::new(vec![
+            Ok(task_call(
+                "c1",
+                json!({"description": "x", "prompt": "Do it."}),
+            )),
+            Ok(text("the subagent's answer")),
+            Ok(text("done")),
+        ]);
+        let mut events = Vec::new();
+        let outcome = run(
+            &RunConfig::new("/w"),
+            &model,
+            &tools,
+            "go",
+            &mut events,
+            &Cancel::new(),
+        )
+        .await;
+        assert_eq!(outcome.answer.as_deref(), Some("done"));
+        assert!(events.iter().any(|e| matches!(e, Event::Sub { .. })));
+    }
+
+    #[tokio::test]
+    async fn the_owners_hooks_hold_inside_a_subagent_and_session_start_stays_run_once() {
+        let model = Script::new(vec![
+            Ok(task_call(
+                "c1",
+                json!({"description": "x", "prompt": "Use the echo tool."}),
+            )),
+            Ok(calls(&[("s1", "echo", r#"{"text":"hi"}"#)])),
+            Ok(text("sub done")),
+            Ok(text("all done")),
+        ]);
+        let config = hooks_config(
+            "sub",
+            json!({
+                "SessionStart": [{"hooks": [{"type": "command", "command": "echo \"house rules\""}]}],
+                "PreToolUse": [{"matcher": "echo", "hooks": [{"type": "command",
+                    "command": "echo '{\"hookSpecificOutput\":{\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"not today\"}}'"}]}],
+            }),
+        );
+        let mut events = Vec::new();
+        let outcome = run(
+            &config,
+            &model,
+            &toolbox(),
+            "go",
+            &mut events,
+            &Cancel::new(),
+        )
+        .await;
+        assert_eq!(
+            (outcome.reason, outcome.answer.as_deref()),
+            (FinishReason::Answered, Some("all done"))
+        );
+
+        // D4: the veto held inside the subagent — its echo never ran, the block arrived as its result.
+        assert!(events.iter().any(|e| matches!(
+            e,
+            Event::Sub { depth: 1, event, .. }
+                if matches!(&**event, Event::Hook { blocked: true, hook_event, .. }
+                    if hook_event == "PreToolUse")
+        )));
+        {
+            let seen = model.seen.lock().unwrap();
+            assert!(seen[2].iter().any(|m| {
+                m.role == Role::Tool
+                    && m.content
+                        .as_deref()
+                        .is_some_and(|text| text.contains("error: not today"))
+            }));
+            // The subagent never saw the SessionStart context: it belongs to the run (D4).
+            assert!(
+                !seen[1][0]
+                    .content
+                    .as_deref()
+                    .unwrap()
+                    .contains("house rules")
+            );
+        }
+
+        // SessionStart runs once, and never wrapped — not even a copy for the subagent.
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| matches!(e, Event::Hook { hook_event, .. }
+                    if hook_event == "SessionStart"))
+                .count(),
+            1
+        );
+        assert!(!events.iter().any(|e| matches!(e, Event::Sub { event, .. }
+            if matches!(&**event, Event::Hook { hook_event, .. }
+                if hook_event == "SessionStart"))));
+    }
+
+    #[tokio::test]
+    async fn a_subagents_own_turn_limit_ends_it_and_its_time_limit_stops_it_early() {
+        // Its own turn limit (D6): one turn may call a tool, the next one is already over it — and
+        // the parent carries on untouched.
+        let model = Script::new(vec![
+            Ok(task_call(
+                "c1",
+                json!({"description": "x", "prompt": "Work."}),
+            )),
+            Ok(calls(&[("s1", "echo", r#"{"text":"go"}"#)])),
+            Ok(text("all done")),
+        ]);
+        let mut config = RunConfig::new("/w");
+        config.subagent_max_turns = 1;
+        let outcome = run(
+            &config,
+            &model,
+            &toolbox(),
+            "go",
+            &mut Vec::new(),
+            &Cancel::new(),
+        )
+        .await;
+        assert_eq!(
+            (outcome.reason, outcome.answer.as_deref()),
+            (FinishReason::Answered, Some("all done")),
+            "the subagent's limit is not the parent's"
+        );
+        {
+            let seen = model.seen.lock().unwrap();
+            let answer = seen[2]
+                .iter()
+                .find(|m| m.role == Role::Tool)
+                .and_then(|m| m.content.clone())
+                .unwrap_or_default();
+            assert!(answer.contains("MaxTurns"), "{answer}");
+        }
+
+        // Its own time limit (D6): a slow model cannot hold the subagent past it, and the parent's
+        // queued replies stay the parent's — the subagent never finished its first call.
+        let mut slow = Script::new(vec![
+            Ok(task_call(
+                "c1",
+                json!({"description": "x", "prompt": "Work."}),
+            )),
+            Ok(text("the parent carried on")),
+        ]);
+        slow.delay = Duration::from_millis(300);
+        let mut config = RunConfig::new("/w");
+        config.subagent_timeout = Duration::from_millis(50);
+        let outcome = run(
+            &config,
+            &slow,
+            &toolbox(),
+            "go",
+            &mut Vec::new(),
+            &Cancel::new(),
+        )
+        .await;
+        assert_eq!(outcome.answer.as_deref(), Some("the parent carried on"));
+        let seen = slow.seen.lock().unwrap();
+        assert_eq!(
+            seen.len(),
+            3,
+            "the parent's two turns and the subagent's one unfinished"
+        );
+        let answer = seen[2]
+            .iter()
+            .find(|m| m.role == Role::Tool)
+            .and_then(|m| m.content.clone())
+            .unwrap_or_default();
+        assert!(answer.contains("Timeout"), "{answer}");
+    }
+
+    #[tokio::test]
+    async fn a_cancel_from_inside_the_subagent_ends_the_whole_run() {
+        let cancel = Cancel::new();
+        let mut tools = toolbox();
+        tools.extend([Box::new(CancelRun(cancel.clone())) as Box<dyn Tool>]);
+        let model = Script::new(vec![
+            Ok(task_call(
+                "c1",
+                json!({"description": "x", "prompt": "Work."}),
+            )),
+            Ok(calls(&[("s1", "cancel_run", "{}")])),
+        ]);
+        let mut events = Vec::new();
+        let outcome = run(
+            &RunConfig::new("/w"),
+            &model,
+            &tools,
+            "go",
+            &mut events,
+            &cancel,
+        )
+        .await;
+        assert_eq!(outcome.reason, FinishReason::Cancelled);
+        assert_eq!(outcome.answer, None);
+        // Both replies were spent and both are the run's tokens: 7/1 (the task) + 7/1 (the
+        // subagent's last turn).
+        assert_eq!(
+            outcome.usage,
+            Usage {
+                input_tokens: 14,
+                output_tokens: 2
+            }
+        );
+        // The bracket still closed: the parent's stream shows why the subagent stopped.
+        assert!(events.iter().any(
+            |e| matches!(e, Event::ToolResult { ok: false, output, .. } if output.contains("Cancelled"))
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_run_without_subagents_never_offers_task_and_a_task_call_has_no_tool() {
+        let model = Script::new(vec![
+            Ok(task_call(
+                "c1",
+                json!({"description": "x", "prompt": "Work."}),
+            )),
+            Ok(text("done")),
+        ]);
+        let mut config = RunConfig::new("/w");
+        config.subagents = false;
+        let mut events = Vec::new();
+        run(
+            &config,
+            &model,
+            &toolbox(),
+            "go",
+            &mut events,
+            &Cancel::new(),
+        )
+        .await;
+        assert!(!model.offered.lock().unwrap()[0].contains(&"task".to_owned()));
+        assert!(matches!(
+            events.first(),
+            Some(Event::Started { tools, .. }) if !tools.contains(&"task".to_owned())
+        ));
+        // Not intercepted, so the ordinary "no tool named" of the toolbox answers it.
+        assert!(tool_answer(&model).contains("no tool named"));
     }
 }
