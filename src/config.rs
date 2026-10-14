@@ -4,6 +4,9 @@ use std::fmt;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::hooks::Hooks;
+use crate::permissions::settings::SandboxSettings;
+
 /// The most model turns a run takes before it stops (a turn is one model call). Generous for real work, but an end
 /// to a model that keeps calling tools without ever answering.
 pub const DEFAULT_MAX_TURNS: u32 = 40;
@@ -50,6 +53,11 @@ pub struct RunConfig {
     /// `.axh/skills` (HS6, K2): `<folder>/<name>/SKILL.md` each. `axh` fills them from its repeatable
     /// `--skill-dir`; a caller loads the catalog with them (`skills::Catalog::load`).
     pub skill_dirs: Vec<PathBuf>,
+    /// The owner's hooks (HS7); empty: the run has none and nothing is built for them. Only the owner's
+    /// `~/.axh/settings.json` contributes — a project's hooks are parsed and left out (`B1`).
+    pub hooks: Hooks,
+    /// How the hooks' commands run (HS3b's sandbox, HS7 D5); `None`: as they are, judged by the rules alone.
+    pub sandbox: Option<SandboxSettings>,
 }
 
 impl RunConfig {
@@ -62,6 +70,8 @@ impl RunConfig {
             timeout: DEFAULT_TIMEOUT,
             max_output_tokens: None,
             skill_dirs: Vec::new(),
+            hooks: Hooks::default(),
+            sandbox: None,
         }
     }
 }

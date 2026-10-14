@@ -935,7 +935,9 @@ pub struct GateOptions {
 }
 
 /// The gate of a run in `project`: the owner's settings below `home`, the project's if trusted, then `options`;
-/// whether project settings were left out for lack of trust; and what the settings say about the sandbox.
+/// whether project settings were left out for lack of trust; what the settings say about the sandbox; the
+/// owner's hooks (HS7, B1 — the only ones that ever run); and whether the project has hooks of its own that
+/// were parsed but not taken over.
 ///
 /// # Errors
 ///
@@ -945,7 +947,16 @@ pub fn build_gate(
     project: &std::path::Path,
     options: GateOptions,
     asker: Arc<dyn Asker>,
-) -> Result<(Gate, bool, settings::SandboxSettings), crate::HarnessError> {
+) -> Result<
+    (
+        Gate,
+        bool,
+        settings::SandboxSettings,
+        crate::hooks::Hooks,
+        bool,
+    ),
+    crate::HarnessError,
+> {
     let loaded = settings::load(home, project, options.trusted)?;
     let mut rules = loaded.rules;
     let flag = |name: &str, list: &[String]| -> Result<Vec<Rule>, crate::HarnessError> {
@@ -968,6 +979,8 @@ pub fn build_gate(
         Gate::new(rules, mode, asker),
         loaded.untrusted_project,
         loaded.sandbox,
+        loaded.hooks,
+        loaded.project_hooks_skipped,
     ))
 }
 
@@ -1334,7 +1347,7 @@ mod tests {
             deny: vec!["Edit(secrets/**)".into()],
             ..GateOptions::default()
         };
-        let (gate, untrusted, sandbox) =
+        let (gate, untrusted, sandbox, _hooks, _project_hooks) =
             build_gate(&home, &project, options.clone(), Arc::new(Nobody)).unwrap();
         assert!(sandbox.enabled, "on unless the owner switches it off");
         assert_eq!(gate.mode(), Mode::Plan);

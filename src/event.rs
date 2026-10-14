@@ -111,6 +111,17 @@ pub enum Event {
         name: String,
         how: SkillHow,
     },
+    /// A hook of this run ran (HS7): which of Claude's four events it belongs to, its command (cut), whether it
+    /// blocked, how much context it left behind, and — for a failure (B3) or a block — the note saying why.
+    /// `turn` is `None` for `SessionStart`, which runs before the first model turn.
+    Hook {
+        turn: Option<u32>,
+        hook_event: String,
+        command: String,
+        blocked: bool,
+        context_chars: usize,
+        note: Option<String>,
+    },
     Error {
         message: String,
     },
@@ -288,6 +299,35 @@ mod tests {
         })
         .unwrap();
         assert_eq!(loaded["how"], "loaded");
+    }
+
+    #[test]
+    fn a_hook_event_is_a_tagged_line_like_the_others() {
+        let line = serde_json::to_value(Event::Hook {
+            turn: Some(2),
+            hook_event: "PreToolUse".into(),
+            command: "echo hi".into(),
+            blocked: true,
+            context_chars: 9,
+            note: Some("not today".into()),
+        })
+        .unwrap();
+        assert_eq!(
+            line,
+            json!({"event": "hook", "turn": 2, "hook_event": "PreToolUse", "command": "echo hi",
+                   "blocked": true, "context_chars": 9, "note": "not today"})
+        );
+        // SessionStart runs before the first turn and carries no one.
+        let start = serde_json::to_value(Event::Hook {
+            turn: None,
+            hook_event: "SessionStart".into(),
+            command: "true".into(),
+            blocked: false,
+            context_chars: 5,
+            note: None,
+        })
+        .unwrap();
+        assert_eq!(start["turn"], serde_json::Value::Null);
     }
 
     #[test]

@@ -21,7 +21,7 @@ use std::time::Duration;
 use rustix::process::{Pid, Signal, kill_process_group};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
 use tokio::sync::OnceCell;
 
@@ -166,6 +166,17 @@ fn command_script(family: Family) -> String {
     )
 }
 
+/// The script a hook runs in (HS7, D5): the snapshot and the folder, then the command — stderr kept apart from
+/// stdout (a hook's two channels mean different things), and no folder note: a hook does not move the run's folder.
+fn hook_script(family: Family) -> String {
+    let b = family.builtin();
+    format!(
+        "if [ -n \"$AXH_SNAPSHOT\" ]; then . \"$AXH_SNAPSHOT\" >/dev/null 2>&1; fi\n\
+         {b}cd \"$AXH_CWD\" || exit 1\n\
+         {b}eval \"$AXH_COMMAND\"\n"
+    )
+}
+
 /// Whether a command runs in the sandbox, and then with the gate its proxy asks about hosts.
 enum Sandboxing {
     On(Option<Arc<Gate>>),
@@ -180,8 +191,8 @@ struct Sandbox {
     profile: String,
 }
 
-/// What the shell tools of one run share.
-struct Session {
+/// What the shell tools of one run share — also the hooks of a run (HS7, D5): they get what a command gets.
+pub(crate) struct Session {
     root: PathBuf,
     shell: PathBuf,
     family: Family,
@@ -213,8 +224,17 @@ struct Job {
     ended: Arc<Mutex<Option<String>>>,
 }
 
+/// How a hook ended (HS7): its exit code (`None` when a signal took it), what it wrote on either channel, and
+/// whether it ran into its time limit.
+pub(crate) struct HookOutput {
+    pub(crate) code: Option<i32>,
+    pub(crate) stdout: String,
+    pub(crate) stderr: String,
+    pub(crate) timed_out: bool,
+}
+
 impl Session {
-    fn new(cwd: &Path, options: ShellOptions) -> Result<Self, HarnessError> {
+    pub(crate) fn new(cwd: &Path, options: ShellOptions) -> Result<Self, HarnessError> {
         let root = cwd.canonicalize().map_err(|err| HarnessError::Workspace {
             path: cwd.display().to_string(),
             reason: err.to_string(),
@@ -334,13 +354,14 @@ impl Session {
         Some(sandbox)
     }
 
-    /// A command ready to spawn: the shell running [`command_script`] for `command` in `cwd`.
+    /// A command ready to spawn: the shell running `script` for `command` in `cwd`.
     async fn command(
         &self,
         command: &str,
         cwd: &Path,
         cwd_file: Option<&Path>,
         sandbox: Sandboxing,
+        script: &str,
     ) -> Command {
         let snapshot = self.snapshot().await;
         let mut proxy_env = Vec::new();
@@ -362,7 +383,7 @@ impl Session {
         };
         process
             .arg("-c")
-            .arg(command_script(self.family))
+            .arg(script)
             .env_clear()
             .envs(self.env.iter().cloned())
             .envs(proxy_env)
@@ -409,7 +430,13 @@ impl Session {
             self.next_note.fetch_add(1, Ordering::Relaxed)
         ));
         let mut child = self
-            .command(command, &cwd, Some(&note), sandbox)
+            .command(
+                command,
+                &cwd,
+                Some(&note),
+                sandbox,
+                &command_script(self.family),
+            )
             .await
             .spawn()
             .map_err(|err| format!("could not start {}: {err}", self.shell.display()))?;
@@ -473,6 +500,94 @@ impl Session {
         }
     }
 
+    /// Runs a hook command (HS7, D5): `payload` on stdin, stdout and stderr kept apart — a hook's two channels
+    /// mean different things (context vs. block reason). Hooks start in the run's folder but do not carry a
+    /// folder over, and they run in the sandbox like any command, with the run's proxy for the network. Killed
+    /// with its process group on a time limit or when the run stops.
+    pub(crate) async fn run_hook(
+        &self,
+        command: &str,
+        payload: &str,
+        limit: Duration,
+        stop: &StopFlag,
+        gate: Option<Arc<Gate>>,
+    ) -> Result<HookOutput, String> {
+        let (cwd, _) = self.start_dir();
+        let mut process = self
+            .command(
+                command,
+                &cwd,
+                None,
+                Sandboxing::On(gate),
+                &hook_script(self.family),
+            )
+            .await;
+        process.stdin(Stdio::piped()).stderr(Stdio::piped());
+        let mut child = process
+            .spawn()
+            .map_err(|err| format!("the hook could not start: {err}"))?;
+        // The group goes whichever way this future ends (B3: a dropped hook is a note, never a stop).
+        let group = GroupGuard(Group::of(&child));
+        // Written from a task of its own: a payload larger than the pipe's buffer must not deadlock against a
+        // hook that reads its stdin late; killing the group on any way out closes the pipe under it.
+        let writer = child.stdin.take().map(|mut stdin| {
+            let text = payload.to_owned();
+            tokio::spawn(async move {
+                let _ = stdin.write_all(text.as_bytes()).await;
+            })
+        });
+        let out = Arc::new(Mutex::new(Capture::keep_head(MAX_FOREGROUND_BYTES)));
+        let err = Arc::new(Mutex::new(Capture::keep_head(MAX_FOREGROUND_BYTES)));
+        let mut out_reader = collect_from(child.stdout.take(), Arc::clone(&out));
+        let mut err_reader = collect_from(child.stderr.take(), Arc::clone(&err));
+        let waited = tokio::time::timeout(limit, async {
+            loop {
+                tokio::select! {
+                    status = child.wait() => break status,
+                    () = tokio::time::sleep(STOP_POLL) => {
+                        if stop.load(Ordering::SeqCst) {
+                            group.0.kill();
+                        }
+                    }
+                }
+            }
+        })
+        .await;
+        let (status, timed_out) = match waited {
+            Ok(Ok(status)) => (Some(status), false),
+            Ok(Err(_)) => (None, false),
+            Err(_) => (None, true),
+        };
+        if status.is_none() {
+            group.0.kill();
+            let _ = child.wait().await;
+        }
+        drop(group);
+        for reader in [&mut out_reader, &mut err_reader] {
+            if tokio::time::timeout(DRAIN_GRACE, &mut *reader)
+                .await
+                .is_err()
+            {
+                reader.abort();
+            }
+        }
+        if let Some(writer) = writer {
+            let _ = writer.await;
+        }
+        Ok(HookOutput {
+            code: status.and_then(|status| status.code()),
+            stdout: out
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .text(),
+            stderr: err
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .text(),
+            timed_out,
+        })
+    }
+
     /// Takes the folder a command ended in as the next command's, if it lies inside the run's folder; otherwise
     /// returns to the run's folder and says so. No note (the command ended with `exit`) keeps the folder as it was.
     fn carry_folder(&self, note: &Path) -> Option<String> {
@@ -505,7 +620,7 @@ impl Session {
         }
         let (cwd, _) = self.start_dir();
         let mut child = self
-            .command(command, &cwd, None, sandbox)
+            .command(command, &cwd, None, sandbox, &command_script(self.family))
             .await
             .spawn()
             .map_err(|err| format!("could not start {}: {err}", self.shell.display()))?;
@@ -694,11 +809,18 @@ impl Drop for GroupGuard {
 
 /// Reads a child's output into `output` until the pipe closes.
 fn collect(child: &mut Child, output: Arc<Mutex<Capture>>) -> tokio::task::JoinHandle<()> {
-    let stdout = child.stdout.take();
+    collect_from(child.stdout.take(), output)
+}
+
+/// The same for either pipe: a hook's stdout and stderr are drained beside each other, kept apart.
+fn collect_from<R>(pipe: Option<R>, output: Arc<Mutex<Capture>>) -> tokio::task::JoinHandle<()>
+where
+    R: tokio::io::AsyncRead + Unpin + Send + 'static,
+{
     tokio::spawn(async move {
-        let Some(mut stdout) = stdout else { return };
+        let Some(mut pipe) = pipe else { return };
         let mut chunk = [0u8; 8192];
-        while let Ok(n) = stdout.read(&mut chunk).await {
+        while let Ok(n) = pipe.read(&mut chunk).await {
             if n == 0 {
                 break;
             }

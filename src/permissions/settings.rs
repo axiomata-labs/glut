@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{Mode, Rule, RuleSet};
 use crate::error::HarnessError;
+use crate::hooks::{Hooks, HooksSection};
 
 /// The folder of the owner's settings, below the home folder.
 pub const USER_DIR: &str = ".axh";
@@ -70,6 +71,10 @@ struct File {
     permissions: Permissions,
     #[serde(default)]
     sandbox: Option<SandboxSection>,
+    /// Hooks in Claude's shape (HS7): a project's are parsed here too — a settings file holding hooks must
+    /// not fail the load — but only the owner's ever run (B1, `load`).
+    #[serde(default)]
+    hooks: HooksSection,
 }
 
 /// The `sandbox` section of one settings file (HS3b), as written: paths are still text, `~/…` or relative.
@@ -145,6 +150,8 @@ pub struct Settings {
     pub mode: Option<Mode>,
     /// The `sandbox` section, as written.
     pub sandbox: SandboxSection,
+    /// The compiled hooks (HS7); empty when the file has none.
+    pub hooks: Hooks,
 }
 
 /// Reads one settings file; a missing file says nothing.
@@ -196,6 +203,7 @@ pub fn read(path: &Path) -> Result<Settings, HarnessError> {
             Some(Mode::parse(&text).ok_or_else(|| fail(format!("unknown defaultMode {text:?}")))?)
         }
     };
+    let hooks = Hooks::compile(&file.hooks).map_err(|reason| fail(format!("hooks: {reason}")))?;
     Ok(Settings {
         rules: RuleSet {
             allow: parse(file.permissions.allow)?,
@@ -204,6 +212,7 @@ pub fn read(path: &Path) -> Result<Settings, HarnessError> {
         },
         mode,
         sandbox: file.sandbox.unwrap_or_default(),
+        hooks,
     })
 }
 
@@ -216,6 +225,10 @@ pub struct Loaded {
     /// The project has allow rules or a mode of its own that were left out because the folder is not trusted.
     pub untrusted_project: bool,
     pub sandbox: SandboxSettings,
+    /// The owner's hooks (HS7, B1) — the only ones that ever run.
+    pub hooks: Hooks,
+    /// The project has hooks of its own; they were parsed but not taken over (B1).
+    pub project_hooks_skipped: bool,
 }
 
 /// The project's settings files.
@@ -280,9 +293,14 @@ pub fn load(home: &Path, project: &Path, trusted: bool) -> Result<Loaded, Harnes
         rules: user.rules,
         untrusted_project: false,
         sandbox: SandboxSettings::default(),
+        hooks: user.hooks,
+        project_hooks_skipped: false,
     };
     for file in project_files(project) {
         let settings = read(&file)?;
+        // HS7, B1: a project's hooks are parsed (above) but never run — nothing a stored file says may start
+        // a process. The caller is told and puts a note where a person will see it.
+        loaded.project_hooks_skipped |= !settings.hooks.is_empty();
         // A project may keep more secret; it may not open places to write, localhost, or switch the sandbox off.
         sandbox.deny_read.extend(
             settings
@@ -554,5 +572,50 @@ mod tests {
         );
         let owner = load(&home, &project, false).unwrap().sandbox;
         assert!(!owner.enabled && owner.allow_local_binding, "the owner can");
+    }
+
+    #[test]
+    fn the_owners_hooks_are_loaded_and_a_projects_are_parsed_but_left_out() {
+        let (home, project) = (temp("hooks-home"), temp("hooks-project"));
+        write(
+            &home.join(".axh/settings.json"),
+            r#"{"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "true"}]}]}}"#,
+        );
+        write(
+            &project.join(".axh/settings.json"),
+            r#"{"hooks": {"PreToolUse": [{"hooks": [{"type": "command", "command": "echo project"}]}]}}"#,
+        );
+        let loaded = load(&home, &project, false).unwrap();
+        assert!(!loaded.hooks.is_empty(), "the owner's hooks run (B1)");
+        assert!(
+            loaded.project_hooks_skipped,
+            "and the project's are said to be left out"
+        );
+        // Even where the project is trusted its hooks stay out — B1 has no trust step.
+        assert!(load(&home, &project, true).unwrap().project_hooks_skipped);
+
+        // A project whose hooks are broken still stops the run: parsed, not skipped (D1).
+        write(
+            &project.join(".axh/settings.json"),
+            r#"{"hooks": {"PreToolUse": [{"hooks": [{"type": "prompt", "command": "true"}]}]}}"#,
+        );
+        assert!(matches!(
+            load(&home, &project, false),
+            Err(HarnessError::Settings { .. })
+        ));
+    }
+
+    #[test]
+    fn a_settings_file_with_hooks_is_no_misspelled_field() {
+        // The `hooks` key parses (it used to be a deny_unknown_fields error before HS7) and an unknown event
+        // name in it is ignored rather than fatal (D1).
+        let dir = temp("hooks-parse");
+        write(
+            &dir.join("s.json"),
+            r#"{"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "true"}]}],
+                          "SomethingNew": [{"hooks": [{"type": "command", "command": "true"}]}]}}"#,
+        );
+        let settings = read(&dir.join("s.json")).unwrap();
+        assert!(!settings.hooks.is_empty());
     }
 }

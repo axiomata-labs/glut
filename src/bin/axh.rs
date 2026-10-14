@@ -197,15 +197,25 @@ async fn main() -> ExitCode {
         trusted,
     };
     // Headless: nobody to ask (P6).
-    let (mut gate, untrusted, sandbox) = match build_gate(&home, &cwd, options, Arc::new(Nobody)) {
-        Ok(parts) => parts,
-        Err(err) => return fail(err.to_string()),
-    };
+    let (mut gate, untrusted, sandbox, hooks, project_hooks) =
+        match build_gate(&home, &cwd, options, Arc::new(Nobody)) {
+            Ok(parts) => parts,
+            Err(err) => return fail(err.to_string()),
+        };
     if untrusted {
         eprintln!(
             "axh: the project's .axh/ allow rules and mode are left out: this folder is not trusted"
         );
     }
+    // HS7, B1: the owner's hooks run; a project's are parsed and left out, and said so.
+    if project_hooks {
+        eprintln!(
+            "axh: the project's own .axh/ hooks are not run: only ~/.axh/settings.json hooks run"
+        );
+    }
+    // HS7: the hooks run with what the settings say about the sandbox, like the shell's own commands (D5).
+    config.hooks = hooks;
+    config.sandbox = Some(sandbox.clone());
     if !sandbox.enabled || !axiomata_harness::sandbox::available() {
         eprintln!("axh: commands run without a sandbox: only the permission rules hold them");
     }

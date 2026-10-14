@@ -22,6 +22,8 @@ thiserror.workspace = true
 globset.workspace = true
 # A skill's `SKILL.md` frontmatter, like the roster's `AGENT.md` (HS6, K3).
 gray_matter.workspace = true
+# A hook's `matcher` is a regex, Claude's own spelling (HS7, D1/D2).
+regex.workspace = true
 # `process`: the shell tools kill a command's whole process group (HS2, S4).
 rustix = { workspace = true, features = ["process"] }
 chrono.workspace = true
