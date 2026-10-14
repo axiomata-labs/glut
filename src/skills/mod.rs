@@ -483,8 +483,14 @@ impl<'de> Deserialize<'de> for RuleList {
 }
 
 /// One string of rules as the harness reads them: split on spaces and commas outside parentheses — `Bash(git
-/// status:*)` holds both — and each part parsed as one rule.
-fn rules_of(text: &str) -> Result<Vec<Rule>, String> {
+/// status:*)` holds both — and each part parsed as one rule. Public for a caller that narrows a run by a skill's
+/// `allowed_tools` frontmatter without loading it as a harness skill (HS6b, B3); the harness's own skill
+/// frontmatter parser uses the same function, so both sides split identically.
+///
+/// # Errors
+///
+/// The reason one part does not parse as a rule, as [`Rule::parse`] reports it.
+pub fn rules_of(text: &str) -> Result<Vec<Rule>, String> {
     split_rules(text).into_iter().map(Rule::parse).collect()
 }
 
@@ -722,6 +728,18 @@ mod tests {
         assert!(!skill.description.contains('\n'));
         assert_eq!(skill.allowed_tools.len(), 2);
         assert_eq!(skill.model.as_deref(), Some("anthropic/claude-haiku-5-5"));
+    }
+
+    #[test]
+    fn rules_of_splits_one_string_the_way_the_frontmatter_reads_it() {
+        // Public since HS6b: a caller that narrows a run by a skill's `allowed_tools` splits exactly like the
+        // harness's own frontmatter parser.
+        let rules = rules_of("Bash(git status:*) Read, Edit").unwrap();
+        assert_eq!(rules.len(), 3);
+        assert_eq!(rules[0].text(), "Bash(git status:*)");
+        assert_eq!(rules[1].text(), "Read");
+        assert_eq!(rules[2].text(), "Edit");
+        assert!(rules_of("Bash(").is_err());
     }
 
     #[test]

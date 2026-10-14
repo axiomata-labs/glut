@@ -5,6 +5,7 @@
 //! its `allow` rules — counts only in a folder the owner trusted once (`~/.axh/trusted.json`), and its mode never
 //! lets through more than the owner's own (security review of HS3a, 2026-10-13).
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -23,6 +24,43 @@ const TRUST_FILE: &str = "trusted.json";
 const MAX_SETTINGS_BYTES: u64 = 256 * 1024;
 /// Rules one file may hold: enough for any real list, a stop for a file that would make every call slow to judge.
 const MAX_RULES: usize = 1_000;
+/// Overrides the harness's home folder — the `AXIOMATA_HOME` pattern of the repo (AGENTS.md), so a test or an
+/// embedder runs against its own `~/.axh` and never reads the owner's settings or starts the owner's MCP servers.
+const HOME_ENV: &str = "AXH_HOME";
+
+/// The harness's home folder: `$AXH_HOME` when set, else `$HOME`.
+///
+/// # Errors
+///
+/// [`HarnessError::Settings`] when neither variable holds an absolute path — everything below this folder
+/// (`settings.json`, `trusted.json`, `mcp.json`, `skills/`) would otherwise silently resolve somewhere else.
+pub fn home_dir() -> Result<PathBuf, HarnessError> {
+    home_from_env(std::env::var_os(HOME_ENV), std::env::var_os("HOME"))
+}
+
+/// [`home_dir`] with the two environment values handed in, so the resolution is testable without touching the
+/// environment. An empty variable (`AXH_HOME=`) counts as unset — a script that exports an empty override must
+/// not point every run at `""` below the drive root.
+fn home_from_env(
+    axh_home: Option<OsString>,
+    home: Option<OsString>,
+) -> Result<PathBuf, HarnessError> {
+    let folder = |value: Option<OsString>| -> Option<PathBuf> {
+        let path = PathBuf::from(value?);
+        (!path.as_os_str().is_empty()).then_some(path)
+    };
+    let (name, found) = match folder(axh_home) {
+        Some(path) => (HOME_ENV, Some(path)),
+        None => ("HOME", folder(home)),
+    };
+    match found {
+        Some(path) if path.is_absolute() => Ok(path),
+        _ => Err(HarnessError::Settings {
+            path: name.to_owned(),
+            reason: "is not set to an absolute folder".to_owned(),
+        }),
+    }
+}
 
 // Unknown fields are refused: a misspelled `"denny"` would otherwise drop a deny list without a word.
 #[derive(Debug, Default, Deserialize)]
@@ -365,6 +403,28 @@ mod tests {
     fn write(path: &Path, text: &str) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, text).unwrap();
+    }
+
+    #[test]
+    fn axh_home_overrides_home_and_both_must_be_absolute() {
+        let own = home_from_env(Some("/scratch/axh".into()), Some("/Users/owner".into())).unwrap();
+        assert_eq!(own, PathBuf::from("/scratch/axh"));
+        // An empty override (an unset-looking variable) counts as absent, not as "" below the drive root.
+        let fallback = home_from_env(Some(OsString::new()), Some("/Users/owner".into())).unwrap();
+        assert_eq!(fallback, PathBuf::from("/Users/owner"));
+        assert!(home_from_env(None, Some("/Users/owner".into())).is_ok());
+        for (axh, home) in [
+            (Some("relative/axh".into()), Some("/Users/owner".into())),
+            (None, Some("relative".into())),
+            (None, None),
+        ] {
+            assert!(
+                home_from_env(axh, home).is_err(),
+                "a relative or missing folder is an error"
+            );
+        }
+        // A valid AXH_HOME never consults HOME, whatever HOME says.
+        assert!(home_from_env(Some("/scratch/axh".into()), Some("relative".into())).is_ok());
     }
 
     #[test]
