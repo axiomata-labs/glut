@@ -7,6 +7,10 @@ use std::time::Duration;
 use crate::hooks::Hooks;
 use crate::permissions::settings::SandboxSettings;
 
+/// The environment variable `axh` reads the model API's key from. Never handed on: not to a command (the shell's
+/// cleaned environment drops it) and not to an MCP server's `${…}` header (`mcp::client`).
+pub const API_KEY_ENV: &str = "AXH_API_KEY";
+
 /// The most model turns a run takes before it stops (a turn is one model call). Generous for real work, but an end
 /// to a model that keeps calling tools without ever answering.
 pub const DEFAULT_MAX_TURNS: u32 = 40;
@@ -21,6 +25,11 @@ pub const DEFAULT_SUBAGENT_MAX_TURNS: u32 = 15;
 /// How long one subagent (HS8, D6) may run; at runtime it is additionally capped by the time the parent has
 /// left, so a subagent can never outlive the run that started it.
 pub const DEFAULT_SUBAGENT_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+
+/// How many subagents one run may start in all (HS8). Each brings up to [`DEFAULT_SUBAGENT_MAX_TURNS`] model
+/// calls of its own, so without a count a parent asking for one per turn could multiply the run's spend by
+/// that factor while staying inside every other limit.
+pub const DEFAULT_MAX_SUBAGENTS: u32 = 8;
 
 /// A model behind an OpenAI-compatible chat API (`POST {base_url}/v1/chat/completions`): OpenRouter, Ollama and most
 /// others speak it.
@@ -73,6 +82,8 @@ pub struct RunConfig {
     pub subagent_max_turns: u32,
     /// How long one subagent may run, at runtime also capped by the parent's remaining time (HS8, D6).
     pub subagent_timeout: Duration,
+    /// How many subagents the run may start in all; a `task` call past it is answered with an error.
+    pub max_subagents: u32,
 }
 
 impl RunConfig {
@@ -90,6 +101,7 @@ impl RunConfig {
             subagents: true,
             subagent_max_turns: DEFAULT_SUBAGENT_MAX_TURNS,
             subagent_timeout: DEFAULT_SUBAGENT_TIMEOUT,
+            max_subagents: DEFAULT_MAX_SUBAGENTS,
         }
     }
 }

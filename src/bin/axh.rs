@@ -11,22 +11,20 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use axiomata_harness::commands::{Expanded, PermissionsView, Registry, Source};
+use axiomata_harness::commands::{PermissionsView, Registry};
 use axiomata_harness::mcp;
 use axiomata_harness::permissions::settings::Trust;
 use axiomata_harness::permissions::{GateOptions, Mode, Nobody, build_gate};
-use axiomata_harness::skills::{self, SkillTool};
-use axiomata_harness::tools::Tool;
-use axiomata_harness::tools::files::{SkillRoots, file_tools};
-use axiomata_harness::tools::shell::{ShellOptions, shell_tools};
+use axiomata_harness::setup::{self, Draft, Prepared};
+use axiomata_harness::skills;
 use axiomata_harness::{
     Cancel, Event, EventSink, FinishReason, ModelEndpoint, OpenAiCompat, RunConfig, SharedSink,
-    SkillHow, Toolbox, Usage, run,
+    Usage, run,
 };
 use clap::{Parser, Subcommand};
 
 /// The environment variable the key is read from.
-const KEY_ENV: &str = "AXH_API_KEY";
+const KEY_ENV: &str = axiomata_harness::config::API_KEY_ENV;
 
 #[derive(Parser)]
 #[command(name = "axh", version, about = "Axiomata's own agent harness")]
@@ -143,7 +141,7 @@ async fn main() -> ExitCode {
     if let Some(secs) = timeout_secs {
         config.timeout = std::time::Duration::from_secs(secs);
     }
-    let mut endpoint = ModelEndpoint {
+    let endpoint = ModelEndpoint {
         base_url,
         api_key: std::env::var(KEY_ENV).ok().filter(|key| !key.is_empty()),
         model,
@@ -178,17 +176,6 @@ async fn main() -> ExitCode {
     // Every event through one shared sink: the loop writes to it, and the `skill` tool reports from inside a call
     // (HS6, K1.2).
     let mut sink = SharedSink::new(Box::new(JsonLines));
-    let mut tools = Toolbox::new();
-    match file_tools(&cwd, SkillRoots::new(&catalog.folders())) {
-        Ok(files) => tools.extend(files),
-        Err(err) => return fail(err.to_string()),
-    }
-    // The `skill` tool only while there is at least one skill to load (K1.2).
-    if !catalog.is_empty() {
-        tools.extend([
-            Box::new(SkillTool::new(Arc::clone(&catalog), sink.clone())) as Box<dyn Tool>
-        ]);
-    }
     let options = GateOptions {
         mode,
         allow,
@@ -197,48 +184,39 @@ async fn main() -> ExitCode {
         trusted,
     };
     // Headless: nobody to ask (P6).
-    let (mut gate, untrusted, sandbox, hooks, project_hooks) =
-        match build_gate(&home, &cwd, options, Arc::new(Nobody)) {
-            Ok(parts) => parts,
-            Err(err) => return fail(err.to_string()),
-        };
-    if untrusted {
-        eprintln!(
-            "axh: the project's .axh/ allow rules and mode are left out: this folder is not trusted"
-        );
-    }
-    // HS7, B1: the owner's hooks run; a project's are parsed and left out, and said so.
-    if project_hooks {
-        eprintln!(
-            "axh: the project's own .axh/ hooks are not run: only ~/.axh/settings.json hooks run"
-        );
+    let built = match build_gate(&home, &cwd, options, Arc::new(Nobody)) {
+        Ok(built) => built,
+        Err(err) => return fail(err.to_string()),
+    };
+    for note in built.notes() {
+        eprintln!("axh: {note}");
     }
     // HS7: the hooks run with what the settings say about the sandbox, like the shell's own commands (D5).
-    config.hooks = hooks;
-    config.sandbox = Some(sandbox.clone());
-    if !sandbox.enabled || !axiomata_harness::sandbox::available() {
-        eprintln!("axh: commands run without a sandbox: only the permission rules hold them");
-    }
+    config.hooks = built.hooks;
+    config.sandbox = Some(built.sandbox.clone());
 
-    // Slash commands (HS4), built after the gate with the same home, folder and trust it was built with (C1).
+    // Slash commands (HS4), with the same home, folder and trust the gate was built with (C1).
     let mut registry = match Registry::load(&home, &cwd, trusted) {
         Ok(registry) => registry,
         Err(err) => return fail(err.to_string()),
     };
-    registry.set_permissions(PermissionsView::of(&gate, &sandbox));
-    let mut prompt = prompt.unwrap_or_default();
-    endpoint = match registry.expand(&prompt) {
-        // An ordinary prompt: no command was named (C6).
-        None => endpoint,
-        Some(Err(message)) => return fail(message),
+    registry.set_permissions(PermissionsView::of(&built.gate, &built.sandbox));
+    let mut draft = Draft {
+        config,
+        endpoint,
+        gate: built.gate,
+    };
+    let prompt = match setup::prepare(
+        &mut draft,
+        &registry,
+        &catalog,
+        prompt,
+        skill.as_deref(),
+        &mut sink,
+    ) {
+        Ok(Prepared::Prompt(prompt)) => prompt,
         // A built-in is answered without a model: its text is the answer (C5).
-        Some(Ok(Expanded::Builtin { name, text })) => {
-            sink.emit(Event::Command {
-                name,
-                source: Source::Builtin.as_str().to_owned(),
-                prompt_chars: 0,
-            });
-            sink.emit(Event::AssistantText { turn: 0, text });
+        Ok(Prepared::Answered) => {
             sink.emit(Event::Finished {
                 reason: FinishReason::Answered,
                 turns: 0,
@@ -246,78 +224,31 @@ async fn main() -> ExitCode {
             });
             return ExitCode::SUCCESS;
         }
-        Some(Ok(Expanded::Prompt {
-            name,
-            prompt: expanded,
-            allowed_tools,
-            model,
-        })) => {
-            let source = registry.source(&name).unwrap_or(Source::User);
-            sink.emit(Event::Command {
-                source: source.as_str().to_owned(),
-                name: name.clone(),
-                prompt_chars: expanded.chars().count(),
-            });
-            // C3: the command's tools narrow the gate on top of its rules, never in their place.
-            if !allowed_tools.is_empty() {
-                gate.restrict_name = Some(name);
-                gate.restrict = Some(allowed_tools);
-            }
-            prompt = expanded;
-            match model {
-                Some(model) => ModelEndpoint { model, ..endpoint },
-                None => endpoint,
-            }
-        }
+        Err(err) => return fail(err.to_string()),
     };
-    // A skill as the run (HS6, K1.1): its body is the run's instructions, its frontmatter may narrow the tools,
-    // pick the model and set the time limit (K5). After the commands, so a command's own word wins where both
-    // name one.
-    if let Some(name) = skill {
-        let Some(chosen) = catalog.get(&name) else {
-            return fail(format!(
-                "no skill named {name:?}; known: {}",
-                catalog.known()
-            ));
-        };
-        if let Err(err) = chosen.start_run(&cwd, &mut config, &mut endpoint, &mut gate) {
-            return fail(err.to_string());
-        }
-        sink.send(Event::Skill {
-            name,
-            how: SkillHow::Run,
-        });
-        if prompt.trim().is_empty() {
-            prompt = skills::DEFAULT_PROMPT.to_owned();
-        }
-    }
-    // The gate enters the toolbox only after the command and the skill had their say about it (C3, K5).
-    tools.set_gate(Arc::new(gate));
-    // The model is built after the commands: one of them may name its own (C2).
+    let Draft {
+        config,
+        endpoint,
+        gate,
+    } = draft;
+    // The model is built after the command and the skill: either may name its own (C2, K5).
     let model = match OpenAiCompat::new(endpoint) {
         Ok(model) => model,
         Err(err) => return fail(err.to_string()),
     };
-    // MCP servers (HS5): after the gate, before the shell (M1–M3). `axh` has no terminal, so a project's server
-    // nobody approved is left out and said so on stderr rather than asked about (M2).
-    let entries = match mcp::config::load(&home, &cwd) {
-        Ok(entries) => entries,
+    // MCP servers (HS5, M1–M3). `axh` has no terminal, so a project's server nobody approved is left out and said
+    // so on stderr rather than asked about (M2).
+    let servers = match mcp::config::load(&home, &cwd)
+        .and_then(|entries| mcp::approval::permitted(entries, &home, &cwd, false))
+    {
+        Ok(servers) => servers,
         Err(err) => return fail(err.to_string()),
     };
-    let entries = match mcp::approval::permitted(entries, &home, &cwd, false) {
-        Ok(entries) => entries,
+    let tools = match setup::toolbox(&cwd, &catalog, gate, servers, built.sandbox, &mut sink).await
+    {
+        Ok(tools) => tools,
         Err(err) => return fail(err.to_string()),
     };
-    tools.extend(mcp::start(entries, &mut sink).await);
-    // The shell after the gate: the settings that built it also say how the sandbox runs (HS3b).
-    let shell = ShellOptions {
-        sandbox: Some(sandbox),
-        ..ShellOptions::from_environment()
-    };
-    match shell_tools(&cwd, shell) {
-        Ok(shell) => tools.extend(shell),
-        Err(err) => return fail(err.to_string()),
-    }
 
     // Ctrl-C, SIGTERM and SIGHUP end the run cleanly, with its `finished` line and every background job stopped.
     let cancel = Cancel::new();

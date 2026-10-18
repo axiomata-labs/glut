@@ -764,12 +764,19 @@ pub struct Gate {
     /// would mix their answers.
     asking: tokio::sync::Mutex<()>,
     log: Mutex<Vec<Judgement>>,
-    /// The `allowed-tools` of the command a run was started with (HS4, C3): only the calls these rules name are
-    /// judged as usual, everything else is refused — and such a rule never allows anything by itself. `None` (or an
-    /// empty list) means no narrowing. Set together with [`Gate::restrict_name`], which the refusal names.
-    pub restrict: Option<Vec<Rule>>,
-    /// The name of the command that narrowed this run, without its slash — for the refusal's text.
-    pub restrict_name: Option<String>,
+    /// The `allowed-tools` lists that narrow this run (HS4 C3, HS6 K5, HS6b B3) — a command's, a skill's, or both.
+    /// Every one of them must name a call, so a second narrowing can only take away from the first, never give
+    /// back what it left out. Added through [`Gate::narrow`].
+    narrowings: Vec<Narrowing>,
+}
+
+/// One `allowed-tools` list and who declared it: only the calls these rules name are judged as usual, everything
+/// else is refused — and such a rule never allows anything by itself.
+#[derive(Debug, Clone)]
+struct Narrowing {
+    /// Who narrowed the run, as the refusal names it (`the command /review`, `the skill mail-digest`).
+    by: String,
+    rules: Vec<Rule>,
 }
 
 impl Gate {
@@ -780,9 +787,28 @@ impl Gate {
             asker,
             asking: tokio::sync::Mutex::new(()),
             log: Mutex::new(Vec::new()),
-            restrict: None,
-            restrict_name: None,
+            narrowings: Vec::new(),
         }
+    }
+
+    /// Narrows the run to the calls `rules` name (HS4 C3, HS6 K5), on top of every narrowing it already has: a
+    /// call must be named by each of them. `by` is how a refusal names the declarer (`the command /review`). An
+    /// empty list declares nothing and narrows nothing.
+    pub fn narrow(&mut self, by: impl Into<String>, rules: Vec<Rule>) {
+        if !rules.is_empty() {
+            self.narrowings.push(Narrowing {
+                by: by.into(),
+                rules,
+            });
+        }
+    }
+
+    /// Who narrowed this run, in the order they did — empty for a run nothing narrowed.
+    pub fn narrowed_by(&self) -> Vec<&str> {
+        self.narrowings
+            .iter()
+            .map(|narrowing| narrowing.by.as_str())
+            .collect()
     }
 
     pub fn mode(&self) -> Mode {
@@ -823,19 +849,21 @@ impl Gate {
         if *access == Access::Own {
             return Ok(());
         }
-        // C3: a command's `allowed-tools` only narrows. What it does not name is refused here, before any rule or
-        // mode is even asked; what it does name goes on to the normal judgement below, where such a rule never
-        // allows anything by itself.
-        if let Some(restrict) = self.restrict.as_ref().filter(|rules| !rules.is_empty())
-            && !restrict_allows(restrict, tool, access)
+        // C3: an `allowed-tools` list only narrows. What one of them does not name is refused here, before any
+        // rule or mode is even asked; what all of them name goes on to the normal judgement below, where such a
+        // rule never allows anything by itself.
+        if let Some(narrowing) = self
+            .narrowings
+            .iter()
+            .find(|narrowing| !restrict_allows(&narrowing.rules, tool, access))
         {
-            let rules = restrict
+            let rules = narrowing
+                .rules
                 .iter()
                 .map(Rule::text)
                 .collect::<Vec<_>>()
                 .join(", ");
-            let name = self.restrict_name.as_deref().unwrap_or_default();
-            let reason = format!("the command /{name} allows only: {rules}");
+            let reason = format!("{} allows only: {rules}", narrowing.by);
             self.log
                 .lock()
                 .unwrap_or_else(|poison| poison.into_inner())
@@ -941,10 +969,44 @@ pub struct GateOptions {
     pub trusted: bool,
 }
 
-/// The gate of a run in `project`: the owner's settings below `home`, the project's if trusted, then `options`;
-/// whether project settings were left out for lack of trust; what the settings say about the sandbox; the
-/// owner's hooks (HS7, B1 — the only ones that ever run); and whether the project has hooks of its own that
-/// were parsed but not taken over.
+/// What [`build_gate`] makes of the settings files and a caller's options.
+pub struct BuiltGate {
+    /// The settings' and the options' rules under the mode they name.
+    pub gate: Gate,
+    /// The project's allow rules or mode were left out: the folder is not trusted.
+    pub untrusted_project: bool,
+    /// What the settings say about the sandbox (HS3b).
+    pub sandbox: settings::SandboxSettings,
+    /// The owner's hooks (HS7, B1 — the only ones that ever run).
+    pub hooks: crate::hooks::Hooks,
+    /// The project has hooks of its own that were parsed but not taken over (B1).
+    pub project_hooks_skipped: bool,
+}
+
+impl BuiltGate {
+    /// What the person starting the run should be told about how it is guarded, one line each: what of the
+    /// project's settings was left out, and a sandbox that is off or missing.
+    pub fn notes(&self) -> Vec<&'static str> {
+        let mut notes = Vec::new();
+        if self.untrusted_project {
+            notes.push(
+                "the project's .axh/ allow rules and mode are left out: this folder is not trusted",
+            );
+        }
+        if self.project_hooks_skipped {
+            notes.push(
+                "the project's own .axh/ hooks are not run: only ~/.axh/settings.json hooks run",
+            );
+        }
+        if !self.sandbox.enabled || !crate::sandbox::available() {
+            notes.push("commands run without a sandbox: only the permission rules hold them");
+        }
+        notes
+    }
+}
+
+/// The gate of a run in `project`: the owner's settings below `home`, the project's if trusted, then `options`
+/// — and beside it what else the settings say ([`BuiltGate`]).
 ///
 /// # Errors
 ///
@@ -954,16 +1016,7 @@ pub fn build_gate(
     project: &std::path::Path,
     options: GateOptions,
     asker: Arc<dyn Asker>,
-) -> Result<
-    (
-        Gate,
-        bool,
-        settings::SandboxSettings,
-        crate::hooks::Hooks,
-        bool,
-    ),
-    crate::HarnessError,
-> {
+) -> Result<BuiltGate, crate::HarnessError> {
     let loaded = settings::load(home, project, options.trusted)?;
     let mut rules = loaded.rules;
     let flag = |name: &str, list: &[String]| -> Result<Vec<Rule>, crate::HarnessError> {
@@ -982,13 +1035,13 @@ pub fn build_gate(
         deny: flag("deny", &options.deny)?,
     });
     let mode = options.mode.or(loaded.mode).unwrap_or_default();
-    Ok((
-        Gate::new(rules, mode, asker),
-        loaded.untrusted_project,
-        loaded.sandbox,
-        loaded.hooks,
-        loaded.project_hooks_skipped,
-    ))
+    Ok(BuiltGate {
+        gate: Gate::new(rules, mode, asker),
+        untrusted_project: loaded.untrusted_project,
+        sandbox: loaded.sandbox,
+        hooks: loaded.hooks,
+        project_hooks_skipped: loaded.project_hooks_skipped,
+    })
 }
 
 /// The rule an "always" answer adds: exactly this command, this path, or this tool.
@@ -1368,11 +1421,10 @@ mod tests {
             deny: vec!["Edit(secrets/**)".into()],
             ..GateOptions::default()
         };
-        let (gate, untrusted, sandbox, _hooks, _project_hooks) =
-            build_gate(&home, &project, options.clone(), Arc::new(Nobody)).unwrap();
-        assert!(sandbox.enabled, "on unless the owner switches it off");
-        assert_eq!(gate.mode(), Mode::Plan);
-        assert!(!untrusted);
+        let built = build_gate(&home, &project, options.clone(), Arc::new(Nobody)).unwrap();
+        assert!(built.sandbox.enabled, "on unless the owner switches it off");
+        assert_eq!(built.gate.mode(), Mode::Plan);
+        assert!(!built.untrusted_project);
         let flagged = GateOptions {
             mode: Some(Mode::Auto),
             ..options
@@ -1380,7 +1432,7 @@ mod tests {
         assert_eq!(
             build_gate(&home, &project, flagged, Arc::new(Nobody))
                 .unwrap()
-                .0
+                .gate
                 .mode(),
             Mode::Auto
         );
@@ -1389,6 +1441,28 @@ mod tests {
             ..GateOptions::default()
         };
         assert!(build_gate(&home, &project, broken, Arc::new(Nobody)).is_err());
+    }
+
+    #[test]
+    fn the_notes_of_a_built_gate_say_what_was_left_out_and_a_sandbox_that_is_off() {
+        let built = |untrusted_project, project_hooks_skipped, enabled| BuiltGate {
+            gate: Gate::new(RuleSet::default(), Mode::Default, Arc::new(Nobody)),
+            untrusted_project,
+            sandbox: settings::SandboxSettings {
+                enabled,
+                ..settings::SandboxSettings::default()
+            },
+            hooks: crate::hooks::Hooks::default(),
+            project_hooks_skipped,
+        };
+        let off = built(true, true, false).notes();
+        assert_eq!(off.len(), 3, "{off:?}");
+        assert!(off[0].contains("not trusted"));
+        assert!(off[1].contains("hooks are not run"));
+        assert!(off[2].contains("without a sandbox"));
+        // Nothing left out and the sandbox on: at most the note that this system has none.
+        let on = built(false, false, true).notes();
+        assert_eq!(on.is_empty(), crate::sandbox::available(), "{on:?}");
     }
 
     #[test]
@@ -1734,13 +1808,13 @@ mod tests {
     async fn a_commands_allowed_tools_only_narrows_and_never_allows() {
         let narrowed = |mode: Mode, restrict: &[&str]| {
             let mut gate = Gate::new(RuleSet::default(), mode, Arc::new(Nobody));
-            gate.restrict = Some(
+            gate.narrow(
+                "the command /review",
                 restrict
                     .iter()
                     .map(|text| Rule::parse(text).unwrap())
                     .collect(),
             );
-            gate.restrict_name = Some("review".into());
             gate
         };
         let read = Access::Read {
@@ -1772,6 +1846,37 @@ mod tests {
         let plan = narrowed(Mode::Plan, &["Bash(git status:*)"]);
         let refused = plan.judge("bash", &git_status).await.unwrap_err();
         assert!(refused.contains("mode plan"), "{refused}");
+    }
+
+    /// A skill run started with a slash command (`axh run --skill s "/cmd"`): both `allowed-tools` lists narrow
+    /// the run, so the second can only take away — a call needs both, and the refusal names the one that left
+    /// it out.
+    #[tokio::test]
+    async fn a_second_narrowing_never_widens_the_first() {
+        let parse = |list: &[&str]| list.iter().map(|text| Rule::parse(text).unwrap()).collect();
+        let mut gate = Gate::new(
+            rules(&["Bash(git status:*)"], &[], &[]),
+            Mode::Default,
+            Arc::new(Nobody),
+        );
+        gate.narrow("the command /look", parse(&["Read"]));
+        gate.narrow("the skill git", parse(&["Read", "Bash(git status:*)"]));
+        assert_eq!(gate.narrowed_by(), ["the command /look", "the skill git"]);
+
+        let read = Access::Read {
+            path: "src/lib.rs".into(),
+        };
+        assert!(gate.judge("read_file", &read).await.is_ok());
+        let refused = gate.judge("bash", &bash("git status")).await.unwrap_err();
+        assert!(
+            refused.contains("the command /look allows only: Read"),
+            "{refused}"
+        );
+
+        // An empty list declares nothing and narrows nothing.
+        let mut open = Gate::new(RuleSet::default(), Mode::Default, Arc::new(Nobody));
+        open.narrow("the skill quiet", Vec::new());
+        assert!(open.narrowed_by().is_empty());
     }
 
     /// An MCP call as the model makes it (M5): the server's own names.

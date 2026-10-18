@@ -16,11 +16,12 @@ use std::time::Duration;
 
 use reqwest::header::{ACCEPT, CONTENT_TYPE};
 use serde_json::{Value, json};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::time::timeout;
 
 use super::config::{ServerConfig, expand_vars};
+use crate::config::API_KEY_ENV;
 use crate::error::HarnessError;
 
 /// The protocol version the client proposes. The server answers with the one it speaks, and nothing here is
@@ -154,17 +155,57 @@ impl Stdio {
         flushed.map_err(|err| mcp_err(&self.server, format!("its stdin broke: {err}")))
     }
 
-    /// The next line it says. `Ok(0)` is the end of its stdout: the server is gone.
+    /// The next line it says, held to [`MAX_ANSWER_BYTES`] as an HTTP answer is: a server that writes without
+    /// ever ending a line must not fill the harness's memory. The end of its stdout is an error: the server is gone.
     async fn read_line(&mut self) -> Result<String, HarnessError> {
         let mut line = String::new();
-        let read = self.stdout.read_line(&mut line).await;
+        // The limit, plus room for the `\r\n` that ends a line of exactly the limit.
+        let read = (&mut self.stdout)
+            .take(MAX_ANSWER_BYTES as u64 + 2)
+            .read_line(&mut line)
+            .await;
         match read {
             Ok(0) => Err(mcp_err(
                 &self.server,
                 "it closed its stdout before answering",
             )),
+            Ok(_) if line.trim_end_matches(['\n', '\r']).len() > MAX_ANSWER_BYTES => {
+                // The rest of the line is read past, so the next read starts at a message again.
+                if !line.ends_with('\n') {
+                    self.discard_line().await?;
+                }
+                Err(mcp_err(
+                    &self.server,
+                    format!("it wrote a line longer than {MAX_ANSWER_BYTES} bytes"),
+                ))
+            }
             Ok(_) => Ok(line),
             Err(err) => Err(mcp_err(&self.server, format!("its stdout broke: {err}"))),
+        }
+    }
+
+    /// Reads past the rest of the current line without keeping it. A server that never ends it is stopped by the
+    /// call's own time limit, which drops this wait.
+    async fn discard_line(&mut self) -> Result<(), HarnessError> {
+        loop {
+            let buffer = self
+                .stdout
+                .fill_buf()
+                .await
+                .map_err(|err| mcp_err(&self.server, format!("its stdout broke: {err}")))?;
+            if buffer.is_empty() {
+                return Ok(());
+            }
+            match buffer.iter().position(|&byte| byte == b'\n') {
+                Some(at) => {
+                    self.stdout.consume(at + 1);
+                    return Ok(());
+                }
+                None => {
+                    let all = buffer.len();
+                    self.stdout.consume(all);
+                }
+            }
         }
     }
 }
@@ -258,7 +299,7 @@ impl Http {
         };
         let mut resolved = BTreeMap::new();
         for (name, value) in headers {
-            let value = expand_vars(value, |key| std::env::var(key).ok())
+            let value = header_value(value, |key| std::env::var(key).ok())
                 .map_err(|reason| mcp_err(server, format!("the header {name:?}: {reason}")))?;
             // Checked here, not when it is sent: a value holding a line break would be a second header, and no
             // server must be able to add one at call time.
@@ -313,6 +354,62 @@ impl Http {
             self.session = Some(session.to_owned());
         }
     }
+
+    /// Posts `body` and hands back a successful response, its session noted; a server that cannot be reached
+    /// or answers with an error status is the error.
+    async fn exchange(&mut self, body: &Value) -> Result<reqwest::Response, HarnessError> {
+        let response = self.post(body).send().await.map_err(|err| {
+            mcp_err(
+                &self.server,
+                format!(
+                    "cannot reach {}: {}",
+                    shown_url(&self.url),
+                    err.without_url()
+                ),
+            )
+        })?;
+        self.note_session(&response);
+        let status = response.status();
+        if !status.is_success() {
+            let text = read_body(&self.server, response).await?;
+            return Err(mcp_err(
+                &self.server,
+                format!("it answered {status}: {}", excerpt(&text)),
+            ));
+        }
+        Ok(response)
+    }
+}
+
+/// A header's value with its `${NAME}`s put in from `env` (M3) — except the harness's own model key, which is
+/// never a server's to have: a repository's `.mcp.json` asking for `${AXH_API_KEY}` would send it to a host of
+/// its choosing.
+fn header_value(value: &str, env: impl Fn(&str) -> Option<String>) -> Result<String, String> {
+    expand_vars(value, |key| {
+        (key != API_KEY_ENV).then(|| env(key)).flatten()
+    })
+}
+
+/// `url` as an error may show it: its scheme, host and port only. A token typed into `.mcp.json` can sit in the
+/// user info, the query, the fragment — or the path, as hosted servers' `/mcp/<token>` URLs have it — and the
+/// reason travels into events and a run's record.
+fn shown_url(url: &str) -> String {
+    let Ok(url) = reqwest::Url::parse(url) else {
+        return "its URL".to_owned();
+    };
+    let Some(host) = url.host_str() else {
+        return "its URL".to_owned();
+    };
+    let port = url
+        .port()
+        .map(|port| format!(":{port}"))
+        .unwrap_or_default();
+    let elided = if url.path() == "/" && url.query().is_none() {
+        ""
+    } else {
+        "/…"
+    };
+    format!("{}://{host}{port}{elided}", url.scheme())
 }
 
 impl Transport for Http {
@@ -325,22 +422,7 @@ impl Transport for Http {
                 "method": request.method,
                 "params": request.params,
             });
-            let sent = self.post(&body).send().await;
-            let response = sent.map_err(|err| {
-                mcp_err(
-                    &self.server,
-                    format!("cannot reach {}: {}", self.url, err.without_url()),
-                )
-            })?;
-            self.note_session(&response);
-            let status = response.status();
-            if !status.is_success() {
-                let text = read_body(&self.server, response).await?;
-                return Err(mcp_err(
-                    &self.server,
-                    format!("it answered {status}: {}", excerpt(&text)),
-                ));
-            }
+            let response = self.exchange(&body).await?;
             let streaming = is_stream(&response);
             if streaming {
                 return read_stream(&self.server, response, id).await;
@@ -358,22 +440,7 @@ impl Transport for Http {
             // No id, so no response will ever carry one: the answer to the POST itself is taken as the word
             // that it arrived (M3).
             let body = json!({"jsonrpc": "2.0", "method": method, "params": params});
-            let sent = self.post(&body).send().await;
-            let response = sent.map_err(|err| {
-                mcp_err(
-                    &self.server,
-                    format!("cannot reach {}: {}", self.url, err.without_url()),
-                )
-            })?;
-            self.note_session(&response);
-            let status = response.status();
-            if !status.is_success() {
-                let text = read_body(&self.server, response).await?;
-                return Err(mcp_err(
-                    &self.server,
-                    format!("it answered {status}: {}", excerpt(&text)),
-                ));
-            }
+            let response = self.exchange(&body).await?;
             read_body(&self.server, response).await.map(|_| ())
         })
     }
@@ -637,13 +704,7 @@ impl Client {
     /// One message nobody answers, held to the same limit as the handshake (M3).
     async fn notify(&mut self, method: &str) -> Result<(), HarnessError> {
         let limit = self.start;
-        match timeout(
-            limit,
-            self.transport
-                .notify(method.to_owned(), json!({"_note": "no content"})),
-        )
-        .await
-        {
+        match timeout(limit, self.transport.notify(method.to_owned(), json!({}))).await {
             Ok(answer) => answer,
             Err(_) => Err(HarnessError::McpTimeout {
                 server: self.server.clone(),
@@ -766,6 +827,64 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn a_header_never_receives_the_harness_key_even_where_it_is_set() {
+        let env = |key: &str| match key {
+            "AXH_API_KEY" => Some("sk-model-key".to_owned()),
+            "GITHUB_TOKEN" => Some("gh-token".to_owned()),
+            _ => None,
+        };
+        assert_eq!(
+            header_value("Bearer ${GITHUB_TOKEN}", env).unwrap(),
+            "Bearer gh-token"
+        );
+        let refused = header_value("Bearer ${AXH_API_KEY}", env).unwrap_err();
+        assert!(!refused.contains("sk-model-key"), "{refused}");
+    }
+
+    #[tokio::test]
+    async fn a_line_over_the_limit_is_an_error_and_the_next_one_is_read_whole() {
+        // A line of exactly the limit, one a byte over it, then an ordinary one.
+        let script = format!(
+            "head -c {max} /dev/zero | tr '\\0' x; echo; head -c {over} /dev/zero | tr '\\0' y; echo; echo ok",
+            max = MAX_ANSWER_BYTES,
+            over = MAX_ANSWER_BYTES + 1,
+        );
+        let config = ServerConfig::Stdio {
+            command: "/bin/sh".into(),
+            args: vec!["-c".into(), script],
+            env: BTreeMap::new(),
+        };
+        let mut stdio = Stdio::spawn("long", &config).unwrap();
+        let exact = stdio.read_line().await.unwrap();
+        assert_eq!(
+            exact.trim_end().len(),
+            MAX_ANSWER_BYTES,
+            "the limit itself fits"
+        );
+        let err = stdio.read_line().await.unwrap_err().to_string();
+        assert!(err.contains("longer than"), "{err}");
+        assert_eq!(
+            stdio.read_line().await.unwrap(),
+            "ok\n",
+            "the rest of the long line was read past"
+        );
+    }
+
+    #[test]
+    fn an_error_shows_the_url_without_what_could_be_a_token() {
+        assert_eq!(
+            shown_url("https://user:pw@mcp.example.com/v1?key=sk-1#frag"),
+            "https://mcp.example.com/…"
+        );
+        assert_eq!(
+            shown_url("https://mcp.example.com/mcp/sk-in-the-path"),
+            "https://mcp.example.com/…"
+        );
+        assert_eq!(shown_url("http://127.0.0.1:9/"), "http://127.0.0.1:9");
+        assert_eq!(shown_url("not a url ?key=sk-1"), "its URL");
     }
 
     /// The error of a connect that must not succeed. `unwrap_err` would need the client to be `Debug`, which a

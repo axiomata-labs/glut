@@ -19,6 +19,12 @@ const MAX_MODEL_NAME: usize = 64;
 /// How often a call that waits for its server checks whether the run was stopped (M3): a `tools/call` nobody
 /// answers still ends with the run.
 const STOP_POLL: std::time::Duration = std::time::Duration::from_millis(100);
+/// The most characters of a tool's description the model is sent; a longer one is cut with `…`. Every tool spec
+/// travels with every model call, so a server's prose is paid for on each turn.
+const MAX_DESCRIPTION_CHARS: usize = 2_000;
+/// The largest input schema, as JSON, a tool may have; a larger one leaves the tool out — a schema cut short is
+/// no schema.
+const MAX_SCHEMA_BYTES: usize = 32 * 1024;
 
 /// What a server's tool is called where the model sees it: `mcp__<server>__<tool>`, with every character the
 /// model API does not take in a name (`.` and the like) replaced by `_`.
@@ -53,14 +59,26 @@ pub fn offered(
             );
             continue;
         }
+        if remote.input_schema.to_string().len() > MAX_SCHEMA_BYTES {
+            eprintln!(
+                "mcp: the tool {} has an input schema over {MAX_SCHEMA_BYTES} bytes; left out",
+                crate::permissions::printable(&format!("{}/{}", server, remote.name))
+            );
+            continue;
+        }
         offered.push(Box::new(McpTool {
             server: server.to_owned(),
             tool: remote.name.clone(),
             name,
-            description: remote
-                .description
-                .clone()
-                .unwrap_or_else(|| format!("A tool of the MCP server {server}.")),
+            description: match &remote.description {
+                Some(text) if text.chars().count() > MAX_DESCRIPTION_CHARS => {
+                    let mut cut: String = text.chars().take(MAX_DESCRIPTION_CHARS).collect();
+                    cut.push('…');
+                    cut
+                }
+                Some(text) => text.clone(),
+                None => format!("A tool of the MCP server {server}."),
+            },
             schema: remote.input_schema.clone(),
             client: Arc::clone(&client),
         }) as Box<dyn Tool>);
@@ -170,6 +188,20 @@ mod tests {
             offered(&long_server, &[RemoteTool::for_test("t")], client).len(),
             1
         );
+    }
+
+    #[test]
+    fn a_long_description_is_cut_and_a_huge_schema_leaves_the_tool_out() {
+        let client = Arc::new(Mutex::new(Client::for_test()));
+        let mut wordy = RemoteTool::for_test("wordy");
+        wordy.description = Some("w".repeat(MAX_DESCRIPTION_CHARS + 50));
+        let mut huge = RemoteTool::for_test("huge");
+        huge.input_schema = serde_json::json!({"description": "s".repeat(MAX_SCHEMA_BYTES)});
+        let made = offered("srv", &[wordy, huge], client);
+        assert_eq!(made.len(), 1, "the tool with the huge schema is left out");
+        let description = made[0].spec().description;
+        assert_eq!(description.chars().count(), MAX_DESCRIPTION_CHARS + 1);
+        assert!(description.ends_with('…'));
     }
 
     #[tokio::test]

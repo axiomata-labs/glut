@@ -69,23 +69,44 @@ impl ServerEntry {
         Ok(fingerprint)
     }
 
-    /// What the server is, on one line, for the approval question: its command line, or its URL.
+    /// What the server is, for the approval question: its command line or its URL, then one line for every
+    /// `env` variable or header as written (`${NAME}` unexpanded). The owner approves everything
+    /// [`Self::config_hash`] covers, so everything it covers is shown — an `env` the question left out could load
+    /// code into the server unseen.
     pub fn describe(&self) -> String {
+        let quoted = |part: &str| {
+            // A part with a space in it must still read as one part at the terminal.
+            if part.chars().any(char::is_whitespace) {
+                format!("{part:?}")
+            } else {
+                part.to_owned()
+            }
+        };
+        let mut lines = Vec::new();
         match &self.config {
-            ServerConfig::Stdio { command, args, .. } => std::iter::once(command.as_str())
-                .chain(args.iter().map(String::as_str))
-                // An argument with a space in it must still read as one argument at the terminal.
-                .map(|part| {
-                    if part.chars().any(char::is_whitespace) {
-                        format!("{part:?}")
-                    } else {
-                        part.to_owned()
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join(" "),
-            ServerConfig::Http { url, .. } => url.clone(),
+            ServerConfig::Stdio { command, args, env } => {
+                lines.push(
+                    std::iter::once(command.as_str())
+                        .chain(args.iter().map(String::as_str))
+                        .map(quoted)
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                );
+                lines.extend(
+                    env.iter()
+                        .map(|(key, value)| format!("env {key}={}", quoted(value))),
+                );
+            }
+            ServerConfig::Http { url, headers } => {
+                lines.push(url.clone());
+                lines.extend(
+                    headers
+                        .iter()
+                        .map(|(name, value)| format!("header {name}: {value}")),
+                );
+            }
         }
+        lines.join("\n")
     }
 }
 
@@ -113,8 +134,18 @@ pub enum ServerConfig {
 impl ServerConfig {
     /// Checks one file's entry against the transport it names and turns it into a [`ServerConfig`].
     ///
-    /// `at` is where the entry was read, for the error's text.
-    fn from_raw(raw: Raw, at: &str, name: &str) -> Result<Self, String> {
+    /// `at` is where the entry was read, for the error's text. A project's stdio server may not set a variable
+    /// that makes a program load code ([`loads_code`]): the server runs outside the sandbox, and one approval of
+    /// `npx some-server` must not also be an approval of `NODE_OPTIONS=--require ./x.js`.
+    fn from_raw(raw: Raw, at: &str, name: &str, origin: Origin) -> Result<Self, String> {
+        if origin == Origin::Project
+            && let Some(key) = raw.env.keys().find(|key| loads_code(key))
+        {
+            return Err(format!(
+                "{at}: the project server {name:?} may not set {key}: it decides which code a program loads; \
+                 set it in the owner's {OWNER_FILE} instead"
+            ));
+        }
         match raw.kind.as_deref().unwrap_or(STDIO) {
             STDIO => {
                 if raw.url.is_some() || !raw.headers.is_empty() {
@@ -189,13 +220,93 @@ struct Raw {
 }
 
 /// Whether `name` is a server name (M1): `[a-zA-Z0-9_-]{1,32}`, short enough to head a tool name the model API
-/// accepts.
+/// accepts — and without `__`, the separator of `mcp__<server>__<tool>`: a server `mail__send` would otherwise
+/// be what the rule `mcp__mail__send` names.
 fn valid_name(name: &str) -> bool {
     !name.is_empty()
         && name.chars().count() <= MAX_NAME_CHARS
+        && !name.contains("__")
         && name
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+/// Variables that decide which code a program loads, where it fetches it from or whom it trusts while doing so —
+/// for every program (`PATH`, the shells' start files, the certificate stores) or for one runtime or launcher.
+/// A project's server may not set them (`ServerConfig::from_raw`). Defence in depth: the approval question shows
+/// every variable anyway, but a repository's `.mcp.json` should not be able to slip one past a quick yes.
+const CODE_VARS: &[&str] = &[
+    "PATH",
+    "HOME",
+    "SHELL",
+    "ENV",
+    "BASH_ENV",
+    "SHELLOPTS",
+    "BASHOPTS",
+    "PROMPT_COMMAND",
+    "IFS",
+    "ZDOTDIR",
+    "CLASSPATH",
+    "VIRTUAL_ENV",
+    "GOPATH",
+    "GOROOT",
+    "GOBIN",
+    "GOFLAGS",
+    "GOPROXY",
+    "GOPRIVATE",
+    "GONOSUMDB",
+    "GONOSUMCHECK",
+    "GOINSECURE",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "OPENSSL_CONF",
+    "CURL_CA_BUNDLE",
+    "REQUESTS_CA_BUNDLE",
+];
+/// Prefixes of such variables, family by family: the dynamic loaders, the shells' exported functions, the
+/// runtimes and their package managers (each reads code paths, flags or a registry from its own variables), git,
+/// and the folders programs read their configuration from.
+const CODE_VAR_PREFIXES: &[&str] = &[
+    "DYLD_",
+    "LD_",
+    "BASH_FUNC_",
+    "NODE_",
+    "NPM_CONFIG_",
+    "YARN_",
+    "PNPM_",
+    "BUN_",
+    "DENO_",
+    "PYTHON",
+    "PIP_",
+    "UV_",
+    "POETRY_",
+    "CONDA",
+    "RUBY",
+    "GEM_",
+    "BUNDLE_",
+    "PERL",
+    "JAVA_",
+    "_JAVA_",
+    "JDK_",
+    "CARGO_",
+    "RUSTC",
+    "RUSTUP_",
+    "DOTNET_",
+    "GIT_",
+    "XDG_",
+];
+/// Suffixes of such variables: a proxy decides what a launcher like `npx` or `uvx` actually downloads.
+const CODE_VAR_SUFFIXES: &[&str] = &["_PROXY"];
+
+/// Whether `key` is one of [`CODE_VARS`] or belongs to a family of [`CODE_VAR_PREFIXES`] or
+/// [`CODE_VAR_SUFFIXES`] (case-blind: the file system and some runtimes do not care).
+fn loads_code(key: &str) -> bool {
+    let key = key.to_ascii_uppercase();
+    CODE_VARS.contains(&key.as_str())
+        || CODE_VAR_PREFIXES
+            .iter()
+            .any(|prefix| key.starts_with(prefix))
+        || CODE_VAR_SUFFIXES.iter().any(|suffix| key.ends_with(suffix))
 }
 
 /// Both files read and merged (M1): the owner's first, then the project's — a name the owner already has wins,
@@ -254,7 +365,7 @@ fn read(path: &Path, origin: Origin) -> Result<Vec<ServerEntry>, HarnessError> {
                     "{name:?} is no server name: [a-zA-Z0-9_-], up to {MAX_NAME_CHARS} characters"
                 )));
             }
-            let config = ServerConfig::from_raw(raw, &at, &name).map_err(fail)?;
+            let config = ServerConfig::from_raw(raw, &at, &name, origin).map_err(fail)?;
             Ok(ServerEntry {
                 name,
                 origin,
@@ -278,11 +389,13 @@ pub fn expand_vars(text: &str, lookup: impl Fn(&str) -> Option<String>) -> Resul
         out.push_str(&rest[..open]);
         let after = &rest[open + 2..];
         let Some(close) = after.find('}') else {
-            return Err(format!("{text:?} has a ${{ with no closing brace"));
+            // The value itself is not quoted: it may hold a token typed beside the variable, and this reason
+            // travels into events and a run's record.
+            return Err("a ${ with no closing brace".to_owned());
         };
         let name = &after[..close];
-        let value = lookup(name)
-            .ok_or_else(|| format!("the environment holds no {name:?} to put into {text:?}"))?;
+        let value =
+            lookup(name).ok_or_else(|| format!("the environment holds no {name:?} to put in"))?;
         out.push_str(&value);
         rest = &after[close + 1..];
     }
@@ -462,6 +575,88 @@ mod tests {
             ..stdio
         };
         assert_eq!(http.describe(), "https://x.example/mcp");
+
+        // Everything the approval's hash covers is shown: `env` and headers as written, variables unexpanded.
+        let with_env = ServerEntry {
+            config: ServerConfig::Stdio {
+                command: "npx".into(),
+                args: vec!["srv".into()],
+                env: BTreeMap::from([("TOKEN".into(), "a b".into())]),
+            },
+            ..http.clone()
+        };
+        assert_eq!(with_env.describe(), "npx srv\nenv TOKEN=\"a b\"");
+        let with_header = ServerEntry {
+            config: ServerConfig::Http {
+                url: "https://x.example/mcp".into(),
+                headers: BTreeMap::from([("Authorization".into(), "Bearer ${TOKEN}".into())]),
+            },
+            ..http
+        };
+        assert_eq!(
+            with_header.describe(),
+            "https://x.example/mcp\nheader Authorization: Bearer ${TOKEN}"
+        );
+    }
+
+    #[test]
+    fn a_project_server_may_not_set_what_loads_code_and_no_name_holds_the_separator() {
+        let dir = temp("loader-vars");
+        let home = dir.join("home");
+        let project = dir.join("project");
+        std::fs::create_dir_all(home.join(".axh")).unwrap();
+        std::fs::create_dir_all(&project).unwrap();
+        for key in [
+            "NODE_OPTIONS",
+            "DYLD_INSERT_LIBRARIES",
+            "path",
+            "LD_PRELOAD",
+        ] {
+            std::fs::write(
+                project.join(PROJECT_FILE),
+                format!(
+                    r#"{{"mcpServers": {{"fs": {{"command": "npx", "env": {{"{key}": "x"}}}}}}}}"#
+                ),
+            )
+            .unwrap();
+            let err = load(&home, &project).unwrap_err().to_string();
+            assert!(err.contains("may not set"), "{key}: {err}");
+        }
+        // The owner's own file may: that is the owner's word, not a repository's.
+        std::fs::remove_file(project.join(PROJECT_FILE)).unwrap();
+        std::fs::write(
+            home.join(OWNER_FILE),
+            r#"{"mcpServers": {"fs": {"command": "npx", "env": {"NODE_OPTIONS": "--max-old-space-size=4096"}}}}"#,
+        )
+        .unwrap();
+        assert_eq!(load(&home, &project).unwrap().len(), 1);
+        // The families: launchers' registries, git's config, proxies, exported shell functions.
+        for key in [
+            "npm_config_registry",
+            "UV_INDEX_URL",
+            "GIT_CONFIG_GLOBAL",
+            "https_proxy",
+            "BASH_FUNC_ls%%",
+            "PYTHONUSERBASE",
+            "SSL_CERT_FILE",
+        ] {
+            assert!(loads_code(key), "{key}");
+        }
+        // Ordinary settings and tokens stay a project's to set.
+        for key in [
+            "GITHUB_TOKEN",
+            "GOOGLE_API_KEY",
+            "MAIL_ACCOUNT",
+            "LOG_LEVEL",
+        ] {
+            assert!(!loads_code(key), "{key}");
+        }
+
+        assert!(
+            !valid_name("mail__send"),
+            "`__` would blur mcp__<server>__<tool>"
+        );
+        assert!(valid_name("my_mail-2"));
     }
 
     #[test]
@@ -479,8 +674,12 @@ mod tests {
             expand_vars("${TOKEN}${TOKEN}", lookup).unwrap(),
             "s3crets3cret"
         );
-        let missing = expand_vars("Bearer ${NOPE}", lookup).unwrap_err();
+        let missing = expand_vars("Bearer sk-typed ${NOPE}", lookup).unwrap_err();
         assert!(missing.contains("NOPE"), "{missing}");
+        // The reason ends up in events and the run's record: the value around the variable stays out of it.
+        assert!(!missing.contains("sk-typed"), "{missing}");
+        let unclosed = expand_vars("Bearer sk-typed ${TOKEN", lookup).unwrap_err();
+        assert!(!unclosed.contains("sk-typed"), "{unclosed}");
         assert!(
             expand_vars("Bearer ${TOKEN", lookup).is_err(),
             "an unclosed ${{ is refused, not passed on"

@@ -154,36 +154,38 @@ async fn run_inner<M: ChatModel>(
 
     let mut usage = Usage::default();
     let mut answer = None;
+    // HS8: the subagents this run started, counted against `config.max_subagents`.
+    let mut subagents_started: u32 = 0;
     // Set when the run stops, so a tool still at work (a search over a large tree) stops too and none starts after.
     let stop = StopFlag::default();
-    // HS7: the session the hooks run in, built on the first event that needs one (D8), and the run's identity
-    // for their payloads (D4) — there are no sessions yet, so one id for the whole run.
-    let mut hook_session = HookSession::NotBuilt;
-    let session_id = format!(
-        "axh-{}-{}",
-        std::process::id(),
-        chrono::Local::now().timestamp_millis()
-    );
+    let mut hooks = RunHooks {
+        session: HookSession::NotBuilt,
+        config,
+        // The run's identity for the hooks' payloads (D4) — there are no sessions yet, so one id per run.
+        session_id: format!(
+            "axh-{}-{}",
+            std::process::id(),
+            chrono::Local::now().timestamp_millis()
+        ),
+        deadline,
+        stop: &stop,
+        cancel,
+        gate: tools.gate().cloned(),
+    };
     // HS7, D3: SessionStart once, after `Started` and before the first model call — at depth 0 only (HS8,
     // D4: it belongs to the run, not to each subagent). Its context becomes a
     // system message right behind the harness's own; it can never block.
-    if depth == 0 && !config.hooks.is_empty() {
-        let outcome = hooks_event(
-            &mut hook_session,
-            config,
-            &session_id,
-            HookEvent::SessionStart,
-            "startup",
-            json!({"source": "startup"}),
-            None,
-            deadline,
-            &stop,
-            cancel,
-            tools.gate().cloned(),
-            sink,
-        )
-        .await
-        .unwrap_or_default();
+    if depth == 0 {
+        let outcome = hooks
+            .fire(
+                HookEvent::SessionStart,
+                "startup",
+                || json!({"source": "startup"}),
+                None,
+                sink,
+            )
+            .await
+            .unwrap_or_default();
         if let Some(context) = outcome.context {
             messages.insert(1, Message::system(context));
         }
@@ -232,37 +234,22 @@ async fn run_inner<M: ChatModel>(
         if calls.is_empty() {
             // HS7, D3: a Stop hook may refuse the answer; its reason goes back as a user message and the loop
             // takes another turn (`stop_hook_active` tells the hook it already did this once).
-            if !config.hooks.is_empty() {
-                match hooks_event(
-                    &mut hook_session,
-                    config,
-                    &session_id,
-                    HookEvent::Stop,
-                    "",
-                    json!({"stop_hook_active": stop_hook_active}),
-                    Some(turns),
-                    deadline,
-                    &stop,
-                    cancel,
-                    tools.gate().cloned(),
-                    sink,
-                )
+            let payload = || json!({"stop_hook_active": stop_hook_active});
+            match hooks
+                .fire(HookEvent::Stop, "", payload, Some(turns), sink)
                 .await
-                {
-                    Ok(outcome) if outcome.blocked => {
-                        let block_reason = outcome
-                            .context
-                            .unwrap_or_else(|| "a hook refused to end the run".to_owned());
-                        messages.push(Message::user(format!(
-                            "A Stop hook blocked ending the run: {block_reason}\n\
-                             Continue, and address what it asked for."
-                        )));
-                        stop_hook_active = true;
-                        continue;
-                    }
-                    Ok(_) => {}
-                    Err(ending) => break ending,
+            {
+                Ok(outcome) if outcome.blocked => {
+                    let block_reason = refusal(outcome, "a hook refused to end the run");
+                    messages.push(Message::user(format!(
+                        "A Stop hook blocked ending the run: {block_reason}\n\
+                         Continue, and address what it asked for."
+                    )));
+                    stop_hook_active = true;
+                    continue;
                 }
+                Ok(_) => {}
+                Err(ending) => break ending,
             }
             break FinishReason::Answered;
         }
@@ -291,54 +278,53 @@ async fn run_inner<M: ChatModel>(
             }
             // HS7, D3/B2: the owner's hooks may block a call before anything runs — they never let one
             // through, the gate stays the only decider.
-            if !config.hooks.is_empty() {
-                match hooks_event(
-                    &mut hook_session,
-                    config,
-                    &session_id,
+            let payload = || {
+                json!({
+                    "tool_name": &call.function.name,
+                    "tool_input": hooks::tool_input(&call.function.arguments),
+                })
+            };
+            match hooks
+                .fire(
                     HookEvent::PreToolUse,
                     &call.function.name,
-                    json!({
-                        "tool_name": &call.function.name,
-                        "tool_input": hooks::tool_input(&call.function.arguments),
-                    }),
+                    payload,
                     Some(turns),
-                    deadline,
-                    &stop,
-                    cancel,
-                    tools.gate().cloned(),
                     sink,
                 )
                 .await
-                {
-                    Ok(outcome) if outcome.blocked => {
-                        let text = format!(
-                            "error: {}",
-                            outcome
-                                .context
-                                .as_deref()
-                                .unwrap_or("a hook refused this call")
-                        );
-                        sink.emit(Event::tool_result(
-                            turns,
-                            &call.id,
-                            &call.function.name,
-                            false,
-                            &text,
-                        ));
-                        messages.push(Message::tool(call.id, text));
-                        continue;
-                    }
-                    Ok(_) => {}
-                    Err(ending) => {
-                        stopped = Some(ending);
-                        break;
-                    }
+            {
+                Ok(outcome) if outcome.blocked => {
+                    let text = format!("error: {}", refusal(outcome, "a hook refused this call"));
+                    sink.emit(Event::tool_result(
+                        turns,
+                        &call.id,
+                        &call.function.name,
+                        false,
+                        &text,
+                    ));
+                    messages.push(Message::tool(call.id, text));
+                    continue;
+                }
+                Ok(_) => {}
+                Err(ending) => {
+                    stopped = Some(ending);
+                    break;
                 }
             }
             // HS8, D2: `task` starts a nested run — only this step differs from an ordinary call; the
             // events, the hooks and the message around it stay what they are for any other tool.
-            let (ok, output, sub_usage) = if offer_task && call.function.name == crate::task::NAME {
+            let is_task = offer_task && call.function.name == crate::task::NAME;
+            let (ok, output, sub_usage) = if is_task && subagents_started >= config.max_subagents {
+                let limit = config.max_subagents;
+                (
+                    false,
+                    format!(
+                        "error: this run has started its {limit} subagents; do the rest of the work yourself"
+                    ),
+                    None,
+                )
+            } else if is_task {
                 run_task(
                     config,
                     model,
@@ -363,6 +349,7 @@ async fn run_inner<M: ChatModel>(
             // The subagent's tokens are this run's tokens (HS8, D2.4): the spend metering sees them.
             if let Some(sub) = sub_usage {
                 usage += sub;
+                subagents_started += 1;
             }
             if let Some(gate) = tools.gate() {
                 for judged in gate.take_log() {
@@ -380,44 +367,32 @@ async fn run_inner<M: ChatModel>(
             // HS7, D3: PostToolUse after the tool ran, whatever it answered; a block replaces what the model
             // gets with the reason — the `ToolResult` above keeps what the tool really answered, and the
             // `Hook` event beside it says that a hook blocked.
-            if !config.hooks.is_empty() {
-                let response: String = output.chars().take(EVENT_RESULT_CHARS).collect();
-                match hooks_event(
-                    &mut hook_session,
-                    config,
-                    &session_id,
+            let payload = || {
+                json!({
+                    "tool_name": &call.function.name,
+                    "tool_input": hooks::tool_input(&call.function.arguments),
+                    "tool_response": output.chars().take(EVENT_RESULT_CHARS).collect::<String>(),
+                })
+            };
+            match hooks
+                .fire(
                     HookEvent::PostToolUse,
                     &call.function.name,
-                    json!({
-                        "tool_name": &call.function.name,
-                        "tool_input": hooks::tool_input(&call.function.arguments),
-                        "tool_response": response,
-                    }),
+                    payload,
                     Some(turns),
-                    deadline,
-                    &stop,
-                    cancel,
-                    tools.gate().cloned(),
                     sink,
                 )
                 .await
-                {
-                    Ok(outcome) if outcome.blocked => {
-                        let text = format!(
-                            "error: {}",
-                            outcome
-                                .context
-                                .as_deref()
-                                .unwrap_or("a hook refused this result")
-                        );
-                        messages.push(Message::tool(call.id, text));
-                        continue;
-                    }
-                    Ok(_) => {}
-                    Err(ending) => {
-                        stopped = Some(ending);
-                        break;
-                    }
+            {
+                Ok(outcome) if outcome.blocked => {
+                    let text = format!("error: {}", refusal(outcome, "a hook refused this result"));
+                    messages.push(Message::tool(call.id, text));
+                    continue;
+                }
+                Ok(_) => {}
+                Err(ending) => {
+                    stopped = Some(ending);
+                    break;
                 }
             }
             messages.push(Message::tool(call.id, output));
@@ -592,36 +567,61 @@ impl HookSession {
     }
 }
 
-/// One hook event of the run (HS7, D3): the session built on demand (D8); the run's deadline and its cancel
-/// honoured — dropping the wait mid-hook kills the hook's process group; every hook reported as an event
-/// inside. `Err(reason)` when the run itself ran out of time or was cancelled while a hook worked; a hook's
-/// own failure is a note and `Ok` (B3).
-#[allow(clippy::too_many_arguments)]
-async fn hooks_event(
-    runner: &mut HookSession,
-    config: &RunConfig,
-    session_id: &str,
-    event: HookEvent,
-    target: &str,
-    extra: Value,
-    turn: Option<u32>,
+/// The run's hooks (HS7) with what every one of their events needs: the session they run in, built on the first
+/// event that needs one (D8), the run's id for their payloads (D4), its deadline, stop flag and cancel, and the
+/// gate their commands are judged by.
+struct RunHooks<'a> {
+    session: HookSession,
+    config: &'a RunConfig,
+    session_id: String,
     deadline: Instant,
-    stop: &StopFlag,
-    cancel: &Cancel,
+    stop: &'a StopFlag,
+    cancel: &'a Cancel,
     gate: Option<Arc<Gate>>,
-    sink: &mut dyn EventSink,
-) -> Result<HookOutcome, FinishReason> {
-    let stdin = hooks::payload(session_id, &config.cwd, event, extra);
-    let Some(session) = runner.get(config, sink).await else {
-        return Ok(HookOutcome::default());
-    };
-    let limit = deadline.saturating_duration_since(Instant::now());
-    let outcome = tokio::select! {
-        outcome = hooks::run_event(turn, event, target, &stdin, &config.hooks, session, gate, stop, limit, sink) => outcome,
-        () = tokio::time::sleep_until(deadline) => return Err(FinishReason::Timeout),
-        () = cancel.cancelled() => return Err(FinishReason::Cancelled),
-    };
-    Ok(outcome)
+}
+
+impl RunHooks<'_> {
+    /// One hook event of the run (HS7, D3), and nothing at all for a run without hooks. The run's deadline and
+    /// its cancel are honoured — dropping the wait mid-hook kills the hook's process group; every hook is
+    /// reported as an event inside. `Err(reason)` when the run itself ran out of time or was cancelled while a
+    /// hook worked; a hook's own failure is a note and `Ok` (B3).
+    ///
+    /// `extra` builds the event's own payload fields; it is only called when there are hooks, so a run without
+    /// any pays nothing for them.
+    async fn fire(
+        &mut self,
+        event: HookEvent,
+        target: &str,
+        extra: impl FnOnce() -> Value,
+        turn: Option<u32>,
+        sink: &mut dyn EventSink,
+    ) -> Result<HookOutcome, FinishReason> {
+        let config = self.config;
+        if config.hooks.is_empty() {
+            return Ok(HookOutcome::default());
+        }
+        let stdin = hooks::payload(&self.session_id, &config.cwd, event, extra());
+        let Some(session) = self.session.get(config, sink).await else {
+            return Ok(HookOutcome::default());
+        };
+        let limit = self.deadline.saturating_duration_since(Instant::now());
+        let gate = self.gate.clone();
+        let hooks = &config.hooks;
+        let running = hooks::run_event(
+            turn, event, target, &stdin, hooks, session, gate, self.stop, limit, sink,
+        );
+        let outcome = tokio::select! {
+            outcome = running => outcome,
+            () = tokio::time::sleep_until(self.deadline) => return Err(FinishReason::Timeout),
+            () = self.cancel.cancelled() => return Err(FinishReason::Cancelled),
+        };
+        Ok(outcome)
+    }
+}
+
+/// What a blocking hook said, or `fallback` when it gave no reason.
+fn refusal(outcome: HookOutcome, fallback: &str) -> String {
+    outcome.context.unwrap_or_else(|| fallback.to_owned())
 }
 
 #[cfg(test)]
@@ -1329,6 +1329,95 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_task_past_the_runs_subagent_budget_is_a_tool_error_and_starts_nothing() {
+        let task = || {
+            Ok(task_call(
+                "c1",
+                json!({"description": "d", "prompt": "Do it."}),
+            ))
+        };
+        let model = Script::new(vec![
+            task(),
+            Ok(text("sub answer")),
+            task(),
+            Ok(text("done")),
+        ]);
+        let mut config = RunConfig::new("/w");
+        config.max_subagents = 1;
+        let outcome = run(
+            &config,
+            &model,
+            &toolbox(),
+            "go",
+            &mut Vec::new(),
+            &Cancel::new(),
+        )
+        .await;
+        assert_eq!(outcome.reason, FinishReason::Answered);
+        assert_eq!(
+            model.seen.lock().unwrap().len(),
+            4,
+            "parent, the one subagent, parent, parent — no second subagent"
+        );
+        // The parent's last request carries the refused second call's result.
+        let seen = model.seen.lock().unwrap();
+        let answer = seen[3]
+            .iter()
+            .rev()
+            .find(|m| m.role == Role::Tool)
+            .and_then(|m| m.content.clone())
+            .unwrap_or_default();
+        assert!(answer.contains("started its 1 subagents"), "{answer}");
+    }
+
+    #[tokio::test]
+    async fn only_a_subagent_that_ran_uses_up_the_budget_and_a_budget_of_zero_starts_none() {
+        let good = || {
+            Ok(task_call(
+                "c2",
+                json!({"description": "d", "prompt": "Do it."}),
+            ))
+        };
+        // A `task` with bad arguments starts nothing, so the one subagent the budget allows still runs.
+        let model = Script::new(vec![
+            Ok(task_call("c1", json!({"description": "d"}))),
+            good(),
+            Ok(text("sub answer")),
+            Ok(text("done")),
+        ]);
+        let mut config = RunConfig::new("/w");
+        config.max_subagents = 1;
+        run(
+            &config,
+            &model,
+            &toolbox(),
+            "go",
+            &mut Vec::new(),
+            &Cancel::new(),
+        )
+        .await;
+        assert_eq!(
+            model.seen.lock().unwrap().len(),
+            4,
+            "parent, parent, the subagent, parent"
+        );
+
+        let model = Script::new(vec![good(), Ok(text("done"))]);
+        config.max_subagents = 0;
+        let outcome = run(
+            &config,
+            &model,
+            &toolbox(),
+            "go",
+            &mut Vec::new(),
+            &Cancel::new(),
+        )
+        .await;
+        assert_eq!(outcome.reason, FinishReason::Answered);
+        assert_eq!(model.seen.lock().unwrap().len(), 2, "no subagent at all");
+    }
+
+    #[tokio::test]
     async fn a_task_runs_a_subagent_and_brings_its_answer_and_tokens_back() {
         let model = Script::new(vec![
             Ok(task_call(
@@ -1567,8 +1656,7 @@ mod tests {
                 Mode::Default,
                 Arc::new(Nobody),
             );
-            gate.restrict_name = Some("demo".into());
-            gate.restrict = Some(allowed);
+            gate.narrow("the command /demo", allowed);
             gate
         };
 

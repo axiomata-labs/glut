@@ -428,18 +428,12 @@ fn some(value: &str) -> Option<String> {
     }
 }
 
-/// The `allowed-tools` value: comma-separated rules, each parsed with [`Rule::parse`] (C3). A rule that does not
+/// The `allowed-tools` value: rules split the way a skill's are (`skills::rules_of` — commas and spaces outside
+/// parentheses, so `Bash(echo a, b)` stays one rule), each parsed with [`Rule::parse`] (C3). A rule that does not
 /// parse makes the whole file an error — a narrowed run must know exactly what it may do.
 fn parse_rules(value: &str, path: &Path) -> Result<Vec<Rule>, HarnessError> {
-    if value.is_empty() {
-        return Ok(Vec::new());
-    }
-    value
-        .split(',')
-        .map(|text| {
-            Rule::parse(text).map_err(|reason| refuse(path, format!("allowed-tools: {reason}")))
-        })
-        .collect()
+    crate::skills::rules_of(value)
+        .map_err(|reason| refuse(path, format!("allowed-tools: {reason}")))
 }
 
 /// A file or folder name as one command-name segment (C1): lower case, `[a-z0-9_-]` — a name that does not survive
@@ -580,7 +574,7 @@ mod tests {
                 "---\n\
                  description: \"Reviews a commit\"\n\
                  argument-hint: \"<sha>\"\n\
-                 allowed-tools: Bash(git status:*), Read\n\
+                 allowed-tools: Bash(git status:*), Read Bash(echo a, b)\n\
                  model: claude-haiku\n\
                  ---\n\
                  Body\n",
@@ -598,7 +592,8 @@ mod tests {
                 .iter()
                 .map(|rule| rule.text())
                 .collect::<Vec<_>>(),
-            ["Bash(git status:*)", "Read"]
+            // Split as a skill's `allowed_tools` is: a comma inside parentheses belongs to its rule.
+            ["Bash(git status:*)", "Read", "Bash(echo a, b)"]
         );
         assert_eq!(command.body, "Body\n");
     }

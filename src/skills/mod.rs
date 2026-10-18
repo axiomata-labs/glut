@@ -199,12 +199,13 @@ impl Skill {
         if let Some(model) = &self.model {
             endpoint.model = model.clone();
         }
-        // K5: the skill's tools narrow the run the way a command's do (HS4, C3) — here, in a skill run only. A
-        // skill loaded through the `skill` tool leaves the rules as they are (Claude Code behaves the same).
-        if !self.allowed_tools.is_empty() {
-            gate.restrict_name = Some(self.name.clone());
-            gate.restrict = Some(self.allowed_tools.clone());
-        }
+        // K5: the skill's tools narrow the run the way a command's do (HS4, C3) — here, in a skill run only, and
+        // on top of a command's narrowing where the run has both. A skill loaded through the `skill` tool leaves
+        // the rules as they are (Claude Code behaves the same).
+        gate.narrow(
+            format!("the skill {}", self.name),
+            self.allowed_tools.clone(),
+        );
         if let Some(timeout) = self.timeout {
             config.timeout = config.timeout.min(timeout);
         }
@@ -526,6 +527,22 @@ const MAX_FRONTMATTER_BYTES: usize = 8 * 1024;
 /// Deepest `[`/`{` nesting accepted in the frontmatter.
 const MAX_FLOW_DEPTH: usize = 8;
 
+/// Where the frontmatter block of `raw` ends: at the first later line that is `---` and nothing else, as the
+/// frontmatter parser ends it — a line merely *starting* with `---` (`---x: *a`) is still YAML, and ending the
+/// check there would hand the rest to the parser unchecked. Without such a line the whole text is checked; where
+/// the two readings could differ (`--- ` with a trailing space), the check reads more, never less.
+fn frontmatter_end(raw: &str) -> usize {
+    let mut at = 0;
+    for (index, line) in raw.split_inclusive('\n').enumerate() {
+        let bare = line.trim_end_matches(['\n', '\r']);
+        if index > 0 && bare == "---" {
+            return at;
+        }
+        at += line.len();
+    }
+    raw.len()
+}
+
 /// Refuses frontmatter the YAML parser could be made to blow up on, **before** it runs (K3).
 ///
 /// The parser (yaml-rust2) resolves an alias by cloning the anchored node and has no expansion limit, so a few
@@ -550,8 +567,7 @@ fn check_frontmatter_shape(raw: &str) -> Result<(), String> {
         // No frontmatter block: the parser never sees YAML.
         return Ok(());
     }
-    let end = raw[3..].find("\n---").map_or(raw.len(), |at| at + 3);
-    let front = &raw[..end];
+    let front = &raw[..frontmatter_end(raw)];
     if front.len() > MAX_FRONTMATTER_BYTES {
         return Err(format!("longer than {MAX_FRONTMATTER_BYTES} bytes"));
     }
@@ -857,6 +873,13 @@ mod tests {
         bomb.push_str("---\nbody\n");
         let err = Skill::parse("demo", PathBuf::from("/s/demo"), &bomb).unwrap_err();
         assert!(err.contains("anchors"), "{err}");
+
+        // A line that only starts with `---` does not end the block for the parser, so it must not end the
+        // check either: what follows it is still YAML (security review 2026-10-18).
+        let sneaky = "---\nname: sneaky\ndescription: d\n---x: 1\ny: &a [1]\nz: *a\n---\nbody\n";
+        let err = Skill::parse("sneaky", PathBuf::from("/s/sneaky"), sneaky).unwrap_err();
+        assert!(err.contains("anchors"), "{err}");
+        assert_eq!(frontmatter_end("---\na: 1\n---\nbody"), "---\na: 1\n".len());
     }
 
     #[test]
@@ -935,8 +958,7 @@ mod tests {
             .unwrap();
         assert_eq!(model.model, "some/model");
         assert_eq!(config.timeout, Duration::from_secs(5));
-        assert!(gate.restrict.is_some());
-        assert_eq!(gate.restrict_name.as_deref(), Some("reviewer"));
+        assert_eq!(gate.narrowed_by(), ["the skill reviewer"]);
         // K5, as a command's narrowing (HS4, C3): a shell call is refused, a read is judged as usual.
         let refused = gate
             .judge(

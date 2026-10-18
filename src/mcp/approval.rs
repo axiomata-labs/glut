@@ -168,7 +168,9 @@ fn ask(entry: &ServerEntry, project: &Path) -> bool {
         printable(&project.display().to_string()),
         printable(&entry.name)
     );
-    eprintln!("  {}", printable(&entry.describe()));
+    for line in entry.describe().lines() {
+        eprintln!("  {}", printable(line));
+    }
     eprint!("Start it? [y/N]: ");
     let _ = std::io::stderr().flush();
     let mut line = String::new();

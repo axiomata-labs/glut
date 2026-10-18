@@ -19,6 +19,7 @@ pub mod permissions;
 pub mod prompt;
 pub mod run;
 pub mod sandbox;
+pub mod setup;
 pub mod skills;
 mod task;
 pub mod tools;

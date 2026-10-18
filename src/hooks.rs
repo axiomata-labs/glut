@@ -192,7 +192,7 @@ pub(crate) fn claude_alias(tool: &str) -> Option<&'static str> {
         "read_file" => Some("Read"),
         "write_file" => Some("Write"),
         "edit_file" => Some("Edit"),
-        "list_dir" => Some("Ls"),
+        "list_dir" => Some("LS"),
         "grep" => Some("Grep"),
         "glob" => Some("Glob"),
         // HS8, D9: our subagent tool is Claude's `Task`, matcher and hook payload alike.
@@ -505,7 +505,7 @@ mod tests {
     fn a_matcher_fires_on_the_tool_name_and_its_claude_alias() {
         assert_eq!(claude_alias("bash"), Some("Bash"));
         assert_eq!(claude_alias("read_file"), Some("Read"));
-        assert_eq!(claude_alias("list_dir"), Some("Ls"));
+        assert_eq!(claude_alias("list_dir"), Some("LS"));
         assert_eq!(claude_alias("mcp__mail__send"), None);
         // HS8, D9: the subagent tool matches Claude's own name in a hook's matcher.
         assert_eq!(claude_alias("task"), Some("Task"));
