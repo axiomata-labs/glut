@@ -326,6 +326,16 @@ pub fn load(home: &Path, project: &Path) -> Result<Vec<ServerEntry>, HarnessErro
     Ok(entries)
 }
 
+/// The owner's servers alone (`~/.axh/mcp.json`), checked as [`load`] checks them: the one list the app's own
+/// Opencode instances start too (`docs/plans/agent-isolation.md`, D7).
+///
+/// # Errors
+///
+/// As [`load`], for the owner's file.
+pub fn owner(home: &Path) -> Result<Vec<ServerEntry>, HarnessError> {
+    read(&home.join(OWNER_FILE), Origin::Owner)
+}
+
 /// One file's servers, in the order their names sort in (a `BTreeMap`), so a run starts them the same way every
 /// time.
 fn read(path: &Path, origin: Origin) -> Result<Vec<ServerEntry>, HarnessError> {
