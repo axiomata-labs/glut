@@ -10,7 +10,7 @@ use tokio::time::Instant;
 use crate::config::RunConfig;
 use crate::event::{EVENT_RESULT_CHARS, Event, EventSink, FinishReason};
 use crate::hooks::{self, HookEvent, HookOutcome};
-use crate::model::{ChatModel, Message, Usage};
+use crate::model::{ChatModel, Message, ToolCall, ToolSpec, Usage};
 use crate::permissions::{Access, Gate};
 use crate::prompt::{subagent_prompt, system_prompt};
 use crate::tools::shell::{Session, ShellOptions};
@@ -118,24 +118,7 @@ async fn run_inner<M: ChatModel>(
     cancel: &Cancel,
     depth: u32,
 ) -> RunOutcome {
-    let started = Instant::now();
-    let deadline = started + config.timeout;
-    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
-    let mut messages = if depth == 0 {
-        vec![
-            Message::system(system_prompt(
-                &config.cwd,
-                &today,
-                config.instructions.as_deref(),
-            )),
-            Message::user(prompt),
-        ]
-    } else {
-        vec![
-            Message::system(subagent_prompt(&config.cwd, &today)),
-            Message::user(prompt),
-        ]
-    };
+    let deadline = Instant::now() + config.timeout;
     // HS8, D1/D3: `task` exists at depth 0 only, and only for a run that offers subagents at all (D7) — a
     // subagent never sees the tool, so nesting deeper than one cannot start; and its name is in the run's
     // tool list from the first turn on.
@@ -151,260 +134,50 @@ async fn run_inner<M: ChatModel>(
         cwd: config.cwd.display().to_string(),
         tools: offered,
     });
-
-    let mut usage = Usage::default();
-    let mut answer = None;
-    // HS8: the subagents this run started, counted against `config.max_subagents`.
-    let mut subagents_started: u32 = 0;
     // Set when the run stops, so a tool still at work (a search over a large tree) stops too and none starts after.
     let stop = StopFlag::default();
-    let mut hooks = RunHooks {
-        session: HookSession::NotBuilt,
+    let mut run = Loop {
         config,
-        // The run's identity for the hooks' payloads (D4) — there are no sessions yet, so one id per run.
-        session_id: format!(
-            "axh-{}-{}",
-            std::process::id(),
-            chrono::Local::now().timestamp_millis()
-        ),
-        deadline,
-        stop: &stop,
+        model,
+        tools,
         cancel,
-        gate: tools.gate().cloned(),
+        stop: &stop,
+        deadline,
+        depth,
+        offer_task,
+        hooks: RunHooks {
+            session: HookSession::NotBuilt,
+            config,
+            // The run's identity for the hooks' payloads (D4) — there are no sessions yet, so one id per run.
+            session_id: format!(
+                "axh-{}-{}",
+                std::process::id(),
+                chrono::Local::now().timestamp_millis()
+            ),
+            deadline,
+            stop: &stop,
+            cancel,
+            gate: tools.gate().cloned(),
+        },
+        messages: opening_messages(config, prompt, depth),
+        usage: Usage::default(),
+        answer: None,
+        turns: 0,
+        subagents_started: 0,
     };
-    // HS7, D3: SessionStart once, after `Started` and before the first model call — at depth 0 only (HS8,
-    // D4: it belongs to the run, not to each subagent). Its context becomes a
-    // system message right behind the harness's own; it can never block.
     if depth == 0 {
-        let outcome = hooks
-            .fire(
-                HookEvent::SessionStart,
-                "startup",
-                || json!({"source": "startup"}),
-                None,
-                sink,
-            )
-            .await
-            .unwrap_or_default();
-        if let Some(context) = outcome.context {
-            messages.insert(1, Message::system(context));
-        }
+        run.session_start(sink).await;
     }
-    // Set once a Stop hook blocked the answer: its payload then says so, and the hook lets it end (D3).
-    let mut stop_hook_active = false;
-    let mut turns = 0;
-    let reason = loop {
-        if cancel.is_cancelled() {
-            break FinishReason::Cancelled;
-        }
-        if turns >= config.max_turns {
-            break FinishReason::MaxTurns;
-        }
-        turns += 1;
-        let reply = tokio::select! {
-            reply = model.complete(&messages, &specs, config.max_output_tokens) => reply,
-            () = tokio::time::sleep_until(deadline) => break FinishReason::Timeout,
-            () = cancel.cancelled() => break FinishReason::Cancelled,
-        };
-        let reply = match reply {
-            Ok(reply) => reply,
-            Err(err) => {
-                sink.emit(Event::Error {
-                    message: err.to_string(),
-                });
-                break FinishReason::Failed;
-            }
-        };
-        usage += reply.usage;
-        sink.emit(Event::Usage {
-            turn: turns,
-            input_tokens: reply.usage.input_tokens,
-            output_tokens: reply.usage.output_tokens,
-        });
-        // The last reply's text only: a remark beside earlier tool calls is no answer to the task.
-        answer = reply.message.content.clone();
-        if let Some(text) = &answer {
-            sink.emit(Event::AssistantText {
-                turn: turns,
-                text: text.clone(),
-            });
-        }
-        let calls = reply.message.tool_calls.clone();
-        messages.push(reply.message);
-        if calls.is_empty() {
-            // HS7, D3: a Stop hook may refuse the answer; its reason goes back as a user message and the loop
-            // takes another turn (`stop_hook_active` tells the hook it already did this once).
-            let payload = || json!({"stop_hook_active": stop_hook_active});
-            match hooks
-                .fire(HookEvent::Stop, "", payload, Some(turns), sink)
-                .await
-            {
-                Ok(outcome) if outcome.blocked => {
-                    let block_reason = refusal(outcome, "a hook refused to end the run");
-                    messages.push(Message::user(format!(
-                        "A Stop hook blocked ending the run: {block_reason}\n\
-                         Continue, and address what it asked for."
-                    )));
-                    stop_hook_active = true;
-                    continue;
-                }
-                Ok(_) => {}
-                Err(ending) => break ending,
-            }
-            break FinishReason::Answered;
-        }
-        // One after the other, in the order asked: a later call may depend on an earlier one (write, then read).
-        let mut stopped = None;
-        for (index, call) in calls.into_iter().enumerate() {
-            sink.emit(Event::tool_call(
-                turns,
-                &call.id,
-                &call.function.name,
-                &call.function.arguments,
-            ));
-            if index >= MAX_CALLS_PER_TURN {
-                let output = format!(
-                    "error: at most {MAX_CALLS_PER_TURN} tool calls are run per turn; ask again"
-                );
-                sink.emit(Event::tool_result(
-                    turns,
-                    &call.id,
-                    &call.function.name,
-                    false,
-                    &output,
-                ));
-                messages.push(Message::tool(call.id, output));
-                continue;
-            }
-            // HS7, D3/B2: the owner's hooks may block a call before anything runs — they never let one
-            // through, the gate stays the only decider.
-            let payload = || {
-                json!({
-                    "tool_name": &call.function.name,
-                    "tool_input": hooks::tool_input(&call.function.arguments),
-                })
-            };
-            match hooks
-                .fire(
-                    HookEvent::PreToolUse,
-                    &call.function.name,
-                    payload,
-                    Some(turns),
-                    sink,
-                )
-                .await
-            {
-                Ok(outcome) if outcome.blocked => {
-                    let text = format!("error: {}", refusal(outcome, "a hook refused this call"));
-                    sink.emit(Event::tool_result(
-                        turns,
-                        &call.id,
-                        &call.function.name,
-                        false,
-                        &text,
-                    ));
-                    messages.push(Message::tool(call.id, text));
-                    continue;
-                }
-                Ok(_) => {}
-                Err(ending) => {
-                    stopped = Some(ending);
-                    break;
-                }
-            }
-            // HS8, D2: `task` starts a nested run — only this step differs from an ordinary call; the
-            // events, the hooks and the message around it stay what they are for any other tool.
-            let is_task = offer_task && call.function.name == crate::task::NAME;
-            let (ok, output, sub_usage) = if is_task && subagents_started >= config.max_subagents {
-                let limit = config.max_subagents;
-                (
-                    false,
-                    format!(
-                        "error: this run has started its {limit} subagents; do the rest of the work yourself"
-                    ),
-                    None,
-                )
-            } else if is_task {
-                run_task(
-                    config,
-                    model,
-                    tools,
-                    &call.function.arguments,
-                    sink,
-                    cancel,
-                    deadline,
-                    depth,
-                    turns,
-                    &call.id,
-                )
-                .await
-            } else {
-                let (ok, output) = tokio::select! {
-                    result = tools.call_until(&call.function.name, &call.function.arguments, &stop) => result,
-                    () = tokio::time::sleep_until(deadline) => { stopped = Some(FinishReason::Timeout); break }
-                    () = cancel.cancelled() => { stopped = Some(FinishReason::Cancelled); break }
-                };
-                (ok, output, None)
-            };
-            // The subagent's tokens are this run's tokens (HS8, D2.4): the spend metering sees them.
-            if let Some(sub) = sub_usage {
-                usage += sub;
-                subagents_started += 1;
-            }
-            if let Some(gate) = tools.gate() {
-                for judged in gate.take_log() {
-                    sink.emit(Event::permission(turns, &call.id, &judged));
-                }
-            }
-            // In the stream the tool's own result is shown first (D3); the model's message may still differ.
-            sink.emit(Event::tool_result(
-                turns,
-                &call.id,
-                &call.function.name,
-                ok,
-                &output,
-            ));
-            // HS7, D3: PostToolUse after the tool ran, whatever it answered; a block replaces what the model
-            // gets with the reason — the `ToolResult` above keeps what the tool really answered, and the
-            // `Hook` event beside it says that a hook blocked.
-            let payload = || {
-                json!({
-                    "tool_name": &call.function.name,
-                    "tool_input": hooks::tool_input(&call.function.arguments),
-                    "tool_response": output.chars().take(EVENT_RESULT_CHARS).collect::<String>(),
-                })
-            };
-            match hooks
-                .fire(
-                    HookEvent::PostToolUse,
-                    &call.function.name,
-                    payload,
-                    Some(turns),
-                    sink,
-                )
-                .await
-            {
-                Ok(outcome) if outcome.blocked => {
-                    let text = format!("error: {}", refusal(outcome, "a hook refused this result"));
-                    messages.push(Message::tool(call.id, text));
-                    continue;
-                }
-                Ok(_) => {}
-                Err(ending) => {
-                    stopped = Some(ending);
-                    break;
-                }
-            }
-            messages.push(Message::tool(call.id, output));
-        }
-        if let Some(reason) = stopped {
-            break reason;
-        }
-    };
-    stop.store(true, std::sync::atomic::Ordering::SeqCst);
-    if reason != FinishReason::Answered {
-        answer = None;
-    }
+    let reason = run.drive(&specs, sink).await;
+    stop.store(true, Ordering::SeqCst);
+    let Loop {
+        usage,
+        answer,
+        turns,
+        ..
+    } = run;
+    // Only an answer is one: the text of a run that stopped is a remark on the way, not its result.
+    let answer = answer.filter(|_| reason == FinishReason::Answered);
     sink.emit(Event::Finished {
         reason,
         turns,
@@ -418,99 +191,379 @@ async fn run_inner<M: ChatModel>(
     }
 }
 
-/// The `task` arm of the loop (HS8, D2): judge the call, run the subagent, hand its answer back as the
-/// tool's result — and its tokens, summed into the run's own usage so the spend stays honest (D2.4).
-/// Returns what [`Toolbox::call_until`] returns, plus the usage of a nested run that really happened.
-#[allow(clippy::too_many_arguments)]
-async fn run_task<M: ChatModel>(
-    config: &RunConfig,
-    model: &M,
-    tools: &Toolbox,
-    arguments: &str,
-    sink: &mut dyn EventSink,
-    cancel: &Cancel,
-    deadline: Instant,
-    depth: u32,
-    turn: u32,
-    id: &str,
-) -> (bool, String, Option<Usage>) {
-    let parsed = match serde_json::from_str::<Value>(arguments) {
-        Ok(value @ Value::Object(_)) => value,
-        Ok(_) => {
-            return (
-                false,
-                "error: the arguments must be a JSON object".to_owned(),
-                None,
-            );
-        }
-        Err(err) => {
-            return (
-                false,
-                format!("error: the arguments are not valid JSON: {err}"),
-                None,
-            );
-        }
+/// The conversation a run starts with: its system prompt — the caller's instructions at depth 0, the
+/// subagent's own prompt below (D5) — and the user's message.
+fn opening_messages(config: &RunConfig, prompt: &str, depth: u32) -> Vec<Message> {
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let system = if depth == 0 {
+        system_prompt(&config.cwd, &today, config.instructions.as_deref())
+    } else {
+        subagent_prompt(&config.cwd, &today)
     };
-    let prompt = match crate::task::prompt_of(&parsed) {
-        Ok(prompt) => prompt,
-        Err(reason) => return (false, format!("error: {reason}"), None),
-    };
-    // The judgement and its event belong to the parent (D2.2): the nested run drains this very log in its
-    // own loop, so what the parent judged is read here, before the subagent starts — never inside its
-    // stream, never lost. B1: `task` is judged like any other call of a name the rules know.
-    if let Some(gate) = tools.gate() {
-        let judged = gate.judge(crate::task::NAME, &Access::Other).await;
-        for entry in gate.take_log() {
-            sink.emit(Event::permission(turn, id, &entry));
-        }
-        if let Err(refused) = judged {
-            return (false, format!("error: {refused}"), None);
-        }
-    }
-    let mut sub = config.clone();
-    // D5: the caller's instructions are the parent's contract; the subagent gets its own prompt and
-    // whatever the parent's model put into `prompt`.
-    sub.instructions = None;
-    sub.max_turns = config.subagent_max_turns;
-    // The subagent never outlives the run that started it (D2.3).
-    sub.timeout = config
-        .subagent_timeout
-        .min(deadline.saturating_duration_since(Instant::now()));
-    let mut wrapped = SubSink {
-        depth: depth + 1,
-        inner: sink,
-    };
-    let outcome = Box::pin(run_inner(
-        &sub,
-        model,
-        tools,
-        &prompt,
-        &mut wrapped,
-        cancel,
-        depth + 1,
-    ))
-    .await;
-    // What the subagent judged but did not get to report (it was cancelled mid-call) still belongs to its
-    // stream: drained here, wrapped, before the parent's `ToolResult(task)` brackets it (D2.4).
-    if let Some(gate) = tools.gate() {
-        for entry in gate.take_log() {
-            wrapped.emit(Event::permission(turn, id, &entry));
-        }
-    }
-    let (ok, output) = match outcome.reason {
-        FinishReason::Answered => match outcome.answer {
-            // Cut like every tool result — the model gets the whole, already capped, answer.
-            Some(answer) => (true, crate::tools::cap(answer)),
-            None => (true, "the subagent finished without text".to_owned()),
-        },
-        reason => (
-            false,
-            format!("error: the subagent stopped without answering: {reason:?}"),
-        ),
-    };
-    (ok, output, Some(outcome.usage))
+    vec![Message::system(system), Message::user(prompt)]
 }
 
+/// How the model's answer turned out once the Stop hooks had their say (HS7, D3).
+enum Ending {
+    /// The answer stands: the run is done.
+    Done,
+    /// A hook refused it; its reason went back to the model, which takes another turn.
+    Refused,
+}
+
+/// One run at one nesting level while its loop goes on: what it was given, and what it keeps from turn to
+/// turn — the conversation, the tokens spent, the last text, the subagents started.
+struct Loop<'a, M: ChatModel> {
+    config: &'a RunConfig,
+    model: &'a M,
+    tools: &'a Toolbox,
+    cancel: &'a Cancel,
+    stop: &'a StopFlag,
+    deadline: Instant,
+    depth: u32,
+    offer_task: bool,
+    hooks: RunHooks<'a>,
+    messages: Vec<Message>,
+    usage: Usage,
+    /// The last reply's text only: a remark beside earlier tool calls is no answer to the task.
+    answer: Option<String>,
+    turns: u32,
+    /// HS8: the subagents this run started, counted against `config.max_subagents`.
+    subagents_started: u32,
+}
+
+impl<M: ChatModel> Loop<'_, M> {
+    /// HS7, D3: SessionStart once, after `Started` and before the first model call — at depth 0 only (HS8, D4:
+    /// it belongs to the run, not to each subagent). Its context becomes a system message right behind the
+    /// harness's own; it can never block, and a run that ends while it works ends at its first turn.
+    async fn session_start(&mut self, sink: &mut dyn EventSink) {
+        let payload = || json!({"source": "startup"});
+        let outcome = self
+            .hooks
+            .fire(HookEvent::SessionStart, "startup", payload, None, sink)
+            .await
+            .unwrap_or_default();
+        if let Some(context) = outcome.context {
+            self.messages.insert(1, Message::system(context));
+        }
+    }
+
+    /// The turns, until the model answers without a tool call (and no Stop hook objects) or a limit, a cancel or
+    /// a failing model call ends the run. Returns why it ended.
+    async fn drive(&mut self, specs: &[ToolSpec], sink: &mut dyn EventSink) -> FinishReason {
+        // Set once a Stop hook refused the answer: its payload then says so, and the hook lets it end (D3).
+        let mut stop_hook_active = false;
+        loop {
+            if self.cancel.is_cancelled() {
+                return FinishReason::Cancelled;
+            }
+            if self.turns >= self.config.max_turns {
+                return FinishReason::MaxTurns;
+            }
+            self.turns += 1;
+            let calls = match self.ask(specs, sink).await {
+                Ok(calls) => calls,
+                Err(ending) => return ending,
+            };
+            let ended = if calls.is_empty() {
+                match self.stop_hooks(stop_hook_active, sink).await {
+                    Ok(Ending::Done) => return FinishReason::Answered,
+                    Ok(Ending::Refused) => {
+                        stop_hook_active = true;
+                        Ok(())
+                    }
+                    Err(ending) => Err(ending),
+                }
+            } else {
+                self.run_calls(calls, sink).await
+            };
+            if let Err(ending) = ended {
+                return ending;
+            }
+        }
+    }
+
+    /// One model call: its usage and text reported, its message kept, its tool calls handed back.
+    async fn ask(
+        &mut self,
+        specs: &[ToolSpec],
+        sink: &mut dyn EventSink,
+    ) -> Result<Vec<ToolCall>, FinishReason> {
+        let completion = self
+            .model
+            .complete(&self.messages, specs, self.config.max_output_tokens);
+        let reply = tokio::select! {
+            reply = completion => reply,
+            () = tokio::time::sleep_until(self.deadline) => return Err(FinishReason::Timeout),
+            () = self.cancel.cancelled() => return Err(FinishReason::Cancelled),
+        };
+        let reply = reply.map_err(|err| {
+            sink.emit(Event::Error {
+                message: err.to_string(),
+            });
+            FinishReason::Failed
+        })?;
+        let turn = self.turns;
+        self.usage += reply.usage;
+        sink.emit(Event::Usage {
+            turn,
+            input_tokens: reply.usage.input_tokens,
+            output_tokens: reply.usage.output_tokens,
+        });
+        self.answer = reply.message.content.clone();
+        if let Some(text) = &self.answer {
+            sink.emit(Event::AssistantText {
+                turn,
+                text: text.clone(),
+            });
+        }
+        let calls = reply.message.tool_calls.clone();
+        self.messages.push(reply.message);
+        Ok(calls)
+    }
+
+    /// HS7, D3: a Stop hook may refuse the answer; its reason goes back as a user message and the loop takes
+    /// another turn (`stop_hook_active` tells the hook it already did this once).
+    async fn stop_hooks(
+        &mut self,
+        stop_hook_active: bool,
+        sink: &mut dyn EventSink,
+    ) -> Result<Ending, FinishReason> {
+        let payload = || json!({"stop_hook_active": stop_hook_active});
+        let outcome = self
+            .hooks
+            .fire(HookEvent::Stop, "", payload, Some(self.turns), sink)
+            .await?;
+        if !outcome.blocked {
+            return Ok(Ending::Done);
+        }
+        let reason = refusal(outcome, "a hook refused to end the run");
+        self.messages.push(Message::user(format!(
+            "A Stop hook blocked ending the run: {reason}\nContinue, and address what it asked for."
+        )));
+        Ok(Ending::Refused)
+    }
+
+    /// The reply's tool calls, one after the other in the order asked: a later call may depend on an earlier
+    /// one (write, then read). Past [`MAX_CALLS_PER_TURN`] each is answered with an error instead, so every call
+    /// still gets its reply (the API wants one per call id).
+    async fn run_calls(
+        &mut self,
+        calls: Vec<ToolCall>,
+        sink: &mut dyn EventSink,
+    ) -> Result<(), FinishReason> {
+        for (index, call) in calls.into_iter().enumerate() {
+            sink.emit(Event::tool_call(
+                self.turns,
+                &call.id,
+                &call.function.name,
+                &call.function.arguments,
+            ));
+            if index >= MAX_CALLS_PER_TURN {
+                let output = format!(
+                    "error: at most {MAX_CALLS_PER_TURN} tool calls are run per turn; ask again"
+                );
+                self.answer_call(call, false, output, sink);
+                continue;
+            }
+            self.run_call(call, sink).await?;
+        }
+        Ok(())
+    }
+
+    /// One tool call: the PreToolUse hooks, the call itself, its permission events and result, the PostToolUse
+    /// hooks, and the message the model gets back. `Err` when the run ended on the way.
+    async fn run_call(
+        &mut self,
+        call: ToolCall,
+        sink: &mut dyn EventSink,
+    ) -> Result<(), FinishReason> {
+        let turn = self.turns;
+        // HS7, D3/B2: the owner's hooks may block a call before anything runs — they never let one through,
+        // the gate stays the only decider.
+        let payload = || {
+            json!({
+                "tool_name": &call.function.name,
+                "tool_input": hooks::tool_input(&call.function.arguments),
+            })
+        };
+        let before = self
+            .hooks
+            .fire(
+                HookEvent::PreToolUse,
+                &call.function.name,
+                payload,
+                Some(turn),
+                sink,
+            )
+            .await?;
+        if before.blocked {
+            let text = format!("error: {}", refusal(before, "a hook refused this call"));
+            self.answer_call(call, false, text, sink);
+            return Ok(());
+        }
+        let (ok, output) = self.execute(&call, sink).await?;
+        if let Some(gate) = self.tools.gate() {
+            for judged in gate.take_log() {
+                sink.emit(Event::permission(turn, &call.id, &judged));
+            }
+        }
+        // In the stream the tool's own result is shown first (D3); the model's message may still differ.
+        sink.emit(Event::tool_result(
+            turn,
+            &call.id,
+            &call.function.name,
+            ok,
+            &output,
+        ));
+        // HS7, D3: PostToolUse after the tool ran, whatever it answered; a block replaces what the model gets
+        // with the reason — the `ToolResult` above keeps what the tool really answered, and the `Hook` event
+        // beside it says that a hook blocked.
+        let payload = || {
+            json!({
+                "tool_name": &call.function.name,
+                "tool_input": hooks::tool_input(&call.function.arguments),
+                "tool_response": output.chars().take(EVENT_RESULT_CHARS).collect::<String>(),
+            })
+        };
+        let after = self
+            .hooks
+            .fire(
+                HookEvent::PostToolUse,
+                &call.function.name,
+                payload,
+                Some(turn),
+                sink,
+            )
+            .await?;
+        let output = if after.blocked {
+            format!("error: {}", refusal(after, "a hook refused this result"))
+        } else {
+            output
+        };
+        self.messages.push(Message::tool(call.id, output));
+        Ok(())
+    }
+
+    /// A call answered without running it: its result shown, and the model told.
+    fn answer_call(&mut self, call: ToolCall, ok: bool, output: String, sink: &mut dyn EventSink) {
+        sink.emit(Event::tool_result(
+            self.turns,
+            &call.id,
+            &call.function.name,
+            ok,
+            &output,
+        ));
+        self.messages.push(Message::tool(call.id, output));
+    }
+
+    /// What the call answers: a subagent for `task` (HS8, D2 — only this step differs from an ordinary call),
+    /// the toolbox for everything else, held to the run's deadline and cancel. `Err` when the run ended while it
+    /// worked.
+    async fn execute(
+        &mut self,
+        call: &ToolCall,
+        sink: &mut dyn EventSink,
+    ) -> Result<(bool, String), FinishReason> {
+        let name = &call.function.name;
+        if self.offer_task && name == crate::task::NAME {
+            return Ok(self.run_task(call, sink).await);
+        }
+        tokio::select! {
+            result = self.tools.call_until(name, &call.function.arguments, self.stop) => Ok(result),
+            () = tokio::time::sleep_until(self.deadline) => Err(FinishReason::Timeout),
+            () = self.cancel.cancelled() => Err(FinishReason::Cancelled),
+        }
+    }
+
+    /// The `task` arm (HS8, D2): judge the call, run the subagent, hand its answer back as the tool's result — and
+    /// its tokens, summed into the run's own usage so the spend stays honest (D2.4). A subagent that really ran
+    /// counts against `config.max_subagents`; one refused or asked for wrongly does not.
+    async fn run_task(&mut self, call: &ToolCall, sink: &mut dyn EventSink) -> (bool, String) {
+        let config = self.config;
+        if self.subagents_started >= config.max_subagents {
+            let limit = config.max_subagents;
+            return (
+                false,
+                format!(
+                    "error: this run has started its {limit} subagents; do the rest of the work yourself"
+                ),
+            );
+        }
+        let prompt = match serde_json::from_str::<Value>(&call.function.arguments) {
+            Ok(arguments @ Value::Object(_)) => match crate::task::prompt_of(&arguments) {
+                Ok(prompt) => prompt,
+                Err(reason) => return (false, format!("error: {reason}")),
+            },
+            Ok(_) => {
+                return (
+                    false,
+                    "error: the arguments must be a JSON object".to_owned(),
+                );
+            }
+            Err(err) => {
+                return (
+                    false,
+                    format!("error: the arguments are not valid JSON: {err}"),
+                );
+            }
+        };
+        let (turn, id) = (self.turns, call.id.as_str());
+        // The judgement and its event belong to the parent (D2.2): the nested run drains this very log in its
+        // own loop, so what the parent judged is read here, before the subagent starts — never inside its
+        // stream, never lost. B1: `task` is judged like any other call of a name the rules know.
+        if let Some(gate) = self.tools.gate() {
+            let judged = gate.judge(crate::task::NAME, &Access::Other).await;
+            for entry in gate.take_log() {
+                sink.emit(Event::permission(turn, id, &entry));
+            }
+            if let Err(refused) = judged {
+                return (false, format!("error: {refused}"));
+            }
+        }
+        let mut sub = config.clone();
+        // D5: the caller's instructions are the parent's contract; the subagent gets its own prompt and
+        // whatever the parent's model put into `prompt`.
+        sub.instructions = None;
+        sub.max_turns = config.subagent_max_turns;
+        // The subagent never outlives the run that started it (D2.3).
+        sub.timeout = config
+            .subagent_timeout
+            .min(self.deadline.saturating_duration_since(Instant::now()));
+        let depth = self.depth + 1;
+        let mut wrapped = SubSink { depth, inner: sink };
+        let nested = run_inner(
+            &sub,
+            self.model,
+            self.tools,
+            &prompt,
+            &mut wrapped,
+            self.cancel,
+            depth,
+        );
+        let outcome = Box::pin(nested).await;
+        // What the subagent judged but did not get to report (it was cancelled mid-call) still belongs to its
+        // stream: drained here, wrapped, before the parent's `ToolResult(task)` brackets it (D2.4).
+        if let Some(gate) = self.tools.gate() {
+            for entry in gate.take_log() {
+                wrapped.emit(Event::permission(turn, id, &entry));
+            }
+        }
+        self.usage += outcome.usage;
+        self.subagents_started += 1;
+        match outcome.reason {
+            FinishReason::Answered => match outcome.answer {
+                // Cut like every tool result — the model gets the whole, already capped, answer.
+                Some(answer) => (true, crate::tools::cap(answer)),
+                None => (true, "the subagent finished without text".to_owned()),
+            },
+            reason => (
+                false,
+                format!("error: the subagent stopped without answering: {reason:?}"),
+            ),
+        }
+    }
+}
 /// The nested run's view of the parent's sink (HS8, D8): every event it emits arrives wrapped in
 /// [`Event::Sub`] at the depth it happened at — nothing dropped. Accounting never counts events; the
 /// parent sums `RunOutcome`s (D2.4), so a viewer may count each run's own `Finished` and no other's.

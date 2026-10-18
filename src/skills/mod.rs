@@ -7,6 +7,7 @@
 //! folder of its own with its `SKILL.md` at the top. A skill that cannot be used is left out with a note for
 //! stderr — skill files come from other tools too — and never fails the run.
 
+pub mod context;
 pub mod tool;
 
 pub use tool::SkillTool;
@@ -36,8 +37,6 @@ const SKILL_FILE: &str = "SKILL.md";
 const MAX_SKILLS: usize = 200;
 /// Bytes of one `SKILL.md` (K1): a real skill needs a few KiB; a bigger one is a mistake or somebody's data dump.
 const MAX_SKILL_BYTES: u64 = 256 * 1024;
-/// Bytes of one `prepend_files` file (K5).
-const MAX_PREPEND_BYTES: u64 = 256 * 1024;
 /// Files a skill folder lists beside its `SKILL.md` (K4).
 const MAX_SKILL_FILES: usize = 200;
 /// Folders below the skill folder the walk of K4 enters.
@@ -119,58 +118,30 @@ impl Skill {
         })
     }
 
-    /// What a skill run is told (K1.1, K5): every `prepend_files` file in order, each as a `## Context file:`
-    /// block relative to the working folder, then the body. Read through a contained root, so a link inside the
-    /// working folder cannot lead the run's instructions elsewhere.
+    /// What a skill run is told (K1.1, K5): its `prepend_files` as context blocks ([`context::context_blocks`]),
+    /// read from the working folder through a contained root — a link inside it may lead elsewhere inside, never
+    /// out — then the body.
     ///
     /// # Errors
     ///
-    /// [`HarnessError::Skill`] for a `prepend_files` path that is absolute or climbs out, or a file that cannot
-    /// be read; a file that simply is not there is skipped (K5).
+    /// [`HarnessError::Skill`] for a `prepend_files` entry that may not or cannot be inlined; a file that simply
+    /// is not there is skipped (K5).
     pub fn instructions(&self, cwd: &Path) -> Result<String, HarnessError> {
+        let fail = |message: String| HarnessError::Skill {
+            name: self.name.clone(),
+            message,
+        };
         let mut out = String::new();
         if !self.prepend_files.is_empty() {
-            let root =
-                Root::dir(cwd, LinkPolicy::Contained).map_err(|err| HarnessError::Skill {
-                    name: self.name.clone(),
-                    message: format!(
-                        "cannot read its prepended files in {}: {err}",
-                        cwd.display()
-                    ),
-                })?;
-            for file in &self.prepend_files {
-                if Path::new(file).is_absolute() || file.split('/').any(|part| part == "..") {
-                    return Err(HarnessError::Skill {
-                        name: self.name.clone(),
-                        message: format!(
-                            "{file:?} in prepend_files is not a path inside the working folder"
-                        ),
-                    });
-                }
-                let rel = file.strip_prefix("./").unwrap_or(file);
-                match read_text(&root, rel, MAX_PREPEND_BYTES) {
-                    Ok(text) => {
-                        out.push_str(&format!(
-                            "## Context file: {rel}\n{}\n\n",
-                            text.content.trim_end()
-                        ));
-                    }
-                    Err(FilesError::NotFound { .. }) => continue,
-                    // A missing parent folder is a missing file too: the guard canonicalises the folder the file
-                    // would be in before it can say the file is not there (K5).
-                    Err(FilesError::Io { source, .. })
-                        if source.kind() == std::io::ErrorKind::NotFound =>
-                    {
-                        continue;
-                    }
-                    Err(err) => {
-                        return Err(HarnessError::Skill {
-                            name: self.name.clone(),
-                            message: format!("cannot read its prepended file {rel:?}: {err}"),
-                        });
-                    }
-                }
-            }
+            let root = Root::dir(cwd, LinkPolicy::Contained).map_err(|err| {
+                fail(format!(
+                    "cannot read its prepended files in {}: {err}",
+                    cwd.display()
+                ))
+            })?;
+            let blocks = context::context_blocks(&root, &self.prepend_files)
+                .map_err(|err| fail(err.to_string()))?;
+            out.push_str(&blocks);
         }
         out.push_str(&self.body);
         Ok(out)
@@ -921,10 +892,15 @@ mod tests {
             "demo",
             "---\nname: demo\ndescription: d\nprepend_files: [\"a.md\", \"missing.md\", \"Mail/.topics.md\", \"./b.md\"]\n---\nBody.\n",
         );
-        assert_eq!(
-            skill.instructions(&cwd).unwrap(),
-            "## Context file: a.md\nfirst\n\n## Context file: b.md\nsecond\n\nBody."
+        let instructions = skill.instructions(&cwd).unwrap();
+        let (a, b) = (
+            instructions.find("## Context file: a.md\n").unwrap(),
+            instructions.find("## Context file: b.md\n").unwrap(),
         );
+        assert!(a < b, "in the order given: {instructions}");
+        assert!(instructions.contains("<untrusted-data>\nfirst\n</untrusted-data>"));
+        assert!(!instructions.contains("missing.md") && !instructions.contains("topics"));
+        assert!(instructions.ends_with("---\n\nBody."), "{instructions}");
     }
 
     #[test]
@@ -939,7 +915,7 @@ mod tests {
             );
             let err = skill.instructions(&cwd).unwrap_err();
             assert!(matches!(err, HarnessError::Skill { .. }), "{path}: {err}");
-            assert!(err.to_string().contains("working folder"), "{err}");
+            assert!(err.to_string().contains("not a path inside"), "{err}");
         }
     }
 
