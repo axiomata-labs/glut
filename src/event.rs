@@ -144,6 +144,13 @@ pub enum Event {
         turn: u32,
         items: Vec<crate::planning::TodoItem>,
     },
+    /// The work folder as it was before a step that changes it (Glut 2, D): `axh undo --run <run> --step <turn>` puts it
+    /// back.
+    Snapshot {
+        turn: u32,
+        run: String,
+        commit: String,
+    },
     /// The owner approved the plan and the run left Plan mode (`exit_plan`, Glut 2, D): the mode it works in now.
     ModeChanged {
         turn: u32,

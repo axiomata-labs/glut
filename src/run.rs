@@ -16,6 +16,7 @@ use crate::model::{ChatModel, Message, Role, ToolCall, ToolSpec, Usage};
 use crate::permissions::{Access, Answer, Gate, Mode};
 use crate::planning;
 use crate::prompt::{subagent_prompt, system_prompt};
+use crate::snapshot::{self, Snapshots};
 use crate::tools::shell::{Session, ShellOptions};
 use crate::tools::{StopFlag, Toolbox};
 
@@ -189,6 +190,7 @@ async fn run_inner<M: ChatModel>(
         offer,
         kept: codemode::Kept::default(),
         todos: Vec::new(),
+        snapshots: SnapshotState::Unopened,
     };
     if depth == 0 && !continuing {
         run.session_start(sink).await;
@@ -285,6 +287,16 @@ struct Loop<'a, M: ChatModel> {
     kept: codemode::Kept,
     /// Glut 2, D: the run's task list as `todo_write` last sent it.
     todos: Vec<planning::TodoItem>,
+    /// Glut 2, D: the work folder's snapshots of this run, opened at its first change.
+    snapshots: SnapshotState,
+}
+
+/// Where a run's snapshots stand.
+enum SnapshotState {
+    Unopened,
+    Open(Snapshots),
+    /// They could not be taken (no git, no store): the run goes on without, and says so once.
+    Off,
 }
 
 /// The tools a run offers the model, in the order they go out, and what a script finds in its catalog.
@@ -561,6 +573,7 @@ impl<M: ChatModel> Loop<'_, M> {
             ));
             return Ok(text);
         }
+        self.snapshot_before(call, sink).await;
         let (ok, output) = self.execute(call, sink).await?;
         if let Some(gate) = self.tools.gate() {
             for judged in gate.take_log() {
@@ -659,6 +672,57 @@ impl<M: ChatModel> Loop<'_, M> {
         }
     }
 
+    /// Records the work folder before the first call of this turn that may change it — an edit or a command (Glut 2,
+    /// D) — when the run keeps snapshots. A failure never stops the call: the run goes on without, said once.
+    async fn snapshot_before(&mut self, call: &ToolCall, sink: &mut dyn EventSink) {
+        let Some(root) = self.config.snapshots.clone() else {
+            return;
+        };
+        let changes = matches!(
+            self.tools
+                .access_of(&call.function.name, &call.function.arguments),
+            Some(Access::Edit { .. } | Access::Bash { .. })
+        );
+        if !changes || matches!(self.snapshots, SnapshotState::Off) {
+            return;
+        }
+        let (turn, run, cwd) = (
+            self.turns,
+            self.hooks.session_id.clone(),
+            self.config.cwd.clone(),
+        );
+        let state = std::mem::replace(&mut self.snapshots, SnapshotState::Off);
+        // Git is blocking work; the snapshots move to a blocking thread and back.
+        let taken = tokio::task::spawn_blocking(move || {
+            let mut snaps = match state {
+                SnapshotState::Open(snaps) => snaps,
+                _ => {
+                    snapshot::sweep(&root);
+                    Snapshots::open(&root, &cwd, &run)?
+                }
+            };
+            let commit = snaps.take(turn)?;
+            Ok::<_, String>((snaps, commit))
+        })
+        .await
+        .unwrap_or_else(|err| Err(format!("the snapshot task failed: {err}")));
+        match taken {
+            Ok((snaps, commit)) => {
+                if let Some(commit) = commit {
+                    sink.emit(Event::Snapshot {
+                        turn,
+                        run: self.hooks.session_id.clone(),
+                        commit,
+                    });
+                }
+                self.snapshots = SnapshotState::Open(snaps);
+            }
+            Err(reason) => sink.emit(Event::Error {
+                message: format!("no snapshots for this run (undo is not possible): {reason}"),
+            }),
+        }
+    }
+
     /// The `exit_plan` arm (Glut 2, D): the plan goes to the owner; yes switches the gate to the run's build mode and
     /// offers the tools that mode allows from the next turn on, no keeps Plan. Headless the ask is refused.
     async fn exit_plan(
@@ -671,6 +735,8 @@ impl<M: ChatModel> Loop<'_, M> {
             Ok(plan) => plan,
             Err(reason) => return (false, format!("error: {reason}")),
         };
+        // The owner approves a mode as much as a plan: the question names the one the run switches to.
+        let question = format!("{question} (then mode {})", self.config.build_mode.name());
         match gate.ask_owner(planning::EXIT_PLAN, &question).await {
             Answer::Allow | Answer::AllowAlways => {
                 let mode = self.config.build_mode;
@@ -712,7 +778,17 @@ impl<M: ChatModel> Loop<'_, M> {
             Ok(code) => code,
             Err(reason) => return Ok((false, format!("error: {reason}"))),
         };
-        let (requests, mut asked) = tokio::sync::mpsc::unbounded_channel();
+        // Bounded: a script that fires many calls at once waits for room instead of queueing them all in memory.
+        let (requests, mut asked) = tokio::sync::mpsc::channel(8);
+        // A place among the scripts of this process, before the script starts — waiting for one is no stuck script.
+        let _slot = tokio::select! {
+            slot = codemode::slot() => match slot {
+                Some(slot) => slot,
+                None => return Ok((false, "error: code mode is shut down".into())),
+            },
+            () = tokio::time::sleep_until(self.deadline) => return Err(FinishReason::Timeout),
+            () = self.cancel.cancelled() => return Err(FinishReason::Cancelled),
+        };
         let cancel = self.cancel.clone();
         let interrupt = codemode::Interrupt {
             stop: Arc::clone(self.stop),
@@ -746,7 +822,7 @@ impl<M: ChatModel> Loop<'_, M> {
                 if idle > STUCK_POLLS {
                     return Ok((
                         false,
-                        "Script error: the script waits for a promise nothing will settle (no tool call is open,                          and there are no timers)"
+                        "Script error: the script waits for a promise nothing will settle (no tool call is open, and there are no timers)"
                             .into(),
                     ));
                 }
@@ -774,7 +850,8 @@ impl<M: ChatModel> Loop<'_, M> {
         sink: &mut dyn EventSink,
     ) -> Result<(bool, String), FinishReason> {
         sink.emit(Event::tool_call(self.turns, &id, &name, &arguments));
-        if name == codemode::NAME || name == crate::task::NAME {
+        // Another script, a subagent, or the owner's plan question are the model's own steps, not a script's.
+        if name == codemode::NAME || name == crate::task::NAME || name == planning::EXIT_PLAN {
             let text = format!("not permitted: a script cannot start {name}");
             sink.emit(Event::tool_result(self.turns, &id, &name, false, &text));
             return Ok((false, text));
@@ -1629,6 +1706,18 @@ mod tests {
         )
         .await;
         assert!(nested.contains("cannot start codemode"), "{nested}");
+    }
+
+    #[tokio::test]
+    async fn a_script_waits_for_a_place_instead_of_counting_as_stuck() {
+        // Both places taken, as by two scripts of other runs: this one waits, and runs once one is free.
+        let first = crate::codemode::slot().await.unwrap();
+        let second = crate::codemode::slot().await.unwrap();
+        let waiting = tokio::spawn(script_run("return 'ran'", with_look()));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        drop((first, second));
+        let (answer, _) = waiting.await.unwrap();
+        assert_eq!(answer, "ran");
     }
 
     #[tokio::test]

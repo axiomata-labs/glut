@@ -25,8 +25,10 @@ pub const SHRINK_OVER_CHARS: usize = 2_000;
 /// What stays of a shrunk result: its first characters (G6).
 pub const KEEP_HEAD_CHARS: usize = 1_200;
 /// Results shrink only while the conversation is longer than this, in characters (~20k tokens): a data-gathering
-/// task's results stay whole as long as they fit.
+/// task's results stay whole as long as they fit. Once over it, they shrink until the conversation is at 60 % of it.
 pub const SHRINK_BUDGET_CHARS: usize = 80_000;
+/// What a run's store keeps of shrunk texts and over-long script outputs, in bytes; past it the oldest are dropped.
+const MAX_STORED_BYTES: usize = 32 * 1024 * 1024;
 
 /// The tool's name.
 pub(crate) const NAME: &str = "read_full_result";
@@ -57,6 +59,15 @@ impl ResultStore {
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
         texts.push(text);
+        // Past the store's limit the oldest texts go: their ids then answer "dropped", the newest stay readable.
+        let mut held: usize = texts.iter().map(String::len).sum();
+        for old in texts.iter_mut() {
+            if held <= MAX_STORED_BYTES {
+                break;
+            }
+            held -= old.len();
+            *old = String::new();
+        }
         format!("{}-{}", self.tag, texts.len())
     }
 
@@ -82,6 +93,11 @@ impl ResultStore {
             .checked_sub(1)
             .and_then(|index| texts.get(index))
             .ok_or_else(|| format!("no result with id {id}"))?;
+        if text.is_empty() {
+            return Err(format!(
+                "result {id} was dropped to keep the run's memory small; call its tool again"
+            ));
+        }
         let total = text.chars().count();
         if offset > total || (offset == total && total > 0) {
             return Err(format!(
@@ -160,9 +176,12 @@ pub(crate) fn shrink_over_budget(
     let Some(last_answer) = messages.iter().rposition(|m| m.role == Role::Assistant) else {
         return from;
     };
+    // Once over, down to well below the budget (hysteresis): shrinking just under it would shrink again on the next
+    // turn, and each time the cached prefix of the prompt breaks at that result.
+    let target = budget / 10 * 6;
     let mut done = from;
     for (index, message) in messages.iter_mut().enumerate().take(last_answer).skip(from) {
-        if total <= budget {
+        if total <= target {
             break;
         }
         done = index + 1;
@@ -299,6 +318,18 @@ mod budget_tests {
     use super::*;
 
     #[test]
+    fn a_full_store_drops_its_oldest_texts_and_says_so() {
+        let store = ResultStore::new("f");
+        let big = "x".repeat(MAX_STORED_BYTES / 2 + 1);
+        let first = store.put(big.clone());
+        let second = store.put(big.clone());
+        let third = store.put(big);
+        assert!(store.read(&first, 0).unwrap_err().contains("dropped"));
+        assert!(store.read(&second, 0).unwrap_err().contains("dropped"));
+        assert!(store.read(&third, 0).is_ok());
+    }
+
+    #[test]
     fn the_oldest_shrink_first_and_only_until_the_conversation_fits() {
         let store = ResultStore::new("b");
         let long = || "z".repeat(10_000);
@@ -317,9 +348,9 @@ mod budget_tests {
             assistant(),
             Message::tool("3", long()),
         ];
-        // ~30k characters, a budget of 25k: shrinking the oldest one is enough.
+        // ~30k characters, a budget of 25k: down to 60 % of it, so the two oldest shrink; the newest stays whole.
         let done = shrink_over_budget(&mut messages, 0, &store, 25_000);
-        assert_eq!(done, 3);
+        assert_eq!(done, 5);
         assert!(
             messages[2]
                 .content
@@ -327,7 +358,23 @@ mod budget_tests {
                 .unwrap()
                 .contains("id \"b-1\"")
         );
-        assert_eq!(messages[4].content.as_deref().unwrap().len(), 10_000);
+        assert!(
+            messages[4]
+                .content
+                .as_deref()
+                .unwrap()
+                .contains("id \"b-2\"")
+        );
         assert_eq!(messages[6].content.as_deref().unwrap().len(), 10_000);
+
+        // The next turns add a little each: under the budget again, nothing shrinks — the prefix stays as it is.
+        let before = messages.clone();
+        for turn in 0..3 {
+            messages.push(assistant());
+            messages.push(Message::tool(format!("small{turn}"), "s".repeat(500)));
+            let now = shrink_over_budget(&mut messages, done, &store, 25_000);
+            assert_eq!(now, done, "turn {turn}");
+        }
+        assert_eq!(messages[..before.len()], before[..]);
     }
 }

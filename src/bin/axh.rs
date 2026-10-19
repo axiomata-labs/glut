@@ -33,6 +33,9 @@ struct Cli {
     command: Command,
 }
 
+// Parsed once at start: `Run`'s many flags make it far larger than `Undo`, and boxing them would only complicate the
+// derive.
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 enum Command {
     /// Runs one prompt and writes its events as JSON lines.
@@ -78,6 +81,21 @@ enum Command {
         /// prompt is required; with one it defaults to "Run the skill.".
         prompt: Option<String>,
     },
+    /// Puts a folder back as it was before a run, or before one of its steps (Glut 2): the snapshots a run took
+    /// before it changed anything. Without --run the newest run of the folder; --list shows the runs.
+    Undo {
+        #[arg(long, default_value = ".")]
+        cwd: PathBuf,
+        /// The run, as its `snapshot` events name it.
+        #[arg(long)]
+        run: Option<String>,
+        /// Back to before this step of the run instead of before the whole run.
+        #[arg(long)]
+        step: Option<u32>,
+        /// List the runs with snapshots of the folder, newest first, and change nothing.
+        #[arg(long)]
+        list: bool,
+    },
 }
 
 /// Writes each event as one JSON line, flushed at once so a reader sees it while the run goes on.
@@ -118,6 +136,16 @@ async fn main() -> ExitCode {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .with_writer(std::io::stderr)
         .init();
+    let command = Cli::parse().command;
+    if let Command::Undo {
+        cwd,
+        run,
+        step,
+        list,
+    } = command
+    {
+        return undo(&cwd, run, step, list);
+    }
     let Command::Run {
         base_url,
         model,
@@ -132,7 +160,10 @@ async fn main() -> ExitCode {
         skill,
         skill_dir,
         prompt,
-    } = Cli::parse().command;
+    } = command
+    else {
+        unreachable!("undo returned above");
+    };
 
     let fail = |message: String| {
         JsonLines.emit(Event::Error { message });
@@ -146,6 +177,11 @@ async fn main() -> ExitCode {
         Err(err) => return fail(format!("cannot use {}: {err}", cwd.display())),
     };
     let mut config = RunConfig::new(&cwd);
+    // Glut 2 (D): snapshots before changes, for `axh undo`.
+    config.snapshots = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|home| home.is_absolute())
+        .map(|home| home.join(".axh").join("snapshots"));
     // The folders the run reads skills from, beside the owner's and the project's (HS6, K2).
     config.skill_dirs = skill_dir;
     if let Some(path) = instructions_file {
@@ -295,4 +331,48 @@ async fn main() -> ExitCode {
         FinishReason::Failed => 1,
         FinishReason::MaxTurns | FinishReason::Timeout | FinishReason::Cancelled => 2,
     })
+}
+
+/// `axh undo`: lists a folder's runs with snapshots, or puts the folder back before a run or one of its steps.
+fn undo(cwd: &std::path::Path, run: Option<String>, step: Option<u32>, list: bool) -> ExitCode {
+    use axiomata_harness::snapshot;
+    let fail = |message: String| {
+        eprintln!("axh undo: {message}");
+        ExitCode::from(1)
+    };
+    let Some(root) = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|home| home.is_absolute())
+        .map(|home| home.join(".axh").join("snapshots"))
+    else {
+        return fail("HOME is not set to an absolute folder".into());
+    };
+    let cwd = match cwd.canonicalize() {
+        Ok(cwd) => cwd,
+        Err(err) => return fail(format!("cannot use {}: {err}", cwd.display())),
+    };
+    let runs = snapshot::runs(&root, &cwd);
+    if list {
+        for record in &runs {
+            let steps: Vec<String> = record.steps.iter().map(|s| s.turn.to_string()).collect();
+            println!("{}  steps {}", record.run, steps.join(", "));
+        }
+        return ExitCode::SUCCESS;
+    }
+    let Some(run) = run.or_else(|| runs.first().map(|record| record.run.clone())) else {
+        return fail(format!("no run has snapshots of {}", cwd.display()));
+    };
+    match snapshot::restore(&root, &cwd, &run, step) {
+        Ok(commit) => {
+            match step {
+                Some(step) => println!(
+                    "{} is back as before step {step} of {run} ({commit:.8})",
+                    cwd.display()
+                ),
+                None => println!("{} is back as before {run} ({commit:.8})", cwd.display()),
+            }
+            ExitCode::SUCCESS
+        }
+        Err(reason) => fail(reason),
+    }
 }

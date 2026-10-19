@@ -428,6 +428,17 @@ pub enum Mode {
 }
 
 impl Mode {
+    /// The mode as the flags and settings spell it (`plan`, `accept_edits`, …).
+    pub fn name(self) -> &'static str {
+        match self {
+            Mode::Default => "default",
+            Mode::AcceptEdits => "accept_edits",
+            Mode::Plan => "plan",
+            Mode::DontAsk => "dont_ask",
+            Mode::Auto => "auto",
+        }
+    }
+
     /// Reads a mode as the flags and settings write it (`accept_edits`, also `acceptEdits` as Claude Code does).
     pub fn parse(text: &str) -> Option<Self> {
         match text.trim() {
@@ -957,13 +968,7 @@ impl Gate {
 
     /// The mode as the flags and settings spell it (`plan`, `accept_edits`, …).
     pub fn mode_name(&self) -> &'static str {
-        match self.mode() {
-            Mode::Default => "default",
-            Mode::AcceptEdits => "accept_edits",
-            Mode::Plan => "plan",
-            Mode::DontAsk => "dont_ask",
-            Mode::Auto => "auto",
-        }
+        self.mode().name()
     }
 
     /// The rules this run is judged by, as written — for `/permissions` (HS4).

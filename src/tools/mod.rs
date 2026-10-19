@@ -126,6 +126,19 @@ impl Toolbox {
             .is_none_or(|gate| gate.offers(&tool.spec().name, &tool.offered_as()))
     }
 
+    /// What a call of `name` with these arguments would touch, when the tool exists and the arguments are an object —
+    /// for a step that wants to know beforehand (Glut 2: a snapshot before a change).
+    pub fn access_of(&self, name: &str, arguments: &str) -> Option<Access> {
+        let tool = self.tools.iter().find(|tool| tool.spec().name == name)?;
+        let parsed = serde_json::from_str::<Value>(if arguments.trim().is_empty() {
+            "{}"
+        } else {
+            arguments
+        })
+        .ok()?;
+        parsed.is_object().then(|| tool.access(&parsed))
+    }
+
     /// Runs the tool `name` with the model's argument text. Returns whether it succeeded and the text for the model,
     /// cut to [`MAX_TOOL_OUTPUT_CHARS`].
     pub async fn call(&self, name: &str, arguments: &str) -> (bool, String) {

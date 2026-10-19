@@ -24,6 +24,7 @@ pub mod run;
 pub mod sandbox;
 pub mod setup;
 pub mod skills;
+pub mod snapshot;
 mod task;
 pub mod tools;
 

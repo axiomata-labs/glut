@@ -17,6 +17,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use rquickjs::context::intrinsic;
 use rquickjs::prelude::Async;
 use rquickjs::{
     AsyncContext, AsyncRuntime, CatchResultExt, Ctx, Function, Promise, Value as JsValue,
@@ -46,8 +47,43 @@ const DECLARE_BEHIND_MAX: usize = 10;
 /// `store()`: one value, and all values of a run together, in characters (as Pi).
 const MAX_STORED_VALUE_CHARS: usize = 262_144;
 const MAX_STORED_TOTAL_CHARS: usize = 1_048_576;
+/// `store()`: a key's length and how many keys a run keeps.
+const MAX_STORED_KEY_CHARS: usize = 200;
+const MAX_STORED_KEYS: usize = 1_000;
+/// Largest arguments of one tool call from a script: a call's arguments are text the loop holds while it works.
+const MAX_ARGUMENT_BYTES: usize = 1_048_576;
 
 static SCRIPTS: Semaphore = Semaphore::const_new(MAX_SCRIPTS);
+
+/// The JavaScript a script gets: everything QuickJS offers **but regular expressions** (neither `RegExp` nor the
+/// compiler regex literals need). The bundled quickjs-ng has an open advisory, GHSA-rxpx-wj25-jhqq (2026-07): compiling
+/// a regex after an out-of-memory writes past its buffer — in this process, from a script a prompt can steer. No fixed
+/// release exists yet (rquickjs 0.14.0, quickjs-ng snapshot ~0.16.2); bring them back once one does. A script uses the
+/// string methods instead.
+type Intrinsics = (
+    intrinsic::Date,
+    intrinsic::Eval,
+    intrinsic::Json,
+    intrinsic::Proxy,
+    intrinsic::MapSet,
+    intrinsic::TypedArrays,
+    intrinsic::Promise,
+    intrinsic::WeakRef,
+    intrinsic::DOMException,
+);
+
+/// One of the [`MAX_SCRIPTS`] places to run a script, held while it runs. Taken by the caller before [`run`] starts:
+/// a script waiting for a place is no script waiting on nothing (the loop's stuck check).
+pub(crate) async fn slot() -> Option<tokio::sync::SemaphorePermit<'static>> {
+    SCRIPTS.acquire().await.ok()
+}
+
+/// The line that stands for the output dropped past [`MAX_BUFFERED_CHARS`].
+const DROPPED: &str = "[… more output dropped: the script printed too much]";
+
+/// What a script's lines may add up to before the rest is dropped, in characters: the model gets at most
+/// [`MAX_OUTPUT_CHARS`] anyway, and a loop printing forever must not fill the memory outside QuickJS's limit.
+const MAX_BUFFERED_CHARS: usize = 10 * MAX_OUTPUT_CHARS;
 
 /// One call a script makes: the tool, its arguments as JSON text, and where the answer goes.
 pub(crate) struct Request {
@@ -123,8 +159,10 @@ pub(crate) fn spec(direct: &[ToolSpec], deferred: &[ToolSpec]) -> ToolSpec {
          you print (`text(...)`, `console.log(...)`) and `return` comes back to you — filter and summarize large \
          results inside the script, and run independent calls together with `Promise.all`/`Promise.allSettled`. \
          `store(key, value)` / `load(key)` keep small JSON values for later scripts of this run. `searchTools(query)` \
-         → [{name, description}], `describeTool(name)` → its argument schema, `ALL_TOOLS` → every name. A failed \
-         call stays done; a script cannot start another script or a subagent.",
+         → [{name, description}], `describeTool(name)` → its argument schema, `ALL_TOOLS` → every name. A tool's text \
+         that starts with `error: ` counts as its failure. Regular expressions are not available — use the string \
+         methods. A failed call stays done; a script cannot start another \
+         script or a subagent.",
     );
     let direct_declared = declarations(direct);
     if !direct_declared.is_empty() {
@@ -312,14 +350,8 @@ pub(crate) async fn run(
     kept: Kept,
     store: ResultStore,
     interrupt: Interrupt,
-    requests: mpsc::UnboundedSender<Request>,
+    requests: mpsc::Sender<Request>,
 ) -> Ended {
-    let Ok(_slot) = SCRIPTS.acquire().await else {
-        return Ended {
-            ok: false,
-            text: "error: code mode is shut down".into(),
-        };
-    };
     let runtime = match AsyncRuntime::new() {
         Ok(runtime) => runtime,
         Err(err) => return failed(format!("the script runtime could not start: {err}")),
@@ -332,7 +364,7 @@ pub(crate) async fn run(
                 || Instant::now() >= interrupt.deadline
         })))
         .await;
-    let context = match AsyncContext::full(&runtime).await {
+    let context = match AsyncContext::custom::<Intrinsics>(&runtime).await {
         Ok(context) => context,
         Err(err) => return failed(format!("the script runtime could not start: {err}")),
     };
@@ -394,7 +426,7 @@ async fn evaluate<'js>(
     catalog: Arc<Catalog>,
     output: Arc<Mutex<Vec<String>>>,
     kept: Kept,
-    requests: mpsc::UnboundedSender<Request>,
+    requests: mpsc::Sender<Request>,
 ) -> Result<Option<String>, String> {
     install(&ctx, catalog, output, kept, requests)
         .map_err(|err| format!("the script runtime could not start: {err}"))?;
@@ -425,13 +457,19 @@ fn install<'js>(
     catalog: Arc<Catalog>,
     output: Arc<Mutex<Vec<String>>>,
     kept: Kept,
-    requests: mpsc::UnboundedSender<Request>,
+    requests: mpsc::Sender<Request>,
 ) -> rquickjs::Result<()> {
     let globals = ctx.globals();
     globals.set(
         "__emit",
         Function::new(ctx.clone(), move |line: String| {
-            output.lock().unwrap_or_else(|p| p.into_inner()).push(line);
+            let mut lines = output.lock().unwrap_or_else(|p| p.into_inner());
+            let buffered: usize = lines.iter().map(String::len).sum();
+            if buffered + line.len() <= MAX_BUFFERED_CHARS {
+                lines.push(line);
+            } else if lines.last().is_none_or(|last| last != DROPPED) {
+                lines.push(DROPPED.to_owned());
+            }
         })?,
     )?;
     globals.set(
@@ -441,12 +479,20 @@ fn install<'js>(
             Async(move |name: String, arguments: String| {
                 let requests = requests.clone();
                 async move {
+                    if arguments.len() > MAX_ARGUMENT_BYTES {
+                        let refused =
+                            format!("the arguments are larger than {MAX_ARGUMENT_BYTES} bytes");
+                        return Ok::<String, rquickjs::Error>(json!([false, refused]).to_string());
+                    }
                     let (reply, answer) = oneshot::channel();
-                    let answered = match requests.send(Request {
-                        name,
-                        arguments,
-                        reply,
-                    }) {
+                    let answered = match requests
+                        .send(Request {
+                            name,
+                            arguments,
+                            reply,
+                        })
+                        .await
+                    {
                         Ok(()) => answer.await.unwrap_or((false, "the run ended".into())),
                         Err(_) => (false, "the run ended".into()),
                     };
@@ -487,12 +533,23 @@ fn install<'js>(
                         "the value is too large",
                     ));
                 }
+                let new_key = !map.contains_key(&key);
+                if key.chars().count() > MAX_STORED_KEY_CHARS
+                    || (new_key && map.len() >= MAX_STORED_KEYS)
+                {
+                    return Err(rquickjs::Error::new_from_js_message(
+                        "key",
+                        "store",
+                        "too long a key, or too many keys",
+                    ));
+                }
+                // Keys count too: many large keys with empty values would grow the map as well.
                 let total: usize = map
                     .iter()
                     .filter(|(k, _)| **k != key)
-                    .map(|(_, v)| v.chars().count())
+                    .map(|(k, v)| k.chars().count() + v.chars().count())
                     .sum();
-                if total + value.chars().count() > MAX_STORED_TOTAL_CHARS {
+                if total + key.chars().count() + value.chars().count() > MAX_STORED_TOTAL_CHARS {
                     return Err(rquickjs::Error::new_from_js_message(
                         "value",
                         "store",
@@ -555,7 +612,7 @@ mod tests {
 
     /// Runs `code` with the tool `echo` answered here, as the loop would answer it.
     async fn script(code: &str, kept: Kept) -> Ended {
-        let (tx, mut rx) = mpsc::unbounded_channel::<Request>();
+        let (tx, mut rx) = mpsc::channel::<Request>(8);
         let catalog = Arc::new(Catalog {
             specs: vec![spec_of(
                 "mcp__srv__echo",
@@ -645,6 +702,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn regular_expressions_are_not_there_but_the_string_methods_are() {
+        let literal = script("return /a/.test('a')", Kept::default()).await;
+        assert!(!literal.ok, "{}", literal.text);
+        let constructed = script("return new RegExp('a').test('a')", Kept::default()).await;
+        assert!(
+            !constructed.ok && constructed.text.contains("RegExp"),
+            "{}",
+            constructed.text
+        );
+        let strings = script(
+            "return ['a,b'.split(',').length, 'xay'.includes('a'), 'a-b'.replaceAll('-', '+')].join(' ')",
+            Kept::default(),
+        )
+        .await;
+        assert_eq!(strings.text, "2 true a+b");
+    }
+
+    #[tokio::test]
     async fn store_keeps_values_only_from_scripts_that_succeed() {
         let kept = Kept::default();
         assert!(
@@ -660,7 +735,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_busy_loop_ends_at_the_deadline() {
-        let (tx, _rx) = mpsc::unbounded_channel();
+        let (tx, _rx) = mpsc::channel(8);
         let ended = run(
             "while (true) {}".into(),
             Arc::default(),

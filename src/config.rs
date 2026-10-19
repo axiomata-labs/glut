@@ -98,6 +98,9 @@ pub struct RunConfig {
     pub todos: bool,
     /// The mode a run in Plan mode switches to once the owner approves its plan (`exit_plan`, Glut 2, D).
     pub build_mode: crate::permissions::Mode,
+    /// Where the work folder's snapshots go before a run changes it (Glut 2, D, G11; `~/.axh/snapshots`), for `axh
+    /// undo`. `None`: no snapshots.
+    pub snapshots: Option<PathBuf>,
 }
 
 impl RunConfig {
@@ -121,6 +124,7 @@ impl RunConfig {
             mcp_behind_code: true,
             todos: true,
             build_mode: crate::permissions::Mode::Default,
+            snapshots: None,
         }
     }
 }
