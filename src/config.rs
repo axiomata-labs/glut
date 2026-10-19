@@ -84,6 +84,9 @@ pub struct RunConfig {
     pub subagent_timeout: Duration,
     /// How many subagents the run may start in all; a `task` call past it is answered with an error.
     pub max_subagents: u32,
+    /// Whether long tool results the model has answered on shrink in the conversation, their whole text kept for
+    /// `read_full_result` (Glut 2, B). On by default: it needs nothing outside the run.
+    pub shrink_results: bool,
 }
 
 impl RunConfig {
@@ -102,6 +105,7 @@ impl RunConfig {
             subagent_max_turns: DEFAULT_SUBAGENT_MAX_TURNS,
             subagent_timeout: DEFAULT_SUBAGENT_TIMEOUT,
             max_subagents: DEFAULT_MAX_SUBAGENTS,
+            shrink_results: true,
         }
     }
 }

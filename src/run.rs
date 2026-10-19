@@ -9,6 +9,7 @@ use tokio::time::Instant;
 
 use crate::config::RunConfig;
 use crate::event::{EVENT_RESULT_CHARS, Event, EventSink, FinishReason};
+use crate::history::{self, ResultStore};
 use crate::hooks::{self, HookEvent, HookOutcome};
 use crate::model::{ChatModel, Message, Role, ToolCall, ToolSpec, Usage};
 use crate::permissions::{Access, Gate};
@@ -151,6 +152,12 @@ async fn run_inner<M: ChatModel>(
         specs.push(crate::task::spec());
         offered.push(crate::task::NAME.to_owned());
     }
+    // Glut 2, B: offered from the first turn on, so the tool list — and with it the prompt's cached head — never
+    // changes in the middle of a run.
+    if config.shrink_results {
+        specs.push(history::spec());
+        offered.push(history::NAME.to_owned());
+    }
     sink.emit(Event::Started {
         model: model.name().to_owned(),
         cwd: config.cwd.display().to_string(),
@@ -186,6 +193,8 @@ async fn run_inner<M: ChatModel>(
         answer: None,
         turns: 0,
         subagents_started: 0,
+        results: ResultStore::new(store_tag()),
+        settled: 0,
     };
     if depth == 0 && !continuing {
         run.session_start(sink).await;
@@ -272,6 +281,20 @@ struct Loop<'a, M: ChatModel> {
     turns: u32,
     /// HS8: the subagents this run started, counted against `config.max_subagents`.
     subagents_started: u32,
+    /// Glut 2, B: the whole texts of the results that shrank.
+    results: ResultStore,
+    /// Up to which message the conversation has been looked at for results to shrink.
+    settled: usize,
+}
+
+/// A tag no other run of this process — an earlier turn of the same chat included — gives its results.
+fn store_tag() -> String {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
+    format!(
+        "{:x}{n}",
+        chrono::Local::now().timestamp_millis() % 0x10_0000
+    )
 }
 
 impl<M: ChatModel> Loop<'_, M> {
@@ -332,6 +355,10 @@ impl<M: ChatModel> Loop<'_, M> {
         sink: &mut dyn EventSink,
     ) -> Result<Vec<ToolCall>, FinishReason> {
         let turn = self.turns;
+        if self.config.shrink_results {
+            self.settled =
+                history::shrink_answered(&mut self.messages, self.settled, &self.results);
+        }
         let reply = {
             // The answer's text goes out as it streams in (CP5); the whole text follows below either way.
             let mut on_text = |text: &str| {
@@ -522,6 +549,10 @@ impl<M: ChatModel> Loop<'_, M> {
         let name = &call.function.name;
         if self.offer_task && name == crate::task::NAME {
             return Ok(self.run_task(call, sink).await);
+        }
+        // Only the run's own store: nothing for the gate to judge, like `bash_output`.
+        if self.config.shrink_results && name == history::NAME {
+            return Ok(history::answer(&self.results, &call.function.arguments));
         }
         tokio::select! {
             result = self.tools.call_until(name, &call.function.arguments, self.stop) => Ok(result),
@@ -887,6 +918,60 @@ mod tests {
         let mut tools = Toolbox::new();
         tools.extend([Box::new(Echo) as Box<dyn Tool>]);
         tools
+    }
+
+    #[tokio::test]
+    async fn a_long_result_shrinks_after_the_model_answered_on_it_and_comes_back_whole() {
+        let long = "x".repeat(crate::history::SHRINK_OVER_CHARS + 100);
+        let args = json!({ "text": long }).to_string();
+        let model = Script::new(vec![
+            Ok(calls(&[("c1", "echo", args.as_str())])),
+            Ok(calls(&[("c2", "echo", r#"{"text":"short"}"#)])),
+            // By now c1's result is shortened; the model asks for it whole. The id's tag is the run's own.
+            Ok(calls(&[(
+                "c3",
+                crate::history::NAME,
+                r#"{"id": "PLACEHOLDER"}"#,
+            )])),
+            Ok(text("Done.")),
+        ]);
+        let mut events = Vec::new();
+        // The id is only known once the run shrank c1; the script reads it from the third request below.
+        let outcome = run(
+            &RunConfig::new("/w"),
+            &model,
+            &toolbox(),
+            "go",
+            &mut events,
+            &Cancel::new(),
+        )
+        .await;
+        assert_eq!(outcome.reason, FinishReason::Answered);
+
+        let seen = model.seen.lock().unwrap();
+        // Second request: c1 is the newest result, still whole.
+        assert_eq!(seen[1][3].content.as_deref(), Some(long.as_str()));
+        // Third request: the model answered after c1 (with c2's call), so c1 shrank; c2 is short and stays.
+        let shrunk = seen[2][3].content.as_deref().unwrap();
+        assert!(
+            shrunk.len() < 1_500 && shrunk.contains(crate::history::NAME),
+            "{shrunk}"
+        );
+        assert_eq!(seen[2][5].content.as_deref(), Some("short"));
+        // The made-up id is answered as another run's, never with some other text.
+        assert!(
+            seen[3][7]
+                .content
+                .as_deref()
+                .unwrap()
+                .contains("no longer available")
+        );
+        // The tool is offered from the first request on.
+        let started = events.iter().find_map(|e| match e {
+            Event::Started { tools, .. } => Some(tools.clone()),
+            _ => None,
+        });
+        assert!(started.unwrap().iter().any(|t| t == crate::history::NAME));
     }
 
     #[tokio::test]

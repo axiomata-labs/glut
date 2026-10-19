@@ -12,6 +12,7 @@ pub mod commands;
 pub mod config;
 pub mod error;
 pub mod event;
+pub mod history;
 pub mod hooks;
 pub mod mcp;
 pub mod model;
