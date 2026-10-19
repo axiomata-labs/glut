@@ -316,20 +316,29 @@ impl ChatModel for OpenAiCompat {
             .headers()
             .get(reqwest::header::CONTENT_TYPE)
             .and_then(|value| value.to_str().ok())
-            .is_some_and(|value| value.starts_with("text/event-stream"));
+            .is_some_and(|value| value.to_ascii_lowercase().starts_with("text/event-stream"));
         let reply = if status.is_success() && streamed {
             read_stream(response, self.stall, on_text).await
+        } else if status.is_success() {
+            // A provider that streams under another type (`text/plain`) is still read as a stream.
+            let text = read_capped(response).await?;
+            if reads_as_stream(&text) {
+                let mut reader = StreamReader::default();
+                if !reader.feed(text.as_bytes(), on_text)? {
+                    reader.end(on_text)?;
+                }
+                reader.stream.finish()
+            } else {
+                parse_reply(&text)
+            }
         } else {
             let text = read_capped(response).await?;
-            if !status.is_success() {
-                // Some APIs repeat the offending key in their error ("Incorrect API key provided: sk-…").
-                let body: String = text.chars().take(ERROR_BODY_CHARS).collect();
-                return Err(HarnessError::Http {
-                    status: status.as_u16(),
-                    body: redact(&body, self.endpoint.api_key.as_deref()),
-                });
-            }
-            parse_reply(&text)
+            // Some APIs repeat the offending key in their error ("Incorrect API key provided: sk-…").
+            let body: String = text.chars().take(ERROR_BODY_CHARS).collect();
+            return Err(HarnessError::Http {
+                status: status.as_u16(),
+                body: redact(&body, self.endpoint.api_key.as_deref()),
+            });
         };
         reply.map_err(|err| match err {
             HarnessError::Protocol(message) => {
@@ -404,11 +413,7 @@ fn parse_reply(text: &str) -> Result<Reply, HarnessError> {
     let value: Value = serde_json::from_str(text)
         .map_err(|err| HarnessError::Protocol(format!("not JSON: {err}")))?;
     // Some APIs answer an error with status 200 and an `error` object.
-    if let Some(error) = value.get("error") {
-        let message = error
-            .get("message")
-            .and_then(Value::as_str)
-            .unwrap_or("no message");
+    if let Some(message) = api_error(&value) {
         return Err(HarnessError::Protocol(format!(
             "the API reported an error: {message}"
         )));
@@ -454,23 +459,29 @@ fn usage_of(value: &Value) -> Usage {
 }
 
 /// A streamed answer (server-sent events of chat-completion chunks) read into one [`Reply`], each piece of text handed
-/// to `on_text` as it comes. Fails when the stream stays silent for [`STALL_LIMIT`], when a piece carries an error
-/// (a provider that gives up mid-answer, DeepInfra's 400 over its context length), past [`MAX_ANSWER_BYTES`], or when
-/// it ends without any answer.
+/// to `on_text` as it comes. Fails when the stream stays silent for `stall`, when it sends only keep-alive comments for
+/// [`PIECE_LIMIT`], when a piece carries an error (a provider that gives up mid-answer, DeepInfra's 400 over its context
+/// length), past [`MAX_ANSWER_BYTES`], or when it ends before its end mark or a `finish_reason`.
 async fn read_stream(
     mut response: reqwest::Response,
     stall: Duration,
     on_text: &mut (dyn FnMut(&str) + Send),
 ) -> Result<Reply, HarnessError> {
-    let mut stream = Stream::default();
-    let mut pending = Vec::new();
+    let mut reader = StreamReader::default();
     let mut total = 0usize;
+    let mut last_piece = std::time::Instant::now();
     loop {
         let chunk = match tokio::time::timeout(stall, response.chunk()).await {
             Err(_) => {
                 return Err(HarnessError::Transport(format!(
                     "the model sent nothing for {} s; the call was given up",
                     stall.as_secs()
+                )));
+            }
+            Ok(Err(err)) if err.is_timeout() => {
+                return Err(HarnessError::Transport(format!(
+                    "the call ran past its {} min limit",
+                    REQUEST_TIMEOUT.as_secs() / 60
                 )));
             }
             Ok(Err(err)) => return Err(HarnessError::Transport(err.without_url().to_string())),
@@ -481,30 +492,86 @@ async fn read_stream(
         if total > MAX_ANSWER_BYTES {
             return Err(HarnessError::Protocol("the answer is too large".into()));
         }
-        pending.extend_from_slice(&chunk);
-        // Whole lines only: a line ends at `\n`, so a character split between two pieces is never cut.
-        while let Some(end) = pending.iter().position(|byte| *byte == b'\n') {
-            let line: Vec<u8> = pending.drain(..=end).collect();
-            if stream.line(&line, on_text)? {
-                return stream.finish();
-            }
+        let pieces_before = reader.stream.pieces;
+        if reader.feed(&chunk, on_text)? {
+            return reader.stream.finish();
+        }
+        // A provider that keeps the line open with comments while its upstream hangs (OpenRouter's `: PROCESSING`)
+        // passes the stall limit; a stream of nothing but comments is given up here.
+        if reader.stream.pieces > pieces_before {
+            last_piece = std::time::Instant::now();
+        } else if last_piece.elapsed() > PIECE_LIMIT {
+            return Err(HarnessError::Transport(format!(
+                "the model sent only keep-alives for {} s; the call was given up",
+                PIECE_LIMIT.as_secs()
+            )));
         }
     }
-    if !pending.is_empty() {
-        stream.line(&pending, on_text)?;
+    reader.end(on_text)?;
+    reader.stream.finish()
+}
+
+/// How long a stream may send only keep-alive comments, no piece of an answer, before it counts as stalled.
+const PIECE_LIMIT: Duration = Duration::from_secs(300);
+
+/// A stream's bytes cut into whole lines — a line ends at `\n`, so neither a line nor a character split between two
+/// pieces of the response is ever cut — and handed to the [`Stream`].
+#[derive(Default)]
+struct StreamReader {
+    pending: Vec<u8>,
+    stream: Stream,
+}
+
+impl StreamReader {
+    /// Takes the next bytes; `true` once the stream's end mark has been read.
+    fn feed(
+        &mut self,
+        bytes: &[u8],
+        on_text: &mut (dyn FnMut(&str) + Send),
+    ) -> Result<bool, HarnessError> {
+        self.pending.extend_from_slice(bytes);
+        while let Some(end) = self.pending.iter().position(|byte| *byte == b'\n') {
+            let line: Vec<u8> = self.pending.drain(..=end).collect();
+            if self.stream.line(&line, on_text)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
-    stream.finish()
+
+    /// The last line, when the stream ended without a line break after it.
+    fn end(&mut self, on_text: &mut (dyn FnMut(&str) + Send)) -> Result<(), HarnessError> {
+        if !self.pending.is_empty() {
+            let line = std::mem::take(&mut self.pending);
+            self.stream.line(&line, on_text)?;
+        }
+        Ok(())
+    }
+}
+
+/// One tool call as its pieces arrive.
+#[derive(Default)]
+struct CallSlot {
+    /// The `index` the provider gave it, if any.
+    wire: Option<u64>,
+    id: String,
+    name: String,
+    arguments: String,
 }
 
 /// What a stream has said so far.
 #[derive(Default)]
 struct Stream {
     text: String,
-    /// The tool calls by their index in the answer: id, name and the arguments' text as it grows.
-    calls: std::collections::BTreeMap<u64, (String, String, String)>,
+    /// The tool calls in the order they began.
+    calls: Vec<CallSlot>,
     usage: Usage,
     /// Whether any piece held a choice: a stream without one has no answer.
     answered: bool,
+    /// Whether the stream said it was done — its end mark or a `finish_reason`; one that just stops was cut off.
+    ended: bool,
+    /// How many `data:` pieces it sent, comments not counted.
+    pieces: u64,
 }
 
 impl Stream {
@@ -516,31 +583,40 @@ impl Stream {
     ) -> Result<bool, HarnessError> {
         let line = std::str::from_utf8(line)
             .map_err(|_| HarnessError::Protocol("the answer is not UTF-8".into()))?
+            .trim_start_matches('\u{feff}')
             .trim_end_matches(['\r', '\n']);
         // Comments (`: OPENROUTER PROCESSING`), event names and blank lines carry nothing to read.
         let Some(data) = line.strip_prefix("data:").map(str::trim_start) else {
             return Ok(false);
         };
+        self.pieces += 1;
         if data == "[DONE]" {
+            self.ended = true;
             return Ok(true);
         }
         let piece: Value = serde_json::from_str(data).map_err(|err| {
             HarnessError::Protocol(format!("a piece of the answer is not JSON: {err}"))
         })?;
-        if let Some(error) = piece.get("error") {
-            let message = error
-                .get("message")
-                .and_then(Value::as_str)
-                .or_else(|| error.as_str())
-                .unwrap_or("no message");
+        if let Some(message) = api_error(&piece) {
             return Err(HarnessError::Protocol(format!(
                 "the API reported an error: {message}"
             )));
         }
-        if piece.get("usage").is_some_and(Value::is_object) {
-            self.usage = usage_of(&piece);
+        // Some providers send a usage in every piece, some an empty one at the end: only a real count replaces one.
+        let usage = usage_of(&piece);
+        if usage.input_tokens + usage.output_tokens > 0 {
+            self.usage = usage;
         }
-        let Some(delta) = piece.pointer("/choices/0/delta") else {
+        let Some(choice) = piece.pointer("/choices/0") else {
+            return Ok(false);
+        };
+        if choice
+            .get("finish_reason")
+            .is_some_and(|reason| !reason.is_null())
+        {
+            self.ended = true;
+        }
+        let Some(delta) = choice.get("delta") else {
             return Ok(false);
         };
         self.answered = true;
@@ -550,29 +626,56 @@ impl Stream {
             self.text.push_str(text);
             on_text(text);
         }
-        for (position, call) in delta
+        for call in delta
             .get("tool_calls")
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
-            .enumerate()
         {
-            let index = call
-                .get("index")
-                .and_then(Value::as_u64)
-                .unwrap_or(position as u64);
-            let entry = self.calls.entry(index).or_default();
-            if let Some(id) = call.get("id").and_then(Value::as_str) {
-                entry.0 = id.to_owned();
-            }
-            if let Some(name) = call.pointer("/function/name").and_then(Value::as_str) {
-                entry.1.push_str(name);
-            }
-            if let Some(arguments) = call.pointer("/function/arguments").and_then(Value::as_str) {
-                entry.2.push_str(arguments);
-            }
+            self.call_piece(call);
         }
         Ok(false)
+    }
+
+    /// One piece of a tool call, put into the slot it belongs to: by its `index`, and a new slot when it brings an id
+    /// other than the one its slot already has (a provider that numbers every call `0`, or none at all).
+    fn call_piece(&mut self, call: &Value) {
+        let wire = call.get("index").and_then(Value::as_u64);
+        let id = call
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty());
+        let found = match wire {
+            Some(wire) => self.calls.iter().rposition(|slot| slot.wire == Some(wire)),
+            None => self.calls.len().checked_sub(1),
+        };
+        let slot = match found {
+            Some(at)
+                if id.is_none_or(|id| self.calls[at].id.is_empty() || self.calls[at].id == id) =>
+            {
+                at
+            }
+            _ => {
+                self.calls.push(CallSlot {
+                    wire,
+                    ..CallSlot::default()
+                });
+                self.calls.len() - 1
+            }
+        };
+        let slot = &mut self.calls[slot];
+        if let Some(id) = id {
+            slot.id = id.to_owned();
+        }
+        // A name comes whole or in parts; one repeated in every piece is not added again.
+        if let Some(name) = call.pointer("/function/name").and_then(Value::as_str)
+            && slot.name != name
+        {
+            slot.name.push_str(name);
+        }
+        if let Some(arguments) = call.pointer("/function/arguments").and_then(Value::as_str) {
+            slot.arguments.push_str(arguments);
+        }
     }
 
     /// The answer the stream made, as [`parse_reply`] would have read it from one body.
@@ -582,18 +685,28 @@ impl Stream {
                 "the stream ended without an answer".into(),
             ));
         }
+        // Cut off before its end: half an answer, or a tool call's arguments cut in two, is no answer to act on.
+        if !self.ended {
+            return Err(HarnessError::Protocol(
+                "the stream ended before the answer was complete".into(),
+            ));
+        }
         let tool_calls = self
             .calls
             .into_iter()
-            .map(|(index, (id, name, arguments))| ToolCall {
+            .enumerate()
+            .map(|(index, slot)| ToolCall {
                 // A provider that sends no id still gets one the tool's answer can name.
-                id: if id.is_empty() {
+                id: if slot.id.is_empty() {
                     format!("call_{index}")
                 } else {
-                    id
+                    slot.id
                 },
                 kind: function_kind(),
-                function: FunctionCall { name, arguments },
+                function: FunctionCall {
+                    name: slot.name,
+                    arguments: slot.arguments,
+                },
             })
             .collect();
         Ok(Reply {
@@ -606,6 +719,29 @@ impl Stream {
             usage: self.usage,
         })
     }
+}
+
+/// Whether a body is a stream of server-sent events whatever its type says: its first line is a `data:` piece or a
+/// comment.
+fn reads_as_stream(text: &str) -> bool {
+    text.trim_start_matches('\u{feff}')
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .is_some_and(|line| line.starts_with("data:") || line.starts_with(':'))
+}
+
+/// The message of an `error` an answer or a piece carries; `None` without one (`"error": null` is none).
+fn api_error(value: &Value) -> Option<String> {
+    let error = value.get("error").filter(|error| !error.is_null())?;
+    Some(
+        error
+            .get("message")
+            .and_then(Value::as_str)
+            .or_else(|| error.as_str())
+            .unwrap_or("no message")
+            .to_owned(),
+    )
 }
 
 #[cfg(test)]
@@ -929,6 +1065,122 @@ mod tests {
         let body = &api.bodies()[0];
         assert_eq!(body["stream"], true);
         assert_eq!(body["stream_options"]["include_usage"], true);
+    }
+
+    /// The CP5 review: pieces cut anywhere — inside a line, inside a character, with `\r\n`, the last line without a
+    /// break — read the same as whole lines.
+    #[test]
+    fn a_stream_cut_anywhere_reads_the_same() {
+        let body = "data: {\"choices\":[{\"delta\":{\"content\":\"5 €\"}}]}\r\n\r\n: keep-alive\n\
+                    data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"error\":null}\n\
+                    data: [DONE]";
+        let bytes = body.as_bytes();
+        for cut in 1..bytes.len() {
+            let mut reader = StreamReader::default();
+            let mut pieces = String::new();
+            let mut on_text = |text: &str| pieces.push_str(text);
+            let done = reader.feed(&bytes[..cut], &mut on_text).unwrap()
+                || reader.feed(&bytes[cut..], &mut on_text).unwrap();
+            if !done {
+                reader.end(&mut on_text).unwrap();
+            }
+            let reply = reader.stream.finish().unwrap();
+            assert_eq!(
+                reply.message.content.as_deref(),
+                Some("5 €"),
+                "cut at {cut}"
+            );
+            assert_eq!(pieces, "5 €");
+        }
+    }
+
+    /// The CP5 review: tool calls as providers really send them — every call numbered `0`, no index at all, a name
+    /// repeated in each piece, an empty id in the later pieces — come out as separate, whole calls.
+    #[test]
+    fn tool_calls_are_assembled_whatever_numbering_the_provider_uses() {
+        let mut stream = Stream::default();
+        let mut quiet = |_: &str| {};
+        for piece in [
+            json!({"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "a", "function": {"name": "read_file", "arguments": "{\"p"}}]}}]}),
+            json!({"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "", "function": {"name": "read_file", "arguments": "\":1}"}}]}}]}),
+            json!({"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "b", "function": {"name": "glob", "arguments": "{}"}}]}}]}),
+            json!({"choices": [{"delta": {"tool_calls": [{"id": "c", "function": {"name": "gr", "arguments": "{"}}]}}]}),
+            json!({"choices": [{"delta": {"tool_calls": [{"function": {"name": "ep", "arguments": "}"}}]}}]}),
+            json!({"choices": [{"delta": {}, "finish_reason": "tool_calls"}], "usage": {}}),
+        ] {
+            stream
+                .line(format!("data: {piece}").as_bytes(), &mut quiet)
+                .unwrap();
+        }
+        let calls = stream.finish().unwrap().message.tool_calls;
+        let got: Vec<(&str, &str, &str)> = calls
+            .iter()
+            .map(|c| {
+                (
+                    c.id.as_str(),
+                    c.function.name.as_str(),
+                    c.function.arguments.as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("a", "read_file", "{\"p\":1}"),
+                ("b", "glob", "{}"),
+                ("c", "grep", "{}")
+            ]
+        );
+    }
+
+    /// The CP5 review: a stream that just stops — no end mark, no finish reason — is cut off, not an answer; an empty
+    /// usage at the end keeps the real one before it.
+    #[test]
+    fn a_stream_cut_off_is_no_answer_and_an_empty_usage_keeps_the_count() {
+        let mut quiet = |_: &str| {};
+        let mut cut = Stream::default();
+        cut.line(
+            br#"data: {"choices":[{"delta":{"content":"half"}}]}"#,
+            &mut quiet,
+        )
+        .unwrap();
+        assert!(
+            matches!(cut.finish(), Err(HarnessError::Protocol(text)) if text.contains("before the answer"))
+        );
+
+        let mut counted = Stream::default();
+        for line in [
+            &br#"data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":9,"completion_tokens":2}}"#[..],
+            br#"data: {"choices":[],"usage":{}}"#,
+        ] {
+            counted.line(line, &mut quiet).unwrap();
+        }
+        assert_eq!(counted.finish().unwrap().usage.input_tokens, 9);
+    }
+
+    /// The CP5 review: a provider that does not stream still answers in one body, and one that streams under another
+    /// type is still read as a stream.
+    #[tokio::test]
+    async fn a_body_answer_and_a_stream_under_another_type_both_read() {
+        let mut plain_stream = Answer::stream(&[
+            json!({"choices": [{"delta": {"content": "streamed"}, "finish_reason": "stop"}]}),
+        ]);
+        plain_stream.content_type = "text/plain";
+        let api = FakeApi::spawn(vec![
+            Answer::ok(
+                json!({"choices": [{"message": {"role": "assistant", "content": "whole"}}]}),
+            ),
+            plain_stream,
+        ])
+        .await;
+        let model = OpenAiCompat::new(endpoint(&api.base_url, None)).unwrap();
+        for want in ["whole", "streamed"] {
+            let reply = model
+                .complete(&[Message::user("hi")], &[], None)
+                .await
+                .unwrap();
+            assert_eq!(reply.message.content.as_deref(), Some(want));
+        }
     }
 
     /// CP5: an error inside the stream fails the call at once, and so does a stream without any answer.
