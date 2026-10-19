@@ -93,6 +93,25 @@ impl EventSink for JsonLines {
     }
 }
 
+/// `axh`'s web search: the providers' keys from the environment (`EXA_API_KEY`, `TINYFISH_API_KEY`, `TAVILY_API_KEY`;
+/// Exa answers without one) and no budget — the app keeps the limits for its own runs (glut-round CP3).
+fn env_search() -> axiomata_harness::tools::search::WebSearch {
+    use axiomata_harness::tools::search::{SearchKeys, Unlimited, WebSearch};
+    let key = |name: &str| {
+        std::env::var(name)
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+    };
+    WebSearch::new(
+        SearchKeys {
+            exa: key("EXA_API_KEY"),
+            tinyfish: key("TINYFISH_API_KEY"),
+            tavily: key("TAVILY_API_KEY"),
+        },
+        Arc::new(Unlimited),
+    )
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
     tracing_subscriber::fmt()
@@ -244,7 +263,16 @@ async fn main() -> ExitCode {
         Ok(servers) => servers,
         Err(err) => return fail(err.to_string()),
     };
-    let tools = match setup::toolbox(&cwd, &catalog, gate, servers, built.sandbox, &mut sink).await
+    let tools = match setup::toolbox(
+        &cwd,
+        &catalog,
+        gate,
+        servers,
+        built.sandbox,
+        Some(env_search()),
+        &mut sink,
+    )
+    .await
     {
         Ok(tools) => tools,
         Err(err) => return fail(err.to_string()),

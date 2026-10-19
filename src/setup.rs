@@ -32,12 +32,17 @@ pub async fn toolbox(
     gate: Gate,
     servers: Vec<ServerEntry>,
     sandbox: SandboxSettings,
+    search: Option<crate::tools::search::WebSearch>,
     sink: &mut SharedSink,
 ) -> Result<Toolbox, HarnessError> {
     let mut tools = Toolbox::new();
     tools.extend(file_tools(cwd, SkillRoots::new(&catalog.folders()))?);
     // The web is part of the core (docs/plans/glut-round.md): no MCP server to set up for a page.
     tools.extend([Box::new(crate::tools::web::WebFetch) as Box<dyn Tool>]);
+    // `web_search` only for a caller that set up its providers and budget (glut-round CP3); none: no search offered.
+    if let Some(search) = search {
+        tools.extend([Box::new(search) as Box<dyn Tool>]);
+    }
     if !catalog.is_empty() {
         tools
             .extend([Box::new(SkillTool::new(Arc::clone(catalog), sink.clone())) as Box<dyn Tool>]);
@@ -387,12 +392,17 @@ mod tests {
         let gate = || Gate::new(RuleSet::default(), Mode::Default, Arc::new(Nobody));
 
         let with = Arc::new(fx.catalog());
+        let search = crate::tools::search::WebSearch::new(
+            crate::tools::search::SearchKeys::default(),
+            Arc::new(crate::tools::search::Unlimited),
+        );
         let tools = toolbox(
             &fx.project,
             &with,
             gate(),
             Vec::new(),
             SandboxSettings::default(),
+            Some(search),
             &mut sink,
         )
         .await
@@ -400,6 +410,9 @@ mod tests {
         assert!(tools.gate().is_some(), "every call is judged");
         assert!(tools.names().contains(&"skill".to_owned()));
         assert!(tools.names().contains(&"bash".to_owned()));
+        // The web is in the core; a search only where the caller set one up (glut-round CP2/CP3).
+        assert!(tools.names().contains(&"web_fetch".to_owned()));
+        assert!(tools.names().contains(&"web_search".to_owned()));
 
         let without = Arc::new(Catalog::default());
         let tools = toolbox(
@@ -408,10 +421,12 @@ mod tests {
             gate(),
             Vec::new(),
             SandboxSettings::default(),
+            None,
             &mut sink,
         )
         .await
         .unwrap();
         assert!(!tools.names().contains(&"skill".to_owned()));
+        assert!(!tools.names().contains(&"web_search".to_owned()));
     }
 }

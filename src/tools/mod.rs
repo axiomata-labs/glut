@@ -4,6 +4,7 @@
 //! it goes back to the model, which can correct its call (a wrong path, an ambiguous edit).
 
 pub mod files;
+pub mod search;
 pub mod shell;
 pub mod web;
 

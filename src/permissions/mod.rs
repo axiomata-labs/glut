@@ -67,7 +67,15 @@ enum RuleKind {
 }
 
 /// The names Claude Code's format gives meaning to; anything spelled like one but not exactly is a typo (P4).
-const KNOWN_KINDS: [&str; 6] = ["Read", "Edit", "Write", "Bash", "Network", "WebFetch"];
+const KNOWN_KINDS: [&str; 7] = [
+    "Read",
+    "Edit",
+    "Write",
+    "Bash",
+    "Network",
+    "WebFetch",
+    "WebSearch",
+];
 
 /// How a rule names an MCP tool (HS5, M5): `mcp__<server>` for a whole server, `mcp__<server>__<tool>` for one.
 const MCP_PREFIX: &str = "mcp__";
@@ -173,7 +181,13 @@ impl Rule {
         Ok(Rule {
             text: text.to_owned(),
             kind,
-            tool: name.to_owned(),
+            // Claude Code's `WebSearch` names Glut's `web_search` (glut-round CP3): one `allowed_tools` line, both
+            // harnesses.
+            tool: if name == "WebSearch" {
+                crate::tools::search::NAME.to_owned()
+            } else {
+                name.to_owned()
+            },
             pattern,
         })
     }
@@ -1829,6 +1843,9 @@ mod tests {
                 .matches_path("web_fetch", &host("docs.rs"))
         );
         assert!(Rule::parse("webfetch(domain:x.org)").is_err());
+        // `WebSearch` names the `web_search` tool.
+        assert!(Rule::parse("WebSearch").unwrap().names_tool("web_search"));
+        assert!(Rule::parse("websearch").is_err());
         for bad in ["Network(http://x)", "Network(a b)", "network(x)"] {
             assert!(Rule::parse(bad).is_err(), "{bad}");
         }
