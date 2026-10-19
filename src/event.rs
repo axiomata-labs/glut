@@ -64,6 +64,12 @@ pub enum Event {
         source: String,
         prompt_chars: usize,
     },
+    /// A piece of the text the model is writing, as it streams in (glut-round CP5); the whole text follows as
+    /// [`Event::AssistantText`] once the call is done, so a sink that does not show the answer growing ignores these.
+    TextDelta {
+        turn: u32,
+        text: String,
+    },
     /// Text the model wrote, its final answer or a remark beside tool calls.
     AssistantText {
         turn: u32,

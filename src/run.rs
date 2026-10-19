@@ -331,13 +331,26 @@ impl<M: ChatModel> Loop<'_, M> {
         specs: &[ToolSpec],
         sink: &mut dyn EventSink,
     ) -> Result<Vec<ToolCall>, FinishReason> {
-        let completion = self
-            .model
-            .complete(&self.messages, specs, self.config.max_output_tokens);
-        let reply = tokio::select! {
-            reply = completion => reply,
-            () = tokio::time::sleep_until(self.deadline) => return Err(FinishReason::Timeout),
-            () = self.cancel.cancelled() => return Err(FinishReason::Cancelled),
+        let turn = self.turns;
+        let reply = {
+            // The answer's text goes out as it streams in (CP5); the whole text follows below either way.
+            let mut on_text = |text: &str| {
+                sink.emit(Event::TextDelta {
+                    turn,
+                    text: text.to_owned(),
+                });
+            };
+            let completion = self.model.complete_streaming(
+                &self.messages,
+                specs,
+                self.config.max_output_tokens,
+                &mut on_text,
+            );
+            tokio::select! {
+                reply = completion => reply,
+                () = tokio::time::sleep_until(self.deadline) => return Err(FinishReason::Timeout),
+                () = self.cancel.cancelled() => return Err(FinishReason::Cancelled),
+            }
         };
         let reply = reply.map_err(|err| {
             sink.emit(Event::Error {
@@ -345,7 +358,6 @@ impl<M: ChatModel> Loop<'_, M> {
             });
             FinishReason::Failed
         })?;
-        let turn = self.turns;
         self.usage += reply.usage;
         sink.emit(Event::Usage {
             turn,
@@ -1143,6 +1155,51 @@ mod tests {
             bodies[1]["messages"][2]["tool_calls"][0]["function"]["name"],
             "echo"
         );
+    }
+
+    /// CP5: a streamed answer's text goes out piece by piece while it arrives, then once whole.
+    #[tokio::test]
+    async fn a_streamed_answer_reaches_the_sink_in_pieces_and_then_whole() {
+        use crate::model::fake::{Answer, FakeApi};
+        let api = FakeApi::spawn(vec![Answer::stream(&[
+            json!({"choices": [{"delta": {"content": "said "}}]}),
+            json!({"choices": [{"delta": {"content": "hi"}}]}),
+        ])])
+        .await;
+        let model = crate::model::OpenAiCompat::new(crate::config::ModelEndpoint {
+            base_url: api.base_url.clone(),
+            api_key: None,
+            model: "m".into(),
+        })
+        .unwrap();
+        let mut events = Vec::new();
+        let outcome = run(
+            &RunConfig::new("/w"),
+            &model,
+            &toolbox(),
+            "go",
+            &mut events,
+            &Cancel::new(),
+        )
+        .await;
+        assert_eq!(outcome.answer.as_deref(), Some("said hi"));
+        let pieces: Vec<&str> = events
+            .iter()
+            .filter_map(|event| match event {
+                Event::TextDelta { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(pieces, ["said ", "hi"]);
+        let whole = events
+            .iter()
+            .position(|event| matches!(event, Event::AssistantText { .. }))
+            .unwrap();
+        let last_piece = events
+            .iter()
+            .rposition(|event| matches!(event, Event::TextDelta { .. }))
+            .unwrap();
+        assert!(last_piece < whole);
     }
 
     #[tokio::test]

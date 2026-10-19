@@ -23,6 +23,11 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 /// gigabytes must not fill the memory.
 const MAX_ANSWER_BYTES: usize = 16 * 1024 * 1024;
 
+/// How long a streamed answer may stay silent — no byte, not even a provider's keep-alive comment — before the call
+/// counts as stalled and fails with that reason (glut-round CP5): a hung provider is noticed at once, not at the run's
+/// own limit.
+const STALL_LIMIT: Duration = Duration::from_secs(120);
+
 /// Hosts a key may be sent to over plain HTTP: the machine itself (a local Ollama). Anywhere else the key would cross
 /// the network in clear text.
 const LOOPBACK_HOSTS: [&str; 3] = ["localhost", "127.0.0.1", "[::1]"];
@@ -192,6 +197,19 @@ pub trait ChatModel: Send + Sync {
         max_output_tokens: Option<u32>,
     ) -> impl Future<Output = Result<Reply, HarnessError>> + Send;
 
+    /// [`Self::complete`], with each piece of the answer's text handed to `on_text` as it arrives (glut-round CP5). A
+    /// model that does not stream hands nothing over and answers as `complete` does.
+    fn complete_streaming(
+        &self,
+        messages: &[Message],
+        tools: &[ToolSpec],
+        max_output_tokens: Option<u32>,
+        on_text: &mut (dyn FnMut(&str) + Send),
+    ) -> impl Future<Output = Result<Reply, HarnessError>> + Send {
+        let _ = on_text;
+        self.complete(messages, tools, max_output_tokens)
+    }
+
     /// The model's name, for the events.
     fn name(&self) -> &str;
 }
@@ -201,6 +219,8 @@ pub trait ChatModel: Send + Sync {
 pub struct OpenAiCompat {
     endpoint: ModelEndpoint,
     client: reqwest::Client,
+    /// [`STALL_LIMIT`]; shorter in the tests.
+    stall: Duration,
 }
 
 impl OpenAiCompat {
@@ -223,7 +243,11 @@ impl OpenAiCompat {
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|err| HarnessError::Transport(err.to_string()))?;
-        Ok(OpenAiCompat { endpoint, client })
+        Ok(OpenAiCompat {
+            endpoint,
+            client,
+            stall: STALL_LIMIT,
+        })
     }
 
     fn url(&self) -> String {
@@ -239,10 +263,13 @@ impl OpenAiCompat {
         tools: &[ToolSpec],
         max_output_tokens: Option<u32>,
     ) -> Value {
+        // Streamed (CP5): the answer arrives in pieces, so a stalled provider is seen at once; the usage comes in the
+        // last piece. A provider that ignores `stream` answers in one JSON body, which is read as before.
         let mut body = json!({
             "model": self.endpoint.model,
             "messages": messages,
-            "stream": false,
+            "stream": true,
+            "stream_options": { "include_usage": true },
         });
         if !tools.is_empty() {
             body["tools"] = Value::Array(tools.iter().map(ToolSpec::to_api).collect());
@@ -261,6 +288,17 @@ impl ChatModel for OpenAiCompat {
         tools: &[ToolSpec],
         max_output_tokens: Option<u32>,
     ) -> Result<Reply, HarnessError> {
+        self.complete_streaming(messages, tools, max_output_tokens, &mut |_| {})
+            .await
+    }
+
+    async fn complete_streaming(
+        &self,
+        messages: &[Message],
+        tools: &[ToolSpec],
+        max_output_tokens: Option<u32>,
+        on_text: &mut (dyn FnMut(&str) + Send),
+    ) -> Result<Reply, HarnessError> {
         let mut request = self
             .client
             .post(self.url())
@@ -274,16 +312,26 @@ impl ChatModel for OpenAiCompat {
             .await
             .map_err(|err| HarnessError::Transport(err.without_url().to_string()))?;
         let status = response.status();
-        let text = read_capped(response).await?;
-        if !status.is_success() {
-            // Some APIs repeat the offending key in their error ("Incorrect API key provided: sk-…").
-            let body: String = text.chars().take(ERROR_BODY_CHARS).collect();
-            return Err(HarnessError::Http {
-                status: status.as_u16(),
-                body: redact(&body, self.endpoint.api_key.as_deref()),
-            });
-        }
-        parse_reply(&text).map_err(|err| match err {
+        let streamed = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.starts_with("text/event-stream"));
+        let reply = if status.is_success() && streamed {
+            read_stream(response, self.stall, on_text).await
+        } else {
+            let text = read_capped(response).await?;
+            if !status.is_success() {
+                // Some APIs repeat the offending key in their error ("Incorrect API key provided: sk-…").
+                let body: String = text.chars().take(ERROR_BODY_CHARS).collect();
+                return Err(HarnessError::Http {
+                    status: status.as_u16(),
+                    body: redact(&body, self.endpoint.api_key.as_deref()),
+                });
+            }
+            parse_reply(&text)
+        };
+        reply.map_err(|err| match err {
             HarnessError::Protocol(message) => {
                 HarnessError::Protocol(redact(&message, self.endpoint.api_key.as_deref()))
             }
@@ -380,6 +428,14 @@ fn parse_reply(text: &str) -> Result<Reply, HarnessError> {
     {
         message.content = None;
     }
+    Ok(Reply {
+        message,
+        usage: usage_of(&value),
+    })
+}
+
+/// The `usage` of an answer or of a stream's last piece (zero where it says nothing).
+fn usage_of(value: &Value) -> Usage {
     let tokens = |key: &str| {
         value
             .pointer(&format!("/usage/{key}"))
@@ -387,17 +443,169 @@ fn parse_reply(text: &str) -> Result<Reply, HarnessError> {
             .unwrap_or(0)
     };
     let input_tokens = tokens("prompt_tokens");
-    Ok(Reply {
-        message,
-        usage: Usage {
-            input_tokens,
-            // OpenAI's and OpenRouter's field, then DeepSeek's own; never more than the prompt itself.
-            cached_input_tokens: tokens("prompt_tokens_details/cached_tokens")
-                .max(tokens("prompt_cache_hit_tokens"))
-                .min(input_tokens),
-            output_tokens: tokens("completion_tokens"),
-        },
-    })
+    Usage {
+        input_tokens,
+        // OpenAI's and OpenRouter's field, then DeepSeek's own; never more than the prompt itself.
+        cached_input_tokens: tokens("prompt_tokens_details/cached_tokens")
+            .max(tokens("prompt_cache_hit_tokens"))
+            .min(input_tokens),
+        output_tokens: tokens("completion_tokens"),
+    }
+}
+
+/// A streamed answer (server-sent events of chat-completion chunks) read into one [`Reply`], each piece of text handed
+/// to `on_text` as it comes. Fails when the stream stays silent for [`STALL_LIMIT`], when a piece carries an error
+/// (a provider that gives up mid-answer, DeepInfra's 400 over its context length), past [`MAX_ANSWER_BYTES`], or when
+/// it ends without any answer.
+async fn read_stream(
+    mut response: reqwest::Response,
+    stall: Duration,
+    on_text: &mut (dyn FnMut(&str) + Send),
+) -> Result<Reply, HarnessError> {
+    let mut stream = Stream::default();
+    let mut pending = Vec::new();
+    let mut total = 0usize;
+    loop {
+        let chunk = match tokio::time::timeout(stall, response.chunk()).await {
+            Err(_) => {
+                return Err(HarnessError::Transport(format!(
+                    "the model sent nothing for {} s; the call was given up",
+                    stall.as_secs()
+                )));
+            }
+            Ok(Err(err)) => return Err(HarnessError::Transport(err.without_url().to_string())),
+            Ok(Ok(None)) => break,
+            Ok(Ok(Some(chunk))) => chunk,
+        };
+        total += chunk.len();
+        if total > MAX_ANSWER_BYTES {
+            return Err(HarnessError::Protocol("the answer is too large".into()));
+        }
+        pending.extend_from_slice(&chunk);
+        // Whole lines only: a line ends at `\n`, so a character split between two pieces is never cut.
+        while let Some(end) = pending.iter().position(|byte| *byte == b'\n') {
+            let line: Vec<u8> = pending.drain(..=end).collect();
+            if stream.line(&line, on_text)? {
+                return stream.finish();
+            }
+        }
+    }
+    if !pending.is_empty() {
+        stream.line(&pending, on_text)?;
+    }
+    stream.finish()
+}
+
+/// What a stream has said so far.
+#[derive(Default)]
+struct Stream {
+    text: String,
+    /// The tool calls by their index in the answer: id, name and the arguments' text as it grows.
+    calls: std::collections::BTreeMap<u64, (String, String, String)>,
+    usage: Usage,
+    /// Whether any piece held a choice: a stream without one has no answer.
+    answered: bool,
+}
+
+impl Stream {
+    /// Reads one line of the stream; `true` at its end mark (`data: [DONE]`).
+    fn line(
+        &mut self,
+        line: &[u8],
+        on_text: &mut (dyn FnMut(&str) + Send),
+    ) -> Result<bool, HarnessError> {
+        let line = std::str::from_utf8(line)
+            .map_err(|_| HarnessError::Protocol("the answer is not UTF-8".into()))?
+            .trim_end_matches(['\r', '\n']);
+        // Comments (`: OPENROUTER PROCESSING`), event names and blank lines carry nothing to read.
+        let Some(data) = line.strip_prefix("data:").map(str::trim_start) else {
+            return Ok(false);
+        };
+        if data == "[DONE]" {
+            return Ok(true);
+        }
+        let piece: Value = serde_json::from_str(data).map_err(|err| {
+            HarnessError::Protocol(format!("a piece of the answer is not JSON: {err}"))
+        })?;
+        if let Some(error) = piece.get("error") {
+            let message = error
+                .get("message")
+                .and_then(Value::as_str)
+                .or_else(|| error.as_str())
+                .unwrap_or("no message");
+            return Err(HarnessError::Protocol(format!(
+                "the API reported an error: {message}"
+            )));
+        }
+        if piece.get("usage").is_some_and(Value::is_object) {
+            self.usage = usage_of(&piece);
+        }
+        let Some(delta) = piece.pointer("/choices/0/delta") else {
+            return Ok(false);
+        };
+        self.answered = true;
+        if let Some(text) = delta.get("content").and_then(Value::as_str)
+            && !text.is_empty()
+        {
+            self.text.push_str(text);
+            on_text(text);
+        }
+        for (position, call) in delta
+            .get("tool_calls")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .enumerate()
+        {
+            let index = call
+                .get("index")
+                .and_then(Value::as_u64)
+                .unwrap_or(position as u64);
+            let entry = self.calls.entry(index).or_default();
+            if let Some(id) = call.get("id").and_then(Value::as_str) {
+                entry.0 = id.to_owned();
+            }
+            if let Some(name) = call.pointer("/function/name").and_then(Value::as_str) {
+                entry.1.push_str(name);
+            }
+            if let Some(arguments) = call.pointer("/function/arguments").and_then(Value::as_str) {
+                entry.2.push_str(arguments);
+            }
+        }
+        Ok(false)
+    }
+
+    /// The answer the stream made, as [`parse_reply`] would have read it from one body.
+    fn finish(self) -> Result<Reply, HarnessError> {
+        if !self.answered {
+            return Err(HarnessError::Protocol(
+                "the stream ended without an answer".into(),
+            ));
+        }
+        let tool_calls = self
+            .calls
+            .into_iter()
+            .map(|(index, (id, name, arguments))| ToolCall {
+                // A provider that sends no id still gets one the tool's answer can name.
+                id: if id.is_empty() {
+                    format!("call_{index}")
+                } else {
+                    id
+                },
+                kind: function_kind(),
+                function: FunctionCall { name, arguments },
+            })
+            .collect();
+        Ok(Reply {
+            message: Message {
+                role: Role::Assistant,
+                content: (!self.text.trim().is_empty()).then_some(self.text),
+                tool_calls,
+                tool_call_id: None,
+            },
+            usage: self.usage,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -409,10 +617,13 @@ pub(crate) mod fake {
     use serde_json::Value;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    /// One prepared answer: status and body.
+    /// One prepared answer: status, body and its type; with `then_hang`, the connection stays open and silent after
+    /// the body (a stalled stream).
     pub struct Answer {
         pub status: u16,
         pub body: String,
+        pub content_type: &'static str,
+        pub then_hang: bool,
     }
 
     impl Answer {
@@ -420,6 +631,32 @@ pub(crate) mod fake {
             Answer {
                 status: 200,
                 body: body.to_string(),
+                content_type: "application/json",
+                then_hang: false,
+            }
+        }
+
+        /// A streamed answer: each piece as one `data:` event, then the end mark.
+        pub fn stream(pieces: &[Value]) -> Self {
+            let mut body: String = pieces
+                .iter()
+                .map(|piece| format!(": keep-alive\n\ndata: {piece}\n\n"))
+                .collect();
+            body.push_str("data: [DONE]\n\n");
+            Answer {
+                status: 200,
+                body,
+                content_type: "text/event-stream",
+                then_hang: false,
+            }
+        }
+
+        pub fn error(status: u16, body: impl Into<String>) -> Self {
+            Answer {
+                status,
+                body: body.into(),
+                content_type: "application/json",
+                then_hang: false,
             }
         }
     }
@@ -445,16 +682,20 @@ pub(crate) mod fake {
                     log.lock()
                         .unwrap()
                         .push((head, serde_json::from_slice(&body).unwrap_or(Value::Null)));
+                    // A hanging answer has no length: the client reads on, and waits, until the stall limit.
+                    let length = if answer.then_hang {
+                        String::new()
+                    } else {
+                        format!("content-length: {}\r\n", answer.body.len())
+                    };
                     let reply = format!(
-                        concat!(
-                            "HTTP/1.1 {} X\r\ncontent-type: application/json\r\n",
-                            "content-length: {}\r\nconnection: close\r\n\r\n{}"
-                        ),
-                        answer.status,
-                        answer.body.len(),
-                        answer.body
+                        "HTTP/1.1 {} X\r\ncontent-type: {}\r\n{length}connection: close\r\n\r\n{}",
+                        answer.status, answer.content_type, answer.body
                     );
                     let _ = socket.write_all(reply.as_bytes()).await;
+                    if answer.then_hang {
+                        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                    }
                     let _ = socket.shutdown().await;
                 }
             });
@@ -625,10 +866,10 @@ mod tests {
 
     #[tokio::test]
     async fn an_error_status_keeps_the_start_of_the_answer() {
-        let api = FakeApi::spawn(vec![Answer {
-            status: 401,
-            body: format!("{{\"error\":\"bad key\"}}{}", "x".repeat(2000)),
-        }])
+        let api = FakeApi::spawn(vec![Answer::error(
+            401,
+            format!("{{\"error\":\"bad key\"}}{}", "x".repeat(2000)),
+        )])
         .await;
         let model = OpenAiCompat::new(endpoint(&api.base_url, Some("k"))).unwrap();
         match model.complete(&[Message::user("hi")], &[], None).await {
@@ -639,6 +880,101 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    /// CP5: a streamed answer is read into the same reply — text in pieces, tool calls whose arguments arrive in parts,
+    /// the usage of the last piece — and each piece of text is handed over as it comes; the request asks for a stream.
+    #[tokio::test]
+    async fn a_streamed_answer_is_one_reply_and_its_text_arrives_in_pieces() {
+        let api = FakeApi::spawn(vec![Answer::stream(&[
+            json!({"choices": [{"delta": {"role": "assistant", "content": "Hel"}}]}),
+            json!({"choices": [{"delta": {"content": "lo"}}]}),
+            json!({"choices": [{"delta": {"tool_calls": [
+                {"index": 0, "id": "c1", "type": "function", "function": {"name": "read_file", "arguments": "{\"pa"}}
+            ]}}]}),
+            json!({"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"arguments": "th\":\"a\"}"}}]}}]}),
+            json!({"choices": [{"delta": {"tool_calls": [{"index": 1, "function": {"name": "glob", "arguments": "{}"}}]}}]}),
+            json!({"choices": [], "usage": {"prompt_tokens": 20, "completion_tokens": 4,
+                                             "prompt_tokens_details": {"cached_tokens": 5}}}),
+        ])])
+        .await;
+        let model = OpenAiCompat::new(endpoint(&api.base_url, None)).unwrap();
+        let mut pieces = Vec::new();
+        let reply = model
+            .complete_streaming(&[Message::user("hi")], &[spec()], None, &mut |text| {
+                pieces.push(text.to_owned());
+            })
+            .await
+            .unwrap();
+        assert_eq!(pieces, ["Hel", "lo"]);
+        assert_eq!(reply.message.content.as_deref(), Some("Hello"));
+        assert_eq!(reply.message.tool_calls.len(), 2);
+        assert_eq!(reply.message.tool_calls[0].id, "c1");
+        assert_eq!(
+            reply.message.tool_calls[0].function.arguments,
+            "{\"path\":\"a\"}"
+        );
+        assert_eq!(
+            reply.message.tool_calls[1].id, "call_1",
+            "a call without an id still gets one"
+        );
+        assert_eq!(
+            reply.usage,
+            Usage {
+                input_tokens: 20,
+                cached_input_tokens: 5,
+                output_tokens: 4
+            }
+        );
+        let body = &api.bodies()[0];
+        assert_eq!(body["stream"], true);
+        assert_eq!(body["stream_options"]["include_usage"], true);
+    }
+
+    /// CP5: an error inside the stream fails the call at once, and so does a stream without any answer.
+    #[tokio::test]
+    async fn an_error_in_the_stream_or_no_answer_at_all_fails_the_call() {
+        let api = FakeApi::spawn(vec![
+            Answer::stream(&[
+                json!({"choices": [{"delta": {"content": "par"}}]}),
+                json!({"error": {"message": "context length exceeded (131072)"}, "choices": [{"finish_reason": "error", "delta": {}}]}),
+            ]),
+            Answer::stream(&[]),
+        ])
+        .await;
+        let model = OpenAiCompat::new(endpoint(&api.base_url, None)).unwrap();
+        for want in ["context length exceeded", "without an answer"] {
+            let err = model
+                .complete(&[Message::user("hi")], &[], None)
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(&err, HarnessError::Protocol(text) if text.contains(want)),
+                "{err:?}"
+            );
+        }
+    }
+
+    /// CP5: a stream that goes silent fails at the stall limit with that reason, not at the run's own limit.
+    #[tokio::test]
+    async fn a_silent_stream_fails_at_the_stall_limit() {
+        let mut stalled =
+            Answer::stream(&[json!({"choices": [{"delta": {"content": "thinking"}}]})]);
+        stalled.body = stalled.body.replace("data: [DONE]\n\n", "");
+        stalled.then_hang = true;
+        let api = FakeApi::spawn(vec![stalled]).await;
+        let mut model = OpenAiCompat::new(endpoint(&api.base_url, None)).unwrap();
+        model.stall = Duration::from_millis(300);
+        let started = std::time::Instant::now();
+        let err = model
+            .complete(&[Message::user("hi")], &[], None)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, HarnessError::Transport(text) if text.contains("sent nothing")),
+            "{err:?}"
+        );
+        assert!(started.elapsed() < Duration::from_secs(5));
     }
 
     #[test]
@@ -668,10 +1004,10 @@ mod tests {
 
     #[tokio::test]
     async fn an_echoed_key_is_redacted_from_the_error() {
-        let api = FakeApi::spawn(vec![Answer {
-            status: 401,
-            body: r#"{"error":"Incorrect API key provided: sk-live-0123456789"}"#.into(),
-        }])
+        let api = FakeApi::spawn(vec![Answer::error(
+            401,
+            r#"{"error":"Incorrect API key provided: sk-live-0123456789"}"#,
+        )])
         .await;
         let model = OpenAiCompat::new(endpoint(&api.base_url, Some("sk-live-0123456789"))).unwrap();
         let err = model
