@@ -234,6 +234,24 @@ pub(crate) struct Session {
     direct: Vec<DirectProgram>,
 }
 
+/// What `reader` writes, kept up to [`MAX_FOREGROUND_BYTES`]; the rest is read and dropped, so the program never
+/// waits on a full pipe.
+async fn read_capped(reader: Option<impl tokio::io::AsyncRead + Unpin>) -> Vec<u8> {
+    let mut kept = Vec::new();
+    let Some(mut reader) = reader else {
+        return kept;
+    };
+    let mut chunk = [0u8; 8192];
+    while let Ok(read) = reader.read(&mut chunk).await {
+        if read == 0 {
+            break;
+        }
+        let room = MAX_FOREGROUND_BYTES.saturating_sub(kept.len());
+        kept.extend_from_slice(&chunk[..read.min(room)]);
+    }
+    kept
+}
+
 /// One background job.
 struct Job {
     id: String,
@@ -557,9 +575,10 @@ impl Session {
         program: &DirectProgram,
         args: &[String],
         limit: Duration,
+        stop: &StopFlag,
     ) -> Result<String, String> {
         let (cwd, _) = self.start_dir();
-        let child = Command::new(&program.path)
+        let mut child = Command::new(&program.path)
             .args(args)
             .env_clear()
             .envs(self.env.iter().cloned())
@@ -571,7 +590,25 @@ impl Session {
             .kill_on_drop(true)
             .spawn()
             .map_err(|err| format!("could not start {}: {err}", program.name))?;
-        let output = tokio::time::timeout(limit, child.wait_with_output())
+        let (stdout, stderr) = (child.stdout.take(), child.stderr.take());
+        let run = async {
+            let (out, err, status) =
+                tokio::join!(read_capped(stdout), read_capped(stderr), async {
+                    // A stopped run stops the program too, as it stops a shell command.
+                    loop {
+                        tokio::select! {
+                            status = child.wait() => break status,
+                            () = tokio::time::sleep(STOP_POLL) => {
+                                if stop.load(Ordering::SeqCst) {
+                                    let _ = child.start_kill();
+                                }
+                            }
+                        }
+                    }
+                });
+            status.map(|status| (out, err, status))
+        };
+        let (out, err, status) = tokio::time::timeout(limit, run)
             .await
             .map_err(|_| {
                 format!(
@@ -581,6 +618,11 @@ impl Session {
                 )
             })?
             .map_err(|err| format!("[{} could not be waited for: {err}]", program.name))?;
+        let output = std::process::Output {
+            status,
+            stdout: out,
+            stderr: err,
+        };
         let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
         text.push_str(&String::from_utf8_lossy(&output.stderr));
         if text.len() > MAX_FOREGROUND_BYTES {
@@ -1176,7 +1218,7 @@ impl Tool for Bash {
             if let Sandboxing::On(gate) = &sandbox
                 && let Some((program, words)) = self.0.direct_call(&args.command, gate.as_deref())
             {
-                return self.0.run_direct(program, &words, limit).await;
+                return self.0.run_direct(program, &words, limit, &stop).await;
             }
             self.0.run(&args.command, limit, &stop, sandbox).await
         })
