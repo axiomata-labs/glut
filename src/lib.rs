@@ -11,6 +11,7 @@
 pub mod codemode;
 pub mod commands;
 pub mod config;
+mod diagnostics;
 pub mod error;
 pub mod event;
 pub mod history;

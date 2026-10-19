@@ -191,6 +191,7 @@ async fn run_inner<M: ChatModel>(
         kept: codemode::Kept::default(),
         todos: Vec::new(),
         snapshots: SnapshotState::Unopened,
+        diagnostics: None,
     };
     if depth == 0 && !continuing {
         run.session_start(sink).await;
@@ -289,6 +290,8 @@ struct Loop<'a, M: ChatModel> {
     todos: Vec<planning::TodoItem>,
     /// Glut 2, D: the work folder's snapshots of this run, opened at its first change.
     snapshots: SnapshotState,
+    /// Glut 2, D: the language servers this run started for its edits, at the first one.
+    diagnostics: Option<Arc<std::sync::Mutex<crate::diagnostics::Diagnostics>>>,
 }
 
 /// Where a run's snapshots stand.
@@ -574,7 +577,11 @@ impl<M: ChatModel> Loop<'_, M> {
             return Ok(text);
         }
         self.snapshot_before(call, sink).await;
-        let (ok, output) = self.execute(call, sink).await?;
+        let (ok, mut output) = self.execute(call, sink).await?;
+        if ok && let Some(note) = self.diagnostics_after(call).await {
+            output.push_str("\n\n");
+            output.push_str(&note);
+        }
         if let Some(gate) = self.tools.gate() {
             for judged in gate.take_log() {
                 sink.emit(Event::permission(turn, &call.id, &judged));
@@ -721,6 +728,34 @@ impl<M: ChatModel> Loop<'_, M> {
                 message: format!("no snapshots for this run (undo is not possible): {reason}"),
             }),
         }
+    }
+
+    /// The language server's errors for the file an edit just changed (Glut 2, D), when the run asks for them and a
+    /// server for its language is installed. The servers' pipes are blocking work, done on the blocking pool.
+    async fn diagnostics_after(&mut self, call: &ToolCall) -> Option<String> {
+        if !self.config.diagnostics {
+            return None;
+        }
+        let Some(Access::Edit { path }) = self
+            .tools
+            .access_of(&call.function.name, &call.function.arguments)
+        else {
+            return None;
+        };
+        let servers = Arc::clone(self.diagnostics.get_or_insert_with(|| {
+            Arc::new(std::sync::Mutex::new(crate::diagnostics::Diagnostics::new(
+                &self.config.cwd,
+            )))
+        }));
+        tokio::task::spawn_blocking(move || {
+            servers
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .after_edit(&path)
+        })
+        .await
+        .ok()
+        .flatten()
     }
 
     /// The `exit_plan` arm (Glut 2, D): the plan goes to the owner; yes switches the gate to the run's build mode and
