@@ -466,7 +466,10 @@ pub fn rules_of(text: &str) -> Result<Vec<Rule>, String> {
     split_rules(text).into_iter().map(Rule::parse).collect()
 }
 
-fn split_rules(text: &str) -> Vec<&str> {
+/// The parts [`rules_of`] parses, as written: split on spaces and commas outside parentheses. Public for a caller that
+/// hands a skill's `allowed_tools` to another harness verbatim (Claude Code's `--allowedTools`,
+/// `docs/plans/harness-choice.md`), after [`rules_of`] has checked them.
+pub fn split_rules(text: &str) -> Vec<&str> {
     let mut parts = Vec::new();
     let mut depth = 0usize;
     let mut start: Option<usize> = None;
