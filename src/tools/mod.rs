@@ -91,6 +91,24 @@ impl Toolbox {
         self.offered().map(|tool| tool.spec()).collect()
     }
 
+    /// [`Self::specs`] split in two (Glut 2, G3): the tools the model calls directly, and the MCP tools a run in code
+    /// mode keeps behind `codemode`.
+    pub fn split_specs(&self) -> (Vec<ToolSpec>, Vec<ToolSpec>) {
+        self.offered()
+            .map(|tool| (matches!(tool.offered_as(), Access::Mcp { .. }), tool.spec()))
+            .fold(
+                (Vec::new(), Vec::new()),
+                |(mut direct, mut behind), (mcp, spec)| {
+                    if mcp {
+                        behind.push(spec);
+                    } else {
+                        direct.push(spec);
+                    }
+                    (direct, behind)
+                },
+            )
+    }
+
     pub fn names(&self) -> Vec<String> {
         self.offered().map(|tool| tool.spec().name).collect()
     }

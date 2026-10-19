@@ -32,6 +32,8 @@ clap.workspace = true
 tracing-subscriber.workspace = true
 # The fingerprint of an MCP server's config, which a project's server is approved by (HS5, M2).
 sha2.workspace = true
+# Code mode (Glut 2, G2): the QuickJS runtime a script runs in.
+rquickjs.workspace = true
 
 [dev-dependencies]
 # The fake model server of the tests listens on the loopback.

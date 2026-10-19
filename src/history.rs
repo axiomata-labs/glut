@@ -1,5 +1,6 @@
-//! Old tool results shrink in the conversation (Glut 2, B, G6): once the model has answered after a result, a long one
-//! is replaced by its head and a note, and its whole text stays with the run — `read_full_result` gives it back.
+//! Old tool results shrink in the conversation (Glut 2, B, G6): once the conversation grows past a budget, the oldest
+//! long results the model has answered on are replaced by their head and a note, and their whole text stays with the
+//! run — `read_full_result` gives it back.
 //!
 //! Measured on Glut rund's news-web run: every fetched page rode along in every later step (1.7 M input tokens for 18
 //! steps). A result the model has already worked with is rarely needed whole again; when it is, one call fetches it.
@@ -7,7 +8,7 @@
 //! * **Relocation, never loss**: the whole text is kept in the run's [`ResultStore`], the note names its id.
 //! * **Each result shrinks once**: the conversation before it stays byte for byte the same afterwards, so a provider's
 //!   prompt cache breaks once at that point and holds from there on — not on every turn.
-//! * **The newest results stay whole** until the model has answered on them.
+//! * **The newest results stay whole**, and nothing shrinks while the conversation fits the budget.
 //!
 //! Like `task`, `read_full_result` has no [`crate::tools::Tool`] impl: the store belongs to the loop, which answers
 //! the call itself (`run.rs`).
@@ -23,6 +24,9 @@ use crate::tools::MAX_TOOL_OUTPUT_CHARS;
 pub const SHRINK_OVER_CHARS: usize = 2_000;
 /// What stays of a shrunk result: its first characters (G6).
 pub const KEEP_HEAD_CHARS: usize = 1_200;
+/// Results shrink only while the conversation is longer than this, in characters (~20k tokens): a data-gathering
+/// task's results stay whole as long as they fit.
+pub const SHRINK_BUDGET_CHARS: usize = 80_000;
 
 /// The tool's name.
 pub(crate) const NAME: &str = "read_full_result";
@@ -135,36 +139,64 @@ pub(crate) fn answer(store: &ResultStore, arguments: &str) -> (bool, String) {
     }
 }
 
-/// Shrinks the long tool results in `messages[from..]` that an assistant message already follows, keeping their whole
-/// text in `store`; returns the index up to which the conversation is done — the next call starts there, so no result
-/// shrinks twice and none is looked at again.
-pub(crate) fn shrink_answered(messages: &mut [Message], from: usize, store: &ResultStore) -> usize {
+/// Shrinks long tool results the model has already answered on, oldest first, while the conversation is over
+/// `budget` characters; their whole text goes into `store`. Returns the index before which every result has been
+/// dealt with — the next call starts there, so no result shrinks twice.
+///
+/// Over a budget, not as soon as the model answered (measured 2026-10-20, Glut 2 CP2): a task that gathers data for
+/// its final answer — a calendar digest writes every event out again — still needs results it has "answered on" with
+/// another call; shrinking them sent the model fetching them back until the turn limit. Under the budget nothing
+/// shrinks; above it the oldest results go first, the newest stay whole.
+pub(crate) fn shrink_over_budget(
+    messages: &mut [Message],
+    from: usize,
+    store: &ResultStore,
+    budget: usize,
+) -> usize {
+    let mut total: usize = messages.iter().map(size_of).sum();
+    if total <= budget {
+        return from;
+    }
     let Some(last_answer) = messages.iter().rposition(|m| m.role == Role::Assistant) else {
         return from;
     };
-    if last_answer <= from {
-        return from;
-    }
-    for message in &mut messages[from..last_answer] {
+    let mut done = from;
+    for (index, message) in messages.iter_mut().enumerate().take(last_answer).skip(from) {
+        if total <= budget {
+            break;
+        }
+        done = index + 1;
         if message.role != Role::Tool {
             continue;
         }
         let Some(text) = message.content.as_deref() else {
             continue;
         };
-        let total = text.chars().count();
-        if total <= SHRINK_OVER_CHARS {
+        let chars = text.chars().count();
+        if chars <= SHRINK_OVER_CHARS {
             continue;
         }
         let head: String = text.chars().take(KEEP_HEAD_CHARS).collect();
         let id = store.put(message.content.take().unwrap_or_default());
-        let removed = total - KEEP_HEAD_CHARS;
-        message.content = Some(format!(
-            "{head}\n\n[shortened: {removed} more characters were taken out of the conversation after you used this \
-             result; `{NAME}` with id \"{id}\" gives the whole text]"
-        ));
+        let removed = chars - KEEP_HEAD_CHARS;
+        let shrunk = format!(
+            "{head}\n\n[shortened: {removed} more characters were taken out of the conversation to keep it small; \
+             `{NAME}` with id \"{id}\" gives the whole text]"
+        );
+        total = total - chars + shrunk.chars().count();
+        message.content = Some(shrunk);
     }
-    last_answer
+    done
+}
+
+/// What a message adds to the prompt, in characters: its text and its tool calls' arguments.
+fn size_of(message: &Message) -> usize {
+    message.content.as_deref().map_or(0, |t| t.chars().count())
+        + message
+            .tool_calls
+            .iter()
+            .map(|c| c.function.arguments.chars().count())
+            .sum::<usize>()
 }
 
 #[cfg(test)]
@@ -181,7 +213,7 @@ mod tests {
     }
 
     #[test]
-    fn answered_long_results_shrink_once_and_the_newest_stay_whole() {
+    fn over_the_budget_answered_long_results_shrink_once_and_the_newest_stay_whole() {
         let store = ResultStore::new("r");
         let long = "a".repeat(SHRINK_OVER_CHARS + 500);
         let mut messages = vec![
@@ -193,7 +225,11 @@ mod tests {
             assistant(),
             Message::tool("3", long.clone()),
         ];
-        let done = shrink_answered(&mut messages, 0, &store);
+        // Under a generous budget nothing shrinks.
+        let untouched = messages.clone();
+        assert_eq!(shrink_over_budget(&mut messages, 0, &store, usize::MAX), 0);
+        assert_eq!(messages, untouched);
+        let done = shrink_over_budget(&mut messages, 0, &store, 0);
         assert_eq!(done, 5);
         let shrunk = messages[3].content.as_deref().unwrap();
         assert!(shrunk.starts_with(&"a".repeat(KEEP_HEAD_CHARS)));
@@ -205,11 +241,11 @@ mod tests {
 
         // Nothing new answered: nothing changes, and what shrank is not touched again.
         let before = messages.clone();
-        assert_eq!(shrink_answered(&mut messages, done, &store), done);
+        assert_eq!(shrink_over_budget(&mut messages, done, &store, 0), done);
         assert_eq!(messages, before);
 
         messages.push(assistant());
-        assert_eq!(shrink_answered(&mut messages, done, &store), 7);
+        assert_eq!(shrink_over_budget(&mut messages, done, &store, 0), 7);
         assert!(
             messages[6]
                 .content
@@ -255,5 +291,43 @@ mod tests {
         );
         assert!(answer(&store, "[]").1.contains("JSON object"));
         assert!(answer(&store, r#"{"offset": 1}"#).1.contains("`id`"));
+    }
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+
+    #[test]
+    fn the_oldest_shrink_first_and_only_until_the_conversation_fits() {
+        let store = ResultStore::new("b");
+        let long = || "z".repeat(10_000);
+        let assistant = || Message {
+            role: Role::Assistant,
+            content: None,
+            tool_calls: Vec::new(),
+            tool_call_id: None,
+        };
+        let mut messages = vec![
+            Message::user("u"),
+            assistant(),
+            Message::tool("1", long()),
+            assistant(),
+            Message::tool("2", long()),
+            assistant(),
+            Message::tool("3", long()),
+        ];
+        // ~30k characters, a budget of 25k: shrinking the oldest one is enough.
+        let done = shrink_over_budget(&mut messages, 0, &store, 25_000);
+        assert_eq!(done, 3);
+        assert!(
+            messages[2]
+                .content
+                .as_deref()
+                .unwrap()
+                .contains("id \"b-1\"")
+        );
+        assert_eq!(messages[4].content.as_deref().unwrap().len(), 10_000);
+        assert_eq!(messages[6].content.as_deref().unwrap().len(), 10_000);
     }
 }

@@ -139,6 +139,16 @@ pub enum Event {
     Error {
         message: String,
     },
+    /// The run's task list as `todo_write` just sent it (Glut 2, D).
+    Todo {
+        turn: u32,
+        items: Vec<crate::planning::TodoItem>,
+    },
+    /// The owner approved the plan and the run left Plan mode (`exit_plan`, Glut 2, D): the mode it works in now.
+    ModeChanged {
+        turn: u32,
+        mode: String,
+    },
     Finished {
         reason: FinishReason,
         turns: u32,

@@ -87,6 +87,17 @@ pub struct RunConfig {
     /// Whether long tool results the model has answered on shrink in the conversation, their whole text kept for
     /// `read_full_result` (Glut 2, B). On by default: it needs nothing outside the run.
     pub shrink_results: bool,
+    /// Whether the run offers `codemode` and keeps its MCP tools behind it (Glut 2, A + E, G3/G8): the model then sees
+    /// the core tools and `codemode`, and reaches the MCP tools from a script. On by default.
+    pub codemode: bool,
+    /// In code mode, whether the MCP tools are reached only from a script (G3). A run that declares its MCP tools — a
+    /// skill — keeps them direct (G7, revised 2026-10-20 after measuring: a digest whose output *is* its data paid 3×
+    /// the tokens through code); a chat turn keeps them behind code. On by default.
+    pub mcp_behind_code: bool,
+    /// Whether the run offers `todo_write`, its task list (Glut 2, D). On by default.
+    pub todos: bool,
+    /// The mode a run in Plan mode switches to once the owner approves its plan (`exit_plan`, Glut 2, D).
+    pub build_mode: crate::permissions::Mode,
 }
 
 impl RunConfig {
@@ -106,6 +117,10 @@ impl RunConfig {
             subagent_timeout: DEFAULT_SUBAGENT_TIMEOUT,
             max_subagents: DEFAULT_MAX_SUBAGENTS,
             shrink_results: true,
+            codemode: true,
+            mcp_behind_code: true,
+            todos: true,
+            build_mode: crate::permissions::Mode::Default,
         }
     }
 }

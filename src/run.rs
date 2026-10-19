@@ -7,12 +7,14 @@ use serde_json::{Value, json};
 use tokio::sync::Notify;
 use tokio::time::Instant;
 
+use crate::codemode;
 use crate::config::RunConfig;
 use crate::event::{EVENT_RESULT_CHARS, Event, EventSink, FinishReason};
 use crate::history::{self, ResultStore};
 use crate::hooks::{self, HookEvent, HookOutcome};
 use crate::model::{ChatModel, Message, Role, ToolCall, ToolSpec, Usage};
-use crate::permissions::{Access, Gate};
+use crate::permissions::{Access, Answer, Gate, Mode};
+use crate::planning;
 use crate::prompt::{subagent_prompt, system_prompt};
 use crate::tools::shell::{Session, ShellOptions};
 use crate::tools::{StopFlag, Toolbox};
@@ -146,22 +148,11 @@ async fn run_inner<M: ChatModel>(
     // subagent never sees the tool, so nesting deeper than one cannot start; and its name is in the run's
     // tool list from the first turn on.
     let offer_task = depth == 0 && config.subagents;
-    let mut specs = tools.specs();
-    let mut offered = tools.names();
-    if offer_task {
-        specs.push(crate::task::spec());
-        offered.push(crate::task::NAME.to_owned());
-    }
-    // Glut 2, B: offered from the first turn on, so the tool list — and with it the prompt's cached head — never
-    // changes in the middle of a run.
-    if config.shrink_results {
-        specs.push(history::spec());
-        offered.push(history::NAME.to_owned());
-    }
+    let offer = Offer::of(config, tools, depth);
     sink.emit(Event::Started {
         model: model.name().to_owned(),
         cwd: config.cwd.display().to_string(),
-        tools: offered,
+        tools: offer.specs.iter().map(|spec| spec.name.clone()).collect(),
     });
     // Set when the run stops, so a tool still at work (a search over a large tree) stops too and none starts after.
     let stop = StopFlag::default();
@@ -195,11 +186,14 @@ async fn run_inner<M: ChatModel>(
         subagents_started: 0,
         results: ResultStore::new(store_tag()),
         settled: 0,
+        offer,
+        kept: codemode::Kept::default(),
+        todos: Vec::new(),
     };
     if depth == 0 && !continuing {
         run.session_start(sink).await;
     }
-    let reason = run.drive(&specs, sink).await;
+    let reason = run.drive(sink).await;
     stop.store(true, Ordering::SeqCst);
     let Loop {
         usage,
@@ -285,7 +279,67 @@ struct Loop<'a, M: ChatModel> {
     results: ResultStore,
     /// Up to which message the conversation has been looked at for results to shrink.
     settled: usize,
+    /// What the model is offered, and what a script can find; built anew when the mode changes (`exit_plan`).
+    offer: Offer,
+    /// Glut 2, A: what the run's scripts `store()`.
+    kept: codemode::Kept,
+    /// Glut 2, D: the run's task list as `todo_write` last sent it.
+    todos: Vec<planning::TodoItem>,
 }
+
+/// The tools a run offers the model, in the order they go out, and what a script finds in its catalog.
+struct Offer {
+    specs: Vec<ToolSpec>,
+    codemode: bool,
+    catalog: Arc<codemode::Catalog>,
+}
+
+impl Offer {
+    /// The toolbox's offered tools — in code mode the MCP tools behind `codemode` (G3) unless the run keeps them
+    /// direct (G7) — then the loop's own: `codemode`, `task` (depth 0, HS8), `read_full_result` (B), `todo_write`
+    /// and, in Plan mode, `exit_plan` (D).
+    fn of(config: &RunConfig, tools: &Toolbox, depth: u32) -> Self {
+        let (direct, behind) = if config.mcp_behind_code {
+            tools.split_specs()
+        } else {
+            (tools.specs(), Vec::new())
+        };
+        let codemode = config.codemode && !(direct.is_empty() && behind.is_empty());
+        let catalog = Arc::new(codemode::Catalog {
+            specs: direct.iter().chain(&behind).cloned().collect(),
+        });
+        let mut specs = if codemode {
+            direct.clone()
+        } else {
+            tools.specs()
+        };
+        if codemode {
+            specs.push(codemode::spec(&direct, &behind));
+        }
+        if depth == 0 && config.subagents {
+            specs.push(crate::task::spec());
+        }
+        // Offered from the first turn on, so the tool list — and with it the prompt's cached head — stays put.
+        if config.shrink_results {
+            specs.push(history::spec());
+        }
+        if config.todos {
+            specs.push(planning::todo_spec());
+        }
+        if depth == 0 && tools.gate().is_some_and(|gate| gate.mode() == Mode::Plan) {
+            specs.push(planning::exit_plan_spec());
+        }
+        Offer {
+            specs,
+            codemode,
+            catalog,
+        }
+    }
+}
+
+/// How often a script may be found waiting with no call open before it counts as stuck: it waits on a promise nothing
+/// can settle (there are no timers). A few polls, not one, so a call answered a moment ago gets to land first.
+const STUCK_POLLS: u32 = 8;
 
 /// A tag no other run of this process — an earlier turn of the same chat included — gives its results.
 fn store_tag() -> String {
@@ -315,7 +369,7 @@ impl<M: ChatModel> Loop<'_, M> {
 
     /// The turns, until the model answers without a tool call (and no Stop hook objects) or a limit, a cancel or
     /// a failing model call ends the run. Returns why it ended.
-    async fn drive(&mut self, specs: &[ToolSpec], sink: &mut dyn EventSink) -> FinishReason {
+    async fn drive(&mut self, sink: &mut dyn EventSink) -> FinishReason {
         // Set once a Stop hook refused the answer: its payload then says so, and the hook lets it end (D3).
         let mut stop_hook_active = false;
         loop {
@@ -326,7 +380,8 @@ impl<M: ChatModel> Loop<'_, M> {
                 return FinishReason::MaxTurns;
             }
             self.turns += 1;
-            let calls = match self.ask(specs, sink).await {
+            let specs = self.offer.specs.clone();
+            let calls = match self.ask(&specs, sink).await {
                 Ok(calls) => calls,
                 Err(ending) => return ending,
             };
@@ -356,8 +411,12 @@ impl<M: ChatModel> Loop<'_, M> {
     ) -> Result<Vec<ToolCall>, FinishReason> {
         let turn = self.turns;
         if self.config.shrink_results {
-            self.settled =
-                history::shrink_answered(&mut self.messages, self.settled, &self.results);
+            self.settled = history::shrink_over_budget(
+                &mut self.messages,
+                self.settled,
+                &self.results,
+                history::SHRINK_BUDGET_CHARS,
+            );
         }
         let reply = {
             // The answer's text goes out as it streams in (CP5); the whole text follows below either way.
@@ -459,6 +518,19 @@ impl<M: ChatModel> Loop<'_, M> {
         call: ToolCall,
         sink: &mut dyn EventSink,
     ) -> Result<(), FinishReason> {
+        let output = self.perform(&call, sink).await?;
+        self.messages.push(Message::tool(call.id, output));
+        Ok(())
+    }
+
+    /// One call as [`Self::run_call`] runs it, without adding its answer to the conversation — what a script's call
+    /// (Glut 2, A) shares with a direct one: the hooks, the gate's events, the result event. Returns the text the
+    /// caller hands on.
+    async fn perform(
+        &mut self,
+        call: &ToolCall,
+        sink: &mut dyn EventSink,
+    ) -> Result<String, FinishReason> {
         let turn = self.turns;
         // HS7, D3/B2: the owner's hooks may block a call before anything runs — they never let one through,
         // the gate stays the only decider.
@@ -480,10 +552,16 @@ impl<M: ChatModel> Loop<'_, M> {
             .await?;
         if before.blocked {
             let text = format!("error: {}", refusal(before, "a hook refused this call"));
-            self.answer_call(call, false, text, sink);
-            return Ok(());
+            sink.emit(Event::tool_result(
+                turn,
+                &call.id,
+                &call.function.name,
+                false,
+                &text,
+            ));
+            return Ok(text);
         }
-        let (ok, output) = self.execute(&call, sink).await?;
+        let (ok, output) = self.execute(call, sink).await?;
         if let Some(gate) = self.tools.gate() {
             for judged in gate.take_log() {
                 sink.emit(Event::permission(turn, &call.id, &judged));
@@ -517,13 +595,11 @@ impl<M: ChatModel> Loop<'_, M> {
                 sink,
             )
             .await?;
-        let output = if after.blocked {
+        Ok(if after.blocked {
             format!("error: {}", refusal(after, "a hook refused this result"))
         } else {
             output
-        };
-        self.messages.push(Message::tool(call.id, output));
-        Ok(())
+        })
     }
 
     /// A call answered without running it: its result shown, and the model told.
@@ -554,11 +630,171 @@ impl<M: ChatModel> Loop<'_, M> {
         if self.config.shrink_results && name == history::NAME {
             return Ok(history::answer(&self.results, &call.function.arguments));
         }
+        if self.config.todos && name == planning::TODO {
+            return Ok(match planning::parse_todos(&call.function.arguments) {
+                Ok(items) => {
+                    sink.emit(Event::Todo {
+                        turn: self.turns,
+                        items: items.clone(),
+                    });
+                    let answer = planning::todo_answer(&items);
+                    self.todos = items;
+                    (true, answer)
+                }
+                Err(reason) => (false, format!("error: {reason}")),
+            });
+        }
+        if name == planning::EXIT_PLAN
+            && let Some(gate) = self.tools.gate().filter(|gate| gate.mode() == Mode::Plan)
+        {
+            return Ok(self.exit_plan(Arc::clone(gate), call, sink).await);
+        }
+        if self.offer.codemode && name == codemode::NAME {
+            return Box::pin(self.run_codemode(call, sink)).await;
+        }
         tokio::select! {
             result = self.tools.call_until(name, &call.function.arguments, self.stop) => Ok(result),
             () = tokio::time::sleep_until(self.deadline) => Err(FinishReason::Timeout),
             () = self.cancel.cancelled() => Err(FinishReason::Cancelled),
         }
+    }
+
+    /// The `exit_plan` arm (Glut 2, D): the plan goes to the owner; yes switches the gate to the run's build mode and
+    /// offers the tools that mode allows from the next turn on, no keeps Plan. Headless the ask is refused.
+    async fn exit_plan(
+        &mut self,
+        gate: Arc<Gate>,
+        call: &ToolCall,
+        sink: &mut dyn EventSink,
+    ) -> (bool, String) {
+        let (_, question) = match planning::plan_of(&call.function.arguments) {
+            Ok(plan) => plan,
+            Err(reason) => return (false, format!("error: {reason}")),
+        };
+        match gate.ask_owner(planning::EXIT_PLAN, &question).await {
+            Answer::Allow | Answer::AllowAlways => {
+                let mode = self.config.build_mode;
+                gate.set_mode(mode);
+                sink.emit(Event::ModeChanged {
+                    turn: self.turns,
+                    mode: gate.mode_name().to_owned(),
+                });
+                self.offer = Offer::of(self.config, self.tools, self.depth);
+                (
+                    true,
+                    format!("The owner approved the plan: carry it out now (mode {}).", gate.mode_name()),
+                )
+            }
+            Answer::Deny if !gate.can_ask() => (
+                false,
+                "Nobody can be asked from here: present the plan in your answer and ask the owner to switch to build \
+                 mode to carry it out. Until then you stay in plan mode."
+                    .to_owned(),
+            ),
+            Answer::Deny => (
+                false,
+                "The owner did not approve the plan: stay in plan mode — refine the plan, or answer with your \
+                 questions."
+                    .to_owned(),
+            ),
+        }
+    }
+
+    /// The `codemode` arm (Glut 2, A): runs the script and answers each of its tool calls on the path a direct call
+    /// takes ([`Self::perform`]), one after the other, until it ends. A script found waiting with no call open is
+    /// ended — nothing could ever settle what it waits for. `Err` when the run ended meanwhile.
+    async fn run_codemode(
+        &mut self,
+        call: &ToolCall,
+        sink: &mut dyn EventSink,
+    ) -> Result<(bool, String), FinishReason> {
+        let code = match codemode::code_of(&call.function.arguments) {
+            Ok(code) => code,
+            Err(reason) => return Ok((false, format!("error: {reason}"))),
+        };
+        let (requests, mut asked) = tokio::sync::mpsc::unbounded_channel();
+        let cancel = self.cancel.clone();
+        let interrupt = codemode::Interrupt {
+            stop: Arc::clone(self.stop),
+            cancelled: Box::new(move || cancel.is_cancelled()),
+            deadline: self.deadline.into_std(),
+        };
+        let script = codemode::run(
+            code,
+            Arc::clone(&self.offer.catalog),
+            Arc::clone(&self.kept),
+            self.results.clone(),
+            interrupt,
+            requests,
+        );
+        let mut script = std::pin::pin!(script);
+        let (mut calls, mut idle) = (0u32, 0u32);
+        loop {
+            let polled =
+                std::future::poll_fn(|cx| std::task::Poll::Ready(script.as_mut().poll(cx))).await;
+            if let std::task::Poll::Ready(ended) = polled {
+                return Ok((ended.ok, ended.text));
+            }
+            if self.cancel.is_cancelled() {
+                return Err(FinishReason::Cancelled);
+            }
+            if Instant::now() >= self.deadline {
+                return Err(FinishReason::Timeout);
+            }
+            let Ok(request) = asked.try_recv() else {
+                idle += 1;
+                if idle > STUCK_POLLS {
+                    return Ok((
+                        false,
+                        "Script error: the script waits for a promise nothing will settle (no tool call is open,                          and there are no timers)"
+                            .into(),
+                    ));
+                }
+                tokio::task::yield_now().await;
+                continue;
+            };
+            idle = 0;
+            calls += 1;
+            let id = format!("{}.{calls}", call.id);
+            let answer = self
+                .script_call(id, request.name, request.arguments, sink)
+                .await?;
+            // The script may have ended meanwhile (an error elsewhere): nobody left to hear the answer.
+            let _ = request.reply.send(answer);
+        }
+    }
+
+    /// One call from a script: refused for what a script may not start (another script, a subagent), answered from
+    /// the run's own store for `read_full_result`, otherwise run like a direct call. Its events carry `<call>.<n>`.
+    async fn script_call(
+        &mut self,
+        id: String,
+        name: String,
+        arguments: String,
+        sink: &mut dyn EventSink,
+    ) -> Result<(bool, String), FinishReason> {
+        sink.emit(Event::tool_call(self.turns, &id, &name, &arguments));
+        if name == codemode::NAME || name == crate::task::NAME {
+            let text = format!("not permitted: a script cannot start {name}");
+            sink.emit(Event::tool_result(self.turns, &id, &name, false, &text));
+            return Ok((false, text));
+        }
+        if name == history::NAME {
+            let (ok, text) = history::answer(&self.results, &arguments);
+            sink.emit(Event::tool_result(self.turns, &id, &name, ok, &text));
+            return Ok((ok, text.trim_start_matches("error: ").to_owned()));
+        }
+        let call = ToolCall {
+            id,
+            kind: "function".into(),
+            function: crate::model::FunctionCall { name, arguments },
+        };
+        let text = self.perform(&call, sink).await?;
+        // A tool's failure is text that starts with `error: ` (the toolbox's convention); the script gets a rejection.
+        Ok(match text.strip_prefix("error: ") {
+            Some(reason) => (false, reason.to_owned()),
+            None => (true, text),
+        })
     }
 
     /// The `task` arm (HS8, D2): judge the call, run the subagent, hand its answer back as the tool's result — and
@@ -922,7 +1158,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_long_result_shrinks_after_the_model_answered_on_it_and_comes_back_whole() {
-        let long = "x".repeat(crate::history::SHRINK_OVER_CHARS + 100);
+        let long = "x".repeat(crate::history::SHRINK_BUDGET_CHARS + 100);
         let args = json!({ "text": long }).to_string();
         let model = Script::new(vec![
             Ok(calls(&[("c1", "echo", args.as_str())])),
@@ -949,8 +1185,13 @@ mod tests {
         assert_eq!(outcome.reason, FinishReason::Answered);
 
         let seen = model.seen.lock().unwrap();
-        // Second request: c1 is the newest result, still whole.
-        assert_eq!(seen[1][3].content.as_deref(), Some(long.as_str()));
+        // Second request: c1 is the newest result, still whole (as long as the toolbox lets any result be).
+        let second = seen[1][3].content.as_deref().unwrap();
+        assert!(
+            second.len() > crate::tools::MAX_TOOL_OUTPUT_CHARS,
+            "{}",
+            second.len()
+        );
         // Third request: the model answered after c1 (with c2's call), so c1 shrank; c2 is short and stays.
         let shrunk = seen[2][3].content.as_deref().unwrap();
         assert!(
@@ -1285,6 +1526,269 @@ mod tests {
             .rposition(|event| matches!(event, Event::TextDelta { .. }))
             .unwrap();
         assert!(last_piece < whole);
+    }
+
+    /// An MCP-like tool: a run in code mode keeps it behind `codemode` (Glut 2, G3).
+    struct Look;
+
+    impl Tool for Look {
+        fn spec(&self) -> ToolSpec {
+            ToolSpec {
+                name: "mcp__srv__look".into(),
+                description: "Looks.".into(),
+                parameters: json!({"type": "object"}),
+            }
+        }
+
+        fn access(&self, _arguments: &Value) -> crate::permissions::Access {
+            crate::permissions::Access::Mcp {
+                server: "srv".into(),
+                tool: "look".into(),
+            }
+        }
+
+        fn call(&self, _arguments: Value, _context: crate::tools::CallContext) -> ToolFuture<'_> {
+            Box::pin(async { Ok("looked".to_owned()) })
+        }
+    }
+
+    /// Runs one `codemode` call with `code` over echo and the MCP-like tool; returns the script's answer and the events.
+    async fn script_run(code: &str, tools: Toolbox) -> (String, Vec<Event>) {
+        let args = json!({ "code": code }).to_string();
+        let model = Script::new(vec![
+            Ok(calls(&[("c1", crate::codemode::NAME, args.as_str())])),
+            Ok(text("done")),
+        ]);
+        let mut events = Vec::new();
+        run(
+            &RunConfig::new("/w"),
+            &model,
+            &tools,
+            "go",
+            &mut events,
+            &Cancel::new(),
+        )
+        .await;
+        let seen = model.seen.lock().unwrap();
+        let answer = seen[1].last().unwrap().content.clone().unwrap_or_default();
+        (answer, events)
+    }
+
+    fn with_look() -> Toolbox {
+        let mut tools = toolbox();
+        tools.extend([Box::new(Look) as Box<dyn Tool>]);
+        tools
+    }
+
+    #[tokio::test]
+    async fn a_script_calls_tools_as_the_run_does_and_mcp_stays_behind_code() {
+        let (answer, events) = script_run(
+            "const [a, b] = await Promise.all([tools.echo({text: 'x'}), tools.mcp__srv__look({})]); \
+             return a + '|' + b",
+            with_look(),
+        )
+        .await;
+        assert_eq!(answer, "x|looked");
+        let started = events.iter().find_map(|e| match e {
+            Event::Started { tools, .. } => Some(tools.clone()),
+            _ => None,
+        });
+        let started = started.unwrap();
+        assert!(
+            started.iter().any(|t| t == "echo")
+                && started.iter().any(|t| t == crate::codemode::NAME)
+        );
+        assert!(
+            !started.iter().any(|t| t == "mcp__srv__look"),
+            "{started:?}"
+        );
+        // Each call from the script is a call of the run, reported under the script's id.
+        let inner: Vec<String> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::ToolCall { id, .. } if id.starts_with("c1.") => Some(id.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(inner, ["c1.1", "c1.2"]);
+    }
+
+    #[tokio::test]
+    async fn a_script_waiting_for_nothing_ends_and_cannot_start_a_subagent_or_a_script() {
+        let (stuck, _) = script_run("await new Promise(() => {}); return 1", with_look()).await;
+        assert!(stuck.contains("nothing will settle"), "{stuck}");
+        let (task, _) = script_run(
+            "try { await tools.task({description: 'd', prompt: 'p'}) } catch (e) { return e.message }",
+            with_look(),
+        )
+        .await;
+        assert!(task.contains("cannot start task"), "{task}");
+        let (nested, _) = script_run(
+            "try { await tools.codemode({code: 'return 1'}) } catch (e) { return e.message }",
+            with_look(),
+        )
+        .await;
+        assert!(nested.contains("cannot start codemode"), "{nested}");
+    }
+
+    #[tokio::test]
+    async fn the_gate_judges_every_call_from_a_script() {
+        use crate::permissions::{Gate, Mode, Nobody, RuleSet};
+        let mut tools = with_look();
+        tools.set_gate(Arc::new(Gate::new(
+            RuleSet::default(),
+            Mode::Default,
+            Arc::new(Nobody),
+        )));
+        let (answer, events) = script_run(
+            "try { await tools.echo({text: 'x'}); return 'ran' } catch (e) { return 'refused: ' + e.message }",
+            tools,
+        )
+        .await;
+        assert!(answer.starts_with("refused: not permitted"), "{answer}");
+        assert!(events.iter().any(
+            |e| matches!(e, Event::Permission { allowed: false, tool, .. } if tool == "echo")
+        ));
+    }
+
+    #[tokio::test]
+    async fn without_code_mode_mcp_tools_are_offered_directly() {
+        let model = Script::new(vec![Ok(text("done"))]);
+        let mut events = Vec::new();
+        let config = RunConfig {
+            codemode: false,
+            ..RunConfig::new("/w")
+        };
+        run(
+            &config,
+            &model,
+            &with_look(),
+            "go",
+            &mut events,
+            &Cancel::new(),
+        )
+        .await;
+        let started = events.iter().find_map(|e| match e {
+            Event::Started { tools, .. } => Some(tools.clone()),
+            _ => None,
+        });
+        let started = started.unwrap();
+        assert!(started.iter().any(|t| t == "mcp__srv__look"));
+        assert!(!started.iter().any(|t| t == crate::codemode::NAME));
+    }
+
+    #[tokio::test]
+    async fn todo_write_reports_the_list_and_answers_with_what_is_open() {
+        let model = Script::new(vec![
+            Ok(calls(&[(
+                "c1",
+                crate::planning::TODO,
+                r#"{"items":[{"text":"read","status":"done"},{"text":"fix","status":"in_progress"}]}"#,
+            )])),
+            Ok(text("done")),
+        ]);
+        let mut events = Vec::new();
+        run(
+            &RunConfig::new("/w"),
+            &model,
+            &toolbox(),
+            "go",
+            &mut events,
+            &Cancel::new(),
+        )
+        .await;
+        assert_eq!(tool_answer(&model), "list saved: 2 items, 1 done\n▸ fix");
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, Event::Todo { items, .. } if items.len() == 2))
+        );
+    }
+
+    /// An edit-like tool: Plan mode does not offer it.
+    struct Write;
+
+    impl Tool for Write {
+        fn spec(&self) -> ToolSpec {
+            ToolSpec {
+                name: "write".into(),
+                description: "w".into(),
+                parameters: json!({"type": "object"}),
+            }
+        }
+
+        fn access(&self, _arguments: &Value) -> crate::permissions::Access {
+            crate::permissions::Access::Edit { path: "f".into() }
+        }
+
+        fn call(&self, _arguments: Value, _context: crate::tools::CallContext) -> ToolFuture<'_> {
+            Box::pin(async { Ok("written".to_owned()) })
+        }
+    }
+
+    /// Says yes to every ask.
+    struct Yes;
+
+    impl crate::permissions::Asker for Yes {
+        fn ask<'a>(
+            &'a self,
+            _request: &'a crate::permissions::AskRequest,
+        ) -> crate::permissions::AnswerFuture<'a> {
+            Box::pin(async { crate::permissions::Answer::Allow })
+        }
+    }
+
+    async fn plan_run(asker: Arc<dyn crate::permissions::Asker>) -> (Script, Vec<Event>) {
+        use crate::permissions::{Gate, Mode, RuleSet};
+        let mut tools = toolbox();
+        tools.extend([Box::new(Write) as Box<dyn Tool>]);
+        tools.set_gate(Arc::new(Gate::new(RuleSet::default(), Mode::Plan, asker)));
+        let model = Script::new(vec![
+            Ok(calls(&[(
+                "c1",
+                crate::planning::EXIT_PLAN,
+                r#"{"plan":"change f"}"#,
+            )])),
+            Ok(text("done")),
+        ]);
+        let mut events = Vec::new();
+        let config = RunConfig {
+            build_mode: crate::permissions::Mode::AcceptEdits,
+            ..RunConfig::new("/w")
+        };
+        run(&config, &model, &tools, "go", &mut events, &Cancel::new()).await;
+        (model, events)
+    }
+
+    #[tokio::test]
+    async fn an_approved_plan_leaves_plan_mode_and_offers_the_edit_tools_from_the_next_turn() {
+        let (model, events) = plan_run(Arc::new(Yes)).await;
+        assert!(tool_answer(&model).contains("approved"));
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, Event::ModeChanged { mode, .. } if mode == "accept_edits"))
+        );
+        let tools_sent = model.offered.lock().unwrap();
+        assert!(
+            !tools_sent[0].iter().any(|t| t == "write")
+                && tools_sent[0].iter().any(|t| t == "exit_plan")
+        );
+        assert!(
+            tools_sent[1].iter().any(|t| t == "write")
+                && !tools_sent[1].iter().any(|t| t == "exit_plan")
+        );
+    }
+
+    #[tokio::test]
+    async fn without_an_answer_the_run_stays_in_plan_mode() {
+        let (model, events) = plan_run(Arc::new(crate::permissions::Nobody)).await;
+        assert!(tool_answer(&model).contains("ask the owner to switch to build"));
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, Event::ModeChanged { .. }))
+        );
     }
 
     #[tokio::test]

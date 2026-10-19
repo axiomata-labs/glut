@@ -825,7 +825,8 @@ pub struct Judgement {
 /// Judges every tool call of a run.
 pub struct Gate {
     rules: Mutex<RuleSet>,
-    mode: Mode,
+    /// The run's mode; switched once when the owner approves a plan (`set_mode`).
+    mode: Mutex<Mode>,
     asker: Arc<dyn Asker>,
     /// One question at a time: the proxy's connections can ask while a command runs, and two prompts in one terminal
     /// would mix their answers.
@@ -850,7 +851,7 @@ impl Gate {
     pub fn new(rules: RuleSet, mode: Mode, asker: Arc<dyn Asker>) -> Self {
         Gate {
             rules: Mutex::new(rules),
-            mode,
+            mode: Mutex::new(mode),
             asker,
             asking: tokio::sync::Mutex::new(()),
             log: Mutex::new(Vec::new()),
@@ -879,7 +880,7 @@ impl Gate {
         if *sample == Access::Own {
             return true;
         }
-        if self.mode == Mode::Plan && matches!(sample, Access::Edit { .. }) {
+        if self.mode() == Mode::Plan && matches!(sample, Access::Edit { .. }) {
             return false;
         }
         let denied = self
@@ -921,12 +922,42 @@ impl Gate {
     }
 
     pub fn mode(&self) -> Mode {
-        self.mode
+        *self
+            .mode
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+    }
+
+    /// Switches the run's mode — out of Plan once the owner approved the plan (Glut 2, `exit_plan`).
+    pub fn set_mode(&self, mode: Mode) {
+        *self
+            .mode
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) = mode;
+    }
+
+    /// Whether anyone can be asked at all (a terminal, the app) — `false` for a headless run.
+    pub fn can_ask(&self) -> bool {
+        self.asker.present()
+    }
+
+    /// Asks the owner about something that is no single call (Glut 2: leaving Plan mode with a plan): one question at
+    /// a time like every ask, refused without asking when nobody is there.
+    pub async fn ask_owner(&self, tool: &str, target: &str) -> Answer {
+        if !self.asker.present() {
+            return Answer::Deny;
+        }
+        let request = AskRequest {
+            tool: tool.to_owned(),
+            target: target.to_owned(),
+        };
+        let _one_at_a_time = self.asking.lock().await;
+        self.asker.ask(&request).await
     }
 
     /// The mode as the flags and settings spell it (`plan`, `accept_edits`, …).
     pub fn mode_name(&self) -> &'static str {
-        match self.mode {
+        match self.mode() {
             Mode::Default => "default",
             Mode::AcceptEdits => "accept_edits",
             Mode::Plan => "plan",
@@ -993,7 +1024,7 @@ impl Gate {
         let (mut verdict, mut reason) = match said {
             Said::Verdict(verdict, why) => (verdict, why),
             Said::Unsure(why) => (Verdict::Ask, why),
-            Said::Silent => (self.mode.fallback(access), mode.clone()),
+            Said::Silent => (self.mode().fallback(access), mode.clone()),
         };
         // Plan mode writes nothing, whatever a rule says (P3) — neither with the file tools nor by a redirection.
         let writes = match access {
@@ -1001,10 +1032,10 @@ impl Gate {
             Access::Bash { command, .. } => !analyze(command).writes.is_empty(),
             _ => false,
         };
-        if self.mode == Mode::Plan && writes {
+        if self.mode() == Mode::Plan && writes {
             (verdict, reason) = (Verdict::Deny, mode.clone());
         }
-        if verdict == Verdict::Ask && self.mode.asks_nothing() {
+        if verdict == Verdict::Ask && self.mode().asks_nothing() {
             verdict = Verdict::Deny;
             reason = format!("{reason}; {mode} asks nothing");
         }
