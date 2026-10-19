@@ -158,13 +158,18 @@ impl ToolSpec {
 /// Tokens one call used, as the API reports them (zero when it does not).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 pub struct Usage {
+    /// Every prompt token the call processed, the cached ones included.
     pub input_tokens: u64,
+    /// The part of [`Self::input_tokens`] the provider read from its prompt cache — billed at a lower price
+    /// (glut-round CP4).
+    pub cached_input_tokens: u64,
     pub output_tokens: u64,
 }
 
 impl std::ops::AddAssign for Usage {
     fn add_assign(&mut self, other: Usage) {
         self.input_tokens += other.input_tokens;
+        self.cached_input_tokens += other.cached_input_tokens;
         self.output_tokens += other.output_tokens;
     }
 }
@@ -381,10 +386,15 @@ fn parse_reply(text: &str) -> Result<Reply, HarnessError> {
             .and_then(Value::as_u64)
             .unwrap_or(0)
     };
+    let input_tokens = tokens("prompt_tokens");
     Ok(Reply {
         message,
         usage: Usage {
-            input_tokens: tokens("prompt_tokens"),
+            input_tokens,
+            // OpenAI's and OpenRouter's field, then DeepSeek's own; never more than the prompt itself.
+            cached_input_tokens: tokens("prompt_tokens_details/cached_tokens")
+                .max(tokens("prompt_cache_hit_tokens"))
+                .min(input_tokens),
             output_tokens: tokens("completion_tokens"),
         },
     })
@@ -528,7 +538,8 @@ mod tests {
                 "tool_calls": [{"id": "c1", "type": "function",
                                 "function": {"name": "read_file", "arguments": "{\"path\":\"a.txt\"}"}}]
             }}],
-            "usage": {"prompt_tokens": 12, "completion_tokens": 3}
+            "usage": {"prompt_tokens": 12, "completion_tokens": 3,
+                      "prompt_tokens_details": {"cached_tokens": 8}}
         }))])
         .await;
         let model = OpenAiCompat::new(endpoint(&api.base_url, Some("sk-test"))).unwrap();
@@ -547,6 +558,7 @@ mod tests {
             reply.usage,
             Usage {
                 input_tokens: 12,
+                cached_input_tokens: 8,
                 output_tokens: 3
             }
         );

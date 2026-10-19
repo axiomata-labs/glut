@@ -788,6 +788,7 @@ mod tests {
             },
             usage: Usage {
                 input_tokens: 10,
+                cached_input_tokens: 0,
                 output_tokens: 2,
             },
         }
@@ -813,6 +814,7 @@ mod tests {
             },
             usage: Usage {
                 input_tokens: 7,
+                cached_input_tokens: 0,
                 output_tokens: 1,
             },
         }
@@ -902,6 +904,7 @@ mod tests {
             outcome.usage,
             Usage {
                 input_tokens: 17,
+                cached_input_tokens: 0,
                 output_tokens: 3
             }
         );
@@ -1597,6 +1600,7 @@ mod tests {
             outcome.usage,
             Usage {
                 input_tokens: 27,
+                cached_input_tokens: 0,
                 output_tokens: 5
             }
         );
@@ -1664,6 +1668,7 @@ mod tests {
                 turns: 2,
                 usage: Usage {
                     input_tokens: 27,
+                    cached_input_tokens: 0,
                     output_tokens: 5
                 },
             })
@@ -2054,6 +2059,7 @@ mod tests {
             outcome.usage,
             Usage {
                 input_tokens: 14,
+                cached_input_tokens: 0,
                 output_tokens: 2
             }
         );

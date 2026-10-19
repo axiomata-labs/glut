@@ -166,6 +166,10 @@ impl Rule {
                 host_pattern(p.strip_prefix("domain:").unwrap_or(p))?,
             )),
             Some(p) if kind == RuleKind::Bash => Some(match p.strip_suffix(":*") {
+                // `Bash(:*)` names no command; read as a prefix of nothing it would match nothing sensibly.
+                Some(prefix) if rule_words(prefix).is_empty() => {
+                    return Err(format!("rule {text:?} names no command before `:*`"));
+                }
                 Some(prefix) => Pattern::Prefix(rule_words(prefix)),
                 None => Pattern::Wild(rule_words(p).join(" ")),
             }),
@@ -1231,7 +1235,7 @@ mod tests {
         assert!(Rule::parse("Bash(cargo test:*)").is_ok());
         assert!(Rule::parse("Read").is_ok());
         assert!(Rule::parse("Edit(src/**/*.rs)").is_ok());
-        for bad in ["", "Bash(cargo", "(x)", "Edit([)"] {
+        for bad in ["", "Bash(cargo", "(x)", "Edit([)", "Bash(:*)", "Bash( :*)"] {
             assert!(Rule::parse(bad).is_err(), "{bad:?}");
         }
     }

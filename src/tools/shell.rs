@@ -83,6 +83,9 @@ pub struct DirectProgram {
     pub path: PathBuf,
     /// What it needs beside the cleaned environment (`AXIOMATA_HOME` of a run under a scratch home).
     pub env: Vec<(OsString, OsString)>,
+    /// The only commands of it that may start this way, as their leading words (`["board", "add"]`): a declaration
+    /// as wide as `Bash(axiomata-cli:*)` still reaches no other one outside the sandbox (security audit).
+    pub allowed: Vec<Vec<String>>,
 }
 
 impl ShellOptions {
@@ -540,7 +543,11 @@ impl Session {
             && part.assignments.is_empty();
         let (name, args) = part.words.split_first()?;
         let program = self.direct.iter().find(|program| program.name == *name)?;
-        (plain && gate?.declares_command(&part.words)).then(|| (program, args.to_vec()))
+        let allowed = program
+            .allowed
+            .iter()
+            .any(|prefix| args.len() >= prefix.len() && args[..prefix.len()] == prefix[..]);
+        (plain && allowed && gate?.declares_command(&part.words)).then(|| (program, args.to_vec()))
     }
 
     /// Runs a direct program (see [`DirectProgram`]) in the shell's folder, its output and its errors kept together
@@ -1662,6 +1669,7 @@ mod tests {
                     ("AXIOMATA_HOME".into(), "/scratch-home".into()),
                     ("PROBE".into(), probe.clone().into_os_string()),
                 ],
+                allowed: vec![vec!["board".into(), "list".into()]],
             }],
         };
         let declared = vec![
@@ -1698,6 +1706,7 @@ mod tests {
                     name: "axiomata-cli".into(),
                     path: PathBuf::from("/bin/echo"),
                     env: Vec::new(),
+                    allowed: vec![vec!["board".into(), "list".into()]],
                 }],
             },
         )
@@ -1723,6 +1732,27 @@ mod tests {
                 "{shell_command}"
             );
         }
+        // A declaration as wide as the whole program reaches only the commands the program allows directly.
+        let wide_rule = vec![Rule::parse("Bash(axiomata-cli:*)").unwrap()];
+        let mut wide = Gate::new(
+            RuleSet {
+                allow: wide_rule.clone(),
+                ..RuleSet::default()
+            },
+            Mode::Default,
+            Arc::new(Nobody),
+        );
+        wide.narrow("the skill wide", wide_rule);
+        assert!(
+            session
+                .direct_call("axiomata-cli board list", Some(&wide))
+                .is_some()
+        );
+        assert!(
+            session
+                .direct_call("axiomata-cli files read x", Some(&wide))
+                .is_none()
+        );
         // Without a declaration (a chat turn) no command is trusted, whatever the mode allows.
         let open = Gate::new(RuleSet::default(), Mode::Auto, Arc::new(Nobody));
         assert!(
