@@ -34,6 +34,9 @@ const MAX_REDIRECTS: usize = 5;
 /// What the fetch sends as its user agent.
 const USER_AGENT: &str = "Glut/1 (Axiomata; +https://github.com/NamorX68/Axiomata-OS)";
 
+/// What closes a page's data frame.
+const END_MARK: &str = "[end of page content]";
+
 /// The `web_fetch` tool.
 #[derive(Default)]
 pub struct WebFetch;
@@ -249,8 +252,9 @@ impl Page {
             ));
             return out;
         }
-        out.push_str(&part);
-        out.push_str("\n[end of page content]");
+        out.push_str(&super::as_data(&part, END_MARK));
+        out.push('\n');
+        out.push_str(END_MARK);
         let end = offset + shown;
         if end < total {
             out.push_str(&format!(

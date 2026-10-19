@@ -263,13 +263,16 @@ async fn main() -> ExitCode {
         Ok(servers) => servers,
         Err(err) => return fail(err.to_string()),
     };
-    let tools = match setup::toolbox(
+    let mut tools = match setup::toolbox(
         &cwd,
         &catalog,
         gate,
         servers,
         built.sandbox,
-        Some(env_search()),
+        setup::Extras {
+            search: Some(env_search()),
+            direct: Vec::new(),
+        },
         &mut sink,
     )
     .await
@@ -277,6 +280,10 @@ async fn main() -> ExitCode {
         Ok(tools) => tools,
         Err(err) => return fail(err.to_string()),
     };
+    // A skill run's task is the skill's body already: loading skills would only cost a turn (glut-round CP4).
+    if skill.is_some() {
+        tools.withdraw(axiomata_harness::skills::tool::NAME);
+    }
 
     // Ctrl-C, SIGTERM and SIGHUP end the run cleanly, with its `finished` line and every background job stopped.
     let cancel = Cancel::new();

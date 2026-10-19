@@ -47,6 +47,11 @@ pub trait Tool: Send + Sync {
     fn access(&self, arguments: &Value) -> Access;
     /// Runs the tool with the model's arguments (a JSON object).
     fn call(&self, arguments: Value, context: CallContext) -> ToolFuture<'_>;
+    /// What the tool's calls touch in general, for [`Gate::offers`] to decide whether the run shows it to the model
+    /// at all (glut-round CP4): by default a call without arguments — its kind of access, with no path or host.
+    fn offered_as(&self) -> Access {
+        self.access(&Value::Object(Default::default()))
+    }
 }
 
 /// The tools of a run.
@@ -76,13 +81,31 @@ impl Toolbox {
         self.tools.extend(tools);
     }
 
-    /// The specs to send to the model.
+    /// Takes the tool `name` out of the box (a skill run has no use for the `skill` tool: its body is the task).
+    pub fn withdraw(&mut self, name: &str) {
+        self.tools.retain(|tool| tool.spec().name != name);
+    }
+
+    /// The specs to send to the model: the tools the gate offers (glut-round CP4), every one without a gate.
     pub fn specs(&self) -> Vec<ToolSpec> {
-        self.tools.iter().map(|tool| tool.spec()).collect()
+        self.offered().map(|tool| tool.spec()).collect()
     }
 
     pub fn names(&self) -> Vec<String> {
-        self.tools.iter().map(|tool| tool.spec().name).collect()
+        self.offered().map(|tool| tool.spec().name).collect()
+    }
+
+    fn offered(&self) -> impl Iterator<Item = &dyn Tool> {
+        self.tools
+            .iter()
+            .map(Box::as_ref)
+            .filter(|tool| self.offers(*tool))
+    }
+
+    fn offers(&self, tool: &dyn Tool) -> bool {
+        self.gate
+            .as_ref()
+            .is_none_or(|gate| gate.offers(&tool.spec().name, &tool.offered_as()))
     }
 
     /// Runs the tool `name` with the model's argument text. Returns whether it succeeded and the text for the model,
@@ -99,6 +122,13 @@ impl Toolbox {
         let Some(tool) = self.tools.iter().find(|tool| tool.spec().name == name) else {
             return (false, format!("error: there is no tool named {name:?}"));
         };
+        // A tool the run does not offer stays refused when the model guesses its name.
+        if !self.offers(tool.as_ref()) {
+            return (
+                false,
+                format!("error: not permitted: this run does not offer {name}"),
+            );
+        }
         // Some models send no arguments at all for a tool without required ones.
         let arguments = if arguments.trim().is_empty() {
             "{}"
@@ -130,6 +160,20 @@ impl Toolbox {
         };
         (ok, cap(text))
     }
+}
+
+/// Text from outside (a web page, search results) as the model gets it between a data frame and its `end_mark`: no
+/// control characters but line breaks and tabs, none of the invisible ones that hide or reorder text, and no copy of
+/// the end mark — a page that writes `[end of page content]` must not be able to close the frame early and speak
+/// after it (glut-round CP3, security audit).
+pub(crate) fn as_data(text: &str, end_mark: &str) -> String {
+    let plain: String = text
+        .chars()
+        .filter(|c| {
+            matches!(c, '\n' | '\t') || !(c.is_control() || crate::permissions::is_invisible(*c))
+        })
+        .collect();
+    plain.replace(end_mark, "[…]")
 }
 
 /// `text` cut to [`MAX_TOOL_OUTPUT_CHARS`], with a note for the model when it was. `pub(crate)` since HS8: the
@@ -179,6 +223,39 @@ mod tests {
         let mut toolbox = Toolbox::new();
         toolbox.extend([Box::new(Echo) as Box<dyn Tool>]);
         toolbox
+    }
+
+    /// glut-round CP4: a tool the gate does not offer is neither shown to the model nor callable by its name.
+    #[tokio::test]
+    async fn a_tool_the_gate_does_not_offer_is_not_there_for_the_model() {
+        use crate::permissions::{Mode, Nobody, Rule, RuleSet};
+        let narrowed = |declared: &str| {
+            // As a skill's declaration does: the same rules allow and narrow.
+            let declared = vec![Rule::parse(declared).unwrap()];
+            let allow = RuleSet {
+                allow: declared.clone(),
+                ..RuleSet::default()
+            };
+            let mut gate = Gate::new(allow, Mode::Default, Arc::new(Nobody));
+            gate.narrow("the skill s", declared);
+            let mut tools = toolbox();
+            tools.set_gate(Arc::new(gate));
+            tools
+        };
+        let reader = narrowed("Read");
+        assert!(reader.specs().is_empty() && reader.names().is_empty());
+        let (ok, text) = reader.call("echo", r#"{"text":"hi"}"#).await;
+        assert!(!ok && text.contains("does not offer echo"), "{text}");
+        let named = narrowed("echo");
+        assert_eq!(named.names(), ["echo"]);
+        assert_eq!(
+            named.call("echo", r#"{"text":"hi"}"#).await,
+            (true, "hi".into())
+        );
+
+        let mut withdrawn = toolbox();
+        withdrawn.withdraw("echo");
+        assert!(withdrawn.names().is_empty());
     }
 
     #[tokio::test]

@@ -204,6 +204,28 @@ impl Rule {
         self.kind == RuleKind::Tool && self.tool == tool && self.pattern.is_none()
     }
 
+    /// Whether this rule could name some call of `tool`, whose calls touch what `sample` stands for — the rule's
+    /// pattern left aside (glut-round CP4): `Edit(News/**)` could name a call of `edit_file`, `Read` none. What the
+    /// toolbox offers the model is decided on this, so a run is not shown tools its declaration refuses outright.
+    fn could_name(&self, tool: &str, sample: &Access) -> bool {
+        let named = self.kind == RuleKind::Tool && self.tool == tool;
+        match sample {
+            Access::Read { .. } => self.kind == RuleKind::Read || named,
+            Access::Edit { .. } => self.kind == RuleKind::Edit || named,
+            Access::Bash { .. } => self.kind == RuleKind::Bash || named,
+            Access::Network { .. } => {
+                self.kind == RuleKind::Network
+                    || (self.kind == RuleKind::Web && tool == crate::tools::web::NAME)
+            }
+            Access::Mcp {
+                server,
+                tool: called,
+            } => self.kind == RuleKind::Mcp && mcp_matches(&self.tool, server, called),
+            Access::Own => true,
+            Access::Other => named,
+        }
+    }
+
     /// Whether this rule is about commands of `tool`.
     fn is_command_rule(&self, tool: &str) -> bool {
         self.kind == RuleKind::Bash || (self.kind == RuleKind::Tool && self.tool == tool)
@@ -760,7 +782,7 @@ pub fn printable(text: &str) -> String {
         .collect()
 }
 
-fn is_invisible(c: char) -> bool {
+pub(crate) fn is_invisible(c: char) -> bool {
     matches!(c,
         '\u{200B}'..='\u{200F}'
         | '\u{202A}'..='\u{202E}'
@@ -828,6 +850,48 @@ impl Gate {
                 rules,
             });
         }
+    }
+
+    /// Whether the run offers the model `tool`, whose calls touch what `sample` stands for (glut-round CP4): not when
+    /// a narrowing names no call of it, a deny rule without a pattern refuses all of them, or — for an edit tool —
+    /// the mode is Plan, which writes nothing whatever a rule says. Every tool's schema rides along on every turn, so
+    /// a tool that can only be refused costs tokens and invites a call that fails. Offering is not allowing: what is
+    /// offered is still judged call by call.
+    pub fn offers(&self, tool: &str, sample: &Access) -> bool {
+        if *sample == Access::Own {
+            return true;
+        }
+        if self.mode == Mode::Plan && matches!(sample, Access::Edit { .. }) {
+            return false;
+        }
+        let denied = self
+            .rules
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .deny
+            .iter()
+            .any(|rule| rule.pattern.is_none() && rule.could_name(tool, sample));
+        !denied
+            && self.narrowings.iter().all(|narrowing| {
+                narrowing
+                    .rules
+                    .iter()
+                    .any(|rule| rule.could_name(tool, sample))
+            })
+    }
+
+    /// Whether every narrowing of the run names this one command by a pattern of its own (`Bash(axiomata-cli board
+    /// add:*)`, not a bare `Bash`): the declaration the shell asks before it starts one of its direct programs
+    /// outside the sandbox ([`crate::tools::shell::DirectProgram`]). A run nothing narrowed declares no command.
+    pub fn declares_command(&self, words: &[String]) -> bool {
+        !self.narrowings.is_empty()
+            && self.narrowings.iter().all(|narrowing| {
+                narrowing.rules.iter().any(|rule| {
+                    rule.kind == RuleKind::Bash
+                        && rule.pattern.is_some()
+                        && rule.matches_words(words)
+                })
+            })
     }
 
     /// Who narrowed this run, in the order they did — empty for a run nothing narrowed.
@@ -1851,6 +1915,99 @@ mod tests {
         }
         let always = always_rule("network", &host("pypi.org")).unwrap();
         assert!(always.matches_path("network", &host("pypi.org")));
+    }
+
+    /// glut-round CP4: a run is offered only the tools its declaration could name — patterns left aside — no tool a
+    /// pattern-less deny refuses whole, and no edit tool in Plan mode; a run nothing narrows is offered everything.
+    #[test]
+    fn a_run_is_offered_only_the_tools_its_declaration_could_name() {
+        let gate = |mode: Mode, declared: &[&str], deny: &[&str]| {
+            let mut gate = Gate::new(rules(&[], &[], deny), mode, Arc::new(Nobody));
+            gate.narrow(
+                "the skill news",
+                declared
+                    .iter()
+                    .map(|text| Rule::parse(text).unwrap())
+                    .collect(),
+            );
+            gate
+        };
+        let read = Access::Read {
+            path: String::new(),
+        };
+        let edit = Access::Edit {
+            path: String::new(),
+        };
+        let shell = bash("");
+        let page = Access::Network {
+            host: String::new(),
+        };
+        let mail = |tool: &str| Access::Mcp {
+            server: "apple-mail".into(),
+            tool: tool.into(),
+        };
+
+        let news = gate(
+            Mode::Default,
+            &[
+                "Read",
+                "WebFetch",
+                "Edit(News/**)",
+                "Bash(grep:*)",
+                "mcp__apple-mail__search_emails",
+            ],
+            &[],
+        );
+        assert!(news.offers("read_file", &read));
+        assert!(
+            news.offers("edit_file", &edit),
+            "a pattern still names the tool"
+        );
+        assert!(news.offers("bash", &shell));
+        assert!(news.offers("bash_output", &shell));
+        assert!(news.offers("web_fetch", &page));
+        assert!(news.offers("mcp__apple-mail__search_emails", &mail("search_emails")));
+        assert!(!news.offers("mcp__apple-mail__send_email", &mail("send_email")));
+        assert!(!news.offers("web_search", &Access::Other));
+        assert!(!news.offers("skill", &Access::Other));
+        assert!(
+            news.offers("todo", &Access::Own),
+            "the run's own state is always offered"
+        );
+
+        let reader = gate(Mode::Default, &["Read"], &[]);
+        for (tool, access) in [
+            ("write_file", &edit),
+            ("bash", &shell),
+            ("web_fetch", &page),
+        ] {
+            assert!(!reader.offers(tool, access), "{tool}");
+        }
+        // `Network(…)` serves the shell's proxy and the fetch alike; a whole MCP server names each of its tools.
+        let wide = gate(
+            Mode::Default,
+            &["Network(docs.rs)", "mcp__apple-mail", "WebSearch"],
+            &[],
+        );
+        assert!(wide.offers("web_fetch", &page));
+        assert!(wide.offers("mcp__apple-mail__send_email", &mail("send_email")));
+        assert!(wide.offers("web_search", &Access::Other));
+
+        let open = gate(Mode::Default, &[], &[]);
+        for (tool, access) in [
+            ("write_file", &edit),
+            ("bash", &shell),
+            ("skill", &Access::Other),
+        ] {
+            assert!(open.offers(tool, access), "{tool}");
+        }
+        let plan = gate(Mode::Plan, &[], &[]);
+        assert!(!plan.offers("write_file", &edit));
+        assert!(plan.offers("read_file", &read));
+        // A deny without a pattern takes the tool away; one with a pattern leaves it for the other calls.
+        let denied = gate(Mode::Default, &[], &["WebFetch", "Bash(rm:*)"]);
+        assert!(!denied.offers("web_fetch", &page));
+        assert!(denied.offers("bash", &shell));
     }
 
     /// A command's `allowed-tools` narrows the gate (HS4, C3): what it does not name is refused before any rule or

@@ -15,6 +15,9 @@ use crate::model::ToolSpec;
 use crate::permissions::Access;
 use crate::tools::{CallContext, Tool, ToolFuture};
 
+/// The tool's name as the model sees it.
+pub const NAME: &str = "skill";
+
 /// Characters of one skill's description the tool's own description shows; a longer one is cut with `…`.
 const DESCRIPTION_CHARS: usize = 300;
 /// Characters of the whole skill list the tool's own description holds. Past it the list stops and counts what is
@@ -70,7 +73,7 @@ impl SkillTool {
 impl Tool for SkillTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
-            name: "skill".into(),
+            name: NAME.into(),
             description: self.described(),
             parameters: json!({"type": "object", "properties": {
                 "name": {"type": "string", "description": "The skill to load."},
@@ -83,6 +86,12 @@ impl Tool for SkillTool {
     /// with it (K1.2, like Claude Code's model-invoked skills).
     fn access(&self, _arguments: &Value) -> Access {
         Access::Own
+    }
+
+    fn offered_as(&self) -> Access {
+        // Loading a skill touches only the run's own state, but a declaration that does not name `skill` has no use
+        // for it (glut-round CP4): the declared run's task is set already.
+        Access::Other
     }
 
     fn call(&self, arguments: Value, _context: CallContext) -> ToolFuture<'_> {

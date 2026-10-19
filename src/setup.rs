@@ -15,7 +15,8 @@ use crate::permissions::Gate;
 use crate::permissions::settings::SandboxSettings;
 use crate::skills::{self, Catalog, SkillTool};
 use crate::tools::files::{SkillRoots, file_tools};
-use crate::tools::shell::{ShellOptions, shell_tools};
+use crate::tools::search::WebSearch;
+use crate::tools::shell::{DirectProgram, ShellOptions, shell_tools};
 use crate::tools::{Tool, Toolbox};
 
 /// A run's toolbox under `gate`: the file tools (with the catalog's skill folders as read-only roots, K4), the
@@ -32,9 +33,10 @@ pub async fn toolbox(
     gate: Gate,
     servers: Vec<ServerEntry>,
     sandbox: SandboxSettings,
-    search: Option<crate::tools::search::WebSearch>,
+    extras: Extras,
     sink: &mut SharedSink,
 ) -> Result<Toolbox, HarnessError> {
+    let Extras { search, direct } = extras;
     let mut tools = Toolbox::new();
     tools.extend(file_tools(cwd, SkillRoots::new(&catalog.folders()))?);
     // The web is part of the core (docs/plans/glut-round.md): no MCP server to set up for a page.
@@ -53,10 +55,19 @@ pub async fn toolbox(
         cwd,
         ShellOptions {
             sandbox: Some(sandbox),
+            direct,
             ..ShellOptions::from_environment()
         },
     )?);
     Ok(tools)
+}
+
+/// What a caller adds to the toolbox beside the core: the web search with its providers and budget (glut-round
+/// CP3; none, no search offered), and its own programs a declared command may start outside the sandbox (W8).
+#[derive(Default)]
+pub struct Extras {
+    pub search: Option<WebSearch>,
+    pub direct: Vec<DirectProgram>,
 }
 
 /// A run as it stands before a slash command and a skill have had their say about it.
@@ -402,7 +413,10 @@ mod tests {
             gate(),
             Vec::new(),
             SandboxSettings::default(),
-            Some(search),
+            Extras {
+                search: Some(search),
+                direct: Vec::new(),
+            },
             &mut sink,
         )
         .await
@@ -421,7 +435,7 @@ mod tests {
             gate(),
             Vec::new(),
             SandboxSettings::default(),
-            None,
+            Extras::default(),
             &mut sink,
         )
         .await

@@ -238,6 +238,37 @@ fn rule_path(working: &Root, skills: &SkillRoots, path: &str) -> String {
     }
 }
 
+/// The folder a search over the glob `pattern` stays in, as the rules see it: its leading components without a glob
+/// character (`News/2026/*.md` → `News/2026`), or `.` — the whole working folder — when there are none, or when one of
+/// them steps up or the pattern is absolute.
+fn searched_folder(working: &Root, skills: &SkillRoots, pattern: &str) -> String {
+    let pattern = rel(pattern);
+    if pattern.starts_with('/') {
+        return ".".into();
+    }
+    let mut fixed = Vec::new();
+    for component in pattern.split('/') {
+        if component.contains(['*', '?', '[', '{']) {
+            break;
+        }
+        if component == ".." {
+            return ".".into();
+        }
+        if !component.is_empty() && component != "." {
+            fixed.push(component);
+        }
+    }
+    // The last fixed component of a pattern without any glob is a file name, not a folder.
+    if !pattern.contains(['*', '?', '[', '{']) {
+        fixed.pop();
+    }
+    if fixed.is_empty() {
+        ".".into()
+    } else {
+        rule_path(working, skills, &fixed.join("/"))
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 enum Kind {
     Read,
@@ -349,16 +380,18 @@ impl Tool for FileTool {
             },
             // A search reads a whole folder; what the read rules hold back is left out of its results (`shown`).
             // An `include`/`pattern` naming a skill searches that skill's folder, not the working folder (K4).
+            // A glob's fixed folder (`News/**` → `News`) is all it can match below, so the search is judged as a read
+            // of that folder: `Read(News/**)` allows a search of `News/` and nothing wider (glut-round W8).
             Kind::Grep => Access::Read {
                 path: match skill_path(rel(&path("include"))) {
                     Some((name, _)) => format!("skill:{name}"),
-                    None => ".".into(),
+                    None => searched_folder(&self.root, &self.skills, &path("include")),
                 },
             },
             Kind::Glob => Access::Read {
                 path: match skill_path(rel(&path("pattern"))) {
                     Some((name, _)) => format!("skill:{name}"),
-                    None => ".".into(),
+                    None => searched_folder(&self.root, &self.skills, &path("pattern")),
                 },
             },
             Kind::Write | Kind::Edit => Access::Edit {
@@ -733,6 +766,62 @@ mod tests {
         let mut toolbox = Toolbox::new();
         toolbox.extend(file_tools(&dir, SkillRoots::new(&folders)).unwrap());
         (dir, toolbox)
+    }
+
+    /// glut-round W8: a search is judged as a read of its glob's fixed folder, so `Read(News/**)` lets a skill search
+    /// `News/` — and only `News/`: a search of the whole folder, one that steps up and the rest of the tree are refused.
+    #[tokio::test]
+    async fn a_search_is_a_read_of_the_folder_its_glob_stays_in() {
+        use crate::permissions::{Gate, Mode, Nobody, Rule, RuleSet};
+        let (dir, mut tools) = setup();
+        std::fs::create_dir_all(dir.join("News")).unwrap();
+        std::fs::write(
+            dir.join("News/KI.md"),
+            "[Original](https://example.org/a)\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("secret.md"), "https://example.org/a\n").unwrap();
+        let declared = vec![Rule::parse("Read(News/**)").unwrap()];
+        let mut gate = Gate::new(
+            RuleSet {
+                allow: declared.clone(),
+                ..RuleSet::default()
+            },
+            Mode::Default,
+            std::sync::Arc::new(Nobody),
+        );
+        gate.narrow("the skill news", declared);
+        tools.set_gate(std::sync::Arc::new(gate));
+
+        let (ok, text) = tools
+            .call(
+                "grep",
+                r#"{"pattern":"example\\.org/a","include":"News/**"}"#,
+            )
+            .await;
+        assert!(
+            ok && text.contains("News/KI.md") && !text.contains("secret"),
+            "{text}"
+        );
+        let (ok, text) = tools.call("glob", r#"{"pattern":"News/*.md"}"#).await;
+        assert!(ok && text.contains("News/KI.md"), "{text}");
+        for refused in [
+            r#"{"pattern":"example"}"#,
+            r#"{"pattern":"example","include":"**/*.md"}"#,
+            r#"{"pattern":"example","include":"News/../*.md"}"#,
+            r#"{"pattern":"example","include":"/etc/*"}"#,
+        ] {
+            let (ok, text) = tools.call("grep", refused).await;
+            assert!(!ok && text.contains("not permitted"), "{refused}: {text}");
+        }
+        assert_eq!(
+            searched_folder(
+                &Root::dir(&dir, LinkPolicy::Contained).unwrap(),
+                &SkillRoots::new(&[]),
+                "News/KI.md"
+            ),
+            "News/"
+        );
     }
 
     #[tokio::test]

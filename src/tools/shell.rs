@@ -66,6 +66,23 @@ pub struct ShellOptions {
     /// Run commands in the sandbox (HS3b) with these settings; `None`, or a system without one, runs them as they
     /// are, judged by the rules alone.
     pub sandbox: Option<crate::permissions::settings::SandboxSettings>,
+    /// The caller's own programs a declared command may start directly — see [`DirectProgram`].
+    pub direct: Vec<DirectProgram>,
+}
+
+/// A program of the caller's own that a run starts directly — no shell, no sandbox, its words as its arguments — when
+/// the run's declaration names the exact command (`Bash(axiomata-cli board add:*)`, glut-round W8). The app's CLI
+/// needs its database under `~/.axiomata`, which the sandbox hides from every command because the owner's keys live
+/// there too; the declaration is what makes the one command trusted, never the program alone. A command with anything
+/// besides words — an assignment, a redirection, a second command, an expansion — runs in the shell as usual.
+#[derive(Debug, Clone)]
+pub struct DirectProgram {
+    /// The command word that names it, exactly (`axiomata-cli`).
+    pub name: String,
+    /// The program itself, an absolute path; never looked up on the `PATH`.
+    pub path: PathBuf,
+    /// What it needs beside the cleaned environment (`AXIOMATA_HOME` of a run under a scratch home).
+    pub env: Vec<(OsString, OsString)>,
 }
 
 impl ShellOptions {
@@ -81,6 +98,7 @@ impl ShellOptions {
             profile: true,
             ambient: std::env::vars_os().collect(),
             sandbox: Some(Default::default()),
+            direct: Vec::new(),
         }
     }
 }
@@ -210,6 +228,7 @@ pub(crate) struct Session {
     jobs: Mutex<Vec<Job>>,
     next_job: AtomicU32,
     next_note: AtomicU64,
+    direct: Vec<DirectProgram>,
 }
 
 /// One background job.
@@ -297,6 +316,7 @@ impl Session {
             jobs: Mutex::new(Vec::new()),
             next_job: AtomicU32::new(1),
             next_note: AtomicU64::new(1),
+            direct: options.direct,
         })
     }
 
@@ -497,6 +517,85 @@ impl Session {
             }),
             Ok(status) => Err(format!("{}\n[{}]", text.trim_end(), describe_exit(status))),
             Err(reason) => Err(format!("{}\n{reason}", text.trim_end())),
+        }
+    }
+
+    /// The direct program `command` starts and its arguments, when it is one: a single simple command, every bit of it
+    /// read, without assignments or redirections, whose command word names a [`DirectProgram`], and which the run's
+    /// declaration names exactly ([`Gate::declares_command`]).
+    fn direct_call(
+        &self,
+        command: &str,
+        gate: Option<&Gate>,
+    ) -> Option<(&DirectProgram, Vec<String>)> {
+        let analysis = crate::permissions::command::analyze(command);
+        let [part] = analysis.parts.as_slice() else {
+            return None;
+        };
+        let plain = !analysis.is_opaque()
+            && analysis.writes.is_empty()
+            && analysis.reads.is_empty()
+            && analysis.nested.is_empty()
+            && !analysis.protected
+            && part.assignments.is_empty();
+        let (name, args) = part.words.split_first()?;
+        let program = self.direct.iter().find(|program| program.name == *name)?;
+        (plain && gate?.declares_command(&part.words)).then(|| (program, args.to_vec()))
+    }
+
+    /// Runs a direct program (see [`DirectProgram`]) in the shell's folder, its output and its errors kept together
+    /// as a command's are; stopped when the run stops (the future is dropped) or at `limit`.
+    async fn run_direct(
+        &self,
+        program: &DirectProgram,
+        args: &[String],
+        limit: Duration,
+    ) -> Result<String, String> {
+        let (cwd, _) = self.start_dir();
+        let child = Command::new(&program.path)
+            .args(args)
+            .env_clear()
+            .envs(self.env.iter().cloned())
+            .envs(program.env.iter().cloned())
+            .current_dir(&cwd)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|err| format!("could not start {}: {err}", program.name))?;
+        let output = tokio::time::timeout(limit, child.wait_with_output())
+            .await
+            .map_err(|_| {
+                format!(
+                    "[timed out after {} s; {} was stopped]",
+                    limit.as_secs(),
+                    program.name
+                )
+            })?
+            .map_err(|err| format!("[{} could not be waited for: {err}]", program.name))?;
+        let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+        text.push_str(&String::from_utf8_lossy(&output.stderr));
+        if text.len() > MAX_FOREGROUND_BYTES {
+            let mut end = MAX_FOREGROUND_BYTES;
+            while !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            text.truncate(end);
+            text.push_str("\n[output cut]");
+        }
+        if output.status.success() {
+            Ok(if text.trim().is_empty() {
+                "(no output)".into()
+            } else {
+                text
+            })
+        } else {
+            Err(format!(
+                "{}\n[{}]",
+                text.trim_end(),
+                describe_exit(output.status)
+            ))
         }
     }
 
@@ -1067,6 +1166,11 @@ impl Tool for Bash {
                 .timeout_secs
                 .map_or(DEFAULT_TIMEOUT, Duration::from_secs)
                 .clamp(Duration::from_secs(1), MAX_TIMEOUT);
+            if let Sandboxing::On(gate) = &sandbox
+                && let Some((program, words)) = self.0.direct_call(&args.command, gate.as_deref())
+            {
+                return self.0.run_direct(program, &words, limit).await;
+            }
             self.0.run(&args.command, limit, &stop, sandbox).await
         })
     }
@@ -1090,6 +1194,15 @@ impl Tool for BashOutput {
         Access::Own
     }
 
+    fn offered_as(&self) -> Access {
+        // A job is started by `bash`: offered with it, or not at all.
+        Access::Bash {
+            command: String::new(),
+            folder: String::new(),
+            unsandboxed: false,
+        }
+    }
+
     fn call(&self, arguments: Value, _context: CallContext) -> ToolFuture<'_> {
         Box::pin(async move { self.0.job_output(&parse::<JobArgs>(arguments)?.id) })
     }
@@ -1109,6 +1222,15 @@ impl Tool for KillShell {
     fn access(&self, _arguments: &Value) -> Access {
         // Only the run's own jobs.
         Access::Own
+    }
+
+    fn offered_as(&self) -> Access {
+        // A job is started by `bash`: offered with it, or not at all.
+        Access::Bash {
+            command: String::new(),
+            folder: String::new(),
+            unsandboxed: false,
+        }
     }
 
     fn call(&self, arguments: Value, _context: CallContext) -> ToolFuture<'_> {
@@ -1143,6 +1265,7 @@ mod tests {
             profile: false,
             ambient,
             sandbox: None,
+            direct: Vec::new(),
         };
         let mut tools = Toolbox::new();
         tools.extend(shell_tools(&dir, options).unwrap());
@@ -1311,6 +1434,7 @@ mod tests {
                 ("PATH".into(), "/usr/bin:/bin".into()),
             ],
             sandbox: None,
+            direct: Vec::new(),
         };
         let mut tools = Toolbox::new();
         tools.extend(shell_tools(&dir, options).unwrap());
@@ -1486,6 +1610,129 @@ mod tests {
         }
     }
 
+    /// W8: a command the declaration names exactly starts the caller's program directly — outside the sandbox, its
+    /// words as arguments, with the program's own environment; anything more than words, or a command no pattern
+    /// names, stays a shell command in the sandbox.
+    #[tokio::test]
+    async fn a_declared_command_of_a_direct_program_runs_outside_the_sandbox() {
+        use crate::permissions::{Mode, Nobody, Rule, RuleSet};
+        if !crate::sandbox::available() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!(
+            "axh-shell-direct-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        std::fs::create_dir_all(dir.join("work")).unwrap();
+        let outside =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/axh-shell-direct-outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        let probe = outside
+            .canonicalize()
+            .unwrap()
+            .join(format!("probe-{}", std::process::id()));
+        let program = dir.join("fake-cli");
+        std::fs::write(
+            &program,
+            "#!/bin/sh\necho \"args:$*|home:$AXIOMATA_HOME\"\necho x > \"$PROBE\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(
+            &program,
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        )
+        .unwrap();
+        let ambient: Vec<(OsString, OsString)> = std::env::vars_os()
+            .filter(|(key, _)| key == "PATH" || key == "TMPDIR")
+            .chain(std::iter::once((
+                "HOME".into(),
+                dir.clone().into_os_string(),
+            )))
+            .collect();
+        let options = ShellOptions {
+            shell: PathBuf::from("/bin/bash"),
+            profile: false,
+            ambient,
+            sandbox: Some(Default::default()),
+            direct: vec![DirectProgram {
+                name: "axiomata-cli".into(),
+                path: program,
+                env: vec![
+                    ("AXIOMATA_HOME".into(), "/scratch-home".into()),
+                    ("PROBE".into(), probe.clone().into_os_string()),
+                ],
+            }],
+        };
+        let declared = vec![
+            Rule::parse("Bash(axiomata-cli board list:*)").unwrap(),
+            Rule::parse("Bash(echo:*)").unwrap(),
+        ];
+        let mut gate = Gate::new(
+            RuleSet {
+                allow: declared.clone(),
+                ..RuleSet::default()
+            },
+            Mode::Default,
+            Arc::new(Nobody),
+        );
+        gate.narrow("the skill board", declared);
+        let mut tools = Toolbox::new();
+        tools.extend(shell_tools(&dir.join("work"), options).unwrap());
+        tools.set_gate(Arc::new(gate));
+
+        let (ok, text) = bash(&tools, "axiomata-cli board list --board '1'").await;
+        assert!(ok, "{text}");
+        assert_eq!(text, "args:board list --board 1|home:/scratch-home\n");
+        assert!(probe.exists(), "it ran outside the sandbox");
+        std::fs::remove_file(&probe).unwrap();
+
+        let session = Session::new(
+            &dir.join("work"),
+            ShellOptions {
+                shell: PathBuf::from("/bin/bash"),
+                profile: false,
+                ambient: Vec::new(),
+                sandbox: None,
+                direct: vec![DirectProgram {
+                    name: "axiomata-cli".into(),
+                    path: PathBuf::from("/bin/echo"),
+                    env: Vec::new(),
+                }],
+            },
+        )
+        .unwrap();
+        let gate = tools.gate().cloned();
+        assert!(
+            session
+                .direct_call("axiomata-cli board list", gate.as_deref())
+                .is_some()
+        );
+        for shell_command in [
+            "axiomata-cli board list > f",
+            "axiomata-cli board list; echo x",
+            "X=1 axiomata-cli board list",
+            "axiomata-cli board list $(id)",
+            "axiomata-cli board add --column 1 x",
+            "/bin/axiomata-cli board list",
+        ] {
+            assert!(
+                session
+                    .direct_call(shell_command, gate.as_deref())
+                    .is_none(),
+                "{shell_command}"
+            );
+        }
+        // Without a declaration (a chat turn) no command is trusted, whatever the mode allows.
+        let open = Gate::new(RuleSet::default(), Mode::Auto, Arc::new(Nobody));
+        assert!(
+            session
+                .direct_call("axiomata-cli board list", Some(&open))
+                .is_none()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[tokio::test]
     async fn a_sandboxed_command_cannot_write_outside_and_the_escape_runs_unsandboxed() {
         if !crate::sandbox::available() {
@@ -1517,6 +1764,7 @@ mod tests {
             profile: false,
             ambient,
             sandbox: Some(Default::default()),
+            direct: Vec::new(),
         };
         let mut tools = Toolbox::new();
         tools.extend(shell_tools(&dir.join("work"), options).unwrap());

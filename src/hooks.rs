@@ -432,6 +432,7 @@ mod tests {
             profile: false,
             ambient,
             sandbox: None,
+            direct: Vec::new(),
         };
         let session = Session::new(&dir, options).unwrap();
         (dir, session)
