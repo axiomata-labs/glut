@@ -529,6 +529,32 @@ mod tests {
         }
     }
 
+    /// glut-round CP4: the cached part is read from OpenAI's/OpenRouter's field or DeepSeek's own, and never exceeds
+    /// the prompt.
+    #[tokio::test]
+    async fn cached_tokens_come_from_either_field_and_never_exceed_the_prompt() {
+        let answer = |usage: Value| {
+            Answer::ok(json!({
+                "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+                "usage": usage
+            }))
+        };
+        let api = FakeApi::spawn(vec![
+            answer(json!({"prompt_tokens": 100, "completion_tokens": 1, "prompt_cache_hit_tokens": 70})),
+            answer(json!({"prompt_tokens": 10, "completion_tokens": 1,
+                          "prompt_tokens_details": {"cached_tokens": 50}})),
+        ])
+        .await;
+        let model = OpenAiCompat::new(endpoint(&api.base_url, None)).unwrap();
+        for want in [70, 10] {
+            let reply = model
+                .complete(&[Message::user("hi")], &[], Some(10))
+                .await
+                .unwrap();
+            assert_eq!(reply.usage.cached_input_tokens, want);
+        }
+    }
+
     #[tokio::test]
     async fn a_call_sends_model_messages_tools_and_key_and_reads_tool_calls_and_usage() {
         let api = FakeApi::spawn(vec![Answer::ok(json!({
