@@ -29,5 +29,5 @@ pub use error::HarnessError;
 pub use event::{Event, EventSink, FinishReason, McpStatus, SharedSink, SkillHow};
 pub use model::{ChatModel, Message, OpenAiCompat, Reply, ToolCall, ToolSpec, Usage};
 pub use permissions::{Access, Gate, Mode, Rule, RuleSet};
-pub use run::{Cancel, RunOutcome, run};
+pub use run::{Cancel, RunOutcome, run, run_continuing};
 pub use tools::{Tool, ToolFuture, Toolbox};

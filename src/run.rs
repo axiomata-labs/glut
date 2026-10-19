@@ -10,7 +10,7 @@ use tokio::time::Instant;
 use crate::config::RunConfig;
 use crate::event::{EVENT_RESULT_CHARS, Event, EventSink, FinishReason};
 use crate::hooks::{self, HookEvent, HookOutcome};
-use crate::model::{ChatModel, Message, ToolCall, ToolSpec, Usage};
+use crate::model::{ChatModel, Message, Role, ToolCall, ToolSpec, Usage};
 use crate::permissions::{Access, Gate};
 use crate::prompt::{subagent_prompt, system_prompt};
 use crate::tools::shell::{Session, ShellOptions};
@@ -102,22 +102,44 @@ pub async fn run<M: ChatModel>(
     sink: &mut dyn EventSink,
     cancel: &Cancel,
 ) -> RunOutcome {
-    run_inner(config, model, tools, prompt, sink, cancel, 0).await
+    run_inner(config, model, tools, Vec::new(), prompt, sink, cancel, 0)
+        .await
+        .0
+}
+
+/// A run that goes on with an earlier conversation (`docs/plans/harness-choice.md`, CP4): `earlier` is what a
+/// previous call of this function returned — empty for a new conversation — and `prompt` the next user message.
+/// The system prompt is written anew (today's date, the caller's instructions as they are now), the rest is kept
+/// as it was; `SessionStart` fires for a new conversation only. Returns the outcome and the whole conversation,
+/// this turn included, for the caller to keep for the next one.
+pub async fn run_continuing<M: ChatModel>(
+    config: &RunConfig,
+    model: &M,
+    tools: &Toolbox,
+    earlier: Vec<Message>,
+    prompt: &str,
+    sink: &mut dyn EventSink,
+    cancel: &Cancel,
+) -> (RunOutcome, Vec<Message>) {
+    run_inner(config, model, tools, earlier, prompt, sink, cancel, 0).await
 }
 
 /// The loop at nesting `depth` (HS8, D3): depth 0 is the run itself — it offers the `task` tool, runs
 /// `SessionStart` and speaks the caller's system prompt; depth ≥ 1 is a subagent, which gets the prompt of
 /// `prompt::subagent_prompt` (D5), no `task` tool and no `SessionStart` (D4). Everything else — hooks, gate,
 /// tools, events — is identical on every level.
+#[allow(clippy::too_many_arguments)] // The loop's whole input; a struct for it would only rename the list.
 async fn run_inner<M: ChatModel>(
     config: &RunConfig,
     model: &M,
     tools: &Toolbox,
+    earlier: Vec<Message>,
     prompt: &str,
     sink: &mut dyn EventSink,
     cancel: &Cancel,
     depth: u32,
-) -> RunOutcome {
+) -> (RunOutcome, Vec<Message>) {
+    let continuing = !earlier.is_empty();
     let deadline = Instant::now() + config.timeout;
     // HS8, D1/D3: `task` exists at depth 0 only, and only for a run that offers subagents at all (D7) — a
     // subagent never sees the tool, so nesting deeper than one cannot start; and its name is in the run's
@@ -159,13 +181,13 @@ async fn run_inner<M: ChatModel>(
             cancel,
             gate: tools.gate().cloned(),
         },
-        messages: opening_messages(config, prompt, depth),
+        messages: opening_messages(config, earlier, prompt, depth),
         usage: Usage::default(),
         answer: None,
         turns: 0,
         subagents_started: 0,
     };
-    if depth == 0 {
+    if depth == 0 && !continuing {
         run.session_start(sink).await;
     }
     let reason = run.drive(&specs, sink).await;
@@ -174,6 +196,7 @@ async fn run_inner<M: ChatModel>(
         usage,
         answer,
         turns,
+        messages,
         ..
     } = run;
     // Only an answer is one: the text of a run that stopped is a remark on the way, not its result.
@@ -183,24 +206,42 @@ async fn run_inner<M: ChatModel>(
         turns,
         usage,
     });
-    RunOutcome {
+    let outcome = RunOutcome {
         reason,
         answer,
         turns,
         usage,
-    }
+    };
+    (outcome, messages)
 }
 
 /// The conversation a run starts with: its system prompt — the caller's instructions at depth 0, the
-/// subagent's own prompt below (D5) — and the user's message.
-fn opening_messages(config: &RunConfig, prompt: &str, depth: u32) -> Vec<Message> {
+/// subagent's own prompt below (D5) — then the `earlier` conversation without its old system prompt, and the
+/// user's message.
+fn opening_messages(
+    config: &RunConfig,
+    earlier: Vec<Message>,
+    prompt: &str,
+    depth: u32,
+) -> Vec<Message> {
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let system = if depth == 0 {
         system_prompt(&config.cwd, &today, config.instructions.as_deref())
     } else {
         subagent_prompt(&config.cwd, &today)
     };
-    vec![Message::system(system), Message::user(prompt)]
+    let mut messages = vec![Message::system(system)];
+    let mut earlier = earlier.into_iter().peekable();
+    // The opening system message is written anew; a `SessionStart` context behind it (HS7) is kept.
+    if earlier
+        .peek()
+        .is_some_and(|first| first.role == Role::System)
+    {
+        earlier.next();
+    }
+    messages.extend(earlier);
+    messages.push(Message::user(prompt));
+    messages
 }
 
 /// How the model's answer turned out once the Stop hooks had their say (HS7, D3).
@@ -536,12 +577,13 @@ impl<M: ChatModel> Loop<'_, M> {
             &sub,
             self.model,
             self.tools,
+            Vec::new(),
             &prompt,
             &mut wrapped,
             self.cancel,
             depth,
         );
-        let outcome = Box::pin(nested).await;
+        let (outcome, _) = Box::pin(nested).await;
         // What the subagent judged but did not get to report (it was cancelled mid-call) still belongs to its
         // stream: drained here, wrapped, before the parent's `ToolResult(task)` brackets it (D2.4).
         if let Some(gate) = self.tools.gate() {
@@ -890,6 +932,55 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    /// CP4 of harness-choice: a conversation goes on — the second turn sees the first one, tool calls included,
+    /// under a system prompt written anew, and comes back whole for the turn after.
+    #[tokio::test]
+    async fn a_conversation_goes_on_with_what_came_before() {
+        let model = Script::new(vec![
+            Ok(calls(&[("c1", "echo", r#"{"text":"pong"}"#)])),
+            Ok(text("Remembered.")),
+            Ok(text("It was ping.")),
+        ]);
+        let config = RunConfig::new("/w");
+        let (first, kept) = run_continuing(
+            &config,
+            &model,
+            &toolbox(),
+            Vec::new(),
+            "ping",
+            &mut Vec::new(),
+            &Cancel::new(),
+        )
+        .await;
+        assert_eq!(first.answer.as_deref(), Some("Remembered."));
+        // system, user, the call, its result, the answer
+        assert_eq!(kept.len(), 5);
+        let mut old = kept.clone();
+        old[0] = Message::system("an old system prompt");
+
+        let (second, kept) = run_continuing(
+            &config,
+            &model,
+            &toolbox(),
+            old,
+            "what did I say?",
+            &mut Vec::new(),
+            &Cancel::new(),
+        )
+        .await;
+        assert_eq!(second.answer.as_deref(), Some("It was ping."));
+        assert_eq!(second.turns, 1);
+        let sent = &model.seen.lock().unwrap()[2];
+        assert_eq!(sent.len(), 6);
+        assert_eq!(sent[0].role, Role::System);
+        assert_ne!(sent[0].content.as_deref(), Some("an old system prompt"));
+        assert_eq!(sent[1].content.as_deref(), Some("ping"));
+        assert_eq!(sent[3], Message::tool("c1", "pong"));
+        assert_eq!(sent[5].content.as_deref(), Some("what did I say?"));
+        assert_eq!(kept.len(), 7);
+        assert_eq!(kept[6].content.as_deref(), Some("It was ping."));
     }
 
     #[tokio::test]
