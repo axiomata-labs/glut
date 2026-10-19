@@ -356,6 +356,35 @@ impl Offer {
 /// can settle (there are no timers). A few polls, not one, so a call answered a moment ago gets to land first.
 const STUCK_POLLS: u32 = 8;
 
+/// Commands that only read, by their first word — what needs no snapshot before it runs (`date` in every step of a
+/// skill must not record the folder each time). Anything else, a redirection, a nested shell or what the lexer cannot
+/// read counts as a change.
+const READ_ONLY_COMMANDS: [&str; 19] = [
+    "ls", "cat", "head", "tail", "grep", "egrep", "fgrep", "rg", "wc", "date", "echo", "printf",
+    "pwd", "which", "file", "stat", "du", "df", "basename",
+];
+/// Git's subcommands that only read.
+const READ_ONLY_GIT: [&str; 6] = ["status", "log", "diff", "show", "rev-parse", "ls-files"];
+
+/// Whether `command` only reads: every part a read-only command, no output redirection, nothing opaque or nested.
+fn reads_only(command: &str) -> bool {
+    let analysis = crate::permissions::command::analyze(command);
+    !analysis.is_opaque()
+        && analysis.writes.is_empty()
+        && analysis.nested.is_empty()
+        && analysis
+            .parts
+            .iter()
+            .all(|part| match part.words.first().map(String::as_str) {
+                Some("git") => part
+                    .words
+                    .get(1)
+                    .is_some_and(|sub| READ_ONLY_GIT.contains(&sub.as_str())),
+                Some(word) => READ_ONLY_COMMANDS.contains(&word),
+                None => true,
+            })
+}
+
 /// A tag no other run of this process — an earlier turn of the same chat included — gives its results.
 fn store_tag() -> String {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -578,7 +607,7 @@ impl<M: ChatModel> Loop<'_, M> {
         }
         self.snapshot_before(call, sink).await;
         let (ok, mut output) = self.execute(call, sink).await?;
-        if ok && let Some(note) = self.diagnostics_after(call).await {
+        if ok && let Some(note) = self.diagnostics_after(call, sink).await {
             output.push_str("\n\n");
             output.push_str(&note);
         }
@@ -685,11 +714,17 @@ impl<M: ChatModel> Loop<'_, M> {
         let Some(root) = self.config.snapshots.clone() else {
             return;
         };
-        let changes = matches!(
-            self.tools
-                .access_of(&call.function.name, &call.function.arguments),
-            Some(Access::Edit { .. } | Access::Bash { .. })
-        );
+        // A subagent's steps are covered by the snapshot its parent took before the `task` call: one record per run.
+        let changes = self.depth == 0
+            && (call.function.name == crate::task::NAME
+                || match self
+                    .tools
+                    .access_of(&call.function.name, &call.function.arguments)
+                {
+                    Some(Access::Edit { .. }) => true,
+                    Some(Access::Bash { command, .. }) => !reads_only(&command),
+                    _ => false,
+                });
         if !changes || matches!(self.snapshots, SnapshotState::Off) {
             return;
         }
@@ -700,7 +735,7 @@ impl<M: ChatModel> Loop<'_, M> {
         );
         let state = std::mem::replace(&mut self.snapshots, SnapshotState::Off);
         // Git is blocking work; the snapshots move to a blocking thread and back.
-        let taken = tokio::task::spawn_blocking(move || {
+        let job = tokio::task::spawn_blocking(move || {
             let mut snaps = match state {
                 SnapshotState::Open(snaps) => snaps,
                 _ => {
@@ -710,9 +745,13 @@ impl<M: ChatModel> Loop<'_, M> {
             };
             let commit = snaps.take(turn)?;
             Ok::<_, String>((snaps, commit))
-        })
-        .await
-        .unwrap_or_else(|err| Err(format!("the snapshot task failed: {err}")));
+        });
+        // The run's end does not wait for a snapshot: git finishes on its own thread, the run goes without.
+        let taken = tokio::select! {
+            joined = job => joined.unwrap_or_else(|err| Err(format!("the snapshot task failed: {err}"))),
+            () = tokio::time::sleep_until(self.deadline) => return,
+            () = self.cancel.cancelled() => return,
+        };
         match taken {
             Ok((snaps, commit)) => {
                 if let Some(commit) = commit {
@@ -730,10 +769,17 @@ impl<M: ChatModel> Loop<'_, M> {
         }
     }
 
-    /// The language server's errors for the file an edit just changed (Glut 2, D), when the run asks for them and a
-    /// server for its language is installed. The servers' pipes are blocking work, done on the blocking pool.
-    async fn diagnostics_after(&mut self, call: &ToolCall) -> Option<String> {
-        if !self.config.diagnostics {
+    /// The language server's errors for the file an edit just changed (Glut 2, D, G12). A server reads files the agent
+    /// wrote and may run programs because of them, so it is treated as a command of the run: it starts only at the top
+    /// level, only where the run has a sandbox (it runs in it, without network), and only when the gate allows its
+    /// command line as it would a shell command — judged once, at its start. The servers' pipes are blocking work,
+    /// done on the blocking pool; the run's end does not wait for them.
+    async fn diagnostics_after(
+        &mut self,
+        call: &ToolCall,
+        sink: &mut dyn EventSink,
+    ) -> Option<String> {
+        if !self.config.diagnostics || self.depth > 0 {
             return None;
         }
         let Some(Access::Edit { path }) = self
@@ -742,20 +788,66 @@ impl<M: ChatModel> Loop<'_, M> {
         else {
             return None;
         };
-        let servers = Arc::clone(self.diagnostics.get_or_insert_with(|| {
-            Arc::new(std::sync::Mutex::new(crate::diagnostics::Diagnostics::new(
-                &self.config.cwd,
-            )))
-        }));
-        tokio::task::spawn_blocking(move || {
+        if self.diagnostics.is_none() {
+            let profile = self.sandbox_profile()?;
+            self.diagnostics = Some(Arc::new(std::sync::Mutex::new(
+                crate::diagnostics::Diagnostics::new(&self.config.cwd, profile),
+            )));
+        }
+        let servers = Arc::clone(self.diagnostics.as_ref()?);
+        let launch = servers
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .launch(&path);
+        if let (Some(launch), Some(gate)) = (launch, self.tools.gate()) {
+            let access = Access::Bash {
+                command: launch.line.clone(),
+                folder: String::new(),
+                unsandboxed: false,
+            };
+            let judged = gate.judge("bash", &access).await;
+            for entry in gate.take_log() {
+                sink.emit(Event::permission(self.turns, &call.id, &entry));
+            }
+            if judged.is_err() {
+                servers
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner())
+                    .refuse(launch.server);
+                return None;
+            }
+        }
+        let job = tokio::task::spawn_blocking(move || {
             servers
                 .lock()
                 .unwrap_or_else(|poison| poison.into_inner())
                 .after_edit(&path)
-        })
-        .await
-        .ok()
-        .flatten()
+        });
+        tokio::select! {
+            joined = job => joined.ok().flatten(),
+            () = tokio::time::sleep_until(self.deadline) => None,
+            () = self.cancel.cancelled() => None,
+        }
+    }
+
+    /// The run's sandbox as a Seatbelt profile without network — `None` where there is no sandbox (not on, not on this
+    /// system, no home): then nothing else is started for the run either.
+    fn sandbox_profile(&self) -> Option<String> {
+        let settings = self
+            .config
+            .sandbox
+            .as_ref()
+            .filter(|settings| settings.enabled)?;
+        if !crate::sandbox::available() {
+            return None;
+        }
+        let home = std::env::var_os("HOME")
+            .map(std::path::PathBuf::from)
+            .filter(|home| home.is_absolute())?;
+        let root = self.config.cwd.canonicalize().ok()?;
+        let policy =
+            crate::sandbox::Policy::new(&root, &home, &settings.allow_write, &settings.deny_read);
+        Some(policy.profile())
     }
 
     /// The `exit_plan` arm (Glut 2, D): the plan goes to the owner; yes switches the gate to the run's build mode and
@@ -1799,6 +1891,29 @@ mod tests {
         let started = started.unwrap();
         assert!(started.iter().any(|t| t == "mcp__srv__look"));
         assert!(!started.iter().any(|t| t == crate::codemode::NAME));
+    }
+
+    #[test]
+    fn read_only_commands_need_no_snapshot() {
+        for command in [
+            "date",
+            "ls -la News",
+            "grep -r x . | head -5",
+            "git status",
+            "git log -3",
+        ] {
+            assert!(reads_only(command), "{command}");
+        }
+        for command in [
+            "rm a",
+            "echo x > f",
+            "date; touch f",
+            "sh -c 'ls'",
+            "git commit -m x",
+            "mkdir -p News",
+        ] {
+            assert!(!reads_only(command), "{command}");
+        }
     }
 
     #[tokio::test]

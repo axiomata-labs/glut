@@ -31,20 +31,28 @@ const MAX_ERRORS: usize = 10;
 /// LSP's severity of an error.
 const ERROR: u64 = 1;
 
-/// The servers asked after an edit: the ones that never run the project's own code. An agent writes the files these
-/// servers read, so a server that runs a build script, a proc macro or a config file (`svelte.config.js`, a tsserver
-/// plugin from `node_modules`, a Swift build) would run what the agent wrote — outside the sandbox, past the gate.
-/// rust-analyzer is here only with its build scripts, proc macros and check-on-save off ([`rust_analyzer_settings`]).
-const SAFE_SERVERS: [&str; 8] = [
+/// The programs asked after an edit, by file name — never by the table's server id, which also stands for fallbacks
+/// (`pylsp` for "pyright", with plugins that run the project's config). A language server reads files the agent wrote
+/// and may run programs because of them (rust-analyzer: `cargo metadata`, which obeys the project's
+/// `.cargo/config.toml`; pyright: the interpreter a project's config names). So a server starts only where the run's
+/// gate would allow its command line, and only in the run's sandbox — writes inside the folder, no network — as a
+/// command of the run would ([`Diagnostics::launch`], `run.rs` `diagnostics_after`).
+const SAFE_PROGRAMS: [&str; 9] = [
     "rust-analyzer",
-    "pyright",
+    "pyright-langserver",
+    "basedpyright-langserver",
     "taplo",
-    "yaml",
-    "json",
-    "css",
-    "html",
+    "yaml-language-server",
+    "vscode-json-language-server",
+    "vscode-css-language-server",
+    "vscode-html-language-server",
     "marksman",
 ];
+
+/// Most messages a server may have waiting between two edits; past it, the rest is dropped (progress reports, mostly).
+const MAX_WAITING: usize = 1024;
+/// A server that has said nothing within the limit this many times in a row is not asked again in the run.
+const MAX_SILENT: u32 = 2;
 
 /// rust-analyzer without anything that runs the project's code: build scripts, proc macros, `cargo check`.
 fn rust_analyzer_settings() -> Value {
@@ -59,10 +67,13 @@ fn rust_analyzer_settings() -> Value {
 
 /// What a server is started with and answers `workspace/configuration` with.
 fn settings_for(server: &str) -> Value {
-    if server == "rust-analyzer" {
-        rust_analyzer_settings()
-    } else {
-        Value::Null
+    match server {
+        "rust-analyzer" => rust_analyzer_settings(),
+        // No schema fetched from a URL a file names: a way out past the web gate (the sandbox has no network anyway).
+        "json" => json!({ "json": { "schemaDownload": { "enable": false } } }),
+        "yaml" => json!({ "yaml": { "schemaStore": { "enable": false }, "schemas": {} } }),
+        "taplo" => json!({ "schema": { "enabled": false } }),
+        _ => Value::Null,
     }
 }
 
@@ -119,10 +130,16 @@ struct Server {
     /// The last errors the server reported per document: a server that finds nothing new in a change says nothing,
     /// and its last word still stands.
     known: HashMap<String, Vec<String>>,
+    /// Edits in a row the server said nothing about within the limit.
+    silent: u32,
 }
 
 impl Drop for Server {
     fn drop(&mut self) {
+        // The server leads its own process group: its children (cargo, node workers) go with it.
+        if let Some(pid) = rustix::process::Pid::from_raw(self.child.id() as i32) {
+            let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
+        }
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
@@ -134,26 +151,42 @@ impl Server {
         program: &Path,
         args: &[String],
         root: &Path,
+        profile: &str,
     ) -> Result<Self, String> {
-        let mut child = Command::new(program)
+        use std::os::unix::process::CommandExt;
+        // In the run's sandbox, as a command of the run; with a cleared environment.
+        let mut command = Command::new(crate::sandbox::SANDBOX_EXEC);
+        command
+            .arg("-p")
+            .arg(profile)
+            .arg(program)
             .args(args)
+            .env_clear();
+        for key in ["PATH", "HOME", "TMPDIR"] {
+            if let Some(value) = std::env::var_os(key) {
+                command.env(key, value);
+            }
+        }
+        let mut child = command
             .current_dir(root)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
+            .process_group(0)
             .spawn()
             .map_err(|err| format!("cannot start {}: {err}", program.display()))?;
         let stdin = child.stdin.take().ok_or("no stdin")?;
         let stdout = child.stdout.take().ok_or("no stdout")?;
-        let (tx, incoming) = mpsc::channel();
+        let (tx, incoming) = mpsc::sync_channel(MAX_WAITING);
         std::thread::spawn(move || {
             let mut reader = BufReader::new(stdout);
             while let Ok(Some(text)) = framing::read_message(&mut reader) {
                 let Ok(message) = serde_json::from_str::<Value>(&text) else {
                     continue;
                 };
-                if tx.send(message).is_err() {
-                    break;
+                match tx.try_send(message) {
+                    Ok(()) | Err(mpsc::TrySendError::Full(_)) => {}
+                    Err(mpsc::TrySendError::Disconnected(_)) => break,
                 }
             }
         });
@@ -165,6 +198,7 @@ impl Server {
             next_id: 1,
             versions: HashMap::new(),
             known: HashMap::new(),
+            silent: 0,
         };
         let uri = uri_of(root);
         let id = server.request(
@@ -342,26 +376,40 @@ fn uri_of(path: &Path) -> String {
     format!("file://{encoded}")
 }
 
-/// The servers of one run, by server id; a server that would not start is remembered as such.
+/// A server that would start for an edit: its id and the command line the gate judges.
+pub(crate) struct Launch {
+    pub server: &'static str,
+    pub line: String,
+}
+
+/// The servers of one run, by server id; a server that would not start, was refused, or fell silent is remembered as
+/// such (`None`).
 pub(crate) struct Diagnostics {
     root: PathBuf,
     search: Vec<PathBuf>,
+    /// The run's sandbox profile, which every server runs in.
+    profile: String,
     servers: HashMap<&'static str, Option<Server>>,
 }
 
+/// What [`Diagnostics::resolve`] finds for a file: its path, language, server id, program and arguments.
+type Resolved = (PathBuf, &'static str, &'static str, PathBuf, Vec<String>);
+
 impl Diagnostics {
-    pub(crate) fn new(root: &Path) -> Self {
+    /// The servers for a run in `root`, each started in the sandbox `profile`.
+    pub(crate) fn new(root: &Path, profile: String) -> Self {
         let home = std::env::var_os("HOME").map(PathBuf::from);
         Self {
-            root: root.to_owned(),
+            root: root.canonicalize().unwrap_or_else(|_| root.to_owned()),
             search: servers::search_path(std::env::var_os("PATH").as_deref(), home.as_deref()),
+            profile,
             servers: HashMap::new(),
         }
     }
 
-    /// The note to append to an edit of `rel` (relative to the root): the server's errors, or `None` when there is no
-    /// server, it said nothing in time, or found nothing.
-    pub(crate) fn after_edit(&mut self, rel: &str) -> Option<String> {
+    /// The file `rel` names inside the root, its language and its server — `None` for a file outside, a language
+    /// without a server, or a program not on [`SAFE_PROGRAMS`].
+    fn resolve(&self, rel: &str) -> Option<Resolved> {
         let path = self.root.join(rel).canonicalize().ok()?;
         if !path.starts_with(&self.root) {
             return None;
@@ -375,22 +423,61 @@ impl Diagnostics {
         else {
             return None;
         };
-        if !SAFE_SERVERS.contains(&server) {
+        let name = program.file_name()?.to_str()?;
+        SAFE_PROGRAMS
+            .contains(&name)
+            .then_some((path, language, server, program, args))
+    }
+
+    /// The server an edit of `rel` would start now — for the gate to judge first; `None` when none would start (no
+    /// server, already running, or given up on in this run).
+    pub(crate) fn launch(&self, rel: &str) -> Option<Launch> {
+        let (_, _, server, program, args) = self.resolve(rel)?;
+        if self.servers.contains_key(server) {
             return None;
         }
+        let line = std::iter::once(program.display().to_string())
+            .chain(args)
+            .collect::<Vec<_>>()
+            .join(" ");
+        Some(Launch { server, line })
+    }
+
+    /// The gate refused to start `server`: it is not asked about again in this run.
+    pub(crate) fn refuse(&mut self, server: &'static str) {
+        self.servers.insert(server, None);
+    }
+
+    /// The note to append to an edit of `rel` (relative to the root): the server's errors, or `None` when there is no
+    /// server, it said nothing in time, or found nothing.
+    pub(crate) fn after_edit(&mut self, rel: &str) -> Option<String> {
+        let (path, language, server, program, args) = self.resolve(rel)?;
         let text = std::fs::read_to_string(&path).ok()?;
+        let (root, profile) = (self.root.clone(), self.profile.clone());
         let entry = self
             .servers
             .entry(server)
-            .or_insert_with(|| Server::start(server, &program, &args, &self.root).ok());
+            .or_insert_with(|| Server::start(server, &program, &args, &root, &profile).ok());
         let running = entry.as_mut()?;
         match running.errors_for(&path, language, &text) {
-            Ok(Some(errors)) if !errors.is_empty() => Some(format!(
-                "{server} reports {} error(s) in {rel} now:\n{}",
-                errors.len(),
-                errors.join("\n")
-            )),
-            Ok(_) => None,
+            Ok(Some(errors)) => {
+                running.silent = 0;
+                (!errors.is_empty()).then(|| {
+                    format!(
+                        "{server} reports {} error(s) in {rel} now:\n{}",
+                        errors.len(),
+                        errors.join("\n")
+                    )
+                })
+            }
+            Ok(None) => {
+                // Nothing within the limit: a server still loading a large project would add seconds to every edit.
+                running.silent += 1;
+                if running.silent >= MAX_SILENT {
+                    *entry = None;
+                }
+                None
+            }
             Err(_) => {
                 // A server that broke is not asked again in this run.
                 *entry = None;
@@ -422,9 +509,20 @@ mod tests {
         let ra = settings_for("rust-analyzer");
         assert_eq!(ra["cargo"]["buildScripts"]["enable"], false);
         assert_eq!(ra["procMacro"]["enable"], false);
-        for unsafe_server in ["typescript", "svelte", "sourcekit", "lua", "sqls", "bash"] {
-            assert!(!SAFE_SERVERS.contains(&unsafe_server), "{unsafe_server}");
+        for program in [
+            "typescript-language-server",
+            "svelteserver",
+            "sourcekit-lsp",
+            "pylsp",
+            "sqls",
+        ] {
+            assert!(!SAFE_PROGRAMS.contains(&program), "{program}");
         }
+        assert_eq!(
+            settings_for("json")["json"]["schemaDownload"]["enable"],
+            false
+        );
+        assert_eq!(settings_for("yaml")["yaml"]["schemaStore"]["enable"], false);
     }
 
     /// Live against rust-analyzer when it is installed: an edit with a type error gets the error back.
@@ -443,7 +541,10 @@ mod tests {
             "fn main() { let x: i32 = \"no\"; }\n",
         )
         .unwrap();
-        let mut diagnostics = Diagnostics::new(&dir.canonicalize().unwrap());
+        let root = dir.canonicalize().unwrap();
+        let home = std::path::PathBuf::from(std::env::var_os("HOME").unwrap());
+        let profile = crate::sandbox::Policy::new(&root, &home, &[], &[]).profile();
+        let mut diagnostics = Diagnostics::new(&root, profile);
         // Its own diagnostics (no `cargo check`): the type error among them; asked again, the last word stands.
         let first = diagnostics.after_edit("src/main.rs");
         let note = diagnostics.after_edit("src/main.rs");
