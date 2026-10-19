@@ -5,6 +5,7 @@
 
 pub mod files;
 pub mod shell;
+pub mod web;
 
 use std::future::Future;
 use std::pin::Pin;

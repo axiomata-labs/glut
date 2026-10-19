@@ -14,6 +14,7 @@ axiomata-files = { path = "../axiomata-files" }
 # HTTPS for remote model APIs (OpenRouter); rustls rather than the platform stack, like the rest of the tree would
 # want it — no Security.framework link for a crate meant to stand alone.
 reqwest = { workspace = true, features = ["rustls-tls"] }
+htmd.workspace = true
 # `signal`: a run ends cleanly on Ctrl-C/SIGTERM/SIGHUP; `net`: the sandbox's network proxy (HS3b).
 tokio = { workspace = true, features = ["signal", "net"] }
 serde.workspace = true

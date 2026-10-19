@@ -52,8 +52,13 @@ enum RuleKind {
     Read,
     Edit,
     Bash,
-    /// `Network(crates.io)`, `Network(*.github.com)`: a host the run's proxy lets a sandboxed command reach.
+    /// `Network(crates.io)`, `Network(*.github.com)`: a host the run's proxy lets a sandboxed command reach — and
+    /// `web_fetch` too, which asks the same question.
     Network,
+    /// `WebFetch`, `WebFetch(domain:docs.rs)` — Claude Code's spelling, so one `allowed_tools` line means the same on
+    /// both harnesses: a host `web_fetch` may reach, and nothing else. Kept apart from [`Self::Network`] so a skill
+    /// that may read pages does not also let its shell (`curl`, `pip`) reach every host (glut-round CP2, audit).
+    Web,
     /// `mcp__mail` (every tool of that server) or `mcp__mail__send` (one tool) (HS5, M5): a name the model sees
     /// for an MCP tool, with no pattern — there is nothing a pattern could add to it.
     Mcp,
@@ -62,7 +67,7 @@ enum RuleKind {
 }
 
 /// The names Claude Code's format gives meaning to; anything spelled like one but not exactly is a typo (P4).
-const KNOWN_KINDS: [&str; 5] = ["Read", "Edit", "Write", "Bash", "Network"];
+const KNOWN_KINDS: [&str; 6] = ["Read", "Edit", "Write", "Bash", "Network", "WebFetch"];
 
 /// How a rule names an MCP tool (HS5, M5): `mcp__<server>` for a whole server, `mcp__<server>__<tool>` for one.
 const MCP_PREFIX: &str = "mcp__";
@@ -132,6 +137,7 @@ impl Rule {
             "Edit" | "Write" => RuleKind::Edit,
             "Bash" => RuleKind::Bash,
             "Network" => RuleKind::Network,
+            "WebFetch" => RuleKind::Web,
             // M5: an MCP rule is written the way the model is shown the tool, and says everything in its name.
             // `mcp__mail(send)` would be a rule about a tool called "mail(send)" that never matches — a deny that
             // silently does nothing — so a pattern here is refused rather than kept.
@@ -148,7 +154,9 @@ impl Rule {
         };
         let pattern = match pattern.filter(|p| !p.is_empty() && *p != "*" && *p != "**") {
             None => None,
-            Some(p) if kind == RuleKind::Network => Some(Pattern::Host(host_pattern(p)?)),
+            Some(p) if matches!(kind, RuleKind::Network | RuleKind::Web) => Some(Pattern::Host(
+                host_pattern(p.strip_prefix("domain:").unwrap_or(p))?,
+            )),
             Some(p) if kind == RuleKind::Bash => Some(match p.strip_suffix(":*") {
                 Some(prefix) => Pattern::Prefix(rule_words(prefix)),
                 None => Pattern::Wild(rule_words(p).join(" ")),
@@ -224,7 +232,12 @@ impl Rule {
             Access::Read { path } => (path, RuleKind::Read),
             Access::Edit { path } => (path, RuleKind::Edit),
             Access::Network { host } => {
-                return self.kind == RuleKind::Network
+                let speaks = match self.kind {
+                    RuleKind::Network => true,
+                    RuleKind::Web => tool == crate::tools::web::NAME,
+                    _ => false,
+                };
+                return speaks
                     && match &self.pattern {
                         None => true,
                         Some(Pattern::Host(pattern)) => host_matches(pattern, host),
@@ -1795,6 +1808,27 @@ mod tests {
             Some(Verdict::Deny)
         );
         assert_eq!(said(&set, "network", host("notgithub.com")), None);
+        // Claude Code's spelling speaks about `web_fetch` alone — never about the shell's proxy (glut-round CP2).
+        let web = Rule::parse("WebFetch(domain:docs.rs)").unwrap();
+        assert!(web.matches_path("web_fetch", &host("docs.rs")));
+        assert!(!web.matches_path("web_fetch", &host("evil.rs")));
+        assert!(
+            Rule::parse("WebFetch")
+                .unwrap()
+                .matches_path("web_fetch", &host("any.org"))
+        );
+        assert!(
+            !Rule::parse("WebFetch")
+                .unwrap()
+                .matches_path(crate::sandbox::proxy::NETWORK_TOOL, &host("any.org"))
+        );
+        // `Network(…)` keeps serving both.
+        assert!(
+            Rule::parse("Network(docs.rs)")
+                .unwrap()
+                .matches_path("web_fetch", &host("docs.rs"))
+        );
+        assert!(Rule::parse("webfetch(domain:x.org)").is_err());
         for bad in ["Network(http://x)", "Network(a b)", "network(x)"] {
             assert!(Rule::parse(bad).is_err(), "{bad}");
         }

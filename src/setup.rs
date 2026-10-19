@@ -36,6 +36,8 @@ pub async fn toolbox(
 ) -> Result<Toolbox, HarnessError> {
     let mut tools = Toolbox::new();
     tools.extend(file_tools(cwd, SkillRoots::new(&catalog.folders()))?);
+    // The web is part of the core (docs/plans/glut-round.md): no MCP server to set up for a page.
+    tools.extend([Box::new(crate::tools::web::WebFetch) as Box<dyn Tool>]);
     if !catalog.is_empty() {
         tools
             .extend([Box::new(SkillTool::new(Arc::clone(catalog), sink.clone())) as Box<dyn Tool>]);
