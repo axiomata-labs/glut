@@ -181,7 +181,7 @@ async fn run_inner<M: ChatModel>(
             cancel,
             gate: tools.gate().cloned(),
         },
-        messages: opening_messages(config, earlier, prompt, depth),
+        messages: opening_messages(config, model.name(), earlier, prompt, depth),
         usage: Usage::default(),
         answer: None,
         turns: 0,
@@ -220,13 +220,14 @@ async fn run_inner<M: ChatModel>(
 /// user's message.
 fn opening_messages(
     config: &RunConfig,
+    model: &str,
     earlier: Vec<Message>,
     prompt: &str,
     depth: u32,
 ) -> Vec<Message> {
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let system = if depth == 0 {
-        system_prompt(&config.cwd, &today, config.instructions.as_deref())
+        system_prompt(&config.cwd, &today, model, config.instructions.as_deref())
     } else {
         subagent_prompt(&config.cwd, &today)
     };

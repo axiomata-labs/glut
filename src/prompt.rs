@@ -9,9 +9,15 @@ Use the tools to read and change files; paths are relative to the working folder
 Look before you change: read a file before you edit it. \
 When the task is done, answer briefly with what you did or found, and do not call another tool.";
 
-/// The system prompt for a run in `cwd` on `date`, with the caller's instructions, if any, after it.
-pub fn system_prompt(cwd: &Path, date: &str, instructions: Option<&str>) -> String {
-    let mut prompt = format!("{BASE}\nWorking folder: {}\nToday: {date}", cwd.display());
+/// The system prompt for a run in `cwd` on `date` with `model`, with the caller's instructions, if any, after it.
+/// It names the harness and the model, so a model asked who it is says where it runs rather than a name it learned
+/// (DeepSeek in the Glut chat called itself "Claude", `docs/plans/glut-round.md`).
+pub fn system_prompt(cwd: &Path, date: &str, model: &str, instructions: Option<&str>) -> String {
+    let mut prompt = format!(
+        "{BASE}\nYou run in Glut, Axiomata's own agent harness, on the model {model}.\n\
+         Working folder: {}\nToday: {date}",
+        cwd.display()
+    );
     if let Some(extra) = instructions.map(str::trim).filter(|text| !text.is_empty()) {
         prompt.push_str("\n\n");
         prompt.push_str(extra);
@@ -39,10 +45,18 @@ mod tests {
 
     #[test]
     fn the_prompt_names_folder_and_date_and_appends_instructions() {
-        let prompt = system_prompt(Path::new("/w"), "2026-10-13", Some("  Be a reviewer.  "));
+        let prompt = system_prompt(
+            Path::new("/w"),
+            "2026-10-13",
+            "m/x",
+            Some("  Be a reviewer.  "),
+        );
         assert!(prompt.contains("Working folder: /w\nToday: 2026-10-13"));
+        assert!(
+            prompt.contains("You run in Glut, Axiomata's own agent harness, on the model m/x.")
+        );
         assert!(prompt.ends_with("\n\nBe a reviewer."));
-        let bare = system_prompt(Path::new("/w"), "2026-10-13", Some("   "));
+        let bare = system_prompt(Path::new("/w"), "2026-10-13", "m/x", Some("   "));
         assert!(
             bare.ends_with("Today: 2026-10-13"),
             "blank instructions add nothing"
@@ -52,7 +66,9 @@ mod tests {
     #[test]
     fn the_base_prompt_stays_small() {
         // A guard against the prompt growing back into a page: it is paid on every turn.
-        assert!(system_prompt(Path::new("/w"), "d", None).len() < 600);
+        assert!(
+            system_prompt(Path::new("/w"), "d", "deepseek/deepseek-v4.1-flash", None).len() < 700
+        );
     }
 
     #[test]
