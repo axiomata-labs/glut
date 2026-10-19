@@ -178,9 +178,9 @@ impl Snapshots {
                 "--cached",
                 "--others",
                 "--exclude-standard",
-                "--directory",
             ],
         )?;
+        // One entry per file — except a nested repository, which git lists as its folder (`dir/`).
         let entries: Vec<&str> = listed.split('\0').filter(|f| !f.is_empty()).collect();
         if entries.len() > MAX_FILES {
             return Err(format!(
@@ -194,7 +194,10 @@ impl Snapshots {
             let large = std::fs::symlink_metadata(&path)
                 .is_ok_and(|meta| meta.is_file() && meta.len() > MAX_FILE_BYTES);
             // A name with pattern characters cannot be written into the list as itself; it is recorded instead.
-            if (nested_repo || large) && !entry.contains(['\n', '*', '?', '[', '\\', '!', '#']) {
+            // A name ending in a space would be trimmed by the exclude file's own rules.
+            let plain =
+                !entry.contains(['\n', '*', '?', '[', '\\', '!', '#']) && !entry.ends_with(' ');
+            if (nested_repo || large) && plain {
                 exclude.push('/');
                 exclude.push_str(entry);
                 exclude.push('\n');
@@ -444,11 +447,12 @@ fn run_limited(mut command: Command, what: &str) -> Result<String, String> {
         .map_err(|err| format!("could not run git: {err}"))?;
     let read = |pipe: Option<Box<dyn std::io::Read + Send>>| {
         std::thread::spawn(move || {
-            let mut text = String::new();
+            // Bytes, then lossy text: a file name that is no UTF-8 must not cost the rest of the answer.
+            let mut bytes = Vec::new();
             if let Some(mut pipe) = pipe {
-                let _ = pipe.read_to_string(&mut text);
+                let _ = pipe.read_to_end(&mut bytes);
             }
-            text
+            String::from_utf8_lossy(&bytes).into_owned()
         })
     };
     let out = read(
@@ -576,6 +580,42 @@ mod tests {
             runs(&root, &folder).len(),
             2,
             "fresh records outlive the sweep"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn deep_large_files_and_nested_repositories_are_left_out_on_the_first_snapshot() {
+        let (root, folder) = (temp("root-deep"), temp("folder-deep"));
+        std::fs::create_dir_all(folder.join("a/b")).unwrap();
+        std::fs::write(
+            folder.join("a/b/big"),
+            vec![0u8; (MAX_FILE_BYTES + 1) as usize],
+        )
+        .unwrap();
+        std::fs::write(folder.join("a/b/small.txt"), "s").unwrap();
+        std::fs::create_dir_all(folder.join("n/sub")).unwrap();
+        let init = Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(folder.join("n/sub"))
+            .status()
+            .unwrap();
+        assert!(init.success());
+        std::fs::write(folder.join("n/sub/inner.txt"), "inner").unwrap();
+
+        let mut snaps = Snapshots::open(&root, &folder, "deep").unwrap();
+        snaps.take(1).unwrap().unwrap();
+        let store = store_of(&root, &folder);
+        let exclude = std::fs::read_to_string(store.join("info/exclude")).unwrap();
+        assert!(exclude.contains("/a/b/big\n"), "{exclude}");
+        assert!(exclude.contains("/n/sub/\n"), "{exclude}");
+        let index = store.join("index-deep");
+        let recorded = git_with_index(&store, &folder, &index, &["ls-files"]).unwrap();
+        assert!(
+            recorded.contains("a/b/small.txt")
+                && !recorded.contains("big")
+                && !recorded.contains("inner")
         );
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&folder);
