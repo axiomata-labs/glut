@@ -23,6 +23,7 @@ enum Language {
     Go,
 }
 
+/// The language of a file, by its extension.
 fn language_of(path: &Path) -> Option<Language> {
     let extension = path.extension()?.to_str()?.to_ascii_lowercase();
     Some(match extension.as_str() {
@@ -96,6 +97,7 @@ fn is_control(trimmed: &str) -> bool {
     })
 }
 
+/// Whether `line` declares something in `language`: a comment or a block's opening line never does.
 fn declares(language: Language, line: &str) -> bool {
     let trimmed = line.trim_start();
     if trimmed.starts_with("//")
@@ -169,6 +171,11 @@ pub(crate) fn of(path: &Path, text: &str) -> Result<String, String> {
 mod tests {
     use super::*;
 
+    /// A source text from its lines.
+    fn src(lines: &[&str]) -> String {
+        lines.iter().map(|line| format!("{line}\n")).collect()
+    }
+
     fn outline(path: &str, text: &str) -> Vec<String> {
         of(Path::new(path), text)
             .unwrap()
@@ -201,9 +208,24 @@ mod tests {
 
     #[test]
     fn the_studios_other_languages() {
-        let ts = "import x from 'y';\nexport class Store {\n  private items = [];\n  async load(id: string): Promise<void> {\n    if (id) {\n      return;\n    }\n  }\n}\nexport const LIMIT = 3;\nexport function add(a: number) {\n  const inner = 1;\n}\ninterface Shape {}\n";
+        let ts = src(&[
+            "import x from 'y';",
+            "export class Store {",
+            "  private items = [];",
+            "  async load(id: string): Promise<void> {",
+            "    if (id) {",
+            "      return;",
+            "    }",
+            "  }",
+            "}",
+            "export const LIMIT = 3;",
+            "export function add(a: number) {",
+            "  const inner = 1;",
+            "}",
+            "interface Shape {}",
+        ]);
         assert_eq!(
-            outline("a.ts", ts),
+            outline("a.ts", &ts),
             [
                 "export class Store",
                 "  async load(id: string): Promise<void>",
@@ -212,9 +234,18 @@ mod tests {
                 "interface Shape {}"
             ]
         );
-        let py = "import os\nMAX = 3\nclass Store:\n    def load(self, id):\n        if id:\n            return\nasync def main():\n    pass\n";
+        let py = src(&[
+            "import os",
+            "MAX = 3",
+            "class Store:",
+            "    def load(self, id):",
+            "        if id:",
+            "            return",
+            "async def main():",
+            "    pass",
+        ]);
         assert_eq!(
-            outline("a.py", py),
+            outline("a.py", &py),
             [
                 "MAX = 3",
                 "class Store:",
@@ -222,9 +253,19 @@ mod tests {
                 "async def main():"
             ]
         );
-        let swift = "import Foundation\npublic struct Calc {\n    let base: Int\n    public func add(_ a: Int) -> Int {\n        let x = 1\n        return x\n    }\n}\nextension Calc: Equatable {}\n";
+        let swift = src(&[
+            "import Foundation",
+            "public struct Calc {",
+            "    let base: Int",
+            "    public func add(_ a: Int) -> Int {",
+            "        let x = 1",
+            "        return x",
+            "    }",
+            "}",
+            "extension Calc: Equatable {}",
+        ]);
         assert_eq!(
-            outline("Calc.swift", swift),
+            outline("Calc.swift", &swift),
             [
                 "public struct Calc",
                 "    let base: Int",
@@ -232,9 +273,23 @@ mod tests {
                 "extension Calc: Equatable {}"
             ]
         );
-        let c = "#include <stdio.h>\n#define MAX 3\nstruct point {\n  int x;\n};\nstatic int add(int a, int b)\n{\n  return a + b;\n}\nint main(void) {\n  if (x) {\n  }\n}\n";
+        let c = src(&[
+            "#include <stdio.h>",
+            "#define MAX 3",
+            "struct point {",
+            "  int x;",
+            "};",
+            "static int add(int a, int b)",
+            "{",
+            "  return a + b;",
+            "}",
+            "int main(void) {",
+            "  if (x) {",
+            "  }",
+            "}",
+        ]);
         assert_eq!(
-            outline("a.c", c),
+            outline("a.c", &c),
             [
                 "#define MAX 3",
                 "struct point",
@@ -242,19 +297,52 @@ mod tests {
                 "int main(void)"
             ]
         );
-        let svelte = "<script lang=\"ts\">\n  let count = 0;\n  function inc() {\n    count += 1;\n  }\n</script>\n\n<button on:click={inc}>{count}</button>\n<style>\n  button { color: red; }\n</style>\n";
+        let svelte = src(&[
+            "<script lang=\"ts\">",
+            "  let count = 0;",
+            "  function inc() {",
+            "    count += 1;",
+            "  }",
+            "</script>",
+            "",
+            "<button on:click={inc}>{count}</button>",
+            "<style>",
+            "  button { color: red; }",
+            "</style>",
+        ]);
         assert_eq!(
-            outline("A.svelte", svelte),
+            outline("A.svelte", &svelte),
             ["<script lang=\"ts\">", "  function inc()", "<style>"]
         );
-        let lua =
-            "local M = {}\nfunction M.setup(opts)\nend\nlocal function helper()\nend\nreturn M\n";
+        let lua = src(&[
+            "local M = {}",
+            "function M.setup(opts)",
+            "end",
+            "local function helper()",
+            "end",
+            "return M",
+        ]);
         assert_eq!(
-            outline("init.lua", lua),
+            outline("init.lua", &lua),
             ["function M.setup(opts)", "local function helper()"]
         );
-        let go = "package main\n\nimport \"fmt\"\n\ntype Point struct {\n\tX int\n}\n\nfunc main() {\n\tfmt.Println(1)\n}\n";
-        assert_eq!(outline("main.go", go), ["type Point struct", "func main()"]);
+        let go = src(&[
+            "package main",
+            "",
+            "import \"fmt\"",
+            "",
+            "type Point struct {",
+            "\tX int",
+            "}",
+            "",
+            "func main() {",
+            "\tfmt.Println(1)",
+            "}",
+        ]);
+        assert_eq!(
+            outline("main.go", &go),
+            ["type Point struct", "func main()"]
+        );
     }
 
     #[test]

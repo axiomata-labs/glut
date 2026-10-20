@@ -8,6 +8,7 @@
 //! Like `task`, `read_full_result` has no [`crate::tools::Tool`] impl: the store belongs to the loop, which answers
 //! the call itself (`run.rs`). Code mode bounds a script's output the same way.
 
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use serde_json::{Value, json};
@@ -21,14 +22,26 @@ const MAX_STORED_BYTES: usize = 32 * 1024 * 1024;
 /// The tool's name.
 pub(crate) const NAME: &str = "read_full_result";
 
+/// Where a run's store keeps its texts beyond the run (Glut lean, N2): a chat's next turn and a resumed run read the
+/// ids its notes name from there. `tag` is what the ids start with — the conversation's or the run's own id, so it is
+/// the same in every turn.
+#[derive(Debug, Clone)]
+pub struct StoreSpec {
+    pub dir: PathBuf,
+    pub tag: String,
+}
+
 /// The whole texts of relocated results. Shared, so code mode can put an over-long output here too.
 ///
-/// An id is `<tag>-<n>`: the tag is the run's own, so a note from an earlier turn of a chat (whose run, and store, is
-/// gone) is answered "no longer available" — never with another run's text under the same number.
+/// An id is `<tag>-<n>`. In memory only, the tag is the run's own, so a note from an earlier turn of a chat is
+/// answered "no longer available" — never with another run's text under the same number. With a [`StoreSpec`], the
+/// texts are also written to its folder and the numbering goes on from what is there, so later turns read them back.
 #[derive(Debug, Clone)]
 pub struct ResultStore {
     tag: String,
     texts: Arc<Mutex<Vec<String>>>,
+    /// The folder the texts are also written to, and how many ids it held when this store opened.
+    disk: Option<(PathBuf, usize)>,
 }
 
 impl ResultStore {
@@ -37,6 +50,24 @@ impl ResultStore {
         Self {
             tag: tag.into(),
             texts: Arc::default(),
+            disk: None,
+        }
+    }
+
+    /// A store that also keeps its texts in `spec.dir`, numbering on from the texts already there.
+    pub fn persistent(spec: StoreSpec) -> Self {
+        let first = std::fs::read_dir(&spec.dir)
+            .map(|entries| {
+                entries
+                    .filter_map(|entry| number_of(&entry.ok()?.path()))
+                    .max()
+                    .unwrap_or(0)
+            })
+            .unwrap_or(0);
+        Self {
+            tag: spec.tag,
+            texts: Arc::default(),
+            disk: Some((spec.dir, first)),
         }
     }
 
@@ -46,6 +77,14 @@ impl ResultStore {
             .texts
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
+        let first = self.disk.as_ref().map_or(0, |(_, first)| *first);
+        let number = first + texts.len() + 1;
+        if let Some((dir, _)) = &self.disk {
+            // Best effort: a text that cannot be written stays readable from memory for the rest of this run.
+            if write_text(dir, number, &text).is_ok() {
+                prune(dir);
+            }
+        }
         texts.push(text);
         // Past the store's limit the oldest texts go: their ids then answer "dropped", the newest stay readable.
         let mut held: usize = texts.iter().map(String::len).sum();
@@ -56,7 +95,7 @@ impl ResultStore {
             held -= old.len();
             *old = String::new();
         }
-        format!("{}-{}", self.tag, texts.len())
+        format!("{}-{number}", self.tag)
     }
 
     /// Up to [`MAX_TOOL_OUTPUT_CHARS`] characters of result `id` from character `offset` on, with a note when more
@@ -73,36 +112,112 @@ impl ResultStore {
             .ok_or_else(|| {
                 format!("result {id} is no longer available (it is from an earlier run); call its tool again")
             })?;
-        let texts = self
-            .texts
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        let text = number
-            .checked_sub(1)
-            .and_then(|index| texts.get(index))
-            .ok_or_else(|| format!("no result with id {id}"))?;
-        if text.is_empty() {
-            return Err(format!(
-                "result {id} was dropped to keep the run's memory small; call its tool again"
-            ));
-        }
-        let total = text.chars().count();
-        if offset > total || (offset == total && total > 0) {
-            return Err(format!(
-                "offset {offset} is past the end ({total} characters)"
-            ));
-        }
-        let part: String = text
-            .chars()
-            .skip(offset)
-            .take(MAX_TOOL_OUTPUT_CHARS)
-            .collect();
-        let end = offset + part.chars().count();
-        Ok(if end < total {
-            format!("{part}\n\n[characters {offset}–{end} of {total}; read on with offset {end}]")
+        let dropped = || {
+            format!("result {id} was dropped to keep the run's memory small; call its tool again")
+        };
+        let first = self.disk.as_ref().map_or(0, |(_, first)| *first);
+        let text = if number <= first {
+            let (dir, _) = self
+                .disk
+                .as_ref()
+                .ok_or_else(|| format!("no result with id {id}"))?;
+            std::fs::read_to_string(text_path(dir, number)).map_err(|_| dropped())?
         } else {
-            part
+            let texts = self
+                .texts
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            let text = texts
+                .get(number - first - 1)
+                .ok_or_else(|| format!("no result with id {id}"))?;
+            if text.is_empty() {
+                // Dropped from memory: the folder may still hold it.
+                match &self.disk {
+                    Some((dir, _)) => {
+                        std::fs::read_to_string(text_path(dir, number)).map_err(|_| dropped())?
+                    }
+                    None => return Err(dropped()),
+                }
+            } else {
+                text.clone()
+            }
+        };
+        part_of(&text, offset)
+    }
+}
+
+/// Up to [`MAX_TOOL_OUTPUT_CHARS`] characters of `text` from `offset` on, with a note when more follows.
+fn part_of(text: &str, offset: usize) -> Result<String, String> {
+    let total = text.chars().count();
+    if offset > total || (offset == total && total > 0) {
+        return Err(format!(
+            "offset {offset} is past the end ({total} characters)"
+        ));
+    }
+    let part: String = text
+        .chars()
+        .skip(offset)
+        .take(MAX_TOOL_OUTPUT_CHARS)
+        .collect();
+    let end = offset + part.chars().count();
+    Ok(if end < total {
+        format!("{part}\n\n[characters {offset}–{end} of {total}; read on with offset {end}]")
+    } else {
+        part
+    })
+}
+
+fn text_path(dir: &Path, number: usize) -> PathBuf {
+    dir.join(format!("{number}.txt"))
+}
+
+/// The number of a store file (`<n>.txt`).
+fn number_of(path: &Path) -> Option<usize> {
+    path.file_name()?
+        .to_str()?
+        .strip_suffix(".txt")?
+        .parse()
+        .ok()
+}
+
+/// Writes text `number` into `dir`, readable by the owner alone: the texts are tool output — files, commands' output.
+fn write_text(dir: &Path, number: usize, text: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut folder = std::fs::DirBuilder::new();
+    folder.recursive(true);
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut folder, 0o700);
+    folder.create(dir)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    options
+        .open(text_path(dir, number))?
+        .write_all(text.as_bytes())
+}
+
+/// Keeps a store's folder under [`MAX_STORED_BYTES`]: the oldest texts go first.
+fn prune(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut files: Vec<(usize, PathBuf, u64)> = entries
+        .filter_map(|entry| {
+            let path = entry.ok()?.path();
+            let size = std::fs::metadata(&path).ok()?.len();
+            Some((number_of(&path)?, path, size))
         })
+        .collect();
+    files.sort_by_key(|(number, ..)| *number);
+    let mut held: u64 = files.iter().map(|(.., size)| size).sum();
+    for (_, path, size) in files {
+        if held <= MAX_STORED_BYTES as u64 {
+            break;
+        }
+        if std::fs::remove_file(&path).is_ok() {
+            held -= size;
+        }
     }
 }
 
@@ -143,8 +258,8 @@ pub(crate) fn answer(store: &ResultStore, arguments: &str) -> (bool, String) {
     }
 }
 
-/// `text` as the conversation gets it: whole up to `max` characters; beyond, its head and tail with a note between them,
-/// and the whole text in `store`.
+/// `text` as the conversation gets it: whole up to `max` characters; beyond, its head and tail with a note between
+/// them, and the whole text in `store`.
 pub(crate) fn bounded(text: String, store: &ResultStore, max: usize) -> String {
     let total = text.chars().count();
     if total <= max {
@@ -239,5 +354,34 @@ mod store_tests {
             back.push_str(&part);
         }
         assert_eq!(back, text);
+    }
+
+    #[test]
+    fn a_persistent_store_answers_a_later_turn_and_numbers_on() {
+        let dir = std::env::temp_dir().join(format!("axh-results-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let spec = StoreSpec {
+            dir: dir.clone(),
+            tag: "axh-chat".into(),
+        };
+        let first_turn = ResultStore::persistent(spec.clone());
+        assert_eq!(first_turn.put("one".into()), "axh-chat-1");
+        assert_eq!(first_turn.put("two".into()), "axh-chat-2");
+        // The next turn is a new process' store: it reads the earlier ids and goes on numbering.
+        let next_turn = ResultStore::persistent(spec);
+        assert_eq!(next_turn.read("axh-chat-1", 0).unwrap(), "one");
+        assert_eq!(next_turn.put("three".into()), "axh-chat-3");
+        assert_eq!(next_turn.read("axh-chat-3", 0).unwrap(), "three");
+        assert!(next_turn.read("axh-chat-9", 0).is_err());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(dir.join("1.txt"))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

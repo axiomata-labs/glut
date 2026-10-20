@@ -1041,7 +1041,11 @@ impl Capture {
             trim_front(&mut self.data, self.cap);
         } else {
             let room = self.cap.saturating_sub(self.data.len());
-            let taken = bytes.len().min(room);
+            let mut taken = bytes.len().min(room);
+            // The head ends between characters; a character it has no room for goes to the tail whole.
+            while taken > 0 && taken < bytes.len() && is_continuation(bytes[taken]) {
+                taken -= 1;
+            }
             self.data.extend_from_slice(&bytes[..taken]);
             if let Some(tail) = &mut self.tail {
                 tail.extend_from_slice(&bytes[taken..]);
@@ -1559,6 +1563,19 @@ mod tests {
         let mut head = Capture::keep_head(3);
         head.push(b"abcdef");
         assert_eq!(head.text(), "abc\n[3 more bytes of output were not kept]");
+    }
+
+    #[test]
+    fn a_character_at_the_seam_of_head_and_tail_stays_whole() {
+        let mut ends = Capture::keep_ends(8);
+        ends.push("abcä".as_bytes());
+        assert_eq!(ends.text(), "abcä");
+        // Once the head is full, a character split over two chunks still arrives whole in the tail.
+        let mut ends = Capture::keep_ends(8);
+        ends.push(b"abcd");
+        ends.push(&"ö".as_bytes()[..1]);
+        ends.push(&"ö".as_bytes()[1..]);
+        assert_eq!(ends.text(), "abcdö");
     }
 
     #[test]

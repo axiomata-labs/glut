@@ -101,6 +101,10 @@ pub struct RunConfig {
     /// Where the run journals its steps so it can be resumed after the process lost it (durable runs, D5). `None`:
     /// no journal. Only the run itself writes one, never a subagent.
     pub journal: Option<crate::journal::JournalSpec>,
+    /// Where relocated results are kept beyond the run (Glut lean, N2) — a chat's conversation, whose next turn reads
+    /// the ids its notes name. `None`: in memory only. Only the run itself, never a subagent (it shares the run's
+    /// config but numbers its own texts).
+    pub results: Option<crate::results::StoreSpec>,
     /// Whether an edit's result carries the language server's errors for the file (Glut 2, D, G12). On by default;
     /// without an installed server for the file's language nothing is added.
     pub diagnostics: bool,
@@ -128,6 +132,7 @@ impl RunConfig {
             build_mode: crate::permissions::Mode::Default,
             snapshots: None,
             journal: None,
+            results: None,
             diagnostics: true,
         }
     }

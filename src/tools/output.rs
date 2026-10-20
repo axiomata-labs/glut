@@ -5,7 +5,8 @@
 //!
 //! * **Only a simple command**: one program (after `cd dir &&` and `VAR=value`), no pipe, no redirection but
 //!   `2>&1` — a model that pipes through `grep` or `tail` has already chosen what it wants to see.
-//! * **The model's own format wins**: `git status --porcelain`, `git log --oneline`, `cargo test -q` … stay as they are.
+//! * **The model's own format wins**: `git status --porcelain`, `git log --oneline`, `cargo test -q` … stay as they
+//!   are.
 //! * **Only where it pays**: a short output, or one that would shrink by less than a fifth, is left whole.
 
 use std::collections::BTreeMap;
@@ -63,7 +64,24 @@ pub(crate) fn compact(command: &str, output: &str) -> Option<Compacted> {
     if lines_before < MIN_LINES {
         return None;
     }
-    let clean = strip_ansi(output);
+    // A failed command comes back as `error: <its output>`: the prefix is put aside so the filters see the output's
+    // own first line, and put back afterwards.
+    let (prefix, body) = match output.strip_prefix("error: ") {
+        Some(body) => ("error: ", body),
+        None => ("", output),
+    };
+    let clean = strip_ansi(body);
+    // `git show rev:path` prints a file, a combined merge diff marks its lines differently: neither is a plain diff.
+    if kind == Kind::GitDiff
+        && (!clean
+            .lines()
+            .any(|l| l.starts_with("diff --git ") || l.starts_with("@@"))
+            || clean
+                .lines()
+                .any(|l| l.starts_with("diff --cc ") || l.starts_with("diff --combined ")))
+    {
+        return None;
+    }
     let (lines, left_out): (Vec<String>, &'static str) = match kind {
         Kind::GitStatus => (
             git_status(&clean),
@@ -71,7 +89,7 @@ pub(crate) fn compact(command: &str, output: &str) -> Option<Compacted> {
         ),
         Kind::GitDiff => (
             git_diff(&clean),
-            "index and ---/+++ lines; a summary added on top",
+            "index and ---/+++ lines, unchanged lines beyond one around each change",
         ),
         Kind::GitLog => (git_log(&clean), "commit bodies; one line a commit"),
         Kind::Cargo => (
@@ -100,7 +118,8 @@ pub(crate) fn compact(command: &str, output: &str) -> Option<Compacted> {
             "entries of large folders beyond the first few",
         ),
     };
-    let text = squeeze_blank(&lines);
+    // A diff's trailing spaces can be the change itself: its lines stay exactly as they are.
+    let text = format!("{prefix}{}", squeeze_blank(&lines, kind != Kind::GitDiff));
     let share = if kind == Kind::GitDiff {
         MAX_DIFF_SHARE_PERCENT
     } else {
@@ -144,6 +163,8 @@ fn kind_of(words: &[&str]) -> Option<Kind> {
                 .any(|f| w == f || w.starts_with(&format!("{f}=")))
         })
     };
+    // A flag that carries its value glued on (`-U10`, `--unified=5`).
+    let starts = |flags: &[&str]| words.iter().any(|w| flags.iter().any(|f| w.starts_with(f)));
     let program = words[0].rsplit('/').next().unwrap_or(words[0]);
     let args = &words[1..];
     match program {
@@ -162,7 +183,12 @@ fn kind_of(words: &[&str]) -> Option<Kind> {
                 }
             }
             match sub? {
-                "status" if !has(&["--porcelain", "-s", "--short", "-z"]) => Some(Kind::GitStatus),
+                "status"
+                    if !has(&["--porcelain", "-s", "--short", "-z", "--ignored"])
+                        && !starts(&["-s"]) =>
+                {
+                    Some(Kind::GitStatus)
+                }
                 "diff" | "show"
                     if !has(&[
                         "--stat",
@@ -174,7 +200,13 @@ fn kind_of(words: &[&str]) -> Option<Kind> {
                         "--summary",
                         "--word-diff",
                         "--color-words",
-                    ]) =>
+                        "-W",
+                        "--function-context",
+                        "--cc",
+                        "-c",
+                    ]) && !starts(&["-U", "--unified", "--inter-hunk-context"])
+                        // `git show rev:path` prints a file.
+                        && !args.iter().any(|w| !w.starts_with('-') && w.contains(':')) =>
                 {
                     Some(Kind::GitDiff)
                 }
@@ -189,7 +221,13 @@ fn kind_of(words: &[&str]) -> Option<Kind> {
                         "--graph",
                         "--name-only",
                         "--name-status",
-                    ]) =>
+                        "--numstat",
+                        "--shortstat",
+                        "--raw",
+                        "--summary",
+                        "--decorate",
+                        "--source",
+                    ]) && !starts(&["-L", "--format", "--pretty"]) =>
                 {
                     Some(Kind::GitLog)
                 }
@@ -248,7 +286,30 @@ fn kind_of(words: &[&str]) -> Option<Kind> {
         "xcodebuild" => Some(Kind::Xcodebuild),
         "make" | "gmake" | "ninja" => Some(Kind::Make),
         "cmake" if args.first() == Some(&"--build") => Some(Kind::Make),
-        "find" | "fd" => Some(Kind::Listing),
+        // An action that prints something else than paths (`-exec cat {} +`, `fd -x`) is no listing.
+        "find" | "fd"
+            if !has(&[
+                "-exec",
+                "-execdir",
+                "-ok",
+                "-okdir",
+                "-printf",
+                "-fprintf",
+                "-print0",
+                "-ls",
+                "-fls",
+                "-x",
+                "--exec",
+                "-X",
+                "--exec-batch",
+                "-0",
+                "--print0",
+                "-l",
+                "--list-details",
+            ]) =>
+        {
+            Some(Kind::Listing)
+        }
         "ls" if has(&["-R"]) || args.iter().any(|w| w.starts_with('-') && w.contains('R')) => {
             Some(Kind::Listing)
         }
@@ -277,15 +338,16 @@ fn strip_ansi(text: &str) -> String {
     ANSI.replace_all(text, "").into_owned()
 }
 
-/// The lines joined, runs of blank lines down to one, none at the start or the end.
-fn squeeze_blank(lines: &[String]) -> String {
+/// The lines joined, runs of blank lines down to one, none at the start or the end; with `trim`, without the spaces
+/// at the lines' ends.
+fn squeeze_blank(lines: &[String], trim: bool) -> String {
     let mut out: Vec<&str> = Vec::with_capacity(lines.len());
     for line in lines {
         let blank = line.trim().is_empty();
         if blank && out.last().is_none_or(|last| last.trim().is_empty()) {
             continue;
         }
-        out.push(line.trim_end());
+        out.push(if trim { line.trim_end() } else { line });
     }
     while out.last().is_some_and(|last| last.trim().is_empty()) {
         out.pop();
@@ -391,6 +453,11 @@ fn git_diff(text: &str) -> Vec<String> {
     let mut kept_after = DIFF_CONTEXT;
     let mut held: Vec<&str> = Vec::new();
     for line in text.lines() {
+        // `git show`'s commit header and message, before the first file, and Glut's own notes stay as they are.
+        if (summary.is_empty() && !line.starts_with("diff --git ")) || glut_note(line) {
+            out.push(line.to_owned());
+            continue;
+        }
         if let Some(files) = line.strip_prefix("diff --git ") {
             let path = files.rsplit(" b/").next().unwrap_or(files).to_owned();
             summary.push((path, 0, 0));
@@ -449,6 +516,9 @@ fn git_diff(text: &str) -> Vec<String> {
     out
 }
 
+/// How many characters of a commit's hash a compacted log shows: as many as `git log --oneline` on a large repo.
+const SHORT_HASH: usize = 9;
+
 /// `git log`'s default form as one line a commit: short hash, date, author, subject.
 fn git_log(text: &str) -> Vec<String> {
     let mut out = Vec::new();
@@ -456,14 +526,26 @@ fn git_log(text: &str) -> Vec<String> {
     let flush = |commit: &mut Option<(String, String, String, Option<String>)>,
                  out: &mut Vec<String>| {
         if let Some((hash, author, date, subject)) = commit.take() {
-            let short: String = hash.chars().take(9).collect();
+            // The hash is the line's first word; ref names after it (`(HEAD -> main)`) stay.
+            let (full, refs) = hash.split_once(' ').unwrap_or((hash.as_str(), ""));
+            let short: String = full.chars().take(SHORT_HASH).collect();
+            let refs = if refs.is_empty() {
+                String::new()
+            } else {
+                format!(" {refs}")
+            };
             out.push(format!(
-                "{short} {date} {author}: {}",
+                "{short}{refs} {date} {author}: {}",
                 subject.unwrap_or_default()
             ));
         }
     };
     for line in text.lines() {
+        if glut_note(line) {
+            flush(&mut commit, &mut out);
+            out.push(line.to_owned());
+            continue;
+        }
         if let Some(rest) = line.strip_prefix("commit ") {
             flush(&mut commit, &mut out);
             commit = Some((rest.to_owned(), String::new(), String::new(), None));
@@ -604,6 +686,9 @@ static SWIFT_NOISE: LazyLock<Regex> = LazyLock::new(|| {
     .expect("valid regex")
 });
 
+/// A line after "Failed frontend command:" longer than this is the compiler's whole invocation, not a message.
+const INVOCATION_CHARS: usize = 300;
+
 /// Swift's build and test output without progress, started and passing tests and the compiler's own command lines.
 fn swift(text: &str) -> Vec<String> {
     let mut out = Vec::new();
@@ -611,7 +696,10 @@ fn swift(text: &str) -> Vec<String> {
     while let Some(line) = lines.next() {
         if line.starts_with("Failed frontend command:") {
             // The next line is the compiler's whole invocation, often tens of thousands of characters.
-            if lines.peek().is_some_and(|next| next.len() > 300) {
+            if lines
+                .peek()
+                .is_some_and(|next| next.len() > INVOCATION_CHARS)
+            {
                 lines.next();
             }
             continue;
@@ -626,7 +714,8 @@ fn swift(text: &str) -> Vec<String> {
 
 static XCODE_STEP: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(concat!(
-        r"^(CompileC|CompileSwift|CompileSwiftSources|SwiftCompile|SwiftDriver|SwiftEmitModule|SwiftMergeGeneratedHeaders|",
+        r"^(CompileC|CompileSwift|CompileSwiftSources|SwiftCompile|SwiftDriver|SwiftEmitModule|",
+        r"SwiftMergeGeneratedHeaders|",
         r"SwiftExplicitDependency\w*|ScanDependencies|Ld|ProcessInfoPlistFile|CodeSign|CpResource|CopySwiftLibs|Copy|",
         r"Touch|RegisterExecutionPolicyException|WriteAuxiliaryFile|MkDir|ProcessProductPackaging\w*|Validate\w*|",
         r"GenerateAssetSymbols|CompileAssetCatalog\w*|LinkStoryboards|ExtractAppIntentsMetadata|PhaseScriptExecution|",

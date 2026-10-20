@@ -296,3 +296,66 @@ fn the_other_filters_drop_their_noise_and_keep_what_matters() {
     );
     assert!(!out.text.contains("-rw-r--r--"));
 }
+
+#[test]
+fn git_show_keeps_its_commit_and_a_file_print_or_the_models_own_format_is_left_alone() {
+    let out = compacted("git show bceb203", "git-show-edit.txt");
+    assert!(out.text.contains("commit bceb203"), "{}", out.text);
+    assert!(out.text.contains("Author: Owner"), "{}", out.text);
+    assert_eq!(kind_of(&["git", "show", "HEAD:src/a.rs"]), None);
+    assert_eq!(kind_of(&["git", "diff", "-U10"]), None);
+    assert_eq!(kind_of(&["git", "diff", "--unified=5"]), None);
+    assert_eq!(kind_of(&["git", "diff", "-W"]), None);
+    assert_eq!(kind_of(&["git", "log", "--numstat"]), None);
+    assert_eq!(kind_of(&["git", "status", "-sb"]), None);
+    assert_eq!(kind_of(&["git", "status", "--ignored"]), None);
+    // A "diff" that is none — a file printed — is not filtered.
+    let file: String = (0..40).map(|n| format!("line {n}\n")).collect();
+    assert_eq!(compact("git diff", &file), None);
+}
+
+#[test]
+fn a_failed_commands_prefix_and_glut_s_notes_survive_the_git_filters() {
+    let diff = format!("error: {}\n[exit code 1]", fixture("git-diff.txt"));
+    let out = compact("git diff --exit-code", &diff).unwrap();
+    assert!(out.text.starts_with("error: "), "{}", &out.text[..120]);
+    assert!(out.text.ends_with("[exit code 1]"), "{}", out.text);
+    assert!(!out.text.lines().any(|l| l.starts_with("index ")));
+    let log = format!(
+        "{}\n[… 4096 bytes of output in the middle were not kept …]",
+        fixture("git-log.txt")
+    );
+    let out = compact("git log -8", &log).unwrap();
+    assert!(out.text.ends_with("not kept …]"), "{}", out.text);
+}
+
+#[test]
+fn find_with_an_action_that_prints_something_else_is_no_listing() {
+    assert_eq!(
+        kind_of(&["find", "src", "-name", "*.c", "-exec", "cat", "{}", "+"]),
+        None
+    );
+    assert_eq!(kind_of(&["fd", "-e", "rs", "-x", "wc", "-l"]), None);
+    assert_eq!(kind_of(&["find", "src", "-print0"]), None);
+    assert_eq!(
+        kind_of(&["find", "src", "-name", "*.rs"]),
+        Some(Kind::Listing)
+    );
+}
+
+#[test]
+fn a_diffs_trailing_spaces_stay() {
+    let mut diff = String::from(
+        "diff --git a/x b/x\nindex 1..2 100644\n--- a/x\n+++ b/x\n@@ -1,20 +1,20 @@\n",
+    );
+    for n in 0..20 {
+        diff.push_str(&format!(" same {n}\n"));
+    }
+    diff.push_str("-foo\n+foo   \n");
+    let out = compact("git diff", &diff).unwrap();
+    assert!(
+        out.text.contains("\n+foo   \n") || out.text.ends_with("\n+foo   "),
+        "{:?}",
+        out.text
+    );
+}

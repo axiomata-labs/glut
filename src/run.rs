@@ -252,7 +252,10 @@ async fn run_inner<M: ChatModel>(
         journal: None,
         journaled: 0,
         subagents_started: 0,
-        results: ResultStore::new(store_tag()),
+        results: match (&config.results, depth) {
+            (Some(spec), 0) => ResultStore::persistent(spec.clone()),
+            _ => ResultStore::new(store_tag()),
+        },
         offer,
         kept: codemode::Kept::default(),
         todos: Vec::new(),
@@ -781,8 +784,13 @@ impl<M: ChatModel> Loop<'_, M> {
         let output = self.perform(&call, sink).await?;
         let output = unchanged_read(&self.messages, &call, &output).unwrap_or(output);
         let output = compacted(&call, output, &self.results);
-        // Relocated, never cut (Glut lean, N2): the conversation gets head and tail, the store keeps the whole.
-        let output = results::bounded(output, &self.results, crate::tools::MAX_TOOL_OUTPUT_CHARS);
+        // Relocated, never cut (Glut lean, N2): the conversation gets head and tail, the store keeps the whole. A part
+        // read back from the store is already sized to fit — bounding it again would hide its middle.
+        let output = if call.function.name == results::NAME {
+            output
+        } else {
+            results::bounded(output, &self.results, crate::tools::MAX_TOOL_OUTPUT_CHARS)
+        };
         self.messages.push(Message::tool(call.id, output));
         Ok(())
     }
@@ -1459,12 +1467,12 @@ fn unchanged_read(messages: &[Message], call: &ToolCall, output: &str) -> Option
                 && read_key(&c.function.arguments).as_ref() == Some(&key)
         })
     });
-    same_read.then(|| {
-        format!(
-            "[unchanged: this is the same text your call {earlier} read above — {} has not changed since; read it there]",
-            key.0
-        )
-    })
+    let pointer = format!(
+        "[unchanged: the same text as your call {earlier} read above — {} has not changed since]",
+        key.0
+    );
+    // A tiny file is shorter than the pointer to it: then it is simply sent again.
+    (same_read && pointer.len() < output.len()).then_some(pointer)
 }
 
 /// A foreground `bash` call's output in its compact form when Glut knows the command (Glut lean, N3): the raw output
@@ -1667,7 +1675,10 @@ mod tests {
             },
         };
         let first = read("r1", r#"{"path":"src/a.rs"}"#);
-        let text = "     1\tfn a() {}\n";
+        let text: String = (1..=40)
+            .map(|n| format!("{n:>6}\tfn a{n}() {{}}\n"))
+            .collect();
+        let text = text.as_str();
         let mut messages = vec![Message::user("go")];
         messages.push(Message {
             role: Role::Assistant,
@@ -1684,7 +1695,7 @@ mod tests {
         );
         // Changed since, another range, another file, an error: sent as they are.
         assert_eq!(
-            unchanged_read(&messages, &again, "     1\tfn b() {}\n"),
+            unchanged_read(&messages, &again, &text.replace("a1()", "b1()")),
             None
         );
         assert_eq!(
@@ -1703,8 +1714,65 @@ mod tests {
             unchanged_read(&messages, &again, "error: no such file"),
             None
         );
+        // A file shorter than the pointer to it is sent again.
+        let tiny = "     1\tx\n";
+        let mut with_tiny = messages.clone();
+        with_tiny.push(Message::tool("r1", tiny));
+        assert_eq!(unchanged_read(&with_tiny, &again, tiny), None);
         // After a `/compact` the earlier result is gone: the file is sent again.
         assert_eq!(unchanged_read(&messages[..1], &again, text), None);
+    }
+
+    #[tokio::test]
+    async fn a_relocated_result_is_read_back_whole_through_the_tool() {
+        let long: String = (0..70_000)
+            .map(|n| char::from(b'a' + (n % 26) as u8))
+            .collect();
+        let args = json!({ "text": long }).to_string();
+        // A store with a known tag, so the script can name the id the note will name.
+        let dir = std::env::temp_dir().join(format!("axh-readback-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let config = RunConfig {
+            results: Some(results::StoreSpec {
+                dir: dir.clone(),
+                tag: "fixed".into(),
+            }),
+            ..RunConfig::new("/w")
+        };
+        let reads: Vec<String> = [0, 30_000, 60_000]
+            .iter()
+            .map(|offset| json!({"id": "fixed-1", "offset": offset}).to_string())
+            .collect();
+        let model = Script::new(vec![
+            Ok(calls(&[("c1", "echo", args.as_str())])),
+            Ok(calls(&[("r1", results::NAME, reads[0].as_str())])),
+            Ok(calls(&[("r2", results::NAME, reads[1].as_str())])),
+            Ok(calls(&[("r3", results::NAME, reads[2].as_str())])),
+            Ok(text("Done.")),
+        ]);
+        let outcome = run(
+            &config,
+            &model,
+            &toolbox(),
+            "go",
+            &mut Vec::new(),
+            &Cancel::new(),
+        )
+        .await;
+        assert_eq!(outcome.reason, FinishReason::Answered);
+        let seen = model.seen.lock().unwrap();
+        let last = seen.last().unwrap();
+        let mut back = String::new();
+        for message in last.iter().filter(|m| {
+            m.tool_call_id
+                .as_deref()
+                .is_some_and(|id| id.starts_with('r'))
+        }) {
+            let part = message.content.as_deref().unwrap();
+            back.push_str(part.split("\n\n[characters").next().unwrap());
+        }
+        assert_eq!(back, long, "every character comes back, in order");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
