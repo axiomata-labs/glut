@@ -302,12 +302,15 @@ impl Tool for FileTool {
                 "read_file",
                 concat!(
                     "Reads a text file. Lines come numbered. ",
-                    "Use offset (first line, 1-based) and limit for a part of a long file."
+                    "Use offset (first line, 1-based) and limit for a part of a long file. ",
+                    "For a source file of more than a few hundred lines, first ask for its outline (outline: true): ",
+                    "its declarations with their line numbers, then read the ranges you need."
                 ),
                 json!({"type": "object", "properties": {
                     "path": {"type": "string", "description": "Relative to the working folder."},
                     "offset": {"type": "integer", "minimum": 1},
-                    "limit": {"type": "integer", "minimum": 1}
+                    "limit": {"type": "integer", "minimum": 1},
+                    "outline": {"type": "boolean", "description": "Only the file's declarations, with line numbers."}
                 }, "required": ["path"]}),
             ),
             Kind::Write => (
@@ -440,6 +443,9 @@ struct ReadArgs {
     path: String,
     offset: Option<usize>,
     limit: Option<usize>,
+    /// Glut lean, N5: the declarations instead of the lines.
+    #[serde(default)]
+    outline: bool,
 }
 
 fn read(working: &Root, skills: &SkillRoots, args: ReadArgs) -> Result<String, String> {
@@ -457,6 +463,9 @@ fn read(working: &Root, skills: &SkillRoots, args: ReadArgs) -> Result<String, S
         }
     };
     let file = read_text(root, path, MAX_READ_BYTES).map_err(describe)?;
+    if args.outline {
+        return super::outline::of(std::path::Path::new(&args.path), &file.content);
+    }
     let first = args.offset.unwrap_or(1).max(1);
     let limit = args.limit.unwrap_or(DEFAULT_READ_LINES).max(1);
     let lines: Vec<&str> = file.content.lines().collect();

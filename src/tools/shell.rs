@@ -483,7 +483,7 @@ impl Session {
             .map_err(|err| format!("could not start {}: {err}", self.shell.display()))?;
         // Dropped with this future (the run timed out or was stopped while waiting here): the group goes with it.
         let group = GroupGuard(Group::of(&child));
-        let output = Arc::new(Mutex::new(Capture::keep_head(MAX_FOREGROUND_BYTES)));
+        let output = Arc::new(Mutex::new(Capture::keep_ends(MAX_FOREGROUND_BYTES)));
         let mut reader = collect(&mut child, Arc::clone(&output));
         let waited = tokio::time::timeout(limit, async {
             loop {
@@ -626,12 +626,21 @@ impl Session {
         let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
         text.push_str(&String::from_utf8_lossy(&output.stderr));
         if text.len() > MAX_FOREGROUND_BYTES {
-            let mut end = MAX_FOREGROUND_BYTES;
-            while !text.is_char_boundary(end) {
-                end -= 1;
+            // Head and end, as a shell command's output: a CLI reports its outcome last.
+            let mut head = MAX_FOREGROUND_BYTES / 2;
+            while !text.is_char_boundary(head) {
+                head -= 1;
             }
-            text.truncate(end);
-            text.push_str("\n[output cut]");
+            let mut tail = text.len() - MAX_FOREGROUND_BYTES / 2;
+            while !text.is_char_boundary(tail) {
+                tail += 1;
+            }
+            let dropped = tail - head;
+            text = format!(
+                "{}\n[… {dropped} bytes of output in the middle were not kept …]\n{}",
+                &text[..head],
+                &text[tail..]
+            );
         }
         if output.status.success() {
             Ok(if text.trim().is_empty() {
@@ -980,12 +989,14 @@ where
     })
 }
 
-/// A capped output buffer: the first bytes (a foreground command) or the latest ones (a job), and how many were
-/// written in all.
+/// A capped output buffer: the first bytes (a hook), the first and the latest ones (a foreground command — its end is
+/// where a build or a test run reports), or the latest ones (a job), and how many were written in all.
 struct Capture {
     data: Vec<u8>,
     cap: usize,
     keep_tail: bool,
+    /// With [`Capture::keep_ends`]: the latest bytes once `data` holds its half of the cap.
+    tail: Option<Vec<u8>>,
     total: u64,
 }
 
@@ -995,6 +1006,18 @@ impl Capture {
             data: Vec::new(),
             cap,
             keep_tail: false,
+            tail: None,
+            total: 0,
+        }
+    }
+
+    /// Keeps the first half of `cap` and, after it, the latest bytes (between half of `cap` and `cap` of them).
+    fn keep_ends(cap: usize) -> Self {
+        Capture {
+            data: Vec::new(),
+            cap: cap / 2,
+            keep_tail: false,
+            tail: Some(Vec::new()),
             total: 0,
         }
     }
@@ -1006,6 +1029,7 @@ impl Capture {
             data: Vec::new(),
             cap,
             keep_tail: true,
+            tail: None,
             total: 0,
         }
     }
@@ -1014,25 +1038,35 @@ impl Capture {
         self.total += bytes.len() as u64;
         if self.keep_tail {
             self.data.extend_from_slice(bytes);
-            if self.data.len() > 2 * self.cap {
-                let mut cut = self.data.len() - self.cap;
-                // Never into the middle of a character.
-                while cut < self.data.len() && is_continuation(self.data[cut]) {
-                    cut += 1;
-                }
-                self.data.drain(..cut);
-            }
+            trim_front(&mut self.data, self.cap);
         } else {
             let room = self.cap.saturating_sub(self.data.len());
-            self.data.extend_from_slice(&bytes[..bytes.len().min(room)]);
+            let taken = bytes.len().min(room);
+            self.data.extend_from_slice(&bytes[..taken]);
+            if let Some(tail) = &mut self.tail {
+                tail.extend_from_slice(&bytes[taken..]);
+                trim_front(tail, self.cap);
+            }
         }
     }
 
-    /// Everything kept, with a note when something was dropped.
+    /// Everything kept, with a note where something was dropped.
     fn text(&self) -> String {
         let mut text = String::from_utf8_lossy(&self.data).into_owned();
-        let dropped = self.total - self.data.len() as u64;
-        if dropped > 0 {
+        let tail = self.tail.as_deref().unwrap_or_default();
+        let dropped = self.total - (self.data.len() + tail.len()) as u64;
+        if self.tail.is_some() {
+            if dropped > 0 {
+                text.push_str(&format!(
+                    "\n[… {dropped} bytes of output in the middle were not kept …]\n"
+                ));
+            }
+            let mut from = 0;
+            while from < tail.len() && is_continuation(tail[from]) {
+                from += 1;
+            }
+            text.push_str(&String::from_utf8_lossy(&tail[from..]));
+        } else if dropped > 0 {
             text.push_str(&format!("\n[{dropped} more bytes of output were not kept]"));
         }
         text
@@ -1064,6 +1098,19 @@ impl Capture {
         };
         text.push_str(&String::from_utf8_lossy(&self.data[from..end]));
         (text, first_kept + end as u64)
+    }
+}
+
+/// Keeps between `cap` and twice `cap` of the latest bytes: trimming in steps of `cap` rather than on every chunk keeps
+/// a chatty command from moving a megabyte per read.
+fn trim_front(data: &mut Vec<u8>, cap: usize) {
+    if data.len() > 2 * cap {
+        let mut cut = data.len() - cap;
+        // Never into the middle of a character.
+        while cut < data.len() && is_continuation(data[cut]) {
+            cut += 1;
+        }
+        data.drain(..cut);
     }
 }
 
@@ -1512,6 +1559,21 @@ mod tests {
         let mut head = Capture::keep_head(3);
         head.push(b"abcdef");
         assert_eq!(head.text(), "abc\n[3 more bytes of output were not kept]");
+    }
+
+    #[test]
+    fn a_foreground_capture_keeps_the_start_and_the_end_where_a_build_reports() {
+        let mut ends = Capture::keep_ends(8);
+        ends.push(b"abcd");
+        assert_eq!(ends.text(), "abcd");
+        // Past the head's half, the latest bytes are kept (up to twice the other half), the middle is said.
+        for chunk in [&b"efgh"[..], b"ijkl", b"mnop", b"qrst", b"E1"] {
+            ends.push(chunk);
+        }
+        let text = ends.text();
+        assert!(text.starts_with("abcd\n[… "), "{text}");
+        assert!(text.ends_with("stE1"), "{text}");
+        assert!(text.contains("bytes of output in the middle were not kept"));
     }
 
     #[test]

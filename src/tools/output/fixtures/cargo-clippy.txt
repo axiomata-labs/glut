@@ -1,0 +1,30 @@
+    Checking failing v0.1.0 (/work/failing)
+warning: unused variable: `unused`
+ --> src/lib.rs:6:35
+  |
+6 |     #[test] fn adds_wrong() { let unused = 1; assert_eq!(add(2, 2), 5, "two and two"); }
+  |                                   ^^^^^^ help: if this is intentional, prefix it with an underscore: `_unused`
+  |
+  = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: this assertion is always `true`
+ --> src/lib.rs:7:27
+  |
+7 |     #[test] fn more_1() { assert!(true); }
+  |                           ^^^^^^^^^^^^^
+  |
+  = help: remove the assertion
+  = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#assertions_on_constants
+  = note: `#[warn(clippy::assertions_on_constants)]` on by default
+
+warning: this assertion is always `true`
+ --> src/lib.rs:8:27
+  |
+8 |     #[test] fn more_2() { assert!(true); }
+  |                           ^^^^^^^^^^^^^
+  |
+  = help: remove the assertion
+  = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#assertions_on_constants
+
+warning: `failing` (lib test) generated 3 warnings (run `cargo clippy --fix --lib -p failing --tests -- ` to apply 1 suggestion)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.09s

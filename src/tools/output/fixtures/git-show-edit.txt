@@ -1,0 +1,95 @@
+commit bceb203f14e482f61b1d31e638ab992cb1312b75
+Author: Owner <owner@example.com>
+Date:   Tue Oct 20 07:49:33 2026 +0200
+
+    fix(glut): old tool results no longer shrink by default (Glut 2, G6)
+    
+    Measured on news-web, shrinking halved the context a step but not the run's
+    total, which took more steps; a weaker model may not notice what it lost.
+    RunConfig.shrink_results stays as a switch for a later A/B measurement.
+    
+    Co-Authored-By: Claude Opus 5.5 <owner@example.com>
+
+diff --git a/AGENTS.md b/AGENTS.md
+index 9684a29..6333b66 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -31,7 +31,7 @@ design has since diverged, `docs/architecture.md` §1 explains how).
+   (#37, `docs/plans/harness.md`; HS1–HS8 built), made one to keep a role on in "Glut rund" (2026-10-19,
+   `docs/plans/glut-round.md`: web fetch/search, fewer tokens, cached tokens metered apart, streaming, skills that name
+   their rights), and "Glut 2" (2026-10-20, `docs/plans/glut-2.md`: code mode, MCP behind code in the chat, results
+-  shrinking over a budget, todo/plan-build/snapshots/LSP errors). Next: plans for Pi-Durable-like runs and LocalBrain.
++  shrinking over a budget — off by default, todo/plan-build/snapshots/LSP errors). Next: plans for Pi-Durable-like runs and LocalBrain.
+   Deferred: further model-provider work.
+ - **Where the detail lives:** `docs/architecture.md` §5 (what exists), §7 (milestones) and its "Status log"
+   (the full status paragraph, 2026-10-04 snapshot at the end); plans in `docs/plans/`. Read them before substantial
+diff --git a/crates/axiomata-harness/src/config.rs b/crates/axiomata-harness/src/config.rs
+index bbfdce5..0bc7775 100644
+--- a/crates/axiomata-harness/src/config.rs
++++ b/crates/axiomata-harness/src/config.rs
+@@ -85,7 +85,8 @@ pub struct RunConfig {
+     /// How many subagents the run may start in all; a `task` call past it is answered with an error.
+     pub max_subagents: u32,
+     /// Whether long tool results the model has answered on shrink in the conversation, their whole text kept for
+-    /// `read_full_result` (Glut 2, B). On by default: it needs nothing outside the run.
++    /// `read_full_result` (Glut 2, B). Off by default (owner, 2026-10-20): measured on news-web it halved the context a
++    /// step but not the run's total, which took more steps — on again only once a measurement shows it pays.
+     pub shrink_results: bool,
+     /// Whether the run offers `codemode` and keeps its MCP tools behind it (Glut 2, A + E, G3/G8): the model then sees
+     /// the core tools and `codemode`, and reaches the MCP tools from a script. On by default.
+@@ -122,7 +123,7 @@ impl RunConfig {
+             subagent_max_turns: DEFAULT_SUBAGENT_MAX_TURNS,
+             subagent_timeout: DEFAULT_SUBAGENT_TIMEOUT,
+             max_subagents: DEFAULT_MAX_SUBAGENTS,
+-            shrink_results: true,
++            shrink_results: false,
+             codemode: true,
+             mcp_behind_code: true,
+             todos: true,
+diff --git a/crates/axiomata-harness/src/run.rs b/crates/axiomata-harness/src/run.rs
+index 8db46b4..e7681d9 100644
+--- a/crates/axiomata-harness/src/run.rs
++++ b/crates/axiomata-harness/src/run.rs
+@@ -1377,8 +1377,12 @@ mod tests {
+         ]);
+         let mut events = Vec::new();
+         // The id is only known once the run shrank c1; the script reads it from the third request below.
++        let config = RunConfig {
++            shrink_results: true,
++            ..RunConfig::new("/w")
++        };
+         let outcome = run(
+-            &RunConfig::new("/w"),
++            &config,
+             &model,
+             &toolbox(),
+             "go",
+diff --git a/docs/architecture.md b/docs/architecture.md
+index eee9e26..54d5f13 100644
+--- a/docs/architecture.md
++++ b/docs/architecture.md
+@@ -687,7 +687,8 @@ nothing a script calls escapes a rule. Only what the script prints or returns co
+ process, the run's deadline and cancel interrupt it, a script waiting on nothing ends at once. **A chat turn keeps the
+ MCP tools behind code** (45 tools → 15, 16.9k → 3.5k input tokens a step); **a skill that declares its tools keeps
+ them direct** and gets `codemode` only when it names it — measured on the calendar digest, whose output *is* its
+-data. `[agents.glut] codemode` switches it. **Old tool results shrink** (`history.rs`) once the conversation is over
++data. `[agents.glut] codemode` switches it. **Old tool results can shrink** (`history.rs`, `RunConfig.shrink_results`, **off by default** since the news-web
++measurement saved nothing in total) once the conversation is over
+ ~80,000 characters, oldest first down to 60 %, the whole text behind `read_full_result` (ids carry the run's tag).
+ **From Opencode**: `todo_write` (`Event::Todo`), `exit_plan` from Plan mode (the owner's answer switches the gate to the
+ run's build mode; the app chat gets a **Plan/Build switch**, `ChatMode::Plan` on Glut, Claude Code and new Opencode
+diff --git a/docs/plans/glut-2.md b/docs/plans/glut-2.md
+index 6f64add..3ba195e 100644
+--- a/docs/plans/glut-2.md
++++ b/docs/plans/glut-2.md
+@@ -96,6 +96,10 @@ search inside the script. A skill that declares MCP tools gets them through code
+ - **G6 — revised 2026-10-20**: results shrink only while the conversation is over ~80,000 characters, oldest first —
+   shrinking as soon as the model answered sent a data-gathering task (the digest) fetching its results back until the
+   turn limit.
++- **G6 — off by default, 2026-10-20 (owner)**: on news-web the context a step halved (~40k → ~18k) but the runs took
++  30–33 steps instead of 13, so the total stayed (520k → 629k/535k), and a weaker model may not notice what it lost.
++  `RunConfig.shrink_results` is `false`; on again only after an A/B measurement (several news-web runs each way, counting
++  the `read_full_result` calls) shows it pays.
+ - **G8 — code mode is on for every Glut run**: `[agents.glut] codemode = true`; off, the MCP tools are offered directly
+   as today.
+ - **G9 — Pi's limits**: 256 MB per script, no time or call limit of its own — the run's own limits (time, steps, spend)

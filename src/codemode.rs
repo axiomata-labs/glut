@@ -25,8 +25,8 @@ use rquickjs::{
 use serde_json::{Value, json};
 use tokio::sync::{Semaphore, mpsc, oneshot};
 
-use crate::history::ResultStore;
 use crate::model::ToolSpec;
+use crate::results::ResultStore;
 
 /// The tool's name.
 pub(crate) const NAME: &str = "codemode";
@@ -575,19 +575,7 @@ fn install<'js>(
 
 /// The output as the model gets it: whole up to [`MAX_OUTPUT_CHARS`]; beyond, head and tail and the whole in `store`.
 pub(crate) fn bounded(text: String, store: &ResultStore) -> String {
-    let total = text.chars().count();
-    if total <= MAX_OUTPUT_CHARS {
-        return text;
-    }
-    let half = MAX_OUTPUT_CHARS / 2;
-    let head: String = text.chars().take(half).collect();
-    let tail: String = text.chars().skip(total - half).collect();
-    let id = store.put(text);
-    format!(
-        "{head}\n\n[… {} characters left out of the middle; `{}` with id \"{id}\" gives the whole output …]\n\n{tail}",
-        total - 2 * half,
-        crate::history::NAME
-    )
+    crate::results::bounded(text, store, MAX_OUTPUT_CHARS)
 }
 
 #[cfg(test)]

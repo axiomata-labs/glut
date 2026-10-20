@@ -10,13 +10,13 @@ use tokio::time::Instant;
 use crate::codemode;
 use crate::config::RunConfig;
 use crate::event::{EVENT_RESULT_CHARS, Event, EventSink, FinishReason};
-use crate::history::{self, ResultStore};
 use crate::hooks::{self, HookEvent, HookOutcome};
 use crate::journal::{self, Journal, Line, Recorded};
 use crate::model::{ChatModel, Message, Role, ToolCall, ToolSpec, Usage};
 use crate::permissions::{Access, Answer, Gate, Mode};
 use crate::planning;
 use crate::prompt::{subagent_prompt, system_prompt};
+use crate::results::{self, ResultStore};
 use crate::snapshot::{self, Snapshots};
 use crate::tools::shell::{Session, ShellOptions};
 use crate::tools::{StopFlag, Toolbox};
@@ -192,7 +192,7 @@ enum Opening<'p> {
 }
 
 /// The tools the loop answers itself that only read or note (D4): an interrupted call of them may simply run again.
-const LOOP_REPLAY_SAFE: [&str; 2] = [history::NAME, planning::TODO];
+const LOOP_REPLAY_SAFE: [&str; 2] = [results::NAME, planning::TODO];
 
 /// The loop at nesting `depth` (HS8, D3): depth 0 is the run itself — it offers the `task` tool, runs
 /// `SessionStart` and speaks the caller's system prompt; depth ≥ 1 is a subagent, which gets the prompt of
@@ -253,7 +253,6 @@ async fn run_inner<M: ChatModel>(
         journaled: 0,
         subagents_started: 0,
         results: ResultStore::new(store_tag()),
-        settled: 0,
         offer,
         kept: codemode::Kept::default(),
         todos: Vec::new(),
@@ -394,10 +393,8 @@ struct Loop<'a, M: ChatModel> {
     turns: u32,
     /// HS8: the subagents this run started, counted against `config.max_subagents`.
     subagents_started: u32,
-    /// Glut 2, B: the whole texts of the results that shrank.
+    /// Glut lean, N2: the whole texts of results too long for the conversation.
     results: ResultStore,
-    /// Up to which message the conversation has been looked at for results to shrink.
-    settled: usize,
     /// What the model is offered, and what a script can find; built anew when the mode changes (`exit_plan`).
     offer: Offer,
     /// Glut 2, A: what the run's scripts `store()`.
@@ -455,9 +452,7 @@ impl Offer {
             specs.push(crate::task::spec());
         }
         // Offered from the first turn on, so the tool list — and with it the prompt's cached head — stays put.
-        if config.shrink_results {
-            specs.push(history::spec());
-        }
+        specs.push(results::spec());
         if config.todos {
             specs.push(planning::todo_spec());
         }
@@ -574,14 +569,6 @@ impl<M: ChatModel> Loop<'_, M> {
         sink: &mut dyn EventSink,
     ) -> Result<Vec<ToolCall>, FinishReason> {
         let turn = self.turns;
-        if self.config.shrink_results {
-            self.settled = history::shrink_over_budget(
-                &mut self.messages,
-                self.settled,
-                &self.results,
-                history::SHRINK_BUDGET_CHARS,
-            );
-        }
         let reply = {
             // The answer's text goes out as it streams in (CP5); the whole text follows below either way.
             let mut on_text = |text: &str| {
@@ -792,6 +779,10 @@ impl<M: ChatModel> Loop<'_, M> {
         sink: &mut dyn EventSink,
     ) -> Result<(), FinishReason> {
         let output = self.perform(&call, sink).await?;
+        let output = unchanged_read(&self.messages, &call, &output).unwrap_or(output);
+        let output = compacted(&call, output, &self.results);
+        // Relocated, never cut (Glut lean, N2): the conversation gets head and tail, the store keeps the whole.
+        let output = results::bounded(output, &self.results, crate::tools::MAX_TOOL_OUTPUT_CHARS);
         self.messages.push(Message::tool(call.id, output));
         Ok(())
     }
@@ -905,8 +896,8 @@ impl<M: ChatModel> Loop<'_, M> {
             return Ok(self.run_task(call, sink).await);
         }
         // Only the run's own store: nothing for the gate to judge, like `bash_output`.
-        if self.config.shrink_results && name == history::NAME {
-            return Ok(history::answer(&self.results, &call.function.arguments));
+        if name == results::NAME {
+            return Ok(results::answer(&self.results, &call.function.arguments));
         }
         if self.config.todos && name == planning::TODO {
             return Ok(match planning::parse_todos(&call.function.arguments) {
@@ -1212,8 +1203,8 @@ impl<M: ChatModel> Loop<'_, M> {
             sink.emit(Event::tool_result(self.turns, &id, &name, false, &text));
             return Ok((false, text));
         }
-        if name == history::NAME {
-            let (ok, text) = history::answer(&self.results, &arguments);
+        if name == results::NAME {
+            let (ok, text) = results::answer(&self.results, &arguments);
             sink.emit(Event::tool_result(self.turns, &id, &name, ok, &text));
             return Ok((ok, text.trim_start_matches("error: ").to_owned()));
         }
@@ -1310,8 +1301,8 @@ impl<M: ChatModel> Loop<'_, M> {
         self.subagents_started += 1;
         match outcome.reason {
             FinishReason::Answered => match outcome.answer {
-                // Cut like every tool result — the model gets the whole, already capped, answer.
-                Some(answer) => (true, crate::tools::cap(answer)),
+                // Bounded like every tool result when it enters the conversation (`run_call`).
+                Some(answer) => (true, answer),
                 None => (true, "the subagent finished without text".to_owned()),
             },
             reason => (
@@ -1432,6 +1423,79 @@ impl RunHooks<'_> {
 /// What a blocking hook said, or `fallback` when it gave no reason.
 fn refusal(outcome: HookOutcome, fallback: &str) -> String {
     outcome.context.unwrap_or_else(|| fallback.to_owned())
+}
+
+/// The arguments that make two `read_file` calls the same read: the path (without a leading `./`), the range and
+/// whether it asked for the outline.
+fn read_key(arguments: &str) -> Option<(String, Option<u64>, Option<u64>, bool)> {
+    let args = serde_json::from_str::<Value>(arguments).ok()?;
+    let path = args.get("path")?.as_str()?;
+    let path = path.trim_start_matches("./").to_owned();
+    let offset = args
+        .get("offset")
+        .and_then(Value::as_u64)
+        .filter(|o| *o > 1);
+    let limit = args.get("limit").and_then(Value::as_u64);
+    let outline = args.get("outline").and_then(Value::as_bool) == Some(true);
+    Some((path, offset, limit, outline))
+}
+
+/// A short answer for a `read_file` whose result the conversation already holds word for word (Glut lean, N4): the
+/// same file, the same range, unchanged since. `None` when it does not — the file changed, it was never read, or the
+/// earlier result is gone from the conversation (a `/compact`) — and the result is sent as it is.
+fn unchanged_read(messages: &[Message], call: &ToolCall, output: &str) -> Option<String> {
+    if call.function.name != "read_file" || output.starts_with("error:") {
+        return None;
+    }
+    let key = read_key(&call.function.arguments)?;
+    let earlier = messages.iter().rev().find_map(|message| {
+        let id = message.tool_call_id.as_deref()?;
+        (message.role == Role::Tool && message.content.as_deref() == Some(output)).then_some(id)
+    })?;
+    let same_read = messages.iter().any(|message| {
+        message.tool_calls.iter().any(|c| {
+            c.id == earlier
+                && c.function.name == "read_file"
+                && read_key(&c.function.arguments).as_ref() == Some(&key)
+        })
+    });
+    same_read.then(|| {
+        format!(
+            "[unchanged: this is the same text your call {earlier} read above — {} has not changed since; read it there]",
+            key.0
+        )
+    })
+}
+
+/// A foreground `bash` call's output in its compact form when Glut knows the command (Glut lean, N3): the raw output
+/// goes into `store`, and a note on top says what was left out and how to read the raw output back.
+fn compacted(call: &ToolCall, output: String, store: &ResultStore) -> String {
+    if call.function.name != "bash" {
+        return output;
+    }
+    let Ok(args) = serde_json::from_str::<Value>(&call.function.arguments) else {
+        return output;
+    };
+    let background = args.get("run_in_background").and_then(Value::as_bool) == Some(true);
+    let Some(command) = args
+        .get("command")
+        .and_then(Value::as_str)
+        .filter(|_| !background)
+    else {
+        return output;
+    };
+    let Some(compact) = crate::tools::output::compact(command, &output) else {
+        return output;
+    };
+    let id = store.put(output);
+    format!(
+        "[Glut compacted this output: {} → {} lines, left out: {}. The raw output: `{}` with id \"{id}\".]\n{}",
+        compact.lines_before,
+        compact.lines_after,
+        compact.left_out,
+        results::NAME,
+        compact.text
+    )
 }
 
 #[cfg(test)]
@@ -1592,29 +1656,111 @@ mod tests {
         tools
     }
 
+    #[test]
+    fn an_unchanged_re_read_is_answered_with_a_pointer_and_a_changed_one_whole() {
+        let read = |id: &str, args: &str| ToolCall {
+            id: id.into(),
+            kind: "function".into(),
+            function: FunctionCall {
+                name: "read_file".into(),
+                arguments: args.into(),
+            },
+        };
+        let first = read("r1", r#"{"path":"src/a.rs"}"#);
+        let text = "     1\tfn a() {}\n";
+        let mut messages = vec![Message::user("go")];
+        messages.push(Message {
+            role: Role::Assistant,
+            content: None,
+            tool_calls: vec![first],
+            tool_call_id: None,
+        });
+        messages.push(Message::tool("r1", text));
+        let again = read("r2", r#"{"path":"./src/a.rs"}"#);
+        let note = unchanged_read(&messages, &again, text).unwrap();
+        assert!(
+            note.contains("call r1") && note.contains("src/a.rs"),
+            "{note}"
+        );
+        // Changed since, another range, another file, an error: sent as they are.
+        assert_eq!(
+            unchanged_read(&messages, &again, "     1\tfn b() {}\n"),
+            None
+        );
+        assert_eq!(
+            unchanged_read(
+                &messages,
+                &read("r3", r#"{"path":"src/a.rs","offset":5}"#),
+                text
+            ),
+            None
+        );
+        assert_eq!(
+            unchanged_read(&messages, &read("r4", r#"{"path":"src/b.rs"}"#), text),
+            None
+        );
+        assert_eq!(
+            unchanged_read(&messages, &again, "error: no such file"),
+            None
+        );
+        // After a `/compact` the earlier result is gone: the file is sent again.
+        assert_eq!(unchanged_read(&messages[..1], &again, text), None);
+    }
+
+    #[test]
+    fn a_known_commands_output_is_compacted_with_a_note_and_its_raw_text_kept() {
+        let bash = |args: Value| ToolCall {
+            id: "c1".into(),
+            kind: "function".into(),
+            function: FunctionCall {
+                name: "bash".into(),
+                arguments: args.to_string(),
+            },
+        };
+        let mut raw = "   Compiling axiomata-core v0.1.0 (/w/crates/axiomata-core)\n".repeat(40);
+        raw.push_str("warning: unused variable: `x`\n    Finished `dev` profile in 3.1s\n");
+        let store = ResultStore::new("t");
+        let shown = compacted(
+            &bash(json!({"command": "cargo build"})),
+            raw.clone(),
+            &store,
+        );
+        assert!(
+            shown.starts_with("[Glut compacted this output: 42 → 2 lines"),
+            "{shown}"
+        );
+        assert!(
+            shown.ends_with("warning: unused variable: `x`\n    Finished `dev` profile in 3.1s")
+        );
+        assert!(store.read("t-1", 0).unwrap().starts_with(&raw[..200]));
+        // A job in the background, a piped command and any other tool stay as they are.
+        let job = json!({"command": "cargo build", "run_in_background": true});
+        assert_eq!(compacted(&bash(job), raw.clone(), &store), raw);
+        assert_eq!(
+            compacted(
+                &bash(json!({"command": "cargo build | tail"})),
+                raw.clone(),
+                &store
+            ),
+            raw
+        );
+        let mut echo = bash(json!({"command": "cargo build"}));
+        echo.function.name = "echo".into();
+        assert_eq!(compacted(&echo, raw.clone(), &store), raw);
+    }
+
     #[tokio::test]
-    async fn a_long_result_shrinks_after_the_model_answered_on_it_and_comes_back_whole() {
-        let long = "x".repeat(crate::history::SHRINK_BUDGET_CHARS + 100);
+    async fn an_over_long_result_enters_the_conversation_bounded_once_and_stays_as_it_was() {
+        let long: String = "x".repeat(crate::tools::MAX_TOOL_OUTPUT_CHARS) + &"y".repeat(5_000);
         let args = json!({ "text": long }).to_string();
         let model = Script::new(vec![
             Ok(calls(&[("c1", "echo", args.as_str())])),
             Ok(calls(&[("c2", "echo", r#"{"text":"short"}"#)])),
-            // By now c1's result is shortened; the model asks for it whole. The id's tag is the run's own.
-            Ok(calls(&[(
-                "c3",
-                crate::history::NAME,
-                r#"{"id": "PLACEHOLDER"}"#,
-            )])),
             Ok(text("Done.")),
         ]);
         let mut events = Vec::new();
-        // The id is only known once the run shrank c1; the script reads it from the third request below.
-        let config = RunConfig {
-            shrink_results: true,
-            ..RunConfig::new("/w")
-        };
         let outcome = run(
-            &config,
+            &RunConfig::new("/w"),
             &model,
             &toolbox(),
             "go",
@@ -1623,36 +1769,21 @@ mod tests {
         )
         .await;
         assert_eq!(outcome.reason, FinishReason::Answered);
-
         let seen = model.seen.lock().unwrap();
-        // Second request: c1 is the newest result, still whole (as long as the toolbox lets any result be).
-        let second = seen[1][3].content.as_deref().unwrap();
-        assert!(
-            second.len() > crate::tools::MAX_TOOL_OUTPUT_CHARS,
-            "{}",
-            second.len()
-        );
-        // Third request: the model answered after c1 (with c2's call), so c1 shrank; c2 is short and stays.
-        let shrunk = seen[2][3].content.as_deref().unwrap();
-        assert!(
-            shrunk.len() < 1_500 && shrunk.contains(crate::history::NAME),
-            "{shrunk}"
-        );
+        // Head and tail with the note between them — the end of the output is there, not cut away.
+        let bounded = seen[1][3].content.as_deref().unwrap();
+        assert!(bounded.chars().count() < crate::tools::MAX_TOOL_OUTPUT_CHARS + 300);
+        assert!(bounded.starts_with("xxx") && bounded.ends_with("yyy"));
+        assert!(bounded.contains(crate::results::NAME), "{bounded}");
+        // The next request sends it byte for byte the same: the cached prefix holds.
+        assert_eq!(seen[2][3].content.as_deref(), Some(bounded));
         assert_eq!(seen[2][5].content.as_deref(), Some("short"));
-        // The made-up id is answered as another run's, never with some other text.
-        assert!(
-            seen[3][7]
-                .content
-                .as_deref()
-                .unwrap()
-                .contains("no longer available")
-        );
         // The tool is offered from the first request on.
         let started = events.iter().find_map(|e| match e {
             Event::Started { tools, .. } => Some(tools.clone()),
             _ => None,
         });
-        assert!(started.unwrap().iter().any(|t| t == crate::history::NAME));
+        assert!(started.unwrap().iter().any(|t| t == crate::results::NAME));
     }
 
     #[tokio::test]

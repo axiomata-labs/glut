@@ -4,6 +4,8 @@
 //! it goes back to the model, which can correct its call (a wrong path, an ambiguous edit).
 
 pub mod files;
+pub(crate) mod outline;
+pub(crate) mod output;
 pub mod search;
 pub mod shell;
 pub mod web;
@@ -18,8 +20,9 @@ use serde_json::Value;
 use crate::model::ToolSpec;
 use crate::permissions::{Access, Gate};
 
-/// The most characters of one tool result the model gets. A bigger result (a huge file, a broad search) would eat the
-/// context window in one step; the model is told it was cut and can narrow its call.
+/// The most characters of one tool result the conversation gets (Glut lean, N2). A bigger result (a huge file, a broad
+/// search) would eat the context window in one step: the loop keeps its head and tail and relocates the whole into the
+/// run's store (`results::bounded`), where `read_full_result` reads it back. The toolbox itself hands back the whole.
 pub const MAX_TOOL_OUTPUT_CHARS: usize = 30_000;
 
 /// What a tool call returns: its text, or the text of its error.
@@ -162,8 +165,8 @@ impl Toolbox {
             .is_ok_and(|parsed| parsed.is_object() && tool.replay_safe(&parsed))
     }
 
-    /// Runs the tool `name` with the model's argument text. Returns whether it succeeded and the text for the model,
-    /// cut to [`MAX_TOOL_OUTPUT_CHARS`].
+    /// Runs the tool `name` with the model's argument text. Returns whether it succeeded and its whole text; the loop
+    /// bounds it for the conversation.
     pub async fn call(&self, name: &str, arguments: &str) -> (bool, String) {
         self.call_until(name, arguments, &StopFlag::default()).await
     }
@@ -212,7 +215,7 @@ impl Toolbox {
             Ok(text) => (true, text),
             Err(text) => (false, format!("error: {text}")),
         };
-        (ok, cap(text))
+        (ok, text)
     }
 }
 
@@ -228,19 +231,6 @@ pub(crate) fn as_data(text: &str, end_mark: &str) -> String {
         })
         .collect();
     plain.replace(end_mark, "[…]")
-}
-
-/// `text` cut to [`MAX_TOOL_OUTPUT_CHARS`], with a note for the model when it was. `pub(crate)` since HS8: the
-/// loop's own `task` arm caps a subagent's answer with it, like every tool result.
-pub(crate) fn cap(text: String) -> String {
-    if text.chars().count() <= MAX_TOOL_OUTPUT_CHARS {
-        return text;
-    }
-    let mut cut: String = text.chars().take(MAX_TOOL_OUTPUT_CHARS).collect();
-    cut.push_str(&format!(
-        "\n[output cut at {MAX_TOOL_OUTPUT_CHARS} characters; narrow the call to see the rest]"
-    ));
-    cut
 }
 
 #[cfg(test)]
@@ -367,12 +357,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_huge_result_is_cut_with_a_note() {
+    async fn the_toolbox_hands_back_a_huge_result_whole() {
         let long = "y".repeat(MAX_TOOL_OUTPUT_CHARS + 10);
         let (_, text) = toolbox()
             .call("echo", &json!({"text": long}).to_string())
             .await;
-        assert!(text.starts_with(&"y".repeat(MAX_TOOL_OUTPUT_CHARS)));
-        assert!(text.ends_with("narrow the call to see the rest]"));
+        assert_eq!(text.chars().count(), MAX_TOOL_OUTPUT_CHARS + 10);
     }
 }

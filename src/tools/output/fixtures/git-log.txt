@@ -1,0 +1,75 @@
+commit 66cf5443fad2fced7ec59542474e4d8e4b809e0c
+Author: Owner <owner@example.com>
+Date:   Tue Oct 20 18:18:28 2026 +0200
+
+    docs(plans): Glut lean — less goes to the model, nothing is cut away
+    
+    Grilled with the owner after LocalBrain was closed: G6's shrinking goes, an over-long
+    result is relocated into the run's store instead of cut, frequent commands' output is
+    compacted transparently in bash (git, cargo, npm, Python, the Studio's languages), an
+    unchanged re-read is not sent again, and read_file gets an outline.
+    
+    Co-Authored-By: Claude Opus 5.5 <owner@example.com>
+    Claude-Session: https://claude.ai/code/session_01JvFAP4pVk75D1ahRAdmK3d
+
+commit 802415f4288719ff900f0bb132de191c37fa4762
+Author: Owner <owner@example.com>
+Date:   Tue Oct 20 17:38:58 2026 +0200
+
+    docs(plans): LocalBrain closed — built, measured, not taken over
+    
+    CP0–CP4 were built on the branch `localbrain` (kept locally, b27f104). The A/B
+    measurement found no clear saving at the same quality; with cached input at 3–20 %
+    of the price, a stable conversation start saves more than summaries do, and the
+    context limit is better met by Glut's own compaction. The plan records the table,
+    the reasons and what was kept for later.
+    
+    Co-Authored-By: Claude Opus 5.5 <owner@example.com>
+
+commit e785aa27a665bf3d0b57ee7c6e306fd43bf684bd
+Author: Owner <owner@example.com>
+Date:   Tue Oct 20 14:53:01 2026 +0200
+
+    docs(plans): LocalBrain L13 — swaps kind to the prompt cache; L11 measured in money
+    
+    Co-Authored-By: Claude Opus 5.5 <owner@example.com>
+
+commit 3704fe2c1d74aa0fcd3f8e5a22d80df787e3c47f
+Author: Owner <owner@example.com>
+Date:   Tue Oct 20 14:11:52 2026 +0200
+
+    docs(plans): LocalBrain CP0 done — Qwen3.5-4B with a must-keep list passes 27/32, 67% saved
+    
+    Co-Authored-By: Claude Opus 5.5 <owner@example.com>
+
+commit aa076f68ffa28945742b79689b518694724a4beb
+Author: Owner <owner@example.com>
+Date:   Tue Oct 20 14:02:30 2026 +0200
+
+    docs(plans): LocalBrain — Qwen3.5-4B chosen, hybrid with a rule extract for tool output
+    
+    Co-Authored-By: Claude Opus 5.5 <owner@example.com>
+
+commit 33596a4d536baa6edd129fb410268eedb7000aec
+Author: Owner <owner@example.com>
+Date:   Tue Oct 20 14:02:00 2026 +0200
+
+    docs(plans): LocalBrain CP0 — 4B measured too, no better; no newer small Qwen
+    
+    Co-Authored-By: Claude Opus 5.5 <owner@example.com>
+
+commit a2070895e3c91af097c6682a83904c307762c5ea
+Author: Owner <owner@example.com>
+Date:   Tue Oct 20 13:52:05 2026 +0200
+
+    docs(plans): LocalBrain CP0 measured — sub-4B models do not keep the summary contract on tool output
+    
+    Co-Authored-By: Claude Opus 5.5 <owner@example.com>
+
+commit 34cc7964a6a4ca15693d17430a478327ce94b4bc
+Author: Owner <owner@example.com>
+Date:   Tue Oct 20 12:52:42 2026 +0200
+
+    docs(plans): LocalBrain L5 — source code stays verbatim in a summary (owner)
+    
+    Co-Authored-By: Claude Opus 5.5 <owner@example.com>

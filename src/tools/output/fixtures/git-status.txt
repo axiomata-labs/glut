@@ -1,0 +1,16 @@
+On branch glut-lean
+Changes to be committed:
+  (use "git restore --staged <file>..." to unstage)
+	renamed:    crates/axiomata-harness/src/history.rs -> crates/axiomata-harness/src/results.rs
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   crates/axiomata-harness/src/codemode.rs
+	modified:   crates/axiomata-harness/src/config.rs
+	modified:   crates/axiomata-harness/src/lib.rs
+	modified:   crates/axiomata-harness/src/results.rs
+	modified:   crates/axiomata-harness/src/run.rs
+	modified:   crates/axiomata-harness/src/tools/mod.rs
+	modified:   crates/axiomata-harness/src/tools/shell.rs
+
