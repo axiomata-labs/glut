@@ -1377,8 +1377,12 @@ mod tests {
         ]);
         let mut events = Vec::new();
         // The id is only known once the run shrank c1; the script reads it from the third request below.
+        let config = RunConfig {
+            shrink_results: true,
+            ..RunConfig::new("/w")
+        };
         let outcome = run(
-            &RunConfig::new("/w"),
+            &config,
             &model,
             &toolbox(),
             "go",

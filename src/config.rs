@@ -85,7 +85,8 @@ pub struct RunConfig {
     /// How many subagents the run may start in all; a `task` call past it is answered with an error.
     pub max_subagents: u32,
     /// Whether long tool results the model has answered on shrink in the conversation, their whole text kept for
-    /// `read_full_result` (Glut 2, B). On by default: it needs nothing outside the run.
+    /// `read_full_result` (Glut 2, B). Off by default (owner, 2026-10-20): measured on news-web it halved the context a
+    /// step but not the run's total, which took more steps — on again only once a measurement shows it pays.
     pub shrink_results: bool,
     /// Whether the run offers `codemode` and keeps its MCP tools behind it (Glut 2, A + E, G3/G8): the model then sees
     /// the core tools and `codemode`, and reaches the MCP tools from a script. On by default.
@@ -122,7 +123,7 @@ impl RunConfig {
             subagent_max_turns: DEFAULT_SUBAGENT_MAX_TURNS,
             subagent_timeout: DEFAULT_SUBAGENT_TIMEOUT,
             max_subagents: DEFAULT_MAX_SUBAGENTS,
-            shrink_results: true,
+            shrink_results: false,
             codemode: true,
             mcp_behind_code: true,
             todos: true,
