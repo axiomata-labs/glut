@@ -18,8 +18,8 @@ use axiomata_harness::permissions::{GateOptions, Mode, Nobody, build_gate};
 use axiomata_harness::setup::{self, Draft, Prepared};
 use axiomata_harness::skills;
 use axiomata_harness::{
-    Cancel, Event, EventSink, FinishReason, ModelEndpoint, OpenAiCompat, RunConfig, SharedSink,
-    Usage, run,
+    Cancel, Effort, Event, EventSink, FinishReason, ModelEndpoint, OpenAiCompat, RunConfig,
+    SharedSink, Usage, run,
 };
 use clap::{Args, Parser, Subcommand};
 use serde::{Deserialize, Serialize};
@@ -117,6 +117,11 @@ struct RunArgs {
     base_url: String,
     #[arg(long)]
     model: String,
+    /// How hard the model reasons: none, minimal, low, medium, high, xhigh or max. Otherwise a skill's or a
+    /// command's `effort:`, else `effort` in ~/.axh/settings.json, else the provider's own default.
+    #[arg(long)]
+    #[serde(default)]
+    effort: Option<String>,
     /// The folder the run works in; every file tool is confined to it.
     #[arg(long, default_value = ".")]
     cwd: PathBuf,
@@ -280,10 +285,11 @@ async fn resume_command(run: Option<String>, list: bool, discard: bool) -> ExitC
     };
     // What the run goes on with, said before it does: the flags come from the journal, not from this command line.
     eprintln!(
-        "axh resume: {} with --base-url {} --model {} --cwd {} --permission-mode {} --allow {:?} --deny {:?}",
+        "axh resume: {} with --base-url {} --model {} --effort {} --cwd {} --permission-mode {} --allow {:?} --deny {:?}",
         entry.run,
         args.base_url,
         args.model,
+        args.effort.as_deref().unwrap_or("(settings)"),
         args.cwd.display(),
         args.permission_mode.as_deref().unwrap_or("(settings)"),
         args.allow,
@@ -298,6 +304,7 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
     let RunArgs {
         base_url,
         model,
+        effort,
         cwd,
         instructions_file,
         max_turns,
@@ -324,6 +331,10 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
             "--base-url must not hold a user or a password; the key comes from AXH_API_KEY".into(),
         );
     }
+    let effort = match effort.as_deref().map(Effort::parse_or_explain).transpose() {
+        Ok(effort) => effort,
+        Err(reason) => return fail(format!("--effort: {reason}")),
+    };
     let cwd = match cwd.canonicalize() {
         Ok(cwd) => cwd,
         Err(err) => return fail(format!("cannot use {}: {err}", cwd.display())),
@@ -374,6 +385,7 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
         base_url,
         api_key: std::env::var(KEY_ENV).ok().filter(|key| !key.is_empty()),
         model,
+        effort,
     };
     let mode = match permission_mode
         .as_deref()
@@ -430,6 +442,9 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
         Err(err) => return fail(err.to_string()),
     };
     registry.set_permissions(PermissionsView::of(&built.gate, &built.sandbox));
+    // The flag first, else the owner's settings; a skill's or a command's `effort:` still wins in `prepare`.
+    let mut endpoint = endpoint;
+    endpoint.effort = endpoint.effort.or(built.effort);
     let mut draft = Draft {
         config,
         endpoint,
@@ -556,5 +571,22 @@ fn undo(cwd: &std::path::Path, run: Option<String>, step: Option<u32>, list: boo
             ExitCode::SUCCESS
         }
         Err(reason) => fail(reason),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A journal written before `--effort` existed still resumes, with no effort of its own.
+    #[test]
+    fn a_journaled_run_without_an_effort_still_reads() {
+        let args: RunArgs = serde_json::from_value(serde_json::json!({
+            "base_url": "https://openrouter.ai/api", "model": "m", "cwd": "/w", "instructions_file": null,
+            "max_turns": null, "timeout_secs": null, "permission_mode": null, "allow": [], "ask": [],
+            "deny": [], "skill": null, "skill_dir": [], "prompt": "hi"
+        }))
+        .unwrap();
+        assert_eq!(args.effort, None);
     }
 }

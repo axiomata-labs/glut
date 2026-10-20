@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use super::{Mode, Rule, RuleSet};
+use crate::config::Effort;
 use crate::error::HarnessError;
 use crate::hooks::{Hooks, HooksSection};
 
@@ -75,6 +76,10 @@ struct File {
     /// not fail the load — but only the owner's ever run (B1, `load`).
     #[serde(default)]
     hooks: HooksSection,
+    /// How hard the model reasons (Glut effort, E1); the owner's file only — a project's costs no more than the
+    /// owner chose.
+    #[serde(default)]
+    effort: Option<String>,
 }
 
 /// The `sandbox` section of one settings file (HS3b), as written: paths are still text, `~/…` or relative.
@@ -152,6 +157,8 @@ pub struct Settings {
     pub sandbox: SandboxSection,
     /// The compiled hooks (HS7); empty when the file has none.
     pub hooks: Hooks,
+    /// The `effort` as written: [`load`] reads the owner's and leaves a project's unread, so a typo there stops nothing.
+    pub effort: Option<String>,
 }
 
 /// Reads one settings file; a missing file says nothing.
@@ -213,6 +220,7 @@ pub fn read(path: &Path) -> Result<Settings, HarnessError> {
         mode,
         sandbox: file.sandbox.unwrap_or_default(),
         hooks,
+        effort: file.effort,
     })
 }
 
@@ -229,6 +237,8 @@ pub struct Loaded {
     pub hooks: Hooks,
     /// The project has hooks of its own; they were parsed but not taken over (B1).
     pub project_hooks_skipped: bool,
+    /// The owner's `effort`; a project's is left out unread — it would spend the owner's money.
+    pub effort: Option<Effort>,
 }
 
 /// The project's settings files.
@@ -271,7 +281,17 @@ pub fn project_summary(project: &Path) -> Result<(Vec<String>, Option<Mode>), Ha
 ///
 /// Whatever [`read`] refuses.
 pub fn load(home: &Path, project: &Path, trusted: bool) -> Result<Loaded, HarnessError> {
-    let user = read(&home.join(USER_DIR).join(SETTINGS_FILE))?;
+    let owners = home.join(USER_DIR).join(SETTINGS_FILE);
+    let user = read(&owners)?;
+    let effort = user
+        .effort
+        .as_deref()
+        .map(Effort::parse_or_explain)
+        .transpose()
+        .map_err(|reason| HarnessError::Settings {
+            path: owners.display().to_string(),
+            reason,
+        })?;
     let ceiling = user.mode.unwrap_or_default().looseness();
     let owner = &user.sandbox;
     let mut sandbox = SandboxSettings {
@@ -295,6 +315,7 @@ pub fn load(home: &Path, project: &Path, trusted: bool) -> Result<Loaded, Harnes
         sandbox: SandboxSettings::default(),
         hooks: user.hooks,
         project_hooks_skipped: false,
+        effort,
     };
     for file in project_files(project) {
         let settings = read(&file)?;
@@ -603,6 +624,32 @@ mod tests {
             load(&home, &project, false),
             Err(HarnessError::Settings { .. })
         ));
+    }
+
+    #[test]
+    fn the_owners_effort_counts_a_projects_is_left_out_and_an_unknown_one_stops_the_run() {
+        let (home, project) = (temp("effort-home"), temp("effort-project"));
+        write(&home.join(".axh/settings.json"), r#"{"effort": "high"}"#);
+        write(&project.join(".axh/settings.json"), r#"{"effort": "max"}"#);
+        assert_eq!(
+            load(&home, &project, true).unwrap().effort,
+            Some(Effort::High)
+        );
+        write(&home.join(".axh/settings.json"), "{}");
+        assert_eq!(
+            load(&home, &project, true).unwrap().effort,
+            None,
+            "a project's effort would spend the owner's money"
+        );
+        // A project's level is never used, so not even a typo in it stops a run; the owner's does.
+        write(
+            &project.join(".axh/settings.json"),
+            r#"{"effort": "extreme"}"#,
+        );
+        assert_eq!(load(&home, &project, true).unwrap().effort, None);
+        write(&home.join(".axh/settings.json"), r#"{"effort": "extreme"}"#);
+        let err = load(&home, &project, false).unwrap_err().to_string();
+        assert!(err.contains("unknown effort \"extreme\""), "{err}");
     }
 
     #[test]

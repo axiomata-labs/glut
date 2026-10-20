@@ -9,7 +9,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::config::ModelEndpoint;
+use crate::config::{Effort, ModelEndpoint};
 use crate::error::HarnessError;
 
 /// How much of an error answer is kept for the message: enough to read what the API said, not a whole HTML page.
@@ -18,6 +18,10 @@ const ERROR_BODY_CHARS: usize = 500;
 /// How long one model call may take before it counts as a failed connection. The run's own timeout is the real
 /// limit; this only keeps a hung connection from eating all of it silently.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+
+/// The most reasoning one message keeps, in bytes (E4): more is dropped whole — a block cut short is no longer the one
+/// the model signed — so one answer at `max` cannot fill a chat's file or a run's journal.
+const MAX_REASONING_BYTES: usize = 1024 * 1024;
 
 /// The largest answer read from the API. A chat answer is kilobytes; a misconfigured or hostile endpoint streaming
 /// gigabytes must not fill the memory.
@@ -62,6 +66,30 @@ pub struct Message {
     /// For a tool's answer: the call it answers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
+    /// The model's reasoning as plain text, as OpenRouter and Ollama name it (E4). It goes back with the message while
+    /// the model works on the same prompt — some models need their thinking beside their tool calls — and is left out
+    /// once a newer prompt follows ([`api_messages`]).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "text_content"
+    )]
+    pub reasoning: Option<String>,
+    /// The same as DeepSeek and vLLM name it; kept under the provider's own name so it goes back the way it came.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "text_content"
+    )]
+    pub reasoning_content: Option<String>,
+    /// OpenRouter's reasoning blocks (`reasoning.text`, `reasoning.summary`, `reasoning.encrypted`), handed back
+    /// unchanged: a signed or encrypted block is only valid as the model made it.
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "null_as_empty"
+    )]
+    pub reasoning_details: Vec<Value>,
 }
 
 /// A message's text as the APIs send it: a string, `null`, or a list of parts of which the `text` ones count (some
@@ -82,11 +110,12 @@ fn text_content<'de, D: serde::Deserializer<'de>>(
     })
 }
 
-/// `"tool_calls": null`, which several OpenAI-compatible backends send on a plain answer, as no calls.
-fn null_as_empty<'de, D: serde::Deserializer<'de>>(
+/// `"tool_calls": null`, which several OpenAI-compatible backends send on a plain answer, as no calls (and the same for
+/// `reasoning_details`).
+fn null_as_empty<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(
     deserializer: D,
-) -> Result<Vec<ToolCall>, D::Error> {
-    Ok(Option::<Vec<ToolCall>>::deserialize(deserializer)?.unwrap_or_default())
+) -> Result<Vec<T>, D::Error> {
+    Ok(Option::<Vec<T>>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 impl Message {
@@ -112,7 +141,93 @@ impl Message {
             content: Some(text.into()),
             tool_calls: Vec::new(),
             tool_call_id: None,
+            reasoning: None,
+            reasoning_content: None,
+            reasoning_details: Vec::new(),
         }
+    }
+
+    /// Whether the message carries any of the model's reasoning.
+    pub fn has_reasoning(&self) -> bool {
+        self.reasoning.is_some()
+            || self.reasoning_content.is_some()
+            || !self.reasoning_details.is_empty()
+    }
+
+    /// Drops the model's reasoning (E4): once a newer prompt follows it is never sent again, so a conversation that
+    /// goes on keeps it no longer — not in memory, not in a chat's file, not in a journal.
+    pub fn forget_reasoning(&mut self) {
+        self.reasoning = None;
+        self.reasoning_content = None;
+        self.reasoning_details.clear();
+    }
+
+    /// Drops the reasoning when it is larger than [`MAX_REASONING_BYTES`].
+    fn bound_reasoning(&mut self) {
+        let text = |text: &Option<String>| text.as_ref().map_or(0, String::len);
+        let blocks: usize = self
+            .reasoning_details
+            .iter()
+            .map(|block| block.to_string().len())
+            .sum();
+        if text(&self.reasoning) + text(&self.reasoning_content) + blocks > MAX_REASONING_BYTES {
+            self.forget_reasoning();
+        }
+    }
+}
+
+/// The conversation as the API is sent it (E4): an assistant message keeps its reasoning only after the latest user
+/// message — the model works on that prompt still, and a model that thinks before a tool call (Anthropic's, DeepSeek's
+/// in thinking mode) expects its thinking back beside the call. Older reasoning is left out: those providers refuse
+/// or ignore it, and it would only cost tokens. Where blocks are kept, the plain text beside them is the same thinking
+/// twice, so only the blocks go.
+fn api_messages(messages: &[Message]) -> Vec<Value> {
+    let latest_prompt = messages
+        .iter()
+        .rposition(|message| message.role == Role::User)
+        .unwrap_or(0);
+    messages
+        .iter()
+        .enumerate()
+        .map(|(at, message)| {
+            let mut value = serde_json::to_value(message).unwrap_or(Value::Null);
+            if let Some(fields) = value.as_object_mut()
+                && message.has_reasoning()
+            {
+                if at < latest_prompt {
+                    fields.remove("reasoning");
+                    fields.remove("reasoning_content");
+                    fields.remove("reasoning_details");
+                } else if !message.reasoning_details.is_empty() {
+                    fields.remove("reasoning");
+                    fields.remove("reasoning_content");
+                } else if message.reasoning.is_some()
+                    && message.reasoning == message.reasoning_content
+                {
+                    // A provider that sends both names (vLLM) gets the thinking back once.
+                    fields.remove("reasoning_content");
+                }
+            }
+            value
+        })
+        .collect()
+}
+
+/// Whether `base_url` is OpenRouter's, which takes the effort as `reasoning.effort` (E3); everyone else is sent the
+/// OpenAI-compatible `reasoning_effort`.
+fn is_openrouter(base_url: &str) -> bool {
+    reqwest::Url::parse(base_url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
+        .is_some_and(|host| host == "openrouter.ai" || host.ends_with(".openrouter.ai"))
+}
+
+/// The effort as `body` gives it to the API at `base_url` (E3).
+fn put_effort(body: &mut Value, base_url: &str, effort: Effort) {
+    if is_openrouter(base_url) {
+        body["reasoning"] = json!({ "effort": effort });
+    } else {
+        body["reasoning_effort"] = json!(effort);
     }
 }
 
@@ -267,7 +382,7 @@ impl OpenAiCompat {
         // last piece. A provider that ignores `stream` answers in one JSON body, which is read as before.
         let mut body = json!({
             "model": self.endpoint.model,
-            "messages": messages,
+            "messages": api_messages(messages),
             "stream": true,
             "stream_options": { "include_usage": true },
         });
@@ -276,6 +391,9 @@ impl OpenAiCompat {
         }
         if let Some(max) = max_output_tokens {
             body["max_tokens"] = json!(max);
+        }
+        if let Some(effort) = self.endpoint.effort {
+            put_effort(&mut body, &self.endpoint.base_url, effort);
         }
         body
     }
@@ -433,6 +551,12 @@ fn parse_reply(text: &str) -> Result<Reply, HarnessError> {
     {
         message.content = None;
     }
+    for reasoning in [&mut message.reasoning, &mut message.reasoning_content] {
+        if reasoning.as_deref().is_some_and(str::is_empty) {
+            *reasoning = None;
+        }
+    }
+    message.bound_reasoning();
     Ok(Reply {
         message,
         usage: usage_of(&value),
@@ -563,6 +687,10 @@ struct CallSlot {
 #[derive(Default)]
 struct Stream {
     text: String,
+    /// The reasoning as it arrived, under each name a provider uses for it (E4).
+    reasoning: String,
+    reasoning_content: String,
+    reasoning_details: Vec<Value>,
     /// The tool calls in the order they began.
     calls: Vec<CallSlot>,
     usage: Usage,
@@ -625,6 +753,22 @@ impl Stream {
         {
             self.text.push_str(text);
             on_text(text);
+        }
+        for (key, kept) in [
+            ("reasoning", &mut self.reasoning),
+            ("reasoning_content", &mut self.reasoning_content),
+        ] {
+            if let Some(text) = delta.get(key).and_then(Value::as_str) {
+                kept.push_str(text);
+            }
+        }
+        for block in delta
+            .get("reasoning_details")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            merge_block(&mut self.reasoning_details, block);
         }
         for call in delta
             .get("tool_calls")
@@ -709,15 +853,58 @@ impl Stream {
                 },
             })
             .collect();
+        let some = |text: String| (!text.is_empty()).then_some(text);
+        let mut message = Message {
+            role: Role::Assistant,
+            content: (!self.text.trim().is_empty()).then_some(self.text),
+            tool_calls,
+            tool_call_id: None,
+            reasoning: some(self.reasoning),
+            reasoning_content: some(self.reasoning_content),
+            reasoning_details: self.reasoning_details,
+        };
+        message.bound_reasoning();
         Ok(Reply {
-            message: Message {
-                role: Role::Assistant,
-                content: (!self.text.trim().is_empty()).then_some(self.text),
-                tool_calls,
-                tool_call_id: None,
-            },
+            message,
             usage: self.usage,
         })
+    }
+}
+
+/// The text fields a streamed reasoning block arrives in pieces of.
+const BLOCK_TEXT_FIELDS: [&str; 3] = ["text", "summary", "data"];
+
+/// One streamed piece of a reasoning block, put into `blocks` (E4): a piece of the block with the same `index` and
+/// `type` — a piece without a `type` continues the block of its `index`; without an `index`, the last block if it is of
+/// the piece's type — has its text fields appended and its other fields (a `signature`, an `id`) set; any other piece
+/// begins a block.
+fn merge_block(blocks: &mut Vec<Value>, piece: &Value) {
+    let Some(fields) = piece.as_object() else {
+        return;
+    };
+    let kind = fields.get("type").filter(|kind| !kind.is_null());
+    let index = fields.get("index").filter(|index| !index.is_null());
+    let found = blocks.iter().rposition(|block| {
+        kind.is_none_or(|kind| block.get("type") == Some(kind))
+            && index.is_none_or(|index| block.get("index") == Some(index))
+    });
+    let found = found.filter(|at| index.is_some() || *at + 1 == blocks.len());
+    let Some(block) = found.and_then(|at| blocks[at].as_object_mut()) else {
+        blocks.push(piece.clone());
+        return;
+    };
+    for (key, value) in fields {
+        match (
+            BLOCK_TEXT_FIELDS.contains(&key.as_str()),
+            value,
+            block.get_mut(key),
+        ) {
+            (true, Value::String(more), Some(Value::String(kept))) => kept.push_str(more),
+            (_, Value::Null, Some(_)) => {}
+            _ => {
+                block.insert(key.clone(), value.clone());
+            }
+        }
     }
 }
 
@@ -895,6 +1082,7 @@ mod tests {
             base_url: base_url.into(),
             api_key: key.map(str::to_owned),
             model: "test-model".into(),
+            effort: None,
         }
     }
 
@@ -1065,6 +1253,214 @@ mod tests {
         let body = &api.bodies()[0];
         assert_eq!(body["stream"], true);
         assert_eq!(body["stream_options"]["include_usage"], true);
+    }
+
+    #[test]
+    fn the_effort_goes_as_openrouter_names_it_and_as_the_others_do() {
+        let body = |base_url: &str, effort: Option<Effort>| {
+            let model = OpenAiCompat::new(ModelEndpoint {
+                effort,
+                ..endpoint(base_url, None)
+            })
+            .unwrap();
+            model.body(&[Message::user("hi")], &[], None)
+        };
+        let routed = body("https://openrouter.ai/api", Some(Effort::High));
+        assert_eq!(routed["reasoning"], json!({"effort": "high"}));
+        assert!(routed.get("reasoning_effort").is_none());
+        let local = body("http://localhost:11434", Some(Effort::Low));
+        assert_eq!(local["reasoning_effort"], "low");
+        assert!(local.get("reasoning").is_none());
+        // A host that only ends in the name is someone else's.
+        let other = body("https://notopenrouter.ai/api", Some(Effort::Max));
+        assert_eq!(other["reasoning_effort"], "max");
+        let unset = body("https://openrouter.ai/api", None);
+        assert!(unset.get("reasoning").is_none() && unset.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn reasoning_goes_back_while_the_prompt_is_the_same_and_is_left_out_after_a_newer_one() {
+        let thinking = |text: &str, details: Vec<Value>| Message {
+            reasoning: Some(text.into()),
+            reasoning_content: Some(text.into()),
+            reasoning_details: details,
+            ..Message::text(Role::Assistant, "")
+        };
+        let block =
+            json!({"type": "reasoning.text", "text": "now", "signature": "sig", "index": 0});
+        let messages = [
+            Message::user("first"),
+            thinking("before", vec![block.clone()]),
+            Message::tool("c1", "ok"),
+            Message::user("second"),
+            thinking("plain", Vec::new()),
+            Message::tool("c2", "ok"),
+            thinking("now", vec![block.clone()]),
+        ];
+        let sent = api_messages(&messages);
+        for key in ["reasoning", "reasoning_content", "reasoning_details"] {
+            assert!(
+                sent[1].get(key).is_none(),
+                "an older prompt's {key} is left out"
+            );
+        }
+        assert_eq!(sent[4]["reasoning"], "plain");
+        assert!(
+            sent[4].get("reasoning_content").is_none(),
+            "the same thinking goes once"
+        );
+        assert_eq!(sent[6]["reasoning_details"], json!([block]));
+        assert!(
+            sent[6].get("reasoning").is_none() && sent[6].get("reasoning_content").is_none(),
+            "beside its blocks the plain text would be the same thinking twice"
+        );
+        assert_eq!(sent[3], json!({"role": "user", "content": "second"}));
+    }
+
+    #[tokio::test]
+    async fn streamed_reasoning_is_kept_whole_under_the_names_it_came_with() {
+        let api = FakeApi::spawn(vec![Answer::stream(&[
+            json!({"choices": [{"delta": {"reasoning": "thin", "reasoning_details": [
+                {"type": "reasoning.text", "text": "thin", "index": 0, "format": "anthropic-claude-v1"}
+            ]}}]}),
+            json!({"choices": [{"delta": {"reasoning": "king", "reasoning_details": [
+                {"type": "reasoning.text", "text": "king", "index": 0, "signature": null}
+            ]}}]}),
+            json!({"choices": [{"delta": {"reasoning_details": [
+                {"type": "reasoning.text", "text": "", "index": 0, "signature": "sig"},
+                {"type": "reasoning.encrypted", "data": "abc", "index": 1}
+            ]}}]}),
+            json!({"choices": [{"delta": {"tool_calls": [
+                {"index": 0, "id": "c1", "function": {"name": "glob", "arguments": "{}"}}
+            ]}, "finish_reason": "tool_calls"}]}),
+        ])])
+        .await;
+        let model = OpenAiCompat::new(endpoint(&api.base_url, None)).unwrap();
+        let reply = model
+            .complete(&[Message::user("hi")], &[spec()], None)
+            .await
+            .unwrap();
+        let message = reply.message;
+        assert_eq!(message.reasoning.as_deref(), Some("thinking"));
+        assert_eq!(message.reasoning_content, None);
+        assert_eq!(
+            message.reasoning_details,
+            [
+                json!({"type": "reasoning.text", "text": "thinking", "index": 0,
+                       "format": "anthropic-claude-v1", "signature": "sig"}),
+                json!({"type": "reasoning.encrypted", "data": "abc", "index": 1}),
+            ]
+        );
+        // The journal keeps it as the conversation does.
+        let kept: Message =
+            serde_json::from_value(serde_json::to_value(&message).unwrap()).unwrap();
+        assert_eq!(kept, message);
+    }
+
+    #[test]
+    fn reasoning_blocks_merge_by_index_and_type_and_a_typeless_piece_continues_its_index() {
+        let mut blocks = Vec::new();
+        for piece in [
+            json!({"type": "reasoning.text", "text": "a", "index": 0}),
+            json!({"text": "b", "index": 0}),
+            json!({"type": "reasoning.summary", "summary": "s", "index": 1}),
+            json!({"type": "reasoning.text", "text": "c", "index": 2}),
+            json!({"text": "d", "index": 0, "signature": "sig"}),
+        ] {
+            merge_block(&mut blocks, &piece);
+        }
+        assert_eq!(
+            blocks,
+            [
+                json!({"type": "reasoning.text", "text": "abd", "index": 0, "signature": "sig"}),
+                json!({"type": "reasoning.summary", "summary": "s", "index": 1}),
+                json!({"type": "reasoning.text", "text": "c", "index": 2}),
+            ]
+        );
+        // Without an index a piece continues only the last block, and only if it is of its type.
+        let mut plain = Vec::new();
+        for piece in [
+            json!({"type": "reasoning.text", "text": "x"}),
+            json!({"type": "reasoning.text", "text": "y"}),
+            json!({"type": "reasoning.encrypted", "data": "z"}),
+            json!({"type": "reasoning.text", "text": "w"}),
+        ] {
+            merge_block(&mut plain, &piece);
+        }
+        let texts: Vec<_> = plain
+            .iter()
+            .map(|b| b.get("text").or(b.get("data")).unwrap().clone())
+            .collect();
+        assert_eq!(texts, [json!("xy"), json!("z"), json!("w")]);
+    }
+
+    #[test]
+    fn the_same_thinking_under_both_names_goes_back_once_and_without_a_prompt_all_of_it_stays() {
+        let both = Message {
+            reasoning: Some("same".into()),
+            reasoning_content: Some("same".into()),
+            ..Message::text(Role::Assistant, "")
+        };
+        let apart = Message {
+            reasoning: Some("one".into()),
+            reasoning_content: Some("other".into()),
+            ..Message::text(Role::Assistant, "")
+        };
+        // No user message at all (a conversation that opens with a tool's answer): nothing counts as older.
+        let sent = api_messages(&[Message::system("s"), both, apart]);
+        assert_eq!(sent[1]["reasoning"], "same");
+        assert!(sent[1].get("reasoning_content").is_none());
+        assert_eq!(
+            (
+                sent[2]["reasoning"].clone(),
+                sent[2]["reasoning_content"].clone()
+            ),
+            (json!("one"), json!("other"))
+        );
+    }
+
+    #[test]
+    fn reasoning_past_its_bound_is_dropped_whole_and_an_old_journal_line_still_reads() {
+        let mut huge = Message {
+            reasoning: Some("x".repeat(MAX_REASONING_BYTES)),
+            reasoning_details: vec![json!({"type": "reasoning.text", "text": "y"})],
+            ..Message::text(Role::Assistant, "")
+        };
+        huge.bound_reasoning();
+        assert!(!huge.has_reasoning());
+        let mut small = Message {
+            reasoning: Some("fine".into()),
+            ..Message::text(Role::Assistant, "")
+        };
+        small.bound_reasoning();
+        assert_eq!(small.reasoning.as_deref(), Some("fine"));
+        // A message journaled before E4 has none of the fields.
+        let old: Message = serde_json::from_value(json!({
+            "role": "assistant", "tool_calls": [{"id": "c1", "type": "function",
+                                                 "function": {"name": "glob", "arguments": "{}"}}]
+        }))
+        .unwrap();
+        assert!(!old.has_reasoning() && old.tool_calls.len() == 1);
+    }
+
+    #[test]
+    fn a_whole_answer_keeps_deepseeks_reasoning_and_drops_an_empty_one() {
+        let reply = parse_reply(
+            &json!({"choices": [{"message": {
+                "role": "assistant", "content": "done",
+                "reasoning_content": "because", "reasoning": "", "reasoning_details": null
+            }}]})
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(reply.message.reasoning_content.as_deref(), Some("because"));
+        assert_eq!(reply.message.reasoning, None);
+        assert!(reply.message.reasoning_details.is_empty());
+        // A message without any of it serialises as before: older journals and providers see no new field.
+        assert_eq!(
+            serde_json::to_value(Message::user("hi")).unwrap(),
+            json!({"role": "user", "content": "hi"})
+        );
     }
 
     /// The CP5 review: pieces cut anywhere — inside a line, inside a character, with `\r\n`, the last line without a

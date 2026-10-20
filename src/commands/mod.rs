@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 
 use axiomata_files::{EntryKind, LinkPolicy, Root, list_dir, read_text};
 
+use crate::config::Effort;
 use crate::error::HarnessError;
 use crate::permissions::settings::{self, SandboxSettings};
 use crate::permissions::{Gate, Rule};
@@ -62,6 +63,8 @@ pub struct Command {
     /// The `allowed-tools` frontmatter, parsed (C3): a rule that does not parse made the file an error.
     pub allowed_tools: Vec<Rule>,
     pub model: Option<String>,
+    /// The `effort` the command asks for (Glut effort, E1).
+    pub effort: Option<Effort>,
     /// The text after the frontmatter: what a run started with this command is prompted.
     pub body: String,
 }
@@ -70,12 +73,13 @@ pub struct Command {
 #[derive(Debug)]
 pub enum Expanded {
     /// The command's body with its arguments put in: the prompt to run, the tools its `allowed-tools` rules name —
-    /// which only narrow the run's own rules (C3) — and the model it asks for, if it names one.
+    /// which only narrow the run's own rules (C3) — and the model and effort it asks for, if it names them.
     Prompt {
         name: String,
         prompt: String,
         allowed_tools: Vec<Rule>,
         model: Option<String>,
+        effort: Option<Effort>,
     },
     /// A built-in, answered without a model (C5): its text is for the front end, not for the model.
     Builtin { name: String, text: String },
@@ -217,6 +221,7 @@ impl Registry {
             prompt: substitute(&command.body, arguments),
             allowed_tools: command.allowed_tools.clone(),
             model: command.model.clone(),
+            effort: command.effort,
         }))
     }
 
@@ -318,7 +323,7 @@ impl Registry {
 }
 
 impl Command {
-    /// One command file: its name and source from where it lies, its four frontmatter fields and its body from its
+    /// One command file: its name and source from where it lies, its frontmatter fields and its body from its
     /// text (C2).
     ///
     /// # Errors
@@ -338,6 +343,7 @@ impl Command {
             argument_hint: head.argument_hint,
             allowed_tools: head.allowed_tools,
             model: head.model,
+            effort: head.effort,
             body: body.to_owned(),
         })
     }
@@ -350,6 +356,7 @@ struct Head {
     argument_hint: Option<String>,
     allowed_tools: Vec<Rule>,
     model: Option<String>,
+    effort: Option<Effort>,
 }
 
 impl Head {
@@ -370,6 +377,13 @@ impl Head {
                 "description" => head.description = some(value),
                 "argument-hint" => head.argument_hint = some(value),
                 "model" => head.model = some(value),
+                "effort" => {
+                    head.effort = some(value)
+                        .map(|text| {
+                            Effort::parse_or_explain(&text).map_err(|reason| refuse(path, reason))
+                        })
+                        .transpose()?;
+                }
                 "allowed-tools" => head.allowed_tools = parse_rules(value, path)?,
                 other => return Err(refuse(path, format!("unknown frontmatter key {other:?}"))),
             }
@@ -566,7 +580,7 @@ mod tests {
     }
 
     #[test]
-    fn all_four_frontmatter_keys_are_read_and_quoted_values_lose_their_quotes() {
+    fn every_frontmatter_key_is_read_and_quoted_values_lose_their_quotes() {
         let (home, project) = setup(
             "frontmatter",
             &[(
@@ -576,6 +590,7 @@ mod tests {
                  argument-hint: \"<sha>\"\n\
                  allowed-tools: Bash(git status:*), Read Bash(echo a, b)\n\
                  model: claude-haiku\n\
+                 effort: \"High\"\n\
                  ---\n\
                  Body\n",
             )],
@@ -586,6 +601,7 @@ mod tests {
         assert_eq!(command.description.as_deref(), Some("Reviews a commit"));
         assert_eq!(command.argument_hint.as_deref(), Some("<sha>"));
         assert_eq!(command.model.as_deref(), Some("claude-haiku"));
+        assert_eq!(command.effort, Some(Effort::High));
         assert_eq!(
             command
                 .allowed_tools

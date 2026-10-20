@@ -4,6 +4,8 @@ use std::fmt;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
+
 use crate::hooks::Hooks;
 use crate::permissions::settings::SandboxSettings;
 
@@ -41,6 +43,74 @@ pub struct ModelEndpoint {
     pub api_key: Option<String>,
     /// The model as the API names it (`deepseek/deepseek-chat`, `qwen3:8b`).
     pub model: String,
+    /// How hard the model reasons before it answers; `None` sends nothing and leaves it to the provider.
+    pub effort: Option<Effort>,
+}
+
+/// How hard a reasoning model thinks before it answers (Glut effort, E2): the levels OpenRouter names. A model that
+/// does not reason ignores it; a provider that knows fewer levels may refuse one it does not know, and says so.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Effort {
+    None,
+    Minimal,
+    Low,
+    Medium,
+    High,
+    Xhigh,
+    Max,
+}
+
+impl Effort {
+    /// Every level, the least first.
+    pub const ALL: [Effort; 7] = [
+        Effort::None,
+        Effort::Minimal,
+        Effort::Low,
+        Effort::Medium,
+        Effort::High,
+        Effort::Xhigh,
+        Effort::Max,
+    ];
+
+    /// The level as the APIs, the settings and the flags spell it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Effort::None => "none",
+            Effort::Minimal => "minimal",
+            Effort::Low => "low",
+            Effort::Medium => "medium",
+            Effort::High => "high",
+            Effort::Xhigh => "xhigh",
+            Effort::Max => "max",
+        }
+    }
+
+    /// The level `text` names, case and surrounding space aside.
+    pub fn parse(text: &str) -> Option<Effort> {
+        let text = text.trim();
+        Effort::ALL
+            .into_iter()
+            .find(|level| level.as_str().eq_ignore_ascii_case(text))
+    }
+
+    /// [`Self::parse`], with an error that lists the levels there are.
+    ///
+    /// # Errors
+    ///
+    /// A message naming `text` and the known levels.
+    pub fn parse_or_explain(text: &str) -> Result<Effort, String> {
+        Effort::parse(text).ok_or_else(|| {
+            let known: Vec<&str> = Effort::ALL.iter().map(|level| level.as_str()).collect();
+            format!("unknown effort {text:?}; known: {}", known.join(", "))
+        })
+    }
+}
+
+impl fmt::Display for Effort {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 /// The key never shows in a log line or an error, whatever prints the endpoint.
@@ -50,6 +120,7 @@ impl fmt::Debug for ModelEndpoint {
             .field("base_url", &self.base_url)
             .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
             .field("model", &self.model)
+            .field("effort", &self.effort)
             .finish()
     }
 }
@@ -152,9 +223,28 @@ mod tests {
             base_url: "https://example.test/api".into(),
             api_key: Some("sk-secret-123".into()),
             model: "m".into(),
+            effort: None,
         };
         let printed = format!("{endpoint:?}");
         assert!(!printed.contains("sk-secret-123"), "{printed}");
         assert!(printed.contains("<redacted>"));
+    }
+
+    #[test]
+    fn an_effort_reads_in_any_case_and_an_unknown_one_lists_the_levels() {
+        assert_eq!(Effort::parse(" High "), Some(Effort::High));
+        assert_eq!(Effort::parse("xhigh"), Some(Effort::Xhigh));
+        for level in Effort::ALL {
+            assert_eq!(Effort::parse(level.as_str()), Some(level));
+            assert_eq!(
+                serde_json::to_value(level).unwrap(),
+                serde_json::json!(level.as_str())
+            );
+        }
+        let err = Effort::parse_or_explain("extreme").unwrap_err();
+        assert!(
+            err.contains("\"extreme\"") && err.contains("none, minimal"),
+            "{err}"
+        );
     }
 }

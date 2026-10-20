@@ -83,6 +83,9 @@ pub async fn compact<M: ChatModel>(
                 content: Some(ACKNOWLEDGED.into()),
                 tool_calls: Vec::new(),
                 tool_call_id: None,
+                reasoning: None,
+                reasoning_content: None,
+                reasoning_details: Vec::new(),
             },
         ],
         usage: reply.usage,
@@ -174,6 +177,9 @@ mod tests {
                     content: self.answer.map(str::to_owned),
                     tool_calls: Vec::new(),
                     tool_call_id: None,
+                    reasoning: None,
+                    reasoning_content: None,
+                    reasoning_details: Vec::new(),
                 },
                 usage: Usage {
                     input_tokens: 50,
@@ -201,6 +207,9 @@ mod tests {
                 },
             }],
             tool_call_id: None,
+            reasoning: None,
+            reasoning_content: None,
+            reasoning_details: Vec::new(),
         }
     }
 

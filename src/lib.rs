@@ -32,7 +32,7 @@ pub mod snapshot;
 mod task;
 pub mod tools;
 
-pub use config::{ModelEndpoint, RunConfig};
+pub use config::{Effort, ModelEndpoint, RunConfig};
 pub use error::HarnessError;
 pub use event::{Event, EventSink, FinishReason, McpStatus, SharedSink, SkillHow};
 pub use model::{ChatModel, Message, OpenAiCompat, Reply, ToolCall, ToolSpec, Usage};

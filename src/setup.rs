@@ -74,7 +74,7 @@ pub struct Extras {
 pub struct Draft {
     /// The run's settings; a skill adds its instructions and may shorten the time limit.
     pub config: RunConfig,
-    /// The model to use; a skill's or a command's `model` replaces it.
+    /// The model to use; a skill's or a command's `model` and `effort` replace the draft's.
     pub endpoint: ModelEndpoint,
     /// The run's gate; a skill's and a command's tool lists each narrow it.
     pub gate: Gate,
@@ -141,6 +141,7 @@ pub fn prepare(
             prompt: expanded,
             allowed_tools,
             model,
+            effort,
         })) => {
             let source = registry.source(&name).unwrap_or(Source::User);
             sink.emit(Event::Command {
@@ -148,7 +149,7 @@ pub fn prepare(
                 name: name.clone(),
                 prompt_chars: expanded.chars().count(),
             });
-            Some((name, expanded, allowed_tools, model))
+            Some((name, expanded, allowed_tools, model, effort))
         }
     };
     if let Some(name) = skill {
@@ -170,13 +171,16 @@ pub fn prepare(
             how: SkillHow::Run,
         });
     }
-    if let Some((name, expanded, allowed_tools, model)) = command {
+    if let Some((name, expanded, allowed_tools, model, effort)) = command {
         draft
             .gate
             .narrow(format!("the command /{name}"), allowed_tools);
         prompt = expanded;
         if let Some(model) = model {
             draft.endpoint.model = model;
+        }
+        if let Some(effort) = effort {
+            draft.endpoint.effort = Some(effort);
         }
     }
     // Decided on the prompt as it finally stands: a command whose body expands to nothing leaves it empty too.
@@ -214,7 +218,7 @@ mod tests {
             let write = |rel: &str, text: &str| std::fs::write(home.join(rel), text).unwrap();
             write(
                 ".axh/commands/fix.md",
-                "---\nallowed-tools: Bash(git:*)\nmodel: command/model\n---\nFix $ARGUMENTS\n",
+                "---\nallowed-tools: Bash(git:*)\nmodel: command/model\neffort: high\n---\nFix $ARGUMENTS\n",
             );
             write(".axh/commands/plain.md", "Look at $ARGUMENTS\n");
             write(
@@ -224,7 +228,7 @@ mod tests {
             write(
                 ".axh/skills/reviewer/SKILL.md",
                 "---\nname: reviewer\ndescription: d\nallowed_tools: Read Bash(git:*)\nmodel: skill/model\n\
-                 ---\nReview.\n",
+                 effort: low\n---\nReview.\n",
             );
             Fixture {
                 base,
@@ -248,6 +252,7 @@ mod tests {
                     base_url: "http://localhost".into(),
                     api_key: None,
                     model: "caller/model".into(),
+                    effort: None,
                 },
                 gate: Gate::new(RuleSet::default(), Mode::Default, Arc::new(Nobody)),
             }
@@ -296,6 +301,11 @@ mod tests {
             ["the skill reviewer", "the command /fix"]
         );
         assert_eq!(draft.endpoint.model, "command/model");
+        assert_eq!(
+            draft.endpoint.effort,
+            Some(crate::config::Effort::High),
+            "the command's effort wins over the skill's, as its model does"
+        );
         assert!(
             draft
                 .config

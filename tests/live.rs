@@ -21,6 +21,7 @@ async fn a_real_model_reads_a_file_and_answers() {
         base_url,
         api_key: std::env::var("AXH_API_KEY").ok(),
         model,
+        effort: None,
     })
     .unwrap();
     let mut tools = Toolbox::new();

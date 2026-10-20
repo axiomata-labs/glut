@@ -1126,6 +1126,9 @@ pub struct BuiltGate {
     pub hooks: crate::hooks::Hooks,
     /// The project has hooks of its own that were parsed but not taken over (B1).
     pub project_hooks_skipped: bool,
+    /// The owner's `effort` from `~/.axh/settings.json` (Glut effort, E1): the run's unless a flag, a skill or a
+    /// command names one.
+    pub effort: Option<crate::config::Effort>,
 }
 
 impl BuiltGate {
@@ -1186,6 +1189,7 @@ pub fn build_gate(
         sandbox: loaded.sandbox,
         hooks: loaded.hooks,
         project_hooks_skipped: loaded.project_hooks_skipped,
+        effort: loaded.effort,
     })
 }
 
@@ -1599,6 +1603,7 @@ mod tests {
             },
             hooks: crate::hooks::Hooks::default(),
             project_hooks_skipped,
+            effort: None,
         };
         let off = built(true, true, false).notes();
         assert_eq!(off.len(), 3, "{off:?}");

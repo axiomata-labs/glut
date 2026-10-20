@@ -371,7 +371,11 @@ fn opening_messages(
     {
         earlier.next();
     }
-    messages.extend(earlier);
+    // E4: the earlier turns' reasoning is never sent again, so the conversation does not carry it on either.
+    messages.extend(earlier.map(|mut message| {
+        message.forget_reasoning();
+        message
+    }));
     messages.push(Message::user(prompt));
     messages
 }
@@ -1694,6 +1698,32 @@ mod tests {
     use crate::model::{FunctionCall, Reply, Role, ToolCall, ToolSpec};
     use crate::tools::{Tool, ToolFuture};
 
+    /// E4: a turn that goes on from earlier ones starts without their reasoning — it is never sent again, so it is
+    /// not carried into the chat's file or the journal either.
+    #[test]
+    fn a_new_turn_starts_without_the_earlier_turns_reasoning() {
+        let thought = Message {
+            reasoning: Some("old thinking".into()),
+            reasoning_details: vec![json!({"type": "reasoning.text", "text": "old"})],
+            ..Message::user("answer")
+        };
+        let thought = Message {
+            role: Role::Assistant,
+            ..thought
+        };
+        let config = RunConfig::new(std::env::temp_dir());
+        let messages = opening_messages(
+            &config,
+            "m",
+            vec![Message::user("first"), thought],
+            "second",
+            0,
+        );
+        assert_eq!(messages.len(), 4);
+        assert!(messages.iter().all(|message| !message.has_reasoning()));
+        assert_eq!(messages[2].content.as_deref(), Some("answer"));
+    }
+
     /// A model that plays prepared replies in order and records each conversation it was sent.
     struct Script {
         replies: Mutex<Vec<Result<Reply, HarnessError>>>,
@@ -1747,6 +1777,9 @@ mod tests {
                 content: Some(answer.into()),
                 tool_calls: vec![],
                 tool_call_id: None,
+                reasoning: None,
+                reasoning_content: None,
+                reasoning_details: Vec::new(),
             },
             usage: Usage {
                 input_tokens: 10,
@@ -1773,6 +1806,9 @@ mod tests {
                     })
                     .collect(),
                 tool_call_id: None,
+                reasoning: None,
+                reasoning_content: None,
+                reasoning_details: Vec::new(),
             },
             usage: Usage {
                 input_tokens: 7,
@@ -1860,6 +1896,9 @@ mod tests {
             content: None,
             tool_calls: vec![first],
             tool_call_id: None,
+            reasoning: None,
+            reasoning_content: None,
+            reasoning_details: Vec::new(),
         });
         messages.push(Message::tool("r1", text));
         let again = read("r2", r#"{"path":"./src/a.rs"}"#);
@@ -2490,6 +2529,7 @@ mod tests {
             base_url: api.base_url.clone(),
             api_key: None,
             model: "m".into(),
+            effort: None,
         })
         .unwrap();
         let outcome = run(
@@ -2526,6 +2566,7 @@ mod tests {
             base_url: api.base_url.clone(),
             api_key: None,
             model: "m".into(),
+            effort: None,
         })
         .unwrap();
         let mut events = Vec::new();

@@ -67,6 +67,7 @@ pub(super) fn builtins() -> Vec<Command> {
             argument_hint: None,
             allowed_tools: Vec::new(),
             model: None,
+            effort: None,
             body: String::new(),
         })
         .collect()

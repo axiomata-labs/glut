@@ -21,7 +21,7 @@ use gray_matter::engine::YAML;
 use serde::Deserialize;
 use serde::de::{self, SeqAccess, Visitor};
 
-use crate::config::{ModelEndpoint, RunConfig};
+use crate::config::{Effort, ModelEndpoint, RunConfig};
 use crate::error::HarnessError;
 use crate::permissions::settings;
 use crate::permissions::{Gate, Rule};
@@ -55,6 +55,8 @@ pub struct Skill {
     pub body: String,
     /// The model a skill run uses instead of the caller's (K5).
     pub model: Option<String>,
+    /// The effort a skill run uses instead of the caller's (Glut effort, E1).
+    pub effort: Option<Effort>,
     /// What a skill run is narrowed to (K5), like a command's `allowed-tools` (HS4, C3).
     pub allowed_tools: Vec<Rule>,
     /// `timeout_secs`: a skill run's time limit, capped by the one it already has (K5).
@@ -101,8 +103,16 @@ impl Skill {
         else {
             return Err("its frontmatter has no description".into());
         };
+        let effort = front
+            .effort
+            .as_deref()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(Effort::parse_or_explain)
+            .transpose()?;
         Ok(Skill {
             name,
+            effort,
             description: description.to_owned(),
             dir,
             body: parsed.content.trim().to_owned(),
@@ -148,7 +158,7 @@ impl Skill {
     }
 
     /// Everything a skill run takes from the skill (K1.1 + K5): its instructions in the run's config (after the
-    /// caller's own, where there are any), its model over the endpoint's, its `allowed_tools` as the gate's
+    /// caller's own, where there are any), its model and effort over the endpoint's, its `allowed_tools` as the gate's
     /// narrowing and its `timeout_secs` as the run's time limit — capped by the one the run already has. The
     /// binaries of a skill run both call this, so the two cannot drift apart.
     ///
@@ -169,6 +179,9 @@ impl Skill {
         });
         if let Some(model) = &self.model {
             endpoint.model = model.clone();
+        }
+        if let Some(effort) = self.effort {
+            endpoint.effort = Some(effort);
         }
         // K5: the skill's tools narrow the run the way a command's do (HS4, C3) — here, in a skill run only, and
         // on top of a command's narrowing where the run has both. A skill loaded through the `skill` tool leaves
@@ -406,6 +419,7 @@ struct Frontmatter {
     name: Option<String>,
     description: Option<String>,
     model: Option<String>,
+    effort: Option<String>,
     /// `allowed-tools` is the other spelling skill files use.
     #[serde(alias = "allowed-tools")]
     allowed_tools: Option<RuleList>,
@@ -695,6 +709,7 @@ mod tests {
             base_url: "https://example.test/api".into(),
             api_key: None,
             model: model.into(),
+            effort: None,
         }
     }
 
@@ -927,7 +942,8 @@ mod tests {
         let cwd = temp("skill-run");
         let skill = skill_of(
             "reviewer",
-            "---\nname: reviewer\ndescription: d\nallowed_tools: Read\nmodel: some/model\ntimeout_secs: 5\n---\nReview.\n",
+            "---\nname: reviewer\ndescription: d\nallowed_tools: Read\nmodel: some/model\neffort: xhigh\n\
+             timeout_secs: 5\n---\nReview.\n",
         );
         let mut config = RunConfig::new(&cwd);
         let mut model = endpoint("before");
@@ -936,7 +952,16 @@ mod tests {
             .start_run(&cwd, &mut config, &mut model, &mut gate)
             .unwrap();
         assert_eq!(model.model, "some/model");
+        assert_eq!(model.effort, Some(Effort::Xhigh));
         assert_eq!(config.timeout, Duration::from_secs(5));
+        // An effort the harness does not know leaves the skill out with the reason, as any other broken field.
+        let err = Skill::parse(
+            "reviewer",
+            PathBuf::from("/s/reviewer"),
+            "---\nname: reviewer\ndescription: d\neffort: hard\n---\nReview.\n",
+        )
+        .unwrap_err();
+        assert!(err.contains("unknown effort \"hard\""), "{err}");
         assert_eq!(gate.narrowed_by(), ["the skill reviewer"]);
         // K5, as a command's narrowing (HS4, C3): a shell call is refused, a read is judged as usual.
         let refused = gate

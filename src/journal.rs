@@ -467,6 +467,9 @@ mod tests {
                 })
                 .collect(),
             tool_call_id: None,
+            reasoning: None,
+            reasoning_content: None,
+            reasoning_details: Vec::new(),
         }
     }
 
