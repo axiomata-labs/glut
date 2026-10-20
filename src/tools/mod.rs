@@ -52,6 +52,14 @@ pub trait Tool: Send + Sync {
     fn offered_as(&self) -> Access {
         self.access(&Value::Object(Default::default()))
     }
+    /// Whether a call with these arguments may run again after the run was interrupted while it ran (durable runs,
+    /// `docs/plans/durable.md` D4): by default only what reads — a file below the folder, a page on the web.
+    fn replay_safe(&self, arguments: &Value) -> bool {
+        matches!(
+            self.access(arguments),
+            Access::Read { .. } | Access::Network { .. }
+        )
+    }
 }
 
 /// The tools of a run.
@@ -137,6 +145,21 @@ impl Toolbox {
         })
         .ok()?;
         parsed.is_object().then(|| tool.access(&parsed))
+    }
+
+    /// Whether a call of `name` with these arguments may run again after an interruption ([`Tool::replay_safe`]); an
+    /// unknown tool or arguments that are no object may not.
+    pub fn replay_safe(&self, name: &str, arguments: &str) -> bool {
+        let Some(tool) = self.tools.iter().find(|tool| tool.spec().name == name) else {
+            return false;
+        };
+        let text = if arguments.trim().is_empty() {
+            "{}"
+        } else {
+            arguments
+        };
+        serde_json::from_str::<Value>(text)
+            .is_ok_and(|parsed| parsed.is_object() && tool.replay_safe(&parsed))
     }
 
     /// Runs the tool `name` with the model's argument text. Returns whether it succeeded and the text for the model,
@@ -257,6 +280,41 @@ mod tests {
     }
 
     /// glut-round CP4: a tool the gate does not offer is neither shown to the model nor callable by its name.
+    struct Reader;
+
+    impl Tool for Reader {
+        fn spec(&self) -> ToolSpec {
+            ToolSpec {
+                name: "reader".into(),
+                description: "Reads `path`.".into(),
+                parameters: json!({"type": "object"}),
+            }
+        }
+
+        fn access(&self, arguments: &Value) -> Access {
+            Access::Read {
+                path: arguments["path"].as_str().unwrap_or_default().to_owned(),
+            }
+        }
+
+        fn call(&self, _arguments: Value, _context: CallContext) -> ToolFuture<'_> {
+            Box::pin(async { Ok(String::new()) })
+        }
+    }
+
+    /// Durable runs (D4): only what reads runs again after an interruption — an unknown tool or arguments that are no
+    /// object never do.
+    #[test]
+    fn only_a_reading_call_may_run_again() {
+        let mut tools = toolbox();
+        tools.extend([Box::new(Reader) as Box<dyn Tool>]);
+        assert!(tools.replay_safe("reader", r#"{"path": "a.rs"}"#));
+        assert!(tools.replay_safe("reader", ""));
+        assert!(!tools.replay_safe("reader", "[1]"));
+        assert!(!tools.replay_safe("echo", "{}"));
+        assert!(!tools.replay_safe("nope", "{}"));
+    }
+
     #[tokio::test]
     async fn a_tool_the_gate_does_not_offer_is_not_there_for_the_model() {
         use crate::permissions::{Mode, Nobody, Rule, RuleSet};

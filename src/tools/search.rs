@@ -195,6 +195,11 @@ impl Tool for WebSearch {
         Access::Other
     }
 
+    fn replay_safe(&self, _arguments: &Value) -> bool {
+        // A search only reads (durable runs, D4) — but its access names no host, so the default does not see it.
+        true
+    }
+
     fn call(&self, arguments: Value, _context: CallContext) -> ToolFuture<'_> {
         Box::pin(async move {
             let query = arguments

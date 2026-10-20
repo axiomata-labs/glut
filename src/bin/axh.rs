@@ -21,7 +21,8 @@ use axiomata_harness::{
     Cancel, Event, EventSink, FinishReason, ModelEndpoint, OpenAiCompat, RunConfig, SharedSink,
     Usage, run,
 };
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
+use serde::{Deserialize, Serialize};
 
 /// The environment variable the key is read from.
 const KEY_ENV: &str = axiomata_harness::config::API_KEY_ENV;
@@ -39,47 +40,18 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Runs one prompt and writes its events as JSON lines.
-    Run {
-        /// The API's base, without /v1 (https://openrouter.ai/api, http://localhost:11434).
+    Run(RunArgs),
+    /// Goes on with a run that was lost before it finished (durable runs, `docs/plans/durable.md`): from its journal in
+    /// `~/.axh/runs`, with the run's own flags. Without a run the newest unfinished one; --list shows them.
+    Resume {
+        /// The run, as `axh` named it when it started (on stderr).
+        run: Option<String>,
+        /// List the unfinished runs, newest first, and change nothing.
         #[arg(long)]
-        base_url: String,
+        list: bool,
+        /// Give the run up: its journal is deleted.
         #[arg(long)]
-        model: String,
-        /// The folder the run works in; every file tool is confined to it.
-        #[arg(long, default_value = ".")]
-        cwd: PathBuf,
-        /// A file whose text is appended to the system prompt (a role, AGENTS.md).
-        #[arg(long)]
-        instructions_file: Option<PathBuf>,
-        #[arg(long)]
-        max_turns: Option<u32>,
-        /// The run's time limit in seconds.
-        #[arg(long)]
-        timeout_secs: Option<u64>,
-        /// default, accept_edits, plan, dont_ask or auto; otherwise the settings files', else default. Headless, an
-        /// ask is refused: name what the run may do with --allow, or pick a mode.
-        #[arg(long)]
-        permission_mode: Option<String>,
-        /// A rule the run allows, in Claude Code's format (`Bash(cargo test:*)`, `Edit(src/**)`); repeatable.
-        #[arg(long)]
-        allow: Vec<String>,
-        /// A rule the run asks about (refused headless); repeatable.
-        #[arg(long)]
-        ask: Vec<String>,
-        /// A rule the run refuses; repeatable.
-        #[arg(long)]
-        deny: Vec<String>,
-        /// Run a skill as the run's task (HS6, K1.1): its SKILL.md body becomes the run's instructions, and its
-        /// frontmatter may narrow the tools, pick the model and set the time limit (K5).
-        #[arg(long)]
-        skill: Option<String>,
-        /// A folder of skills beside `~/.axh/skills` (HS6, K2); repeatable.
-        #[arg(long)]
-        skill_dir: Vec<PathBuf>,
-        /// The prompt — extra text beside `--skill`, or a slash command (`/review src/`), read from
-        /// `~/.axh/commands/` and, in a trusted folder, the project's `.axh/commands/` (HS4). Without `--skill` a
-        /// prompt is required; with one it defaults to "Run the skill.".
-        prompt: Option<String>,
+        discard: bool,
     },
     /// Puts a folder back as it was before a run, or before one of its steps (Glut 2): the snapshots a run took
     /// before it changed anything. Without --run the newest run of the folder; --list shows the runs.
@@ -130,6 +102,51 @@ fn env_search() -> axiomata_harness::tools::search::WebSearch {
     )
 }
 
+/// `axh run`'s flags — kept in a run's journal, so `axh resume` builds the run again as it began.
+#[derive(Args, Clone, Serialize, Deserialize)]
+struct RunArgs {
+    /// The API's base, without /v1 (https://openrouter.ai/api, http://localhost:11434).
+    #[arg(long)]
+    base_url: String,
+    #[arg(long)]
+    model: String,
+    /// The folder the run works in; every file tool is confined to it.
+    #[arg(long, default_value = ".")]
+    cwd: PathBuf,
+    /// A file whose text is appended to the system prompt (a role, AGENTS.md).
+    #[arg(long)]
+    instructions_file: Option<PathBuf>,
+    #[arg(long)]
+    max_turns: Option<u32>,
+    /// The run's time limit in seconds.
+    #[arg(long)]
+    timeout_secs: Option<u64>,
+    /// default, accept_edits, plan, dont_ask or auto; otherwise the settings files', else default. Headless, an
+    /// ask is refused: name what the run may do with --allow, or pick a mode.
+    #[arg(long)]
+    permission_mode: Option<String>,
+    /// A rule the run allows, in Claude Code's format (`Bash(cargo test:*)`, `Edit(src/**)`); repeatable.
+    #[arg(long)]
+    allow: Vec<String>,
+    /// A rule the run asks about (refused headless); repeatable.
+    #[arg(long)]
+    ask: Vec<String>,
+    /// A rule the run refuses; repeatable.
+    #[arg(long)]
+    deny: Vec<String>,
+    /// Run a skill as the run's task (HS6, K1.1): its SKILL.md body becomes the run's instructions, and its
+    /// frontmatter may narrow the tools, pick the model and set the time limit (K5).
+    #[arg(long)]
+    skill: Option<String>,
+    /// A folder of skills beside `~/.axh/skills` (HS6, K2); repeatable.
+    #[arg(long)]
+    skill_dir: Vec<PathBuf>,
+    /// The prompt — extra text beside `--skill`, or a slash command (`/review src/`), read from
+    /// `~/.axh/commands/` and, in a trusted folder, the project's `.axh/commands/` (HS4). Without `--skill` a
+    /// prompt is required; with one it defaults to "Run the skill.".
+    prompt: Option<String>,
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
     tracing_subscriber::fmt()
@@ -146,7 +163,106 @@ async fn main() -> ExitCode {
     {
         return undo(&cwd, run, step, list);
     }
-    let Command::Run {
+    match command {
+        Command::Undo { .. } => unreachable!("undo returned above"),
+        Command::Run(args) => execute(args, None).await,
+        Command::Resume { run, list, discard } => resume_command(run, list, discard).await,
+    }
+}
+
+/// Whether `url` names a user or a password before its host (`https://user:pw@host`).
+fn has_userinfo(url: &str) -> bool {
+    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+    rest.split(['/', '?', '#'])
+        .next()
+        .is_some_and(|authority| authority.contains('@'))
+}
+
+/// Where `axh` keeps the journals of its own runs (durable runs, D5) — the app keeps its own elsewhere.
+fn journal_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|home| home.is_absolute())
+        .map(|home| home.join(".axh").join("runs"))
+}
+
+/// `axh resume`: lists the unfinished runs, gives one up, or goes on with one — built from the flags it began with.
+async fn resume_command(run: Option<String>, list: bool, discard: bool) -> ExitCode {
+    use axiomata_harness::journal;
+    let fail = |message: String| {
+        eprintln!("axh resume: {message}");
+        ExitCode::from(1)
+    };
+    let Some(dir) = journal_dir() else {
+        return fail("HOME is not set to an absolute folder".into());
+    };
+    journal::sweep(&dir);
+    let unfinished = journal::list(&dir);
+    if list {
+        for entry in &unfinished {
+            let what = entry.meta["args"]["skill"]
+                .as_str()
+                .map(|skill| format!("skill {skill}"))
+                .or_else(|| {
+                    entry.meta["args"]["prompt"]
+                        .as_str()
+                        .map(|p| p.chars().take(60).collect())
+                })
+                .unwrap_or_default();
+            let state = if entry.running {
+                "  (still running)"
+            } else {
+                ""
+            };
+            println!("{}  {}  {what}{state}", entry.run, entry.started_at);
+        }
+        return ExitCode::SUCCESS;
+    }
+    // Named, never guessed: a resume runs with the flags the journal holds, so the owner picks which.
+    let Some(run) = run else {
+        return fail("name the run: axh resume <run> (axh resume --list shows them)".into());
+    };
+    let Some(entry) = unfinished.iter().find(|entry| entry.run == run) else {
+        return fail(format!(
+            "no unfinished run {run} (axh resume --list shows them)"
+        ));
+    };
+    if discard {
+        return match journal::discard(&dir, &entry.run) {
+            Ok(()) => {
+                println!("{} given up", entry.run);
+                ExitCode::SUCCESS
+            }
+            Err(reason) => fail(reason),
+        };
+    }
+    let args = match serde_json::from_value::<RunArgs>(entry.meta["args"].clone()) {
+        Ok(args) => args,
+        Err(err) => {
+            return fail(format!(
+                "the run {} was not started by axh run: {err}",
+                entry.run
+            ));
+        }
+    };
+    // What the run goes on with, said before it does: the flags come from the journal, not from this command line.
+    eprintln!(
+        "axh resume: {} with --base-url {} --model {} --cwd {} --permission-mode {} --allow {:?} --deny {:?}",
+        entry.run,
+        args.base_url,
+        args.model,
+        args.cwd.display(),
+        args.permission_mode.as_deref().unwrap_or("(settings)"),
+        args.allow,
+        args.deny
+    );
+    execute(args, Some(entry.run.clone())).await
+}
+
+/// One run of `axh run` — or of `axh resume`, then `resumed` names the run whose journal it goes on from.
+async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
+    let journal_args = args.clone();
+    let RunArgs {
         base_url,
         model,
         cwd,
@@ -160,10 +276,7 @@ async fn main() -> ExitCode {
         skill,
         skill_dir,
         prompt,
-    } = command
-    else {
-        unreachable!("undo returned above");
-    };
+    } = args;
 
     let fail = |message: String| {
         JsonLines.emit(Event::Error { message });
@@ -172,11 +285,37 @@ async fn main() -> ExitCode {
     if prompt.is_none() && skill.is_none() {
         return fail("name a prompt, or run a skill with --skill <name>".into());
     }
+    // The key goes in a header, never in the URL — and a journal keeps the URL as it was given.
+    if has_userinfo(&base_url) {
+        return fail(
+            "--base-url must not hold a user or a password; the key comes from AXH_API_KEY".into(),
+        );
+    }
     let cwd = match cwd.canonicalize() {
         Ok(cwd) => cwd,
         Err(err) => return fail(format!("cannot use {}: {err}", cwd.display())),
     };
     let mut config = RunConfig::new(&cwd);
+    // Durable runs (D5): every run journals its steps; one the process lost goes on with `axh resume`.
+    if let Some(dir) = journal_dir() {
+        let run = resumed.clone().unwrap_or_else(|| {
+            format!(
+                "axh-{}-{}",
+                std::process::id(),
+                chrono::Local::now().timestamp_millis()
+            )
+        });
+        if resumed.is_none() {
+            eprintln!("axh: run {run} (if it is lost before it ends: axh resume {run})");
+        }
+        let mut kept = journal_args;
+        kept.cwd = cwd.clone();
+        config.journal = Some(axiomata_harness::journal::JournalSpec {
+            dir,
+            run,
+            meta: serde_json::json!({ "args": kept }),
+        });
+    }
     // Glut 2 (D): snapshots before changes, for `axh undo`.
     config.snapshots = std::env::var_os("HOME")
         .map(PathBuf::from)
@@ -325,7 +464,15 @@ async fn main() -> ExitCode {
     let cancel = Cancel::new();
     axiomata_harness::run::cancel_on_signals(&cancel);
 
-    let outcome = run(&config, &model, &tools, &prompt, &mut sink, &cancel).await;
+    let outcome = match &resumed {
+        None => run(&config, &model, &tools, &prompt, &mut sink, &cancel).await,
+        Some(id) => {
+            match axiomata_harness::resume(&config, &model, &tools, id, &mut sink, &cancel).await {
+                Ok((outcome, _)) => outcome,
+                Err(reason) => return fail(reason),
+            }
+        }
+    };
     ExitCode::from(match outcome.reason {
         FinishReason::Answered => 0,
         FinishReason::Failed => 1,

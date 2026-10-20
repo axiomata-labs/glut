@@ -161,7 +161,7 @@ impl ToolSpec {
 }
 
 /// Tokens one call used, as the API reports them (zero when it does not).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Usage {
     /// Every prompt token the call processed, the cached ones included.
     pub input_tokens: u64,

@@ -563,6 +563,9 @@ pub struct RemoteTool {
     pub description: Option<String>,
     /// The server's own `inputSchema`, handed to the model as the call's parameters.
     pub input_schema: Value,
+    /// The server's `annotations.readOnlyHint`: the tool only reads, so an interrupted call may run again (durable
+    /// runs, D7). A hint, as the MCP spec says — only what the owner's own servers say, and only for a replay.
+    pub read_only: bool,
 }
 
 impl RemoteTool {
@@ -578,6 +581,7 @@ impl RemoteTool {
                 .get("inputSchema")
                 .cloned()
                 .unwrap_or_else(|| json!({"type": "object"})),
+            read_only: tool.pointer("/annotations/readOnlyHint") == Some(&Value::Bool(true)),
         })
     }
 
@@ -588,6 +592,7 @@ impl RemoteTool {
             name: name.to_owned(),
             description: Some(format!("the tool {name}")),
             input_schema: json!({"type": "object"}),
+            read_only: false,
         }
     }
 }
@@ -827,6 +832,18 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// Durable runs (D7): the server's `readOnlyHint` is read, and only a plain `true` counts.
+    #[test]
+    fn a_tool_is_read_only_only_when_its_server_says_so() {
+        let tool = |annotations: Value| {
+            RemoteTool::read(&json!({"name": "t", "annotations": annotations})).unwrap()
+        };
+        assert!(tool(json!({"readOnlyHint": true})).read_only);
+        assert!(!tool(json!({"readOnlyHint": "true"})).read_only);
+        assert!(!tool(json!({"destructiveHint": false})).read_only);
+        assert!(!RemoteTool::read(&json!({"name": "t"})).unwrap().read_only);
     }
 
     #[test]

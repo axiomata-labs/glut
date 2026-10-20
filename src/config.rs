@@ -102,6 +102,9 @@ pub struct RunConfig {
     /// Where the work folder's snapshots go before a run changes it (Glut 2, D, G11; `~/.axh/snapshots`), for `axh
     /// undo`. `None`: no snapshots.
     pub snapshots: Option<PathBuf>,
+    /// Where the run journals its steps so it can be resumed after the process lost it (durable runs, D5). `None`:
+    /// no journal. Only the run itself writes one, never a subagent.
+    pub journal: Option<crate::journal::JournalSpec>,
     /// Whether an edit's result carries the language server's errors for the file (Glut 2, D, G12). On by default;
     /// without an installed server for the file's language nothing is added.
     pub diagnostics: bool,
@@ -129,6 +132,7 @@ impl RunConfig {
             todos: true,
             build_mode: crate::permissions::Mode::Default,
             snapshots: None,
+            journal: None,
             diagnostics: true,
         }
     }

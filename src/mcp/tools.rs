@@ -80,6 +80,7 @@ pub fn offered(
                 None => format!("A tool of the MCP server {server}."),
             },
             schema: remote.input_schema.clone(),
+            read_only: remote.read_only,
             client: Arc::clone(&client),
         }) as Box<dyn Tool>);
     }
@@ -96,6 +97,8 @@ struct McpTool {
     name: String,
     description: String,
     schema: Value,
+    /// The server says the tool only reads (`readOnlyHint`).
+    read_only: bool,
     client: Arc<Mutex<Client>>,
 }
 
@@ -107,6 +110,10 @@ impl Tool for McpTool {
             // An MCP tool may name no parameters at all, which still has to be an object for the model API.
             parameters: self.schema.clone(),
         }
+    }
+
+    fn replay_safe(&self, _arguments: &Value) -> bool {
+        self.read_only
     }
 
     fn access(&self, _arguments: &Value) -> Access {
@@ -214,6 +221,7 @@ mod tests {
             name: model_name("mail", "send"),
             description: "send".into(),
             schema: serde_json::json!({"type": "object"}),
+            read_only: false,
             client: Arc::new(Mutex::new(Client::for_test())),
         };
         assert_eq!(

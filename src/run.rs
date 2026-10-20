@@ -12,6 +12,7 @@ use crate::config::RunConfig;
 use crate::event::{EVENT_RESULT_CHARS, Event, EventSink, FinishReason};
 use crate::history::{self, ResultStore};
 use crate::hooks::{self, HookEvent, HookOutcome};
+use crate::journal::{self, Journal, Line, Recorded};
 use crate::model::{ChatModel, Message, Role, ToolCall, ToolSpec, Usage};
 use crate::permissions::{Access, Answer, Gate, Mode};
 use crate::planning;
@@ -106,7 +107,11 @@ pub async fn run<M: ChatModel>(
     sink: &mut dyn EventSink,
     cancel: &Cancel,
 ) -> RunOutcome {
-    run_inner(config, model, tools, Vec::new(), prompt, sink, cancel, 0)
+    let opening = Opening::Fresh {
+        earlier: Vec::new(),
+        prompt,
+    };
+    run_inner(config, model, tools, opening, sink, cancel, 0)
         .await
         .0
 }
@@ -125,8 +130,69 @@ pub async fn run_continuing<M: ChatModel>(
     sink: &mut dyn EventSink,
     cancel: &Cancel,
 ) -> (RunOutcome, Vec<Message>) {
-    run_inner(config, model, tools, earlier, prompt, sink, cancel, 0).await
+    run_inner(
+        config,
+        model,
+        tools,
+        Opening::Fresh { earlier, prompt },
+        sink,
+        cancel,
+        0,
+    )
+    .await
 }
+
+/// Resumes the run `run` from its journal in `config.journal`'s folder (durable runs, `docs/plans/durable.md`): the
+/// conversation as it was saved, the steps and tokens used so far counted on, the time limit afresh (D6). A tool call
+/// that was under way when the run stopped runs again only when it only reads (D4/D7); any other gets an
+/// "interrupted" result and the model decides. A call that had not started yet runs as it would have. The caller
+/// builds `config`, `model` and `tools` as for the run at its start — from the journal's `meta`, which
+/// [`journal::open`] hands back for that — and the journal goes on being written; a finished run deletes it.
+///
+/// # Errors
+///
+/// No journal folder in `config`, no such unfinished run, the run still going, or a journal that cannot be read.
+pub async fn resume<M: ChatModel>(
+    config: &RunConfig,
+    model: &M,
+    tools: &Toolbox,
+    run: &str,
+    sink: &mut dyn EventSink,
+    cancel: &Cancel,
+) -> Result<(RunOutcome, Vec<Message>), String> {
+    let dir = config
+        .journal
+        .as_ref()
+        .map(|spec| spec.dir.clone())
+        .ok_or("this run has no journal folder")?;
+    let (held, recorded) = journal::open(&dir, run)?;
+    // Lost before even its task was saved: there is nothing to go on from.
+    if !recorded.messages.iter().any(|m| m.role == Role::User) {
+        return Err(format!(
+            "the run {run} was lost before its task was saved: start it anew"
+        ));
+    }
+    let opening = Opening::Resumed {
+        recorded: Box::new(recorded),
+        journal: held,
+    };
+    Ok(run_inner(config, model, tools, opening, sink, cancel, 0).await)
+}
+
+/// How a run begins: anew with a prompt (after an earlier conversation, maybe), or from its journal.
+enum Opening<'p> {
+    Fresh {
+        earlier: Vec<Message>,
+        prompt: &'p str,
+    },
+    Resumed {
+        recorded: Box<Recorded>,
+        journal: Journal,
+    },
+}
+
+/// The tools the loop answers itself that only read or note (D4): an interrupted call of them may simply run again.
+const LOOP_REPLAY_SAFE: [&str; 2] = [history::NAME, planning::TODO];
 
 /// The loop at nesting `depth` (HS8, D3): depth 0 is the run itself — it offers the `task` tool, runs
 /// `SessionStart` and speaks the caller's system prompt; depth ≥ 1 is a subagent, which gets the prompt of
@@ -137,13 +203,12 @@ async fn run_inner<M: ChatModel>(
     config: &RunConfig,
     model: &M,
     tools: &Toolbox,
-    earlier: Vec<Message>,
-    prompt: &str,
+    opening: Opening<'_>,
     sink: &mut dyn EventSink,
     cancel: &Cancel,
     depth: u32,
 ) -> (RunOutcome, Vec<Message>) {
-    let continuing = !earlier.is_empty();
+    let continuing = !matches!(&opening, Opening::Fresh { earlier, .. } if earlier.is_empty());
     let deadline = Instant::now() + config.timeout;
     // HS8, D1/D3: `task` exists at depth 0 only, and only for a run that offers subagents at all (D7) — a
     // subagent never sees the tool, so nesting deeper than one cannot start; and its name is in the run's
@@ -180,10 +245,12 @@ async fn run_inner<M: ChatModel>(
             cancel,
             gate: tools.gate().cloned(),
         },
-        messages: opening_messages(config, model.name(), earlier, prompt, depth),
+        messages: Vec::new(),
         usage: Usage::default(),
         answer: None,
         turns: 0,
+        journal: None,
+        journaled: 0,
         subagents_started: 0,
         results: ResultStore::new(store_tag()),
         settled: 0,
@@ -193,18 +260,67 @@ async fn run_inner<M: ChatModel>(
         snapshots: SnapshotState::Unopened,
         diagnostics: None,
     };
+    let mut resumed_calls = Vec::new();
+    match opening {
+        Opening::Fresh { earlier, prompt } => {
+            run.messages = opening_messages(config, model.name(), earlier, prompt, depth);
+            if depth == 0
+                && let Some(spec) = &config.journal
+            {
+                match Journal::create(spec, &config.cwd, model.name()) {
+                    Ok(journal) => run.journal = Some(journal),
+                    Err(reason) => sink.emit(Event::Error {
+                        message: format!(
+                            "no journal for this run (it cannot be resumed): {reason}"
+                        ),
+                    }),
+                }
+            }
+        }
+        Opening::Resumed { recorded, journal } => {
+            let recorded = *recorded;
+            // The system prompt is written anew (today's date, the instructions as they are now); the rest is kept.
+            let mut messages =
+                vec![opening_messages(config, model.name(), Vec::new(), "", depth).remove(0)];
+            // Only the opening system prompt is replaced; a SessionStart context behind it stays (HS7).
+            let mut saved = recorded.messages.into_iter().peekable();
+            if saved.peek().is_some_and(|m| m.role == Role::System) {
+                saved.next();
+            }
+            messages.extend(saved);
+            run.journaled = messages.len();
+            run.messages = messages;
+            run.turns = recorded.turns;
+            run.usage = recorded.usage;
+            run.journal = Some(journal);
+            resumed_calls = recorded.open_calls;
+        }
+    }
+    // SessionStart first: its context goes in behind the system prompt, and the journal must hold it there.
     if depth == 0 && !continuing {
         run.session_start(sink).await;
     }
-    let reason = run.drive(sink).await;
+    run.flush_journal(sink);
+    let reason = match run.settle_resumed(resumed_calls, sink).await {
+        Err(ending) => ending,
+        // A run that had already answered when it stopped needs no further step.
+        Ok(()) if run.answered_before(sink) => FinishReason::Answered,
+        Ok(()) => run.drive(sink).await,
+    };
     stop.store(true, Ordering::SeqCst);
     let Loop {
         usage,
         answer,
         turns,
         messages,
+        journal,
         ..
     } = run;
+    // A run that ended — answered, failed, cancelled, out of steps — is no unfinished one (D8). Only a run the process
+    // lost keeps its journal: then this line is never reached.
+    if let Some(journal) = journal {
+        journal.finish();
+    }
     // Only an answer is one: the text of a run that stopped is a remark on the way, not its result.
     let answer = answer.filter(|_| reason == FinishReason::Answered);
     sink.emit(Event::Finished {
@@ -292,6 +408,10 @@ struct Loop<'a, M: ChatModel> {
     snapshots: SnapshotState,
     /// Glut 2, D: the language servers this run started for its edits, at the first one.
     diagnostics: Option<Arc<std::sync::Mutex<crate::diagnostics::Diagnostics>>>,
+    /// Durable runs: the run's journal, when it keeps one (depth 0 only).
+    journal: Option<Journal>,
+    /// How many of `messages` the journal holds.
+    journaled: usize,
 }
 
 /// Where a run's snapshots stand.
@@ -503,6 +623,12 @@ impl<M: ChatModel> Loop<'_, M> {
         }
         let calls = reply.message.tool_calls.clone();
         self.messages.push(reply.message);
+        self.flush_journal(sink);
+        let progress = Line::Progress {
+            turns: self.turns,
+            usage: self.usage,
+        };
+        self.journal_line(&progress, sink);
         Ok(calls)
     }
 
@@ -525,6 +651,8 @@ impl<M: ChatModel> Loop<'_, M> {
         self.messages.push(Message::user(format!(
             "A Stop hook blocked ending the run: {reason}\nContinue, and address what it asked for."
         )));
+        // Saved now: a run lost before the next reply must not look as if it had answered.
+        self.flush_journal(sink);
         Ok(Ending::Refused)
     }
 
@@ -550,9 +678,110 @@ impl<M: ChatModel> Loop<'_, M> {
                 self.answer_call(call, false, output, sink);
                 continue;
             }
+            self.journal_line(
+                &Line::Call {
+                    id: call.id.clone(),
+                },
+                sink,
+            );
             self.run_call(call, sink).await?;
+            self.flush_journal(sink);
+        }
+        self.flush_journal(sink);
+        Ok(())
+    }
+
+    /// Writes the messages added since the last write to the journal.
+    /// One write and one sync for all of them: a chat turn opens with its whole earlier conversation.
+    fn flush_journal(&mut self, sink: &mut dyn EventSink) {
+        if self.journal.is_none() || self.journaled >= self.messages.len() {
+            return;
+        }
+        let lines: Vec<Line> = self.messages[self.journaled..]
+            .iter()
+            .map(|message| Line::Message {
+                message: message.clone(),
+            })
+            .collect();
+        self.journaled = self.messages.len();
+        self.journal_lines(&lines, sink);
+    }
+
+    /// One line to the journal; a journal that cannot be written is given up — the run goes on, resumable no more.
+    fn journal_line(&mut self, line: &Line, sink: &mut dyn EventSink) {
+        self.journal_lines(std::slice::from_ref(line), sink);
+    }
+
+    fn journal_lines(&mut self, lines: &[Line], sink: &mut dyn EventSink) {
+        let Some(journal) = self.journal.as_mut() else {
+            return;
+        };
+        if let Err(reason) = journal.write_all(lines) {
+            // A journal that stopped would offer a resume from a step long passed: it goes now, not at the sweep.
+            if let Some(journal) = self.journal.take() {
+                journal.finish();
+            }
+            sink.emit(Event::Error {
+                message: format!(
+                    "the journal stopped (this run can no longer be resumed): {reason}"
+                ),
+            });
+        }
+    }
+
+    /// The calls a resumed run found open (D4/D7): one that had not started runs as it would have; one that was under
+    /// way runs again when it only reads, else the model is told it was interrupted.
+    async fn settle_resumed(
+        &mut self,
+        calls: Vec<(ToolCall, bool)>,
+        sink: &mut dyn EventSink,
+    ) -> Result<(), FinishReason> {
+        for (call, started) in calls {
+            let replay = !started
+                || LOOP_REPLAY_SAFE.contains(&call.function.name.as_str())
+                || self
+                    .tools
+                    .replay_safe(&call.function.name, &call.function.arguments);
+            if replay {
+                self.journal_line(
+                    &Line::Call {
+                        id: call.id.clone(),
+                    },
+                    sink,
+                );
+                self.run_call(call, sink).await?;
+            } else {
+                let output = format!(
+                    "error: interrupted — the run stopped while `{}` was running, so whether it took effect is \
+                     unknown. Check the state (the files, git status, the service) before you go on; run it again \
+                     only if it did not.",
+                    call.function.name
+                );
+                self.answer_call(call, false, output, sink);
+            }
+            self.flush_journal(sink);
         }
         Ok(())
+    }
+
+    /// The conversation ends in an answer: the last message is the model's, without tool calls.
+    fn answered_before(&mut self, sink: &mut dyn EventSink) -> bool {
+        let Some(last) = self.messages.last() else {
+            return false;
+        };
+        let answered =
+            last.role == Role::Assistant && last.tool_calls.is_empty() && last.content.is_some();
+        if answered {
+            self.answer = last.content.clone();
+            // The answer is said again: a reader of this resumed run's events would otherwise see none.
+            if let Some(text) = &self.answer {
+                sink.emit(Event::AssistantText {
+                    turn: self.turns,
+                    text: text.clone(),
+                });
+            }
+        }
+        answered
     }
 
     /// One tool call: the PreToolUse hooks, the call itself, its permission events and result, the PostToolUse
@@ -1061,8 +1290,10 @@ impl<M: ChatModel> Loop<'_, M> {
             &sub,
             self.model,
             self.tools,
-            Vec::new(),
-            &prompt,
+            Opening::Fresh {
+                earlier: Vec::new(),
+                prompt: &prompt,
+            },
             &mut wrapped,
             self.cancel,
             depth,
@@ -1205,6 +1436,7 @@ fn refusal(outcome: HookOutcome, fallback: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
     use std::sync::Mutex;
     use std::time::Duration;
 
@@ -1573,6 +1805,174 @@ mod tests {
                 .contains("at most")
         );
         assert_eq!(replies[0].content.as_deref(), Some("x"));
+    }
+
+    fn journal_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "axh-run-journal-{tag}-{}-{}",
+            std::process::id(),
+            chrono::Local::now()
+                .timestamp_nanos_opt()
+                .unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn journaled(dir: &std::path::Path, run: &str) -> RunConfig {
+        let mut config = RunConfig::new("/w");
+        config.journal = Some(crate::journal::JournalSpec {
+            dir: dir.to_owned(),
+            run: run.to_owned(),
+            meta: json!({"kind": "test"}),
+        });
+        config
+    }
+
+    /// Durable runs (D5/D6/D8): a run the process loses mid-step keeps its journal; resumed, it goes on from the last
+    /// saved step with its steps counted on, and the finished run leaves no journal.
+    #[tokio::test]
+    async fn a_lost_run_goes_on_from_its_journal() {
+        let dir = journal_dir("lost");
+        let config = journaled(&dir, "run-lost");
+        let mut slow = Script::new(vec![Ok(calls(&[("c1", "echo", r#"{"text":"one"}"#)]))]);
+        slow.delay = Duration::from_millis(60);
+        // The process "dies" during the second model call: the future is dropped, nothing ends the run.
+        let lost = tokio::time::timeout(
+            Duration::from_millis(100),
+            run(
+                &config,
+                &slow,
+                &toolbox(),
+                "go",
+                &mut Vec::new(),
+                &Cancel::new(),
+            ),
+        )
+        .await;
+        assert!(lost.is_err());
+        assert_eq!(crate::journal::list(&dir).len(), 1);
+
+        let model = Script::new(vec![Ok(text("Done."))]);
+        let (outcome, messages) = resume(
+            &config,
+            &model,
+            &toolbox(),
+            "run-lost",
+            &mut Vec::new(),
+            &Cancel::new(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome.reason, FinishReason::Answered);
+        assert_eq!(outcome.answer.as_deref(), Some("Done."));
+        assert_eq!(outcome.turns, 2, "the step before the loss counts on");
+        assert!(
+            outcome.usage.input_tokens > 10,
+            "the tokens before the loss count on too"
+        );
+        // The model saw the whole saved conversation: the prompt, its call and the call's result.
+        let first: Vec<Option<String>> = model.seen.lock().unwrap()[0]
+            .iter()
+            .map(|m| m.content.clone())
+            .collect();
+        assert!(
+            first.contains(&Some("go".into())) && first.contains(&Some("one".into())),
+            "{first:?}"
+        );
+        assert_eq!(messages.last().unwrap().content.as_deref(), Some("Done."));
+        assert!(
+            crate::journal::list(&dir).is_empty(),
+            "a finished run leaves no journal"
+        );
+        assert!(
+            resume(
+                &config,
+                &model,
+                &toolbox(),
+                "run-lost",
+                &mut Vec::new(),
+                &Cancel::new()
+            )
+            .await
+            .is_err()
+        );
+    }
+
+    /// D4: a call that was under way is not run again unless it only reads — the model is told; one that had not
+    /// started runs as it would have. A run that had already answered ends without another model call.
+    #[tokio::test]
+    async fn an_interrupted_call_is_reported_and_an_unstarted_one_runs() {
+        use crate::journal::{Journal, Line};
+        let dir = journal_dir("calls");
+        let config = journaled(&dir, "run-calls");
+        let spec = config.journal.clone().unwrap();
+        let mut journal = Journal::create(&spec, Path::new("/w"), "script").unwrap();
+        let reply = calls(&[
+            ("c1", "echo", r#"{"text":"sent"}"#),
+            ("c2", "echo", r#"{"text":"later"}"#),
+        ]);
+        for message in [Message::user("go"), reply.message] {
+            journal.write(&Line::Message { message }).unwrap();
+        }
+        journal.write(&Line::Call { id: "c1".into() }).unwrap();
+        drop(journal);
+
+        let model = Script::new(vec![Ok(text("Checked."))]);
+        let (outcome, messages) = resume(
+            &config,
+            &model,
+            &toolbox(),
+            "run-calls",
+            &mut Vec::new(),
+            &Cancel::new(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome.reason, FinishReason::Answered);
+        let results: Vec<(&str, &str)> = messages
+            .iter()
+            .filter(|m| m.role == Role::Tool)
+            .map(|m| {
+                (
+                    m.tool_call_id.as_deref().unwrap(),
+                    m.content.as_deref().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].0, "c1");
+        assert!(
+            results[0].1.starts_with("error: interrupted"),
+            "{}",
+            results[0].1
+        );
+        assert_eq!(results[1], ("c2", "later"));
+
+        // Answered before the loss: resumed, it ends at once.
+        let config = journaled(&dir, "run-done");
+        let spec = config.journal.clone().unwrap();
+        let mut journal = Journal::create(&spec, Path::new("/w"), "script").unwrap();
+        for message in [Message::user("go"), text("All done.").message] {
+            journal.write(&Line::Message { message }).unwrap();
+        }
+        drop(journal);
+        let idle = Script::new(vec![]);
+        let (outcome, _) = resume(
+            &config,
+            &idle,
+            &toolbox(),
+            "run-done",
+            &mut Vec::new(),
+            &Cancel::new(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            (outcome.reason, outcome.answer.as_deref()),
+            (FinishReason::Answered, Some("All done."))
+        );
+        assert!(idle.seen.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
