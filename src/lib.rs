@@ -17,6 +17,7 @@ pub mod error;
 pub mod event;
 pub mod hooks;
 pub mod journal;
+pub mod lean;
 pub mod mcp;
 pub mod model;
 pub mod permissions;

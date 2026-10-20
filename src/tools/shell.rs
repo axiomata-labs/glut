@@ -11,6 +11,7 @@
 //! the shell is no fence until the sandbox of HS3.
 
 use std::ffi::OsString;
+use std::hash::BuildHasher;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
@@ -439,6 +440,17 @@ impl Session {
             .process_group(0)
             .kill_on_drop(true);
         process
+    }
+
+    /// A mark for one chain's parts (N7): random for each call, so no file a command prints can hold one. It is no
+    /// secret from the command itself (the marked text is in its environment); a part that prints a mark only
+    /// misplaces its own chain's parts for compaction — the raw output is kept either way.
+    fn mark(&self) -> String {
+        let seed = self.next_note.fetch_add(1, Ordering::Relaxed);
+        format!(
+            "axh-mark-{:016x}",
+            std::hash::RandomState::new().hash_one(seed)
+        )
     }
 
     /// The folder the next command starts in, and a note when it had to go back to the run's folder because the one it
@@ -1062,7 +1074,8 @@ impl Capture {
         if self.tail.is_some() {
             if dropped > 0 {
                 text.push_str(&format!(
-                    "\n[… {dropped} bytes of output in the middle were not kept …]\n"
+                    "\n[… {dropped} {} …]\n",
+                    super::output::DROPPED_MIDDLE
                 ));
             }
             let mut from = 0;
@@ -1271,9 +1284,47 @@ impl Tool for Bash {
             {
                 return self.0.run_direct(program, &words, limit, &stop).await;
             }
+            // Glut lean, N7: a chain runs with a mark before each part, so its output can be compacted part by part.
+            // The gate judged the command as written; the marks change nothing it ran.
+            if let Some(chain) = super::output::chain(&args.command) {
+                let mark = self.0.mark();
+                let marked = super::output::marked(&chain, &mark, self.0.family.builtin());
+                let ran = self.0.run(&marked, limit, &stop, sandbox).await;
+                return unmarked(ran, &mark, &chain.parts, &context.report);
+            }
             self.0.run(&args.command, limit, &stop, sandbox).await
         })
     }
+}
+
+/// A marked chain's answer without its marks (N7), and the places of the parts that ran on `report` — none when the
+/// marks cannot be trusted. An answer that is only marks is the empty answer a command without output gives.
+fn unmarked(
+    ran: Result<String, String>,
+    mark: &str,
+    parts: &[&str],
+    report: &crate::tools::Report,
+) -> Result<String, String> {
+    let ok = ran.is_ok();
+    let (text, ranges) = super::output::unmark(&ran.unwrap_or_else(|text| text), mark);
+    if ok && text.trim().is_empty() {
+        return Ok("(no output)".into());
+    }
+    let found: Option<Vec<crate::tools::Part>> = ranges.and_then(|ranges| {
+        ranges
+            .into_iter()
+            .map(|(k, range)| {
+                parts.get(k).map(|command| crate::tools::Part {
+                    command: (*command).to_owned(),
+                    range,
+                })
+            })
+            .collect()
+    });
+    if let Some(found) = found {
+        report.parts(found);
+    }
+    if ok { Ok(text) } else { Err(text) }
 }
 
 struct BashOutput(Arc<Session>);
@@ -1391,6 +1442,97 @@ mod tests {
         assert_eq!(bash(&tools, "true").await, (true, "(no output)".into()));
         let (ok, text) = bash(&tools, "  ").await;
         assert!(!ok && text.contains("empty"));
+    }
+
+    #[tokio::test]
+    async fn a_chain_runs_as_written_and_reports_where_each_part_printed() {
+        for shell in ["/bin/bash", "/bin/zsh", "/bin/sh"] {
+            let (dir, tools) = setup(shell, &[]);
+            std::fs::write(dir.join("sub").join("a.txt"), "a").unwrap();
+            std::fs::create_dir(dir.join("sub").join("empty")).unwrap();
+            let chain = |command: &'static str| {
+                let tools = &tools;
+                async move {
+                    tools
+                        .call_reporting(
+                            "bash",
+                            &json!({ "command": command }).to_string(),
+                            &StopFlag::default(),
+                        )
+                        .await
+                }
+            };
+            // `cd` in a part moves the folder for the parts after it, and for the next command.
+            let called = chain("cd sub && ls && echo two").await;
+            assert!(called.ok, "{shell}: {}", called.text);
+            assert_eq!(called.text, "a.txt\nempty\ntwo\n", "{shell}");
+            let parts = called.parts.expect("the parts are reported");
+            let commands: Vec<_> = parts.iter().map(|p| p.command.as_str()).collect();
+            assert_eq!(commands, ["cd sub", "ls", "echo two"], "{shell}");
+            let pieces: Vec<_> = parts
+                .iter()
+                .map(|p| &called.text[p.range.clone()])
+                .collect();
+            assert_eq!(pieces, ["", "a.txt\nempty\n", "two\n"], "{shell}");
+            assert!(
+                bash(&tools, "pwd -P").await.1.ends_with("/sub\n"),
+                "{shell}"
+            );
+            // `||` and `;` keep their meaning; a failed part's exit status decides as before.
+            let called = chain("ls missing || echo fallback; echo after").await;
+            assert!(called.ok, "{shell}: {}", called.text);
+            assert!(
+                called.text.ends_with("fallback\nafter\n"),
+                "{shell}: {}",
+                called.text
+            );
+            assert_eq!(called.parts.map(|p| p.len()), Some(3), "{shell}");
+            // A part `||` passes over has no place; the parts after it keep theirs.
+            let called = chain("ls || echo never; echo after").await;
+            assert!(!called.text.contains("never"), "{shell}: {}", called.text);
+            let commands: Vec<String> = called
+                .parts
+                .unwrap()
+                .into_iter()
+                .map(|p| p.command)
+                .collect();
+            assert_eq!(commands, ["ls", "echo after"], "{shell}");
+            // A part that prints the command's environment shows it whole — the marked text holds no mark.
+            let called = chain("ls && env").await;
+            assert!(
+                called.text.contains("AXH_COMMAND="),
+                "{shell}: {}",
+                called.text
+            );
+            assert!(
+                called.text.contains("printf '%s-%s"),
+                "{shell}: {}",
+                called.text
+            );
+            assert_eq!(called.parts.map(|p| p.len()), Some(2), "{shell}");
+            // A failed chain: the parts lie behind the error's prefix, the parts that never ran have none.
+            let called = chain("ls missing && echo never").await;
+            assert!(!called.ok, "{shell}");
+            assert!(called.text.starts_with("error: "), "{}", called.text);
+            assert!(!called.text.contains("never"), "{shell}: {}", called.text);
+            let parts = called.parts.expect("the part that ran is reported");
+            assert_eq!(parts.len(), 1, "{shell}");
+            assert_eq!(
+                parts[0].range,
+                "error: ".len()..called.text.len(),
+                "{shell}"
+            );
+            // A chain without output answers as a command without output does, and no mark is ever seen.
+            let called = chain("cd . && ls -d sub/missing 2>/dev/null; true").await;
+            assert!(
+                !called.text.contains("axh-mark"),
+                "{shell}: {}",
+                called.text
+            );
+            let quiet = chain("cd empty && ls").await;
+            assert_eq!(quiet.text, "(no output)", "{shell}");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 
     #[tokio::test]

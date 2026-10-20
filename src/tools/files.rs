@@ -404,7 +404,7 @@ impl Tool for FileTool {
     }
 
     fn call(&self, arguments: Value, context: CallContext) -> ToolFuture<'_> {
-        let CallContext { stop, gate } = context;
+        let CallContext { stop, gate, .. } = context;
         let root = self.root.clone();
         let skills = self.skills.clone();
         let kind = self.kind;

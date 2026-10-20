@@ -165,7 +165,13 @@ pub async fn resume<M: ChatModel>(
         .as_ref()
         .map(|spec| spec.dir.clone())
         .ok_or("this run has no journal folder")?;
-    let (held, recorded) = journal::open(&dir, run)?;
+    // Opening waits a moment for the lock (`journal::open`): on a blocking thread, not the run's.
+    let (held, recorded) = {
+        let run = run.to_owned();
+        tokio::task::spawn_blocking(move || journal::open(&dir, &run))
+            .await
+            .map_err(|err| format!("the journal could not be opened: {err}"))??
+    };
     // Lost before even its task was saved: there is nothing to go on from.
     if !recorded.messages.iter().any(|m| m.role == Role::User) {
         return Err(format!(
@@ -261,6 +267,7 @@ async fn run_inner<M: ChatModel>(
         todos: Vec::new(),
         snapshots: SnapshotState::Unopened,
         diagnostics: None,
+        chain: None,
     };
     let mut resumed_calls = Vec::new();
     match opening {
@@ -412,6 +419,16 @@ struct Loop<'a, M: ChatModel> {
     journal: Option<Journal>,
     /// How many of `messages` the journal holds.
     journaled: usize,
+    /// Glut lean, N7: the last chain's answer as the tool gave it and where its parts lie — taken by that call's
+    /// [`Self::run_call`], and only while its answer is still that text (a hook may have replaced it).
+    chain: Option<ChainAnswer>,
+}
+
+/// A `bash` chain's answer and its parts (N7).
+struct ChainAnswer {
+    call: String,
+    text: String,
+    parts: Vec<crate::tools::Part>,
 }
 
 /// Where a run's snapshots stand.
@@ -782,17 +799,94 @@ impl<M: ChatModel> Loop<'_, M> {
         sink: &mut dyn EventSink,
     ) -> Result<(), FinishReason> {
         let output = self.perform(&call, sink).await?;
-        let output = unchanged_read(&self.messages, &call, &output).unwrap_or(output);
-        let output = compacted(&call, output, &self.results);
+        let parts = self
+            .chain
+            .take()
+            .filter(|chain| chain.call == call.id && chain.text == output)
+            .map(|chain| chain.parts);
+        let output = match unchanged_read(&self.messages, &call, &output) {
+            Some(pointer) => {
+                self.saved(&call, "unchanged read", &output, &pointer, sink);
+                pointer
+            }
+            None => output,
+        };
+        let (output, savings) = compacted(&call, output, &self.results, parts);
+        for saving in savings {
+            self.saved_chars(&call, saving.what, saving.before, saving.after, sink);
+        }
+        if let Some(what) = piped(&call) {
+            let chars = output.chars().count();
+            self.saved_chars(
+                &call,
+                &format!("{}{what}", crate::lean::IN_A_PIPE),
+                chars,
+                chars,
+                sink,
+            );
+        }
         // Relocated, never cut (Glut lean, N2): the conversation gets head and tail, the store keeps the whole. A part
         // read back from the store is already sized to fit — bounding it again would hide its middle.
         let output = if call.function.name == results::NAME {
             output
         } else {
-            results::bounded(output, &self.results, crate::tools::MAX_TOOL_OUTPUT_CHARS)
+            let whole = output.chars().count();
+            let bounded =
+                results::bounded(output, &self.results, crate::tools::MAX_TOOL_OUTPUT_CHARS);
+            let shown = bounded.chars().count();
+            if shown < whole {
+                self.saved_chars(&call, "relocated", whole, shown, sink);
+            }
+            bounded
         };
         self.messages.push(Message::tool(call.id, output));
         Ok(())
+    }
+
+    /// Reports and counts one saving of Glut lean (N9): an event, and a line in the run's count when it keeps one.
+    fn saved(
+        &self,
+        call: &ToolCall,
+        what: &str,
+        before: &str,
+        after: &str,
+        sink: &mut dyn EventSink,
+    ) {
+        self.saved_chars(
+            call,
+            what,
+            before.chars().count(),
+            after.chars().count(),
+            sink,
+        );
+    }
+
+    /// [`Self::saved`] with the characters already counted.
+    fn saved_chars(
+        &self,
+        call: &ToolCall,
+        what: &str,
+        before: usize,
+        after: usize,
+        sink: &mut dyn EventSink,
+    ) {
+        sink.emit(Event::Lean {
+            turn: self.turns,
+            id: call.id.clone(),
+            what: what.to_owned(),
+            chars_before: before,
+            chars_after: after,
+        });
+        if let Some(path) = &self.config.savings {
+            let saving = crate::lean::Saving {
+                at: chrono::Utc::now(),
+                what: what.to_owned(),
+                before,
+                after,
+            };
+            // Best-effort: a count that cannot be written never fails the call it counts.
+            let _ = crate::lean::record(path, &saving);
+        }
     }
 
     /// One call as [`Self::run_call`] runs it, without adding its answer to the conversation — what a script's call
@@ -929,11 +1023,20 @@ impl<M: ChatModel> Loop<'_, M> {
         if self.offer.codemode && name == codemode::NAME {
             return Box::pin(self.run_codemode(call, sink)).await;
         }
-        tokio::select! {
-            result = self.tools.call_until(name, &call.function.arguments, self.stop) => Ok(result),
-            () = tokio::time::sleep_until(self.deadline) => Err(FinishReason::Timeout),
-            () = self.cancel.cancelled() => Err(FinishReason::Cancelled),
+        self.chain = None;
+        let called = tokio::select! {
+            called = self.tools.call_reporting(name, &call.function.arguments, self.stop) => called,
+            () = tokio::time::sleep_until(self.deadline) => return Err(FinishReason::Timeout),
+            () = self.cancel.cancelled() => return Err(FinishReason::Cancelled),
+        };
+        if let Some(parts) = called.parts {
+            self.chain = Some(ChainAnswer {
+                call: call.id.clone(),
+                text: called.text.clone(),
+                parts,
+            });
         }
+        Ok((called.ok, called.text))
     }
 
     /// Records the work folder before the first call of this turn that may change it — an edit or a command (Glut 2,
@@ -1475,35 +1578,107 @@ fn unchanged_read(messages: &[Message], call: &ToolCall, output: &str) -> Option
     (same_read && pointer.len() < output.len()).then_some(pointer)
 }
 
-/// A foreground `bash` call's output in its compact form when Glut knows the command (Glut lean, N3): the raw output
-/// goes into `store`, and a note on top says what was left out and how to read the raw output back.
-fn compacted(call: &ToolCall, output: String, store: &ResultStore) -> String {
+/// One compacted output for the count (N9): its kind and characters before and after.
+struct Spared {
+    /// The kind of output ("cargo").
+    what: &'static str,
+    /// Its characters before …
+    before: usize,
+    /// … and compacted.
+    after: usize,
+}
+
+/// The command of a foreground `bash` call, `None` for any other call.
+fn foreground_command(call: &ToolCall) -> Option<String> {
     if call.function.name != "bash" {
-        return output;
+        return None;
     }
-    let Ok(args) = serde_json::from_str::<Value>(&call.function.arguments) else {
-        return output;
-    };
-    let background = args.get("run_in_background").and_then(Value::as_bool) == Some(true);
-    let Some(command) = args
-        .get("command")
+    let args = serde_json::from_str::<Value>(&call.function.arguments).ok()?;
+    if args.get("run_in_background").and_then(Value::as_bool) == Some(true) {
+        return None;
+    }
+    args.get("command")
         .and_then(Value::as_str)
-        .filter(|_| !background)
-    else {
-        return output;
+        .map(str::to_owned)
+}
+
+/// The kind of command a foreground `bash` call pipes on, when Glut knows it (N8).
+fn piped(call: &ToolCall) -> Option<&'static str> {
+    crate::tools::output::piped(&foreground_command(call)?)
+}
+
+/// A foreground `bash` call's output in its compact form when Glut knows the command (Glut lean, N3) — a chain's part
+/// by part where the tool said where they lie (N7): the raw output goes into `store`, and a note on top says what was
+/// left out and how to read the raw output back. Also what each compaction spared, for the count.
+fn compacted(
+    call: &ToolCall,
+    output: String,
+    store: &ResultStore,
+    parts: Option<Vec<crate::tools::Part>>,
+) -> (String, Vec<Spared>) {
+    let Some(command) = foreground_command(call) else {
+        return (output, Vec::new());
     };
-    let Some(compact) = crate::tools::output::compact(command, &output) else {
-        return output;
+    let pieces: Vec<(&str, &str)> = match &parts {
+        Some(parts) if covers(parts, &output) => parts
+            .iter()
+            .map(|part| (part.command.as_str(), &output[part.range.clone()]))
+            .collect(),
+        _ => vec![(command.as_str(), output.as_str())],
     };
+    let mut text = String::with_capacity(output.len());
+    let mut spared = Vec::new();
+    let mut left_out = Vec::new();
+    for (part, piece) in &pieces {
+        match crate::tools::output::compact(part, piece) {
+            Some(compact) => {
+                text.push_str(&compact.text);
+                // The next part's output starts on a line of its own, as it did.
+                if piece.ends_with('\n') && !compact.text.ends_with('\n') {
+                    text.push('\n');
+                }
+                spared.push(Spared {
+                    what: compact.what,
+                    before: piece.chars().count(),
+                    after: compact.text.chars().count(),
+                });
+                left_out.push(if pieces.len() > 1 {
+                    format!("for `{part}`: {}", compact.left_out)
+                } else {
+                    compact.left_out.to_owned()
+                });
+            }
+            None => text.push_str(piece),
+        }
+    }
+    if spared.is_empty() {
+        return (output, spared);
+    }
+    let lines_before = output.lines().count();
+    let lines_after = text.lines().count();
     let id = store.put(output);
-    format!(
-        "[Glut compacted this output: {} → {} lines, left out: {}. The raw output: `{}` with id \"{id}\".]\n{}",
-        compact.lines_before,
-        compact.lines_after,
-        compact.left_out,
+    let shown = format!(
+        "[Glut compacted this output: {lines_before} → {lines_after} lines, left out: {}. \
+         The raw output: `{}` with id \"{id}\".]\n{text}",
+        left_out.join("; "),
         results::NAME,
-        compact.text
-    )
+    );
+    (shown, spared)
+}
+
+/// Whether `parts` lie side by side over the whole of `output`, each on character boundaries.
+fn covers(parts: &[crate::tools::Part], output: &str) -> bool {
+    let mut at = 0;
+    for part in parts {
+        if part.range.start != at
+            || part.range.end < part.range.start
+            || !output.is_char_boundary(part.range.end)
+        {
+            return false;
+        }
+        at = part.range.end;
+    }
+    at == output.len()
 }
 
 #[cfg(test)]
@@ -1788,33 +1963,81 @@ mod tests {
         let mut raw = "   Compiling axiomata-core v0.1.0 (/w/crates/axiomata-core)\n".repeat(40);
         raw.push_str("warning: unused variable: `x`\n    Finished `dev` profile in 3.1s\n");
         let store = ResultStore::new("t");
-        let shown = compacted(
+        let (shown, spared) = compacted(
             &bash(json!({"command": "cargo build"})),
             raw.clone(),
             &store,
+            None,
         );
         assert!(
             shown.starts_with("[Glut compacted this output: 42 → 2 lines"),
             "{shown}"
         );
         assert!(
-            shown.ends_with("warning: unused variable: `x`\n    Finished `dev` profile in 3.1s")
+            shown.ends_with("warning: unused variable: `x`\n    Finished `dev` profile in 3.1s\n")
+        );
+        assert_eq!(spared.len(), 1);
+        assert_eq!(
+            (spared[0].what, spared[0].before),
+            ("cargo", raw.chars().count())
         );
         assert!(store.read("t-1", 0).unwrap().starts_with(&raw[..200]));
         // A job in the background, a piped command and any other tool stay as they are.
+        let same = |call: ToolCall| compacted(&call, raw.clone(), &store, None).0;
         let job = json!({"command": "cargo build", "run_in_background": true});
-        assert_eq!(compacted(&bash(job), raw.clone(), &store), raw);
-        assert_eq!(
-            compacted(
-                &bash(json!({"command": "cargo build | tail"})),
-                raw.clone(),
-                &store
-            ),
-            raw
-        );
+        assert_eq!(same(bash(job)), raw);
+        assert_eq!(same(bash(json!({"command": "cargo build | tail"}))), raw);
         let mut echo = bash(json!({"command": "cargo build"}));
         echo.function.name = "echo".into();
-        assert_eq!(compacted(&echo, raw.clone(), &store), raw);
+        assert_eq!(same(echo), raw);
+    }
+
+    #[test]
+    fn a_chains_parts_are_compacted_each_by_its_own_command() {
+        let command = "git status && cargo build && echo done";
+        let call = ToolCall {
+            id: "c1".into(),
+            kind: "function".into(),
+            function: FunctionCall {
+                name: "bash".into(),
+                arguments: json!({ "command": command }).to_string(),
+            },
+        };
+        let status = "On branch main\nChanges not staged for commit:\n  (use \"git add <file>...\" to update what will be committed)\n  (use \"git restore <file>...\" to discard changes in working directory)\n\tmodified:   a.rs\n\tmodified:   b.rs\n\tmodified:   c.rs\n\tmodified:   d.rs\n\tmodified:   e.rs\n\tmodified:   f.rs\n\tmodified:   g.rs\n\tmodified:   h.rs\n\nno changes added to commit (use \"git add\" and/or \"git commit -a\")\n";
+        let mut build = "   Compiling axiomata-core v0.1.0 (/w/crates/axiomata-core)\n".repeat(40);
+        build.push_str("    Finished `dev` profile in 3.1s\n");
+        let raw = format!("{status}{build}done\n");
+        let part = |command: &str, start: usize, end: usize| crate::tools::Part {
+            command: command.to_owned(),
+            range: start..end,
+        };
+        let (a, b) = (status.len(), status.len() + build.len());
+        let parts = vec![
+            part("git status", 0, a),
+            part("cargo build", a, b),
+            part("echo done", b, raw.len()),
+        ];
+        let store = ResultStore::new("t");
+        let (shown, spared) = compacted(&call, raw.clone(), &store, Some(parts.clone()));
+        let kinds: Vec<_> = spared.iter().map(|s| s.what).collect();
+        assert_eq!(kinds, ["git status", "cargo"], "{shown}");
+        assert!(shown.contains("for `git status`: "), "{shown}");
+        assert!(shown.contains("; for `cargo build`: "), "{shown}");
+        assert!(shown.contains("## main\n M a.rs\n"), "{shown}");
+        // Each part's output starts on a line of its own; the part Glut does not know stays word for word.
+        assert!(
+            shown.contains(" M h.rs\n    Finished `dev` profile in 3.1s\ndone\n"),
+            "{shown}"
+        );
+        assert!(!shown.contains("Compiling"), "{shown}");
+        assert_eq!(store.read("t-1", 0).unwrap(), raw);
+        // Parts that do not lie over the whole answer (a hook changed it) leave the chain whole.
+        let mut gap = parts.clone();
+        gap[1].range.start += 1;
+        assert_eq!(compacted(&call, raw.clone(), &store, Some(gap)).0, raw);
+        let mut short = parts;
+        short.pop();
+        assert_eq!(compacted(&call, raw.clone(), &store, Some(short)).0, raw);
     }
 
     #[tokio::test]

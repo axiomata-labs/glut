@@ -105,6 +105,9 @@ pub struct RunConfig {
     /// the ids its notes name. `None`: in memory only. Only the run itself, never a subagent (it shares the run's
     /// config but numbers its own texts).
     pub results: Option<crate::results::StoreSpec>,
+    /// Where the run counts what Glut lean saves (N9; `~/.axh/lean.jsonl`, `axh gain`). `None`: only the `lean`
+    /// events say it.
+    pub savings: Option<PathBuf>,
     /// Whether an edit's result carries the language server's errors for the file (Glut 2, D, G12). On by default;
     /// without an installed server for the file's language nothing is added.
     pub diagnostics: bool,
@@ -133,6 +136,7 @@ impl RunConfig {
             snapshots: None,
             journal: None,
             results: None,
+            savings: None,
             diagnostics: true,
         }
     }

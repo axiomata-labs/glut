@@ -11,9 +11,10 @@ pub mod shell;
 pub mod web;
 
 use std::future::Future;
+use std::ops::Range;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 
@@ -39,6 +40,49 @@ pub type StopFlag = Arc<AtomicBool>;
 pub struct CallContext {
     pub stop: StopFlag,
     pub gate: Option<Arc<Gate>>,
+    /// Where a tool says more about its answer than the text: a `bash` chain where each part's output lies (Glut lean,
+    /// N7).
+    pub report: Report,
+}
+
+/// One part of a chain's output (Glut lean, N7): the command as the model wrote it and where its output lies in the
+/// call's answer, in bytes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Part {
+    /// The part's command, as the model wrote it.
+    pub command: String,
+    /// Where its output lies in the answer, in bytes.
+    pub range: Range<usize>,
+}
+
+/// What a tool tells the loop beside its answer: shared with the toolbox, filled at most once a call.
+#[derive(Debug, Clone, Default)]
+pub struct Report(Arc<Mutex<Option<Vec<Part>>>>);
+
+impl Report {
+    /// Says where the parts of the answer lie.
+    pub fn parts(&self, parts: Vec<Part>) {
+        *self.0.lock().unwrap_or_else(|poison| poison.into_inner()) = Some(parts);
+    }
+
+    fn take(&self) -> Option<Vec<Part>> {
+        self.0
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .take()
+    }
+}
+
+/// A call's answer as the toolbox hands it to the loop: whether it succeeded, its whole text, and — for a chain —
+/// where each part's output lies in that text.
+#[derive(Debug)]
+pub struct Called {
+    /// Whether the call succeeded.
+    pub ok: bool,
+    /// Its whole answer; an error's starts with `error: `.
+    pub text: String,
+    /// For a `bash` chain, where the output of each part that ran lies in `text`.
+    pub parts: Option<Vec<Part>>,
 }
 
 /// A tool the model can call.
@@ -173,18 +217,28 @@ impl Toolbox {
 
     /// [`Self::call`] within a run: refused once `stop` is set, and handed to the tool so a long one can stop too.
     pub async fn call_until(&self, name: &str, arguments: &str, stop: &StopFlag) -> (bool, String) {
+        let called = self.call_reporting(name, arguments, stop).await;
+        (called.ok, called.text)
+    }
+
+    /// [`Self::call_until`] with what the tool reported beside its text (Glut lean, N7).
+    pub async fn call_reporting(&self, name: &str, arguments: &str, stop: &StopFlag) -> Called {
+        let refused = |text: String| Called {
+            ok: false,
+            text,
+            parts: None,
+        };
         if stop.load(Ordering::SeqCst) {
-            return (false, "error: the run was stopped".into());
+            return refused("error: the run was stopped".into());
         }
         let Some(tool) = self.tools.iter().find(|tool| tool.spec().name == name) else {
-            return (false, format!("error: there is no tool named {name:?}"));
+            return refused(format!("error: there is no tool named {name:?}"));
         };
         // A tool the run does not offer stays refused when the model guesses its name.
         if !self.offers(tool.as_ref()) {
-            return (
-                false,
-                format!("error: not permitted: this run does not offer {name}"),
-            );
+            return refused(format!(
+                "error: not permitted: this run does not offer {name}"
+            ));
         }
         // Some models send no arguments at all for a tool without required ones.
         let arguments = if arguments.trim().is_empty() {
@@ -194,28 +248,38 @@ impl Toolbox {
         };
         let parsed = match serde_json::from_str::<Value>(arguments) {
             Ok(value @ Value::Object(_)) => value,
-            Ok(_) => return (false, "error: the arguments must be a JSON object".into()),
+            Ok(_) => return refused("error: the arguments must be a JSON object".into()),
             Err(err) => {
-                return (
-                    false,
-                    format!("error: the arguments are not valid JSON: {err}"),
-                );
+                return refused(format!("error: the arguments are not valid JSON: {err}"));
             }
         };
         if let Some(gate) = &self.gate
-            && let Err(refused) = gate.judge(name, &tool.access(&parsed)).await
+            && let Err(refusal) = gate.judge(name, &tool.access(&parsed)).await
         {
-            return (false, format!("error: {refused}"));
+            return refused(format!("error: {refusal}"));
         }
+        let report = Report::default();
         let context = CallContext {
             stop: Arc::clone(stop),
             gate: self.gate.clone(),
+            report: report.clone(),
         };
-        let (ok, text) = match tool.call(parsed, context).await {
-            Ok(text) => (true, text),
-            Err(text) => (false, format!("error: {text}")),
+        const ERROR: &str = "error: ";
+        let (ok, text, shift) = match tool.call(parsed, context).await {
+            Ok(text) => (true, text, 0),
+            Err(text) => (false, format!("{ERROR}{text}"), ERROR.len()),
         };
-        (ok, text)
+        // The parts lie in the tool's own text; an error's prefix moves them along.
+        let parts = report.take().map(|parts| {
+            parts
+                .into_iter()
+                .map(|part| Part {
+                    range: part.range.start + shift..part.range.end + shift,
+                    ..part
+                })
+                .collect()
+        });
+        Called { ok, text, parts }
     }
 }
 

@@ -359,3 +359,113 @@ fn a_diffs_trailing_spaces_stay() {
         out.text
     );
 }
+
+#[test]
+fn a_chain_is_split_outside_quotes_and_only_of_simple_commands() {
+    let parts = |command| chain(command).map(|chain| (chain.parts, chain.ops));
+    assert_eq!(
+        parts("cargo fmt && cargo test"),
+        Some((vec!["cargo fmt", "cargo test"], vec!["&&"]))
+    );
+    assert_eq!(
+        parts("cd crates/a && cargo build 2>&1; git status || true"),
+        Some((
+            vec!["cd crates/a", "cargo build 2>&1", "git status", "true"],
+            vec!["&&", ";", "||"]
+        ))
+    );
+    // An operator inside quotes or escaped belongs to the part — which is then no simple command.
+    assert_eq!(
+        split_chain(r#"echo "a && b"; ls"#).unwrap().0,
+        [r#"echo "a && b""#, "ls"]
+    );
+    assert_eq!(
+        split_chain(r"echo 'x;y' && ls").unwrap().0,
+        ["echo 'x;y'", "ls"]
+    );
+    assert_eq!(
+        split_chain(r"echo a\;b; ls").unwrap().0,
+        [r"echo a\;b", "ls"]
+    );
+    assert_eq!(parts(r#"echo "a && b"; ls"#), None);
+    // One command, nothing Glut knows, a pipe, a redirection, a background part, a `;;`, an open quote: no chain.
+    for command in [
+        "cargo test",
+        "cd a && cargo test",
+        "echo a && echo b",
+        "cargo build | tail && git status",
+        "cargo build > log && git status",
+        "sleep 1 & git status",
+        "git status;; ls",
+        "git status && echo 'open",
+        "git status && $(rm x)",
+        "git status &&",
+        "&& git status",
+    ] {
+        assert_eq!(parts(command), None, "{command}");
+    }
+}
+
+#[test]
+fn marks_come_out_again_and_say_where_each_part_began() {
+    let mark = "axh-mark-00ff";
+    let chain = chain("cargo fmt && cargo test").unwrap();
+    let marked = marked(&chain, mark, "builtin ");
+    assert_eq!(
+        marked,
+        "{ builtin printf '%s-%s\\n' 'axh-mark-00ff' '0'\ncargo fmt\n} && \
+         { builtin printf '%s-%s\\n' 'axh-mark-00ff' '1'\ncargo test\n}"
+    );
+    // The command text holds no mark: a part that prints it (`env` shows `AXH_COMMAND`) loses nothing.
+    assert!(!marked.contains("axh-mark-00ff-"));
+    let printed = "[note]\naxh-mark-00ff-0\naxh-mark-00ff-1\nrunning 2 tests\nok\n";
+    let (text, ranges) = unmark(printed, mark);
+    assert_eq!(text, "[note]\nrunning 2 tests\nok\n");
+    assert_eq!(ranges, Some(vec![(0, 0..7), (1, 7..text.len())]));
+    // A part without a closing line break still ends where the next mark begins.
+    let (text, ranges) = unmark("axh-mark-00ff-0\nhalfaxh-mark-00ff-1\nrest", mark);
+    assert_eq!(text, "halfrest");
+    assert_eq!(ranges, Some(vec![(0, 0..4), (1, 4..8)]));
+    // `a || b; c` with `a` succeeding: `b` has no mark and no range.
+    let (text, ranges) = unmark("axh-mark-00ff-0\na\naxh-mark-00ff-2\nc\n", mark);
+    assert_eq!(text, "a\nc\n");
+    assert_eq!(ranges, Some(vec![(0, 0..2), (2, 2..4)]));
+    // Marks out of order (a part printed one) or a lost middle leave no parts, but every mark is taken out.
+    let (text, ranges) = unmark("axh-mark-00ff-1\na\naxh-mark-00ff-0\nb\n", mark);
+    assert_eq!((text.as_str(), ranges), ("a\nb\n", None));
+    let cut = format!("axh-mark-00ff-0\na\n[… 9 {DROPPED_MIDDLE} …]\nz\n");
+    assert_eq!(unmark(&cut, mark).1, None);
+    assert_eq!(
+        unmark("no marks at all\n", mark),
+        ("no marks at all\n".into(), None)
+    );
+}
+
+#[test]
+fn a_chain_the_marks_would_read_otherwise_is_left_alone() {
+    // A comment (whose text the marks would turn into commands), `$?` and `$_` (which would see the mark's `printf`),
+    // keywords, groups, subshells and backslashes (which the braces would break): no chain, the output stays whole.
+    for command in [
+        "git status # note && rm -rf build",
+        "cargo test; echo \"exit=$?\"",
+        "cargo build; echo $_",
+        "cargo build; if [ -f x ]; then echo y; fi",
+        "cargo build; for f in a b; do echo $f; done",
+        "git status && (cd sub; cargo test)",
+        "git status && { cargo test; }",
+        "cargo build && echo a \\",
+        "cargo build && echo $'a\\'b'",
+        "! cargo build; git status",
+    ] {
+        assert_eq!(chain(command), None, "{command}");
+    }
+}
+
+#[test]
+fn a_known_command_in_front_of_a_pipe_is_named_for_the_count() {
+    assert_eq!(piped("cargo test 2>&1 | tail -30"), Some("cargo"));
+    assert_eq!(piped("git diff | head"), Some("git diff"));
+    assert_eq!(piped("cat x | grep y"), None);
+    assert_eq!(piped("cargo test || true"), None);
+    assert_eq!(piped("cargo test"), None);
+}

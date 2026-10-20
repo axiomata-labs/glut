@@ -35,6 +35,8 @@ pub(crate) struct Compacted {
     pub lines_after: usize,
     /// What was left out, in a few words ("progress and passing tests").
     pub left_out: &'static str,
+    /// Which kind of output it was, for the count of savings (N9): "cargo", "git diff" …
+    pub what: &'static str,
 }
 
 /// The kinds of output Glut knows how to compact.
@@ -53,6 +55,27 @@ enum Kind {
     Make,
     Listing,
     Tree,
+}
+
+impl Kind {
+    /// The kind's name in the count of savings (N9).
+    fn name(self) -> &'static str {
+        match self {
+            Kind::GitStatus => "git status",
+            Kind::GitDiff => "git diff",
+            Kind::GitLog => "git log",
+            Kind::Cargo => "cargo",
+            Kind::Install => "install",
+            Kind::JsTests => "js tests",
+            Kind::SvelteCheck => "svelte-check",
+            Kind::Pytest => "pytest",
+            Kind::Swift => "swift",
+            Kind::Xcodebuild => "xcodebuild",
+            Kind::Make => "make",
+            Kind::Listing => "listing",
+            Kind::Tree => "tree",
+        }
+    }
 }
 
 /// The output of `command` compacted, or `None` when the command is none Glut knows, the model chose its own format, or
@@ -131,6 +154,7 @@ pub(crate) fn compact(command: &str, output: &str) -> Option<Compacted> {
         text,
         lines_before,
         left_out,
+        what: kind.name(),
     })
 }
 
@@ -153,6 +177,178 @@ fn simple_command(command: &str) -> Option<Vec<&str>> {
         .collect();
     (!words.is_empty()).then_some(words)
 }
+
+/// A chain of commands worth compacting part by part (N7): two parts or more, each a simple command or a `cd`, and
+/// one of them a command Glut knows.
+#[derive(Debug, PartialEq)]
+pub(crate) struct Chain<'a> {
+    /// The parts as the model wrote them, trimmed.
+    pub parts: Vec<&'a str>,
+    /// The operator after each part but the last: `&&`, `||` or `;`.
+    pub ops: Vec<&'a str>,
+}
+
+/// `command` as a [`Chain`], split at its `&&`, `||` and `;` outside quotes; `None` when it is a single command (after
+/// `cd dir &&`), a part is no simple command (a pipe, a redirection, a substitution), or no part is one Glut knows.
+///
+/// The marks put each part on lines of its own inside braces, so the chain may hold nothing that would read otherwise
+/// there: the gate's own reader must vouch for every bit of it (no comment, grouping, keyword, substitution), and no
+/// part may use `$` (a mark's `printf` would be the "last command" for `$?` and `$_`) or a backslash (a trailing one
+/// would join the closing brace onto the part).
+pub(crate) fn chain(command: &str) -> Option<Chain<'_>> {
+    // `cd dir && cargo test` is one command to [`compact`] already: no marks needed.
+    if simple_command(command).is_some()
+        || command.contains(['$', '\\', '#'])
+        || crate::permissions::command::analyze(command).is_opaque()
+    {
+        return None;
+    }
+    let (parts, ops) = split_chain(command)?;
+    if parts.len() < 2 {
+        return None;
+    }
+    let mut known = false;
+    for part in &parts {
+        match simple_command(part) {
+            Some(words) => known |= kind_of(&words).is_some(),
+            None if is_cd(part) => {}
+            None => return None,
+        }
+    }
+    known.then_some(Chain { parts, ops })
+}
+
+/// The command's parts and the operators between them, split outside quotes and escapes; `None` for an empty part or
+/// a `;;`, which no chain of simple commands has.
+fn split_chain(command: &str) -> Option<(Vec<&str>, Vec<&str>)> {
+    let bytes = command.as_bytes();
+    let (mut parts, mut ops) = (Vec::new(), Vec::new());
+    let (mut start, mut i) = (0, 0);
+    let (mut single, mut double) = (false, false);
+    while i < bytes.len() {
+        let byte = bytes[i];
+        let op_len = match byte {
+            _ if single => {
+                single = byte != b'\'';
+                0
+            }
+            b'\\' => {
+                // The escaped byte is skipped: it opens no quote and ends no part.
+                i += 2;
+                continue;
+            }
+            b'"' => {
+                double = !double;
+                0
+            }
+            _ if double => 0,
+            b'\'' => {
+                single = true;
+                0
+            }
+            b'&' | b'|' if bytes.get(i + 1) == Some(&byte) => 2,
+            b';' => 1,
+            _ => 0,
+        };
+        if op_len > 0 {
+            let part = command[start..i].trim();
+            if part.is_empty() || bytes.get(i + op_len) == Some(&b';') {
+                return None;
+            }
+            parts.push(part);
+            ops.push(&command[i..i + op_len]);
+            i += op_len;
+            start = i;
+        } else {
+            i += 1;
+        }
+    }
+    let last = command[start..].trim();
+    if last.is_empty() || single || double {
+        return None;
+    }
+    parts.push(last);
+    Some((parts, ops))
+}
+
+/// Whether `part` only changes the folder: `cd <dir>`, no more.
+fn is_cd(part: &str) -> bool {
+    let forbidden = ['|', ';', '>', '<', '`', '&', '\n', '$'];
+    let mut words = part.split_whitespace();
+    words.next() == Some("cd") && words.count() <= 1 && !part.contains(forbidden)
+}
+
+/// The command a pipe feeds when it is one Glut knows (N8: counted, not compacted): `cargo test 2>&1 | tail -30`
+/// names "cargo".
+pub(crate) fn piped(command: &str) -> Option<&'static str> {
+    let (first, rest) = command.split_once('|')?;
+    if rest.starts_with('|') {
+        return None;
+    }
+    simple_command(first)
+        .and_then(|words| kind_of(&words))
+        .map(Kind::name)
+}
+
+/// The chain as it runs (N7): each part in braces behind a line with `mark` and its number, the operators as they
+/// were — a brace group runs in the shell itself, so a `cd` still moves the folder and `&&`/`||` see the part's own
+/// exit status. A part sits on lines of its own, so a trailing comment cannot swallow the closing brace. The mark and
+/// the number are printed as two words joined by `printf`, so the command text itself — which a part can print, as
+/// `env` does with `AXH_COMMAND` — never holds a mark [`unmark`] would take out.
+pub(crate) fn marked(chain: &Chain<'_>, mark: &str, builtin: &str) -> String {
+    let mut out = String::new();
+    for (k, part) in chain.parts.iter().enumerate() {
+        if let Some(op) = k.checked_sub(1).and_then(|before| chain.ops.get(before)) {
+            out.push_str(&format!(" {op} "));
+        }
+        out.push_str(&format!(
+            "{{ {builtin}printf '%s-%s\\n' '{mark}' '{k}'\n{part}\n}}"
+        ));
+    }
+    out
+}
+
+/// The output of a [`marked`] chain without its marks, and where each part that ran printed: `(part, range)`, part
+/// `k` from its mark to the next one found (the first from the start). A part `||` or `&&` passed over has no mark and
+/// no range. `None` for the places when the marks are out of order or the output lost its middle (its marks may have
+/// gone with it) — then the output stays whole.
+pub(crate) fn unmark(text: &str, mark: &str) -> (String, Option<Vec<Placed>>) {
+    let prefix = format!("{mark}-");
+    let mut out = String::with_capacity(text.len());
+    let mut starts: Vec<(usize, usize)> = Vec::new();
+    let mut in_order = true;
+    let mut rest = text;
+    while let Some(at) = rest.find(&prefix) {
+        out.push_str(&rest[..at]);
+        let after = &rest[at + prefix.len()..];
+        let digits = after.bytes().take_while(u8::is_ascii_digit).count();
+        match after[..digits].parse::<usize>() {
+            Ok(k) if starts.last().is_none_or(|(last, _)| k > *last) => starts.push((k, out.len())),
+            _ => in_order = false,
+        }
+        let after = &after[digits..];
+        rest = after.strip_prefix('\n').unwrap_or(after);
+    }
+    out.push_str(rest);
+    if !in_order || starts.is_empty() || out.contains(DROPPED_MIDDLE) {
+        return (out, None);
+    }
+    let ranges = (0..starts.len())
+        .map(|i| {
+            let start = if i == 0 { 0 } else { starts[i].1 };
+            let end = starts.get(i + 1).map_or(out.len(), |next| next.1);
+            (starts[i].0, start..end)
+        })
+        .collect();
+    (out, Some(ranges))
+}
+
+/// A part's number in its chain and where its output lies, in bytes.
+pub(crate) type Placed = (usize, std::ops::Range<usize>);
+
+/// What `bash`'s note says when a long output lost its middle (`shell.rs`, `Capture::text`): a chain's marks in that
+/// middle are gone, so its parts cannot be told apart.
+pub(crate) const DROPPED_MIDDLE: &str = "bytes of output in the middle were not kept";
 
 /// Which output `words` produce, if one Glut knows.
 fn kind_of(words: &[&str]) -> Option<Kind> {

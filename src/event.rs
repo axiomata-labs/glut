@@ -156,6 +156,15 @@ pub enum Event {
         turn: u32,
         mode: String,
     },
+    /// What Glut lean spared on one call (N9): a compacted output ("cargo"), an unchanged re-read, a relocated result,
+    /// or — nothing spared — a known command in front of a pipe ("in a pipe: cargo"). In characters.
+    Lean {
+        turn: u32,
+        id: String,
+        what: String,
+        chars_before: usize,
+        chars_after: usize,
+    },
     Finished {
         reason: FinishReason,
         turns: u32,

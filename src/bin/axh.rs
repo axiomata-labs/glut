@@ -68,6 +68,13 @@ enum Command {
         #[arg(long)]
         list: bool,
     },
+    /// What Glut lean saved (`docs/plans/glut-lean.md`, N9): compacted outputs, unchanged re-reads and relocated
+    /// results per kind, from `~/.axh/lean.jsonl` — every Glut run's, the app's too.
+    Gain {
+        /// Only the last N days.
+        #[arg(long)]
+        days: Option<u32>,
+    },
 }
 
 /// Writes each event as one JSON line, flushed at once so a reader sees it while the run goes on.
@@ -167,6 +174,32 @@ async fn main() -> ExitCode {
         Command::Undo { .. } => unreachable!("undo returned above"),
         Command::Run(args) => execute(args, None).await,
         Command::Resume { run, list, discard } => resume_command(run, list, discard).await,
+        Command::Gain { days } => gain(days),
+    }
+}
+
+/// The count of savings in the harness's home (`$AXH_HOME` or `$HOME`, as the app's runs find it).
+fn savings_file() -> Option<PathBuf> {
+    axiomata_harness::permissions::settings::home_dir()
+        .ok()
+        .map(|home| home.join(".axh").join(axiomata_harness::lean::FILE))
+}
+
+/// `axh gain`: the count of savings as a table.
+fn gain(days: Option<u32>) -> ExitCode {
+    let fail = |message: String| {
+        eprintln!("axh gain: {message}");
+        ExitCode::from(1)
+    };
+    let Some(path) = savings_file() else {
+        return fail("no home folder: set HOME or AXH_HOME".to_owned());
+    };
+    match axiomata_harness::lean::report(&path, days) {
+        Ok(table) => {
+            print!("{table}");
+            ExitCode::SUCCESS
+        }
+        Err(err) => fail(format!("cannot read the count of savings: {err}")),
     }
 }
 
@@ -321,6 +354,8 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
         .map(PathBuf::from)
         .filter(|home| home.is_absolute())
         .map(|home| home.join(".axh").join("snapshots"));
+    // Glut lean (N9): the count of savings, where `axh gain` and the app's runs keep it.
+    config.savings = savings_file();
     // The folders the run reads skills from, beside the owner's and the project's (HS6, K2).
     config.skill_dirs = skill_dir;
     if let Some(path) = instructions_file {

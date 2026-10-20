@@ -28,6 +28,12 @@ const EXTENSION: &str = "jsonl";
 const MAX_JOURNAL_BYTES: u64 = 64 * 1024 * 1024;
 /// The most of a journal [`list`] reads to find its `start` line.
 const MAX_START_BYTES: u64 = 64 * 1024;
+/// How long a resume waits for a journal's lock to come free before it calls the run still going. A process being
+/// started at the moment the run closed its journal holds a copy of the file until it starts its program; that window
+/// is short, but under load (the test suite, a busy app) it is long enough to read a finished run as a living one.
+const LOCK_PATIENCE: Duration = Duration::from_millis(200);
+/// How often a resume tries the lock again while it waits.
+const LOCK_RETRY: Duration = Duration::from_millis(10);
 
 /// Where a run keeps its journal and what it is called: set on [`crate::RunConfig::journal`] by a caller that wants
 /// the run to be resumable.
@@ -177,6 +183,19 @@ impl Journal {
     }
 }
 
+/// The file's exclusive lock, tried again for [`LOCK_PATIENCE`] while it is held.
+fn lock_patiently(file: &File) -> Result<(), std::fs::TryLockError> {
+    let deadline = std::time::Instant::now() + LOCK_PATIENCE;
+    loop {
+        match file.try_lock() {
+            Err(std::fs::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(LOCK_RETRY);
+            }
+            done => return done,
+        }
+    }
+}
+
 /// Opens the journal of `run` for a resume: locked (a run still going holds it), and read back.
 ///
 /// # Errors
@@ -186,8 +205,7 @@ pub fn open(dir: &Path, run: &str) -> Result<(Journal, Recorded), String> {
     let path = path_of(dir, run)?;
     let file =
         open_existing(&path, true).map_err(|err| format!("no unfinished run {run}: {err}"))?;
-    file.try_lock()
-        .map_err(|_| format!("the run {run} is still going"))?;
+    lock_patiently(&file).map_err(|_| format!("the run {run} is still going"))?;
     let (recorded, good) = read(&file, &path)?;
     if recorded.run != run {
         return Err(format!("the journal {} names another run", path.display()));
