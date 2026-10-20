@@ -10,6 +10,7 @@
 
 pub mod codemode;
 pub mod commands;
+pub mod compact;
 pub mod config;
 mod diagnostics;
 pub mod error;
