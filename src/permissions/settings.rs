@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use super::{Mode, Rule, RuleSet};
-use crate::config::{Compaction, Effort, MIN_CONTEXT_WINDOW, RefusalLimits};
+use crate::config::{Compaction, Effort, MIN_CONTEXT_WINDOW, Prices, RefusalLimits};
 use crate::error::HarnessError;
 use crate::hooks::{Hooks, HooksSection};
 
@@ -91,6 +91,10 @@ struct File {
     /// `{"gemma4:12b": 32768}`. The owner's only.
     #[serde(default, rename = "contextWindow")]
     context_window: HashMap<String, u32>,
+    /// What the models cost, for a budget in money (`docs/plans/glut-cards.md`, C6):
+    /// `{"deepseek/deepseek-v4.1-flash": {"input_per_m": 0.1, "output_per_m": 0.4}}`. The owner's only.
+    #[serde(default)]
+    prices: HashMap<String, Prices>,
 }
 
 /// The `compact` section (#111, K6).
@@ -218,6 +222,8 @@ pub struct Settings {
     pub compact: Option<CompactSection>,
     /// `contextWindow` as written; only the owner's is read.
     pub context_window: HashMap<String, u32>,
+    /// `prices` as written; only the owner's is read.
+    pub prices: HashMap<String, Prices>,
 }
 
 /// Reads one settings file; a missing file says nothing.
@@ -283,6 +289,7 @@ pub fn read(path: &Path) -> Result<Settings, HarnessError> {
         refusals: file.refusals,
         compact: file.compact,
         context_window: file.context_window,
+        prices: file.prices,
     })
 }
 
@@ -307,6 +314,8 @@ pub struct Loaded {
     pub compact_auto: bool,
     /// The owner's context windows by model id (#111, K2).
     pub context_windows: HashMap<String, u32>,
+    /// The owner's prices by model id (C6).
+    pub prices: HashMap<String, Prices>,
 }
 
 impl Loaded {
@@ -388,6 +397,14 @@ pub fn load(home: &Path, project: &Path, trusted: bool) -> Result<Loaded, Harnes
             reason: format!("contextWindow of {model} is {tokens}, at least {MIN_CONTEXT_WINDOW}"),
         });
     }
+    if let Some((model, _)) = user.prices.iter().find(|(_, prices)| !prices.valid()) {
+        return Err(HarnessError::Settings {
+            path: owners.display().to_string(),
+            reason: format!(
+                "prices of {model} must be finite, non-negative USD per million tokens"
+            ),
+        });
+    }
     let ceiling = user.mode.unwrap_or_default().looseness();
     let owner = &user.sandbox;
     let mut sandbox = SandboxSettings {
@@ -418,6 +435,7 @@ pub fn load(home: &Path, project: &Path, trusted: bool) -> Result<Loaded, Harnes
             .and_then(|section| section.auto)
             .unwrap_or(true),
         context_windows: user.context_window,
+        prices: user.prices,
     };
     for file in project_files(project) {
         let settings = read(&file)?;
@@ -798,6 +816,22 @@ mod tests {
         );
         let err = load(&home, &project, true).unwrap_err().to_string();
         assert!(err.contains("contextWindow of m is 100"), "{err}");
+    }
+
+    #[test]
+    fn the_owners_prices_are_read_and_a_bad_one_is_refused() {
+        let (home, project) = (temp("prices-home"), temp("prices-project"));
+        write(
+            &home.join(".axh/settings.json"),
+            r#"{"prices": {"m": {"input_per_m": 0.1, "output_per_m": 0.4}}}"#,
+        );
+        let loaded = load(&home, &project, true).unwrap();
+        assert_eq!(loaded.prices["m"].output_per_m, 0.4);
+        write(
+            &home.join(".axh/settings.json"),
+            r#"{"prices": {"m": {"input_per_m": -1, "output_per_m": 0.4}}}"#,
+        );
+        assert!(load(&home, &project, true).is_err());
     }
 
     #[test]

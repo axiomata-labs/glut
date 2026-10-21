@@ -634,6 +634,12 @@ impl<M: ChatModel> Loop<'_, M> {
             if self.turns >= self.config.max_turns {
                 return FinishReason::MaxTurns;
             }
+            // Before the next model call, never between a reply and its results: every call of the last reply is
+            // answered.
+            if let Some(why) = self.config.budget.spent(&self.usage) {
+                sink.emit(Event::Error { message: why });
+                return FinishReason::Budget;
+            }
             self.turns += 1;
             if let Err(ending) = self.compact_if_full(sink).await {
                 return ending;
@@ -701,6 +707,7 @@ impl<M: ChatModel> Loop<'_, M> {
         sink.emit(Event::Usage {
             turn,
             input_tokens: reply.usage.input_tokens,
+            cached_input_tokens: reply.usage.cached_input_tokens,
             output_tokens: reply.usage.output_tokens,
         });
         // K1: the provider's own count of this prompt; what is added after it is estimated.
@@ -844,6 +851,7 @@ impl<M: ChatModel> Loop<'_, M> {
         sink.emit(Event::Usage {
             turn: self.turns,
             input_tokens: compacted.usage.input_tokens,
+            cached_input_tokens: compacted.usage.cached_input_tokens,
             output_tokens: compacted.usage.output_tokens,
         });
         // Relocated, never lost (Glut lean, N2): what the summary replaces stays in the run's store, and the summary
@@ -1696,6 +1704,8 @@ impl<M: ChatModel> Loop<'_, M> {
         // whatever the parent's model put into `prompt`.
         sub.instructions = None;
         sub.max_turns = config.subagent_max_turns;
+        // Its usage counts from nothing: it may spend only what the run has left (glut-cards C6).
+        sub.budget = config.budget.less(&self.usage);
         // The subagent never outlives the run that started it (D2.3).
         sub.timeout = config
             .subagent_timeout
@@ -2774,6 +2784,45 @@ mod tests {
         assert_eq!(
             (outcome.reason, outcome.turns, outcome.answer),
             (FinishReason::MaxTurns, 3, None)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_spent_budget_ends_the_run_before_the_next_call_with_every_call_answered() {
+        let model = Script::new(vec![
+            Ok(echo_long("c1", 600)),
+            Ok(echo_long("c2", 600)),
+            Ok(text("never asked")),
+        ]);
+        let mut config = RunConfig::new("/w");
+        config.budget = crate::config::Budget {
+            max_tokens: Some(1_000),
+            ..crate::config::Budget::default()
+        };
+        let mut events = Vec::new();
+        let outcome = run(
+            &config,
+            &model,
+            &toolbox(),
+            "go",
+            &mut events,
+            &Cancel::new(),
+        )
+        .await;
+        assert_eq!((outcome.reason, outcome.turns), (FinishReason::Budget, 2));
+        let results = events
+            .iter()
+            .filter(|event| matches!(event, Event::ToolResult { .. }))
+            .count();
+        assert_eq!(
+            results, 2,
+            "the last reply's call was answered before the run ended"
+        );
+        assert!(
+            error_events(&events)
+                .iter()
+                .any(|message| message.contains("budget of 1000 tokens")),
+            "{events:?}"
         );
     }
 

@@ -138,6 +138,16 @@ struct RunArgs {
     #[arg(long)]
     #[serde(default)]
     context_window: Option<u32>,
+    /// End the run before its next model call once it has used this many tokens (input less cache reads, plus
+    /// output).
+    #[arg(long)]
+    #[serde(default)]
+    max_tokens: Option<u64>,
+    /// End the run before its next model call once it has cost this many USD, at the model's `prices` in
+    /// ~/.axh/settings.json (without them a run has no budget in money, and says so).
+    #[arg(long)]
+    #[serde(default)]
+    max_usd: Option<f64>,
     /// Never compact the conversation automatically (`"compact": {"auto": false}` in ~/.axh/settings.json).
     #[arg(long)]
     #[serde(default)]
@@ -162,6 +172,11 @@ struct RunArgs {
     /// A folder of skills beside `~/.axh/skills` (HS6, K2); repeatable.
     #[arg(long)]
     skill_dir: Vec<PathBuf>,
+    /// The run's MCP servers from this file alone (`{"mcpServers": …}`, Claude Code's shape and flag), instead of
+    /// ~/.axh/mcp.json and the project's .mcp.json.
+    #[arg(long)]
+    #[serde(default)]
+    mcp_config: Option<PathBuf>,
     /// The prompt — extra text beside `--skill`, or a slash command (`/review src/`), read from
     /// `~/.axh/commands/` and, in a trusted folder, the project's `.axh/commands/` (HS4). Without `--skill` a
     /// prompt is required; with one it defaults to "Run the skill.".
@@ -320,12 +335,15 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
         timeout_secs,
         context_window,
         no_auto_compact,
+        max_tokens,
+        max_usd,
         permission_mode,
         allow,
         ask,
         deny,
         skill,
         skill_dir,
+        mcp_config,
         prompt,
     } = args;
 
@@ -497,10 +515,23 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
         Err(err) => return fail(err.to_string()),
     };
     let Draft {
-        config,
+        mut config,
         endpoint,
         gate,
     } = draft;
+    // C6 of docs/plans/glut-cards.md: the budget at the prices of the model the run ends up with (a skill or a
+    // command may name its own).
+    config.budget = axiomata_harness::Budget {
+        max_tokens,
+        max_usd,
+        prices: built.prices.get(&endpoint.model).copied(),
+    };
+    if max_usd.is_some() && config.budget.prices.is_none() {
+        eprintln!(
+            "axh: --max-usd has no prices for {} in ~/.axh/settings.json: the run has no budget in money",
+            endpoint.model
+        );
+    }
     // The model is built after the command and the skill: either may name its own (C2, K5).
     let model = match OpenAiCompat::new(endpoint) {
         Ok(model) => model,
@@ -508,9 +539,13 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
     };
     // MCP servers (HS5, M1–M3). `axh` has no terminal, so a project's server nobody approved is left out and said
     // so on stderr rather than asked about (M2).
-    let servers = match mcp::config::load(&home, &cwd)
-        .and_then(|entries| mcp::approval::permitted(entries, &home, &cwd, false))
-    {
+    // A named file stands for the two places; whoever names it stands for what it starts.
+    let servers = match &mcp_config {
+        Some(file) => mcp::config::named(file),
+        None => mcp::config::load(&home, &cwd)
+            .and_then(|entries| mcp::approval::permitted(entries, &home, &cwd, false)),
+    };
+    let servers = match servers {
         Ok(servers) => servers,
         Err(err) => return fail(err.to_string()),
     };
@@ -552,7 +587,10 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
     ExitCode::from(match outcome.reason {
         FinishReason::Answered => 0,
         FinishReason::Failed | FinishReason::Refused => 1,
-        FinishReason::MaxTurns | FinishReason::Timeout | FinishReason::Cancelled => 2,
+        FinishReason::MaxTurns
+        | FinishReason::Timeout
+        | FinishReason::Cancelled
+        | FinishReason::Budget => 2,
     })
 }
 

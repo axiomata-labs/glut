@@ -158,6 +158,95 @@ impl Default for RefusalLimits {
 /// number is no window a run could work in, and compacting against it would summarise at every step.
 pub const MIN_CONTEXT_WINDOW: u32 = 4_096;
 
+/// What a model's tokens cost, in USD per million (`"prices"` in `~/.axh/settings.json`, or the caller's table): the
+/// one thing a budget in money needs.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Prices {
+    pub input_per_m: f64,
+    /// Input read from the provider's prompt cache; unset, it costs `input_per_m` — never cheaper than written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cached_input_per_m: Option<f64>,
+    pub output_per_m: f64,
+}
+
+impl Prices {
+    /// What `usage` cost.
+    pub fn cost_usd(&self, usage: &crate::model::Usage) -> f64 {
+        let cached = usage.cached_input_tokens.min(usage.input_tokens);
+        (usage.input_tokens - cached) as f64 / 1e6 * self.input_per_m
+            + cached as f64 / 1e6 * self.cached_input_per_m.unwrap_or(self.input_per_m)
+            + usage.output_tokens as f64 / 1e6 * self.output_per_m
+    }
+
+    /// Whether every price is a number a bill could hold: finite and not negative.
+    pub fn valid(&self) -> bool {
+        [
+            self.input_per_m,
+            self.cached_input_per_m.unwrap_or(0.0),
+            self.output_per_m,
+        ]
+        .iter()
+        .all(|price| price.is_finite() && *price >= 0.0)
+    }
+}
+
+/// When a run has spent what it may (`docs/plans/glut-cards.md`, C6): checked before each model call, so the calls of
+/// the last reply are all answered and the run ends as [`crate::FinishReason::Budget`]. Nothing set: no budget.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Budget {
+    /// Tokens: input less what was read from the prompt cache, plus output — the measure a Studio session's limits
+    /// use.
+    pub max_tokens: Option<u64>,
+    /// Money; counts only with [`Self::prices`].
+    pub max_usd: Option<f64>,
+    /// What the run's model costs.
+    pub prices: Option<Prices>,
+}
+
+impl Budget {
+    /// What is left of the budget after `usage`: a subagent's, which counts from nothing, may spend only what its
+    /// parent has not.
+    pub fn less(&self, usage: &crate::model::Usage) -> Budget {
+        let tokens = usage
+            .input_tokens
+            .saturating_sub(usage.cached_input_tokens)
+            .saturating_add(usage.output_tokens);
+        Budget {
+            max_tokens: self.max_tokens.map(|max| max.saturating_sub(tokens)),
+            max_usd: match (self.max_usd, self.prices) {
+                (Some(max), Some(prices)) => Some((max - prices.cost_usd(usage)).max(0.0)),
+                (max, _) => max,
+            },
+            prices: self.prices,
+        }
+    }
+
+    /// Why `usage` is past the budget, `None` while it is not.
+    pub fn spent(&self, usage: &crate::model::Usage) -> Option<String> {
+        let tokens = usage
+            .input_tokens
+            .saturating_sub(usage.cached_input_tokens)
+            .saturating_add(usage.output_tokens);
+        if let Some(max) = self.max_tokens
+            && tokens >= max
+        {
+            return Some(format!(
+                "the run's budget of {max} tokens is spent ({tokens} used)"
+            ));
+        }
+        if let (Some(max), Some(prices)) = (self.max_usd, self.prices) {
+            let cost = prices.cost_usd(usage);
+            if cost >= max {
+                return Some(format!(
+                    "the run's budget of ${max:.2} is spent (${cost:.2} used)"
+                ));
+            }
+        }
+        None
+    }
+}
+
 /// When a run compacts its conversation itself (Glut robust, #111, K1–K6): shortly before the model's context is
 /// full, the older part becomes a summary by the run's own model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -239,6 +328,8 @@ pub struct RunConfig {
     pub refusals: RefusalLimits,
     /// When the run compacts itself (#111); the owner's `"compact"` and `"contextWindow"` set it.
     pub compaction: Compaction,
+    /// What the run may spend (C6 of `docs/plans/glut-cards.md`); none by default.
+    pub budget: Budget,
 }
 
 impl RunConfig {
@@ -268,6 +359,7 @@ impl RunConfig {
             diagnostics: true,
             refusals: RefusalLimits::DEFAULT,
             compaction: Compaction::default(),
+            budget: Budget::default(),
         }
     }
 }
@@ -275,6 +367,70 @@ impl RunConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn usage(input: u64, cached: u64, output: u64) -> crate::model::Usage {
+        crate::model::Usage {
+            input_tokens: input,
+            cached_input_tokens: cached,
+            output_tokens: output,
+        }
+    }
+
+    #[test]
+    fn a_budget_counts_tokens_without_cache_reads_and_money_only_with_prices() {
+        let none = Budget::default();
+        assert_eq!(none.spent(&usage(u64::MAX / 2, 0, 1)), None);
+        let tokens = Budget {
+            max_tokens: Some(1_000),
+            ..Budget::default()
+        };
+        assert_eq!(
+            tokens.spent(&usage(1_500, 600, 99)),
+            None,
+            "900 + 99 is under 1000"
+        );
+        assert!(
+            tokens
+                .spent(&usage(1_500, 600, 100))
+                .unwrap()
+                .contains("1000 tokens")
+        );
+        let prices = Prices {
+            input_per_m: 1.0,
+            cached_input_per_m: Some(0.1),
+            output_per_m: 2.0,
+        };
+        assert!((prices.cost_usd(&usage(2_000_000, 1_000_000, 1_000_000)) - 3.1).abs() < 1e-9);
+        let money = Budget {
+            max_usd: Some(3.0),
+            prices: Some(prices),
+            ..Budget::default()
+        };
+        assert!(
+            money
+                .spent(&usage(2_000_000, 1_000_000, 1_000_000))
+                .is_some()
+        );
+        let unpriced = Budget {
+            max_usd: Some(0.0),
+            ..Budget::default()
+        };
+        assert_eq!(
+            unpriced.spent(&usage(1, 0, 1)),
+            None,
+            "money without prices is no budget"
+        );
+        assert!(
+            !Prices {
+                input_per_m: f64::NAN,
+                ..prices
+            }
+            .valid()
+        );
+        assert!(prices.valid());
+        assert_eq!(money.less(&usage(1_000_000, 0, 0)).max_usd, Some(2.0));
+        assert_eq!(tokens.less(&usage(700, 200, 100)).max_tokens, Some(400));
+    }
 
     #[test]
     fn the_key_is_never_printed() {

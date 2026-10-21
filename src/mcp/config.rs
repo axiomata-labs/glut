@@ -336,6 +336,23 @@ pub fn owner(home: &Path) -> Result<Vec<ServerEntry>, HarnessError> {
     read(&home.join(OWNER_FILE), Origin::Owner)
 }
 
+/// The servers of one file the caller names instead of the two places (`--mcp-config`, Claude Code's flag of the same
+/// name): read and checked as [`load`] reads the owner's, and counted as the owner's — whoever names the file stands
+/// for what it starts. Unlike the two places, a missing file is an error: it was named.
+///
+/// # Errors
+///
+/// As [`load`]; [`HarnessError::Settings`] when the file does not exist.
+pub fn named(path: &Path) -> Result<Vec<ServerEntry>, HarnessError> {
+    if !path.exists() {
+        return Err(HarnessError::Settings {
+            path: path.display().to_string(),
+            reason: "no such file".into(),
+        });
+    }
+    read(path, Origin::Owner)
+}
+
 /// One file's servers, in the order their names sort in (a `BTreeMap`), so a run starts them the same way every
 /// time.
 fn read(path: &Path, origin: Origin) -> Result<Vec<ServerEntry>, HarnessError> {
@@ -432,6 +449,29 @@ mod tests {
     fn write(path: &Path, text: &str) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, text).unwrap();
+    }
+
+    #[test]
+    fn a_named_file_is_read_as_the_owners_and_must_exist() {
+        let dir = temp("named");
+        let file = dir.join("card-mcp.json");
+        assert!(
+            named(&file).is_err(),
+            "a named file that is not there is an error"
+        );
+        write(
+            &file,
+            r#"{"mcpServers": {"axiomata": {"type": "stdio", "command": "/bin/cli", "args": ["mcp-serve"], "env": {"A": "1"}}}}"#,
+        );
+        let entries = named(&file).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "axiomata");
+        assert_eq!(entries[0].origin, Origin::Owner);
+        write(
+            &file,
+            r#"{"mcpServers": {"x": {"command": "a", "surprise": 1}}}"#,
+        );
+        assert!(named(&file).is_err(), "checked as the owner's file is");
     }
 
     #[test]

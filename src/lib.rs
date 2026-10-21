@@ -33,7 +33,7 @@ pub mod snapshot;
 mod task;
 pub mod tools;
 
-pub use config::{Compaction, Effort, ModelEndpoint, RefusalLimits, RunConfig};
+pub use config::{Budget, Compaction, Effort, ModelEndpoint, Prices, RefusalLimits, RunConfig};
 pub use error::HarnessError;
 pub use event::{Event, EventSink, FinishReason, McpStatus, SharedSink, SkillHow};
 pub use model::{ChatModel, Message, OpenAiCompat, Reply, ToolCall, ToolSpec, Usage};

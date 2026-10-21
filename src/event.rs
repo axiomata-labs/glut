@@ -28,6 +28,8 @@ pub enum FinishReason {
     /// Refused calls ended it (#112): the same one tried again too often, or too many in all; the `error` event
     /// before names the call and the reason.
     Refused,
+    /// The run spent its budget (`RunConfig::budget`); the `error` event before says what was spent.
+    Budget,
 }
 
 /// Whether an MCP server of the run came up (HS5, M3).
@@ -95,7 +97,10 @@ pub enum Event {
     /// Tokens of one model call.
     Usage {
         turn: u32,
+        /// Every prompt token the call processed, the cached ones included.
         input_tokens: u64,
+        /// The part of `input_tokens` read from the provider's prompt cache.
+        cached_input_tokens: u64,
         output_tokens: u64,
     },
     /// How a tool call was judged (P8): allowed or refused, and why — a rule, the mode, the owner's answer.

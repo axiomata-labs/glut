@@ -766,7 +766,7 @@ impl Asker for Terminal {
 /// A command for an ask: line breaks shown as `⏎` (each one starts a command of its own), invisible characters
 /// removed, and a long one shortened in the middle — its start and its end both stay in sight, so a long harmless
 /// beginning cannot hide what comes last.
-fn ask_display(text: &str) -> String {
+pub fn ask_display(text: &str) -> String {
     let marked: String = text.replace('\n', " ⏎ ");
     let shown = printable(&marked);
     let count = shown.chars().count();
@@ -1134,6 +1134,8 @@ pub struct BuiltGate {
     /// Whether runs compact themselves (#111, K6) and the context windows the owner named (K2).
     pub compact_auto: bool,
     pub context_windows: std::collections::HashMap<String, u32>,
+    /// The owner's prices by model id (`docs/plans/glut-cards.md`, C6), for a budget in money.
+    pub prices: std::collections::HashMap<String, crate::config::Prices>,
 }
 
 impl BuiltGate {
@@ -1143,6 +1145,11 @@ impl BuiltGate {
             auto: self.compact_auto,
             context_window: self.context_windows.get(model).copied(),
         }
+    }
+
+    /// What `model` costs, as the owner's settings say.
+    pub fn prices(&self, model: &str) -> Option<crate::config::Prices> {
+        self.prices.get(model).copied()
     }
 
     /// What the person starting the run should be told about how it is guarded, one line each: what of the
@@ -1206,6 +1213,7 @@ pub fn build_gate(
         refusals: loaded.refusals,
         compact_auto: loaded.compact_auto,
         context_windows: loaded.context_windows,
+        prices: loaded.prices,
     })
 }
 
@@ -1623,6 +1631,7 @@ mod tests {
             refusals: crate::config::RefusalLimits::DEFAULT,
             compact_auto: true,
             context_windows: std::collections::HashMap::new(),
+            prices: std::collections::HashMap::new(),
         };
         let off = built(true, true, false).notes();
         assert_eq!(off.len(), 3, "{off:?}");
