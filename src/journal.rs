@@ -64,6 +64,9 @@ pub enum Line {
     Call { id: String },
     /// The steps and tokens so far, after a model call.
     Progress { turns: u32, usage: Usage },
+    /// The run compacted itself (#111, K5): the conversation from here on is this one, the lines before stay as the
+    /// record of what it replaced.
+    Compacted { messages: Vec<Message> },
 }
 
 /// What a journal holds, read back for a resume.
@@ -326,6 +329,10 @@ fn read(file: &File, path: &Path) -> Result<(Recorded, u64), String> {
                 recorded.turns = turns;
                 recorded.usage = usage;
             }
+            Line::Compacted { messages } => {
+                started.clear();
+                recorded.messages = messages;
+            }
             Line::Start { .. } => {
                 return Err(format!("the journal {} starts twice", path.display()));
             }
@@ -516,6 +523,39 @@ mod tests {
             .map(|(call, started)| (call.id.as_str(), *started))
             .collect();
         assert_eq!(open, [("b", true), ("c", false)]);
+    }
+
+    #[test]
+    fn a_compacted_run_resumes_from_its_compacted_conversation() {
+        let dir = scratch("compacted");
+        let mut journal = Journal::create(&spec(&dir, "run-c"), Path::new("/w"), "m").unwrap();
+        for text in ["go", "a long way"] {
+            journal
+                .write(&Line::Message {
+                    message: Message::user(text),
+                })
+                .unwrap();
+        }
+        let compacted = vec![Message::user("notes"), Message::user("go")];
+        journal
+            .write(&Line::Compacted {
+                messages: compacted.clone(),
+            })
+            .unwrap();
+        journal
+            .write(&Line::Message {
+                message: calling(&["a"]),
+            })
+            .unwrap();
+        drop(journal);
+        let (_held, recorded) = open(&dir, "run-c").unwrap();
+        let texts: Vec<Option<&str>> = recorded
+            .messages
+            .iter()
+            .map(|m| m.content.as_deref())
+            .collect();
+        assert_eq!(texts, [Some("notes"), Some("go"), None]);
+        assert_eq!(recorded.open_calls.len(), 1);
     }
 
     #[test]

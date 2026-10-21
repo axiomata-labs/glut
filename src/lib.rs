@@ -23,6 +23,7 @@ pub mod model;
 pub mod permissions;
 pub mod planning;
 pub mod prompt;
+mod refusals;
 pub mod results;
 pub mod run;
 pub mod sandbox;
@@ -32,7 +33,7 @@ pub mod snapshot;
 mod task;
 pub mod tools;
 
-pub use config::{Effort, ModelEndpoint, RunConfig};
+pub use config::{Compaction, Effort, ModelEndpoint, RefusalLimits, RunConfig};
 pub use error::HarnessError;
 pub use event::{Event, EventSink, FinishReason, McpStatus, SharedSink, SkillHow};
 pub use model::{ChatModel, Message, OpenAiCompat, Reply, ToolCall, ToolSpec, Usage};

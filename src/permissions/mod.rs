@@ -1129,9 +1129,22 @@ pub struct BuiltGate {
     /// The owner's `effort` from `~/.axh/settings.json` (Glut effort, E1): the run's unless a flag, a skill or a
     /// command names one.
     pub effort: Option<crate::config::Effort>,
+    /// The owner's refusal limits from `~/.axh/settings.json` (#112, R6); the defaults without.
+    pub refusals: crate::config::RefusalLimits,
+    /// Whether runs compact themselves (#111, K6) and the context windows the owner named (K2).
+    pub compact_auto: bool,
+    pub context_windows: std::collections::HashMap<String, u32>,
 }
 
 impl BuiltGate {
+    /// The run's compaction for `model`: the owner's switch and the window the settings name for it.
+    pub fn compaction(&self, model: &str) -> crate::config::Compaction {
+        crate::config::Compaction {
+            auto: self.compact_auto,
+            context_window: self.context_windows.get(model).copied(),
+        }
+    }
+
     /// What the person starting the run should be told about how it is guarded, one line each: what of the
     /// project's settings was left out, and a sandbox that is off or missing.
     pub fn notes(&self) -> Vec<&'static str> {
@@ -1190,6 +1203,9 @@ pub fn build_gate(
         hooks: loaded.hooks,
         project_hooks_skipped: loaded.project_hooks_skipped,
         effort: loaded.effort,
+        refusals: loaded.refusals,
+        compact_auto: loaded.compact_auto,
+        context_windows: loaded.context_windows,
     })
 }
 
@@ -1604,6 +1620,9 @@ mod tests {
             hooks: crate::hooks::Hooks::default(),
             project_hooks_skipped,
             effort: None,
+            refusals: crate::config::RefusalLimits::DEFAULT,
+            compact_auto: true,
+            context_windows: std::collections::HashMap::new(),
         };
         let off = built(true, true, false).notes();
         assert_eq!(off.len(), 3, "{off:?}");

@@ -327,6 +327,59 @@ pub trait ChatModel: Send + Sync {
 
     /// The model's name, for the events.
     fn name(&self) -> &str;
+
+    /// How many tokens the model's context holds, as its provider's model list says (#111, K2); `None` when it says
+    /// nothing or cannot be asked. Asked once per run, and only once the conversation is long enough to matter.
+    fn context_window(&self) -> impl Future<Output = Option<u32>> + Send {
+        async { None }
+    }
+}
+
+/// How long the model list may take: it only sizes the compaction, and a run without it still compacts on the
+/// provider's "too long" (K4).
+const MODEL_LIST_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Whether a model API's error says the prompt does not fit the model's context (#111, K4): the providers word it
+/// differently, so the usual phrases are looked for.
+pub fn is_context_overflow(err: &HarnessError) -> bool {
+    match err {
+        // Only a refused request says it: a rate limit's "too many tokens per minute" (429) is no long prompt.
+        HarnessError::Http { status, body } => {
+            matches!(status, 400 | 413 | 422) && mentions_context_overflow(body)
+        }
+        HarnessError::Protocol(message) => mentions_context_overflow(message),
+        _ => false,
+    }
+}
+
+/// Whether an error's text says the prompt does not fit the model's context, in one of the providers' phrasings.
+pub fn mentions_context_overflow(text: &str) -> bool {
+    const PHRASES: [&str; 7] = [
+        "context length",
+        "context_length",
+        "context window",
+        "maximum context",
+        "too many tokens",
+        "prompt is too long",
+        "input is too long",
+    ];
+    let text = text.to_ascii_lowercase();
+    PHRASES.iter().any(|phrase| text.contains(phrase))
+}
+
+/// The model's context in the list `GET …/v1/models` answers: OpenRouter's `context_length`, or the names other
+/// OpenAI-compatible servers use.
+fn window_in_list(list: &Value, model: &str) -> Option<u32> {
+    let entry = list
+        .get("data")?
+        .as_array()?
+        .iter()
+        .find(|entry| entry.get("id").and_then(Value::as_str) == Some(model))?;
+    ["context_length", "context_window", "max_context_length"]
+        .iter()
+        .find_map(|key| entry.get(*key).and_then(Value::as_u64))
+        .and_then(|tokens| u32::try_from(tokens).ok())
+        .filter(|tokens| *tokens > 0)
 }
 
 /// A model behind an OpenAI-compatible chat API.
@@ -468,6 +521,20 @@ impl ChatModel for OpenAiCompat {
 
     fn name(&self) -> &str {
         &self.endpoint.model
+    }
+
+    async fn context_window(&self) -> Option<u32> {
+        let url = format!("{}/v1/models", self.endpoint.base_url.trim_end_matches('/'));
+        let mut request = self.client.get(url).timeout(MODEL_LIST_TIMEOUT);
+        if let Some(key) = &self.endpoint.api_key {
+            request = request.bearer_auth(key);
+        }
+        let response = request.send().await.ok()?;
+        if !response.status().is_success() {
+            return None;
+        }
+        let text = read_capped(response).await.ok()?;
+        window_in_list(&serde_json::from_str(&text).ok()?, &self.endpoint.model)
     }
 }
 
@@ -1074,6 +1141,53 @@ pub(crate) mod fake {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_too_long_prompt_is_recognised_in_the_providers_words() {
+        let http = |body: &str| HarnessError::Http {
+            status: 400,
+            body: body.into(),
+        };
+        for body in [
+            "This model's maximum context length is 131072 tokens",
+            r#"{"error":{"code":"context_length_exceeded"}}"#,
+            "prompt is too long: 210000 tokens > 200000 maximum",
+            "Input is too long for requested model",
+        ] {
+            assert!(is_context_overflow(&http(body)), "{body}");
+        }
+        assert!(is_context_overflow(&HarnessError::Protocol(
+            "the stream ended with an error: context length exceeded (131072)".into()
+        )));
+        assert!(!is_context_overflow(&http("invalid api key")));
+        let rate_limited = HarnessError::Http {
+            status: 429,
+            body: "too many tokens per minute".into(),
+        };
+        assert!(
+            !is_context_overflow(&rate_limited),
+            "a rate limit is no long prompt"
+        );
+        assert!(!is_context_overflow(&HarnessError::Transport(
+            "context length".into()
+        )));
+    }
+
+    #[test]
+    fn the_window_is_read_from_the_model_list_by_the_models_id() {
+        let list = json!({"data": [
+            {"id": "deepseek/v4", "context_length": 131072},
+            {"id": "local", "context_window": 32768},
+            {"id": "none"},
+            {"id": "zero", "context_length": 0}
+        ]});
+        assert_eq!(window_in_list(&list, "deepseek/v4"), Some(131072));
+        assert_eq!(window_in_list(&list, "local"), Some(32768));
+        assert_eq!(window_in_list(&list, "none"), None);
+        assert_eq!(window_in_list(&list, "zero"), None);
+        assert_eq!(window_in_list(&list, "missing"), None);
+        assert_eq!(window_in_list(&json!({"error": "x"}), "deepseek/v4"), None);
+    }
     use super::fake::{Answer, FakeApi};
     use super::*;
 

@@ -5,13 +5,14 @@
 //! its `allow` rules — counts only in a folder the owner trusted once (`~/.axh/trusted.json`), and its mode never
 //! lets through more than the owner's own (security review of HS3a, 2026-10-13).
 
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 use super::{Mode, Rule, RuleSet};
-use crate::config::Effort;
+use crate::config::{Compaction, Effort, MIN_CONTEXT_WINDOW, RefusalLimits};
 use crate::error::HarnessError;
 use crate::hooks::{Hooks, HooksSection};
 
@@ -80,6 +81,58 @@ struct File {
     /// owner chose.
     #[serde(default)]
     effort: Option<String>,
+    /// When refusals end a run (Glut robust, #112); the owner's file only — a project could otherwise lift them.
+    #[serde(default)]
+    refusals: Option<RefusalsSection>,
+    /// Whether a run compacts itself near the limit (#111, K6): `{"auto": false}` turns it off. The owner's only.
+    #[serde(default)]
+    compact: Option<CompactSection>,
+    /// The models' context windows in tokens (#111, K2), for a provider whose model list says none:
+    /// `{"gemma4:12b": 32768}`. The owner's only.
+    #[serde(default, rename = "contextWindow")]
+    context_window: HashMap<String, u32>,
+}
+
+/// The `compact` section (#111, K6).
+#[derive(Debug, Default, Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompactSection {
+    #[serde(default)]
+    pub auto: Option<bool>,
+}
+
+/// The `refusals` section (#112, R6): `{"repeat": 3, "total": 15}`, either may be left out.
+#[derive(Debug, Default, Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RefusalsSection {
+    #[serde(default)]
+    pub repeat: Option<u32>,
+    #[serde(default)]
+    pub total: Option<u32>,
+}
+
+impl RefusalsSection {
+    /// The limits this section sets over the defaults.
+    ///
+    /// # Errors
+    ///
+    /// A message when `repeat` is below 2 (the warning would never come) or `total` below `repeat`.
+    pub fn limits(self) -> Result<RefusalLimits, String> {
+        let limits = RefusalLimits {
+            repeat: self.repeat.unwrap_or(RefusalLimits::DEFAULT.repeat),
+            total: self.total.unwrap_or(RefusalLimits::DEFAULT.total),
+        };
+        if limits.repeat < 2 {
+            return Err(format!("refusals.repeat is {}, at least 2", limits.repeat));
+        }
+        if limits.total < limits.repeat {
+            return Err(format!(
+                "refusals.total ({}) is below refusals.repeat ({})",
+                limits.total, limits.repeat
+            ));
+        }
+        Ok(limits)
+    }
 }
 
 /// The `sandbox` section of one settings file (HS3b), as written: paths are still text, `~/…` or relative.
@@ -159,6 +212,12 @@ pub struct Settings {
     pub hooks: Hooks,
     /// The `effort` as written: [`load`] reads the owner's and leaves a project's unread, so a typo there stops nothing.
     pub effort: Option<String>,
+    /// The `refusals` section as written; like `effort`, only the owner's is read.
+    pub refusals: Option<RefusalsSection>,
+    /// The `compact` section as written; only the owner's is read.
+    pub compact: Option<CompactSection>,
+    /// `contextWindow` as written; only the owner's is read.
+    pub context_window: HashMap<String, u32>,
 }
 
 /// Reads one settings file; a missing file says nothing.
@@ -221,6 +280,9 @@ pub fn read(path: &Path) -> Result<Settings, HarnessError> {
         sandbox: file.sandbox.unwrap_or_default(),
         hooks,
         effort: file.effort,
+        refusals: file.refusals,
+        compact: file.compact,
+        context_window: file.context_window,
     })
 }
 
@@ -239,6 +301,22 @@ pub struct Loaded {
     pub project_hooks_skipped: bool,
     /// The owner's `effort`; a project's is left out unread — it would spend the owner's money.
     pub effort: Option<Effort>,
+    /// The owner's refusal limits, else the defaults (#112).
+    pub refusals: RefusalLimits,
+    /// Whether runs compact themselves (#111, K6): the owner's `compact.auto`, else on.
+    pub compact_auto: bool,
+    /// The owner's context windows by model id (#111, K2).
+    pub context_windows: HashMap<String, u32>,
+}
+
+impl Loaded {
+    /// The run's compaction for `model`: the owner's switch and the window the settings name for it.
+    pub fn compaction(&self, model: &str) -> Compaction {
+        Compaction {
+            auto: self.compact_auto,
+            context_window: self.context_windows.get(model).copied(),
+        }
+    }
 }
 
 /// The project's settings files.
@@ -292,6 +370,24 @@ pub fn load(home: &Path, project: &Path, trusted: bool) -> Result<Loaded, Harnes
             path: owners.display().to_string(),
             reason,
         })?;
+    let refusals = user
+        .refusals
+        .unwrap_or_default()
+        .limits()
+        .map_err(|reason| HarnessError::Settings {
+            path: owners.display().to_string(),
+            reason,
+        })?;
+    if let Some((model, tokens)) = user
+        .context_window
+        .iter()
+        .find(|(_, tokens)| **tokens < MIN_CONTEXT_WINDOW)
+    {
+        return Err(HarnessError::Settings {
+            path: owners.display().to_string(),
+            reason: format!("contextWindow of {model} is {tokens}, at least {MIN_CONTEXT_WINDOW}"),
+        });
+    }
     let ceiling = user.mode.unwrap_or_default().looseness();
     let owner = &user.sandbox;
     let mut sandbox = SandboxSettings {
@@ -316,6 +412,12 @@ pub fn load(home: &Path, project: &Path, trusted: bool) -> Result<Loaded, Harnes
         hooks: user.hooks,
         project_hooks_skipped: false,
         effort,
+        refusals,
+        compact_auto: user
+            .compact
+            .and_then(|section| section.auto)
+            .unwrap_or(true),
+        context_windows: user.context_window,
     };
     for file in project_files(project) {
         let settings = read(&file)?;
@@ -624,6 +726,78 @@ mod tests {
             load(&home, &project, false),
             Err(HarnessError::Settings { .. })
         ));
+    }
+
+    #[test]
+    fn the_owners_refusal_limits_count_a_projects_are_left_out_and_odd_ones_stop_the_run() {
+        let (home, project) = (temp("refusals-home"), temp("refusals-project"));
+        assert_eq!(
+            load(&home, &project, true).unwrap().refusals,
+            RefusalLimits::DEFAULT
+        );
+        write(
+            &home.join(".axh/settings.json"),
+            r#"{"refusals": {"total": 30}}"#,
+        );
+        write(
+            &project.join(".axh/settings.json"),
+            r#"{"refusals": {"repeat": 99, "total": 999}}"#,
+        );
+        assert_eq!(
+            load(&home, &project, true).unwrap().refusals,
+            RefusalLimits {
+                repeat: 3,
+                total: 30
+            },
+            "a project could otherwise lift the limits"
+        );
+        for odd in [
+            r#"{"refusals": {"repeat": 1}}"#,
+            r#"{"refusals": {"repeat": 5, "total": 4}}"#,
+        ] {
+            write(&home.join(".axh/settings.json"), odd);
+            let err = load(&home, &project, true).unwrap_err().to_string();
+            assert!(err.contains("refusals."), "{err}");
+        }
+        write(
+            &home.join(".axh/settings.json"),
+            r#"{"refusals": {"repat": 3}}"#,
+        );
+        assert!(load(&home, &project, true).is_err(), "a misspelled field");
+    }
+
+    #[test]
+    fn the_owners_compaction_counts_a_projects_is_left_out_and_a_tiny_window_stops_the_run() {
+        let (home, project) = (temp("compact-home"), temp("compact-project"));
+        let loaded = load(&home, &project, true).unwrap();
+        assert_eq!(loaded.compaction("m"), Compaction::default());
+        write(
+            &home.join(".axh/settings.json"),
+            r#"{"compact": {"auto": false}, "contextWindow": {"gemma4:12b": 32768}}"#,
+        );
+        write(
+            &project.join(".axh/settings.json"),
+            r#"{"compact": {"auto": true}, "contextWindow": {"other": 999999}}"#,
+        );
+        let loaded = load(&home, &project, true).unwrap();
+        assert_eq!(
+            loaded.compaction("gemma4:12b"),
+            Compaction {
+                auto: false,
+                context_window: Some(32768)
+            }
+        );
+        assert_eq!(
+            loaded.compaction("other").context_window,
+            None,
+            "a project's is left out"
+        );
+        write(
+            &home.join(".axh/settings.json"),
+            r#"{"contextWindow": {"m": 100}}"#,
+        );
+        let err = load(&home, &project, true).unwrap_err().to_string();
+        assert!(err.contains("contextWindow of m is 100"), "{err}");
     }
 
     #[test]

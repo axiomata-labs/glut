@@ -8,7 +8,9 @@ use tokio::sync::Notify;
 use tokio::time::Instant;
 
 use crate::codemode;
-use crate::config::RunConfig;
+use crate::compact::{self, COMPACTION_FAILED, KEEP_RECENT_TOKENS};
+use crate::config::{MIN_CONTEXT_WINDOW, RunConfig};
+use crate::error::HarnessError;
 use crate::event::{EVENT_RESULT_CHARS, Event, EventSink, FinishReason};
 use crate::hooks::{self, HookEvent, HookOutcome};
 use crate::journal::{self, Journal, Line, Recorded};
@@ -16,6 +18,7 @@ use crate::model::{ChatModel, Message, Role, ToolCall, ToolSpec, Usage};
 use crate::permissions::{Access, Answer, Gate, Mode};
 use crate::planning;
 use crate::prompt::{subagent_prompt, system_prompt};
+use crate::refusals::{Ledger, Refusal};
 use crate::results::{self, ResultStore};
 use crate::snapshot::{self, Snapshots};
 use crate::tools::shell::{Session, ShellOptions};
@@ -93,6 +96,8 @@ pub struct RunOutcome {
     pub answer: Option<String>,
     pub turns: u32,
     pub usage: Usage,
+    /// How many calls the run had refused (#112), so a parent counts its subagent's toward its own.
+    pub refusals: u32,
 }
 
 /// Runs `prompt` with `model` and `tools` under `config`, reporting each step to `sink`.
@@ -268,6 +273,17 @@ async fn run_inner<M: ChatModel>(
         snapshots: SnapshotState::Unopened,
         diagnostics: None,
         chain: None,
+        refusals: Ledger::new(config.refusals),
+        refused_now: Vec::new(),
+        subagent_refusals: 0,
+        window: config
+            .compaction
+            .context_window
+            .filter(|tokens| *tokens >= MIN_CONTEXT_WINDOW)
+            .map_or(Window::Unasked, Window::Known),
+        last_prompt: None,
+        compacted_at: None,
+        compacted_size: None,
     };
     let mut resumed_calls = Vec::new();
     match opening {
@@ -317,6 +333,7 @@ async fn run_inner<M: ChatModel>(
         Ok(()) => run.drive(sink).await,
     };
     stop.store(true, Ordering::SeqCst);
+    let refusals = run.refusals.total();
     let Loop {
         usage,
         answer,
@@ -342,6 +359,7 @@ async fn run_inner<M: ChatModel>(
         answer,
         turns,
         usage,
+        refusals,
     };
     (outcome, messages)
 }
@@ -426,6 +444,60 @@ struct Loop<'a, M: ChatModel> {
     /// Glut lean, N7: the last chain's answer as the tool gave it and where its parts lie — taken by that call's
     /// [`Self::run_call`], and only while its answer is still that text (a hook may have replaced it).
     chain: Option<ChainAnswer>,
+    /// #112: what the run had refused, and when that ends it.
+    refusals: Ledger,
+    /// The current call's refusals judged outside [`Self::perform`] (the `task` judgement), taken by it.
+    refused_now: Vec<Refusal>,
+    /// The refusals of the subagent the current call started, taken by [`Self::perform`] (R5).
+    subagent_refusals: u32,
+    /// #111: what the run knows of its model's context window.
+    window: Window,
+    /// The provider's prompt tokens of the last model call, and how many messages that prompt had (K1).
+    last_prompt: Option<(u64, usize)>,
+    /// The conversation's length after the last compaction (or a failed one): not compacted again before it grew.
+    compacted_at: Option<usize>,
+    /// The prompt's estimated size right after the last compaction.
+    compacted_size: Option<u64>,
+}
+
+/// What a run knows of its model's context window (#111, K2).
+#[derive(Debug, Clone, Copy)]
+enum Window {
+    /// Not known yet: the provider is asked once the conversation is long enough to matter.
+    Unasked,
+    Known(u32),
+    /// The provider's list said nothing: only its "too long" compacts (K4).
+    Unknown,
+}
+
+/// From how many estimated tokens on the run asks the provider for the window: below it no model's is near.
+const ASK_WINDOW_FROM: u64 = 16_384;
+/// The share of the window kept free (K1, the measure Opencode and Pi chose), and at least [`MIN_RESERVE_TOKENS`].
+const RESERVE_PERCENT: u64 = 15;
+const MIN_RESERVE_TOKENS: u64 = 16_384;
+/// The answer's room when the run sets no `max_output_tokens`.
+const DEFAULT_OUTPUT_RESERVE: u64 = 8_192;
+
+/// The prompt size from which a run with a `window`-token model compacts (K1). Each reserve takes at most a quarter
+/// of the window, so a small one (a local model's 8k) still compacts from half of it — not from nothing at every step.
+fn compact_from(window: u32, max_output_tokens: Option<u32>) -> u64 {
+    let window = u64::from(window);
+    let quarter = window / 4;
+    let reserve = (window * RESERVE_PERCENT / 100)
+        .max(MIN_RESERVE_TOKENS)
+        .min(quarter);
+    let output = max_output_tokens
+        .map_or(DEFAULT_OUTPUT_RESERVE, u64::from)
+        .min(quarter);
+    window - reserve - output
+}
+
+/// How much of the newest conversation a compaction keeps (K3): at most half of the room before the limit, so the
+/// summary and the next steps fit beside it.
+fn keep_for(window: Option<u32>, max_output_tokens: Option<u32>) -> u64 {
+    window.map_or(KEEP_RECENT_TOKENS, |window| {
+        KEEP_RECENT_TOKENS.min(compact_from(window, max_output_tokens) / 2)
+    })
 }
 
 /// A `bash` chain's answer and its parts (N7).
@@ -563,6 +635,9 @@ impl<M: ChatModel> Loop<'_, M> {
                 return FinishReason::MaxTurns;
             }
             self.turns += 1;
+            if let Err(ending) = self.compact_if_full(sink).await {
+                return ending;
+            }
             let specs = self.offer.specs.clone();
             let calls = match self.ask(&specs, sink).await {
                 Ok(calls) => calls,
@@ -593,24 +668,27 @@ impl<M: ChatModel> Loop<'_, M> {
         sink: &mut dyn EventSink,
     ) -> Result<Vec<ToolCall>, FinishReason> {
         let turn = self.turns;
-        let reply = {
-            // The answer's text goes out as it streams in (CP5); the whole text follows below either way.
-            let mut on_text = |text: &str| {
-                sink.emit(Event::TextDelta {
-                    turn,
-                    text: text.to_owned(),
-                });
-            };
-            let completion = self.model.complete_streaming(
-                &self.messages,
-                specs,
-                self.config.max_output_tokens,
-                &mut on_text,
-            );
-            tokio::select! {
-                reply = completion => reply,
-                () = tokio::time::sleep_until(self.deadline) => return Err(FinishReason::Timeout),
-                () = self.cancel.cancelled() => return Err(FinishReason::Cancelled),
+        let mut retried = false;
+        let reply = loop {
+            let reply = self.complete(specs, sink).await?;
+            match reply {
+                // K4: the provider says the prompt does not fit — compacted once, asked again; a second time fails.
+                Err(err)
+                    if !retried && self.compacts() && crate::model::is_context_overflow(&err) =>
+                {
+                    retried = true;
+                    let before = self.estimated_prompt();
+                    let window = match self.window {
+                        Window::Known(window) => Some(window),
+                        Window::Unasked | Window::Unknown => None,
+                    };
+                    let keep = keep_for(window, self.config.max_output_tokens);
+                    if self.compact_now(keep, before, sink).await? {
+                        continue;
+                    }
+                    break Err(err);
+                }
+                other => break other,
             }
         };
         let reply = reply.map_err(|err| {
@@ -625,6 +703,9 @@ impl<M: ChatModel> Loop<'_, M> {
             input_tokens: reply.usage.input_tokens,
             output_tokens: reply.usage.output_tokens,
         });
+        // K1: the provider's own count of this prompt; what is added after it is estimated.
+        self.last_prompt = (reply.usage.input_tokens > 0)
+            .then_some((reply.usage.input_tokens, self.messages.len()));
         self.answer = reply.message.content.clone();
         if let Some(text) = &self.answer {
             sink.emit(Event::AssistantText {
@@ -641,6 +722,172 @@ impl<M: ChatModel> Loop<'_, M> {
         };
         self.journal_line(&progress, sink);
         Ok(calls)
+    }
+
+    /// One model call on the conversation as it is, its text streamed out as it comes (CP5); `Err` when the run ended
+    /// while it waited, the API's own error inside.
+    async fn complete(
+        &mut self,
+        specs: &[ToolSpec],
+        sink: &mut dyn EventSink,
+    ) -> Result<Result<crate::model::Reply, HarnessError>, FinishReason> {
+        let turn = self.turns;
+        let mut on_text = |text: &str| {
+            sink.emit(Event::TextDelta {
+                turn,
+                text: text.to_owned(),
+            });
+        };
+        let completion = self.model.complete_streaming(
+            &self.messages,
+            specs,
+            self.config.max_output_tokens,
+            &mut on_text,
+        );
+        tokio::select! {
+            reply = completion => Ok(reply),
+            () = tokio::time::sleep_until(self.deadline) => Err(FinishReason::Timeout),
+            () = self.cancel.cancelled() => Err(FinishReason::Cancelled),
+        }
+    }
+
+    /// Whether this run compacts itself (#111): when the settings leave it on, and never in a subagent — its
+    /// conversation is short and its own.
+    fn compacts(&self) -> bool {
+        self.config.compaction.auto && self.depth == 0
+    }
+
+    /// The prompt's size now (K1): the provider's count of the last one and an estimate of what came after it —
+    /// before the first call, of the whole conversation and the tools on offer.
+    fn estimated_prompt(&self) -> u64 {
+        match self.last_prompt {
+            Some((tokens, len)) if len <= self.messages.len() => {
+                tokens + compact::estimate_tokens(&self.messages[len..])
+            }
+            _ => {
+                let specs: usize = self
+                    .offer
+                    .specs
+                    .iter()
+                    .map(|spec| {
+                        spec.name.len() + spec.description.len() + spec.parameters.to_string().len()
+                    })
+                    .sum();
+                compact::estimate_tokens(&self.messages) + (specs / 4) as u64
+            }
+        }
+    }
+
+    /// K1/K2: compacts before the model call when the prompt nears the window — the window asked for once, when the
+    /// conversation is long enough for it to matter.
+    async fn compact_if_full(&mut self, sink: &mut dyn EventSink) -> Result<(), FinishReason> {
+        if !self.compacts() || self.compacted_at == Some(self.messages.len()) {
+            return Ok(());
+        }
+        let estimate = self.estimated_prompt();
+        let window = match self.window {
+            Window::Known(window) => window,
+            Window::Unknown => return Ok(()),
+            Window::Unasked if estimate < ASK_WINDOW_FROM => return Ok(()),
+            Window::Unasked => {
+                let asked = tokio::select! {
+                    asked = self.model.context_window() => asked,
+                    () = tokio::time::sleep_until(self.deadline) => return Err(FinishReason::Timeout),
+                    () = self.cancel.cancelled() => return Err(FinishReason::Cancelled),
+                };
+                let asked = asked.filter(|tokens| *tokens >= MIN_CONTEXT_WINDOW);
+                self.window = asked.map_or(Window::Unknown, Window::Known);
+                match asked {
+                    Some(window) => window,
+                    None => return Ok(()),
+                }
+            }
+        };
+        let from = compact_from(window, self.config.max_output_tokens);
+        // Not again before the conversation grew by a quarter of the room since the last one: a tail that stays large
+        // (the prompt and tools of a small window) must not be summarised anew at every step.
+        let grown = self
+            .compacted_size
+            .is_none_or(|after| estimate >= after + from / 4);
+        if estimate < from || !grown {
+            return Ok(());
+        }
+        let keep = keep_for(Some(window), self.config.max_output_tokens);
+        self.compact_now(keep, estimate, sink).await.map(|_| ())
+    }
+
+    /// Compacts the older part of the conversation (K3, K5): `true` when it did. A failure leaves the conversation as it
+    /// was, says so, and is not tried again before the conversation grew.
+    async fn compact_now(
+        &mut self,
+        keep: u64,
+        before: u64,
+        sink: &mut dyn EventSink,
+    ) -> Result<bool, FinishReason> {
+        self.flush_journal(sink);
+        let compacted = tokio::select! {
+            compacted = compact::compact_older(self.model, &self.messages, keep) => compacted,
+            () = tokio::time::sleep_until(self.deadline) => return Err(FinishReason::Timeout),
+            () = self.cancel.cancelled() => return Err(FinishReason::Cancelled),
+        };
+        let compacted = match compacted {
+            Ok(compacted) => compacted,
+            Err(err) => {
+                self.compacted_at = Some(self.messages.len());
+                sink.emit(Event::Error {
+                    message: format!("{COMPACTION_FAILED}: {err}"),
+                });
+                return Ok(false);
+            }
+        };
+        self.usage += compacted.usage;
+        sink.emit(Event::Usage {
+            turn: self.turns,
+            input_tokens: compacted.usage.input_tokens,
+            output_tokens: compacted.usage.output_tokens,
+        });
+        // Relocated, never lost (Glut lean, N2): what the summary replaces stays in the run's store, and the summary
+        // says where — the model reads it back as it reads a relocated result.
+        // The model's reasoning stays out: it is no part of the conversation a later step needs (E4), and the store
+        // writes to disk in a chat.
+        let older: String = compacted
+            .older
+            .iter()
+            .map(|message| Message {
+                reasoning: None,
+                reasoning_content: None,
+                reasoning_details: Vec::new(),
+                ..message.clone()
+            })
+            .filter_map(|message| serde_json::to_string(&message).ok())
+            .map(|line| line + "\n")
+            .collect();
+        let id = self.results.put(older);
+        let mut conversation = compacted.conversation;
+        if let Some(notes) = conversation.iter_mut().find(|m| m.role == Role::User) {
+            let text = notes.content.get_or_insert_default();
+            text.push_str(&format!(
+                "\n\n[Glut: the conversation this summary replaces is kept whole as result {id}, one message per \
+                 line; {} reads it.]",
+                results::NAME
+            ));
+        }
+        self.messages = conversation;
+        self.last_prompt = None;
+        self.compacted_at = Some(self.messages.len());
+        self.compacted_size = Some(self.estimated_prompt());
+        sink.emit(Event::Compacted {
+            turn: self.turns,
+            before_tokens: before,
+            after_tokens: self.estimated_prompt(),
+            replaced: compacted.replaced,
+        });
+        let line = Line::Compacted {
+            messages: self.messages.clone(),
+        };
+        self.journal_line(&line, sink);
+        self.journaled = self.messages.len();
+        Ok(true)
     }
 
     /// HS7, D3: a Stop hook may refuse the answer; its reason goes back as a user message and the loop takes
@@ -675,7 +922,8 @@ impl<M: ChatModel> Loop<'_, M> {
         calls: Vec<ToolCall>,
         sink: &mut dyn EventSink,
     ) -> Result<(), FinishReason> {
-        for (index, call) in calls.into_iter().enumerate() {
+        let mut calls = calls.into_iter().enumerate();
+        while let Some((index, call)) = calls.next() {
             sink.emit(Event::tool_call(
                 self.turns,
                 &call.id,
@@ -695,7 +943,19 @@ impl<M: ChatModel> Loop<'_, M> {
                 },
                 sink,
             );
-            self.run_call(call, sink).await?;
+            if let Err(ending) = self.run_call(call, sink).await {
+                // #112, R3: the reply's other calls still get an answer, so the conversation stays one a provider
+                // takes — a caller may go on with it (`run_continuing`).
+                if ending == FinishReason::Refused {
+                    let message = self.refusals.ended().unwrap_or_default().to_owned();
+                    for (_, call) in calls.by_ref() {
+                        let output = format!("error: not run, the run is ending — {message}");
+                        self.answer_call(call, false, output, sink);
+                    }
+                    self.flush_journal(sink);
+                }
+                return Err(ending);
+            }
             self.flush_journal(sink);
         }
         self.flush_journal(sink);
@@ -844,6 +1104,14 @@ impl<M: ChatModel> Loop<'_, M> {
             bounded
         };
         self.messages.push(Message::tool(call.id, output));
+        // #112, R3: the call that reached a limit still has its answer above — the conversation stays whole for the
+        // journal — and the run ends here instead of at the step limit.
+        if let Some(message) = self.refusals.ended() {
+            sink.emit(Event::Error {
+                message: message.to_owned(),
+            });
+            return Err(FinishReason::Refused);
+        }
         Ok(())
     }
 
@@ -902,6 +1170,18 @@ impl<M: ChatModel> Loop<'_, M> {
         sink: &mut dyn EventSink,
     ) -> Result<String, FinishReason> {
         let turn = self.turns;
+        // #112: once refusals ended the run, a script's further calls are not run — the script finishes, the loop ends.
+        if let Some(message) = self.refusals.ended() {
+            let text = format!("error: not run, the run is ending — {message}");
+            sink.emit(Event::tool_result(
+                turn,
+                &call.id,
+                &call.function.name,
+                false,
+                &text,
+            ));
+            return Ok(text);
+        }
         // HS7, D3/B2: the owner's hooks may block a call before anything runs — they never let one through,
         // the gate stays the only decider.
         let payload = || {
@@ -921,7 +1201,17 @@ impl<M: ChatModel> Loop<'_, M> {
             )
             .await?;
         if before.blocked {
-            let text = format!("error: {}", refusal(before, "a hook refused this call"));
+            let reason = refusal(before, "a hook refused this call");
+            let blocked = Refusal {
+                tool: call.function.name.clone(),
+                target: call.function.arguments.clone(),
+                reason: reason.clone(),
+            };
+            let mut text = format!("error: {reason}");
+            if let Some(note) = self.refusals.record(&[blocked], 0) {
+                text.push_str("\n\n");
+                text.push_str(&note);
+            }
             sink.emit(Event::tool_result(
                 turn,
                 &call.id,
@@ -937,10 +1227,23 @@ impl<M: ChatModel> Loop<'_, M> {
             output.push_str("\n\n");
             output.push_str(&note);
         }
+        let mut refused = std::mem::take(&mut self.refused_now);
         if let Some(gate) = self.tools.gate() {
             for judged in gate.take_log() {
                 sink.emit(Event::permission(turn, &call.id, &judged));
+                if !judged.allowed {
+                    refused.push(Refusal {
+                        tool: judged.tool,
+                        target: judged.target,
+                        reason: judged.reason,
+                    });
+                }
             }
+        }
+        let from_subagent = std::mem::take(&mut self.subagent_refusals);
+        if let Some(note) = self.refusals.record(&refused, from_subagent) {
+            output.push_str("\n\n");
+            output.push_str(&note);
         }
         // In the stream the tool's own result is shown first (D3); the model's message may still differ.
         sink.emit(Event::tool_result(
@@ -1376,6 +1679,13 @@ impl<M: ChatModel> Loop<'_, M> {
             let judged = gate.judge(crate::task::NAME, &Access::Other).await;
             for entry in gate.take_log() {
                 sink.emit(Event::permission(turn, id, &entry));
+                if !entry.allowed {
+                    self.refused_now.push(Refusal {
+                        tool: entry.tool,
+                        target: entry.target,
+                        reason: entry.reason,
+                    });
+                }
             }
             if let Err(refused) = judged {
                 return (false, format!("error: {refused}"));
@@ -1414,6 +1724,7 @@ impl<M: ChatModel> Loop<'_, M> {
         }
         self.usage += outcome.usage;
         self.subagents_started += 1;
+        self.subagent_refusals += outcome.refusals;
         match outcome.reason {
             FinishReason::Answered => match outcome.answer {
                 // Bounded like every tool result when it enters the conversation (`run_call`).
@@ -1694,7 +2005,6 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
-    use crate::error::HarnessError;
     use crate::model::{FunctionCall, Reply, Role, ToolCall, ToolSpec};
     use crate::tools::{Tool, ToolFuture};
 
@@ -1732,6 +2042,9 @@ mod tests {
         /// subagent's never do (B2/D3).
         offered: Mutex<Vec<Vec<String>>>,
         delay: Duration,
+        /// What `context_window` answers, and how often it was asked (#111, K2).
+        window: Option<u32>,
+        window_asked: std::sync::atomic::AtomicU32,
     }
 
     impl Script {
@@ -1741,6 +2054,8 @@ mod tests {
                 seen: Mutex::new(Vec::new()),
                 offered: Mutex::new(Vec::new()),
                 delay: Duration::ZERO,
+                window: None,
+                window_asked: std::sync::atomic::AtomicU32::new(0),
             }
         }
     }
@@ -1767,6 +2082,12 @@ mod tests {
 
         fn name(&self) -> &str {
             "script"
+        }
+
+        async fn context_window(&self) -> Option<u32> {
+            self.window_asked
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.window
         }
     }
 
@@ -2895,6 +3216,449 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, Event::ModeChanged { .. }))
         );
+    }
+
+    /// A tool that changes the file its `path` names — asked for in the default mode, so refused headless.
+    struct Put;
+
+    impl Tool for Put {
+        fn spec(&self) -> ToolSpec {
+            ToolSpec {
+                name: "put".into(),
+                description: "p".into(),
+                parameters: json!({"type": "object"}),
+            }
+        }
+
+        fn access(&self, arguments: &Value) -> crate::permissions::Access {
+            crate::permissions::Access::Edit {
+                path: arguments["path"].as_str().unwrap_or_default().to_owned(),
+            }
+        }
+
+        fn call(&self, _arguments: Value, _context: crate::tools::CallContext) -> ToolFuture<'_> {
+            Box::pin(async { Ok("written".to_owned()) })
+        }
+    }
+
+    /// The toolbox with `put` behind a headless gate in the default mode, `allow` rules on top.
+    fn refusing_tools(allow: &[&str]) -> Toolbox {
+        use crate::permissions::{Gate, Mode, Nobody, Rule, RuleSet};
+        let mut tools = Toolbox::new();
+        tools.extend([Box::new(Put) as Box<dyn Tool>]);
+        let rules = RuleSet {
+            allow: allow
+                .iter()
+                .map(|rule| Rule::parse(rule).unwrap())
+                .collect(),
+            ..RuleSet::default()
+        };
+        tools.set_gate(Arc::new(Gate::new(rules, Mode::Default, Arc::new(Nobody))));
+        tools
+    }
+
+    fn put(id: &str, path: &str) -> Reply {
+        let arguments = json!({ "path": path }).to_string();
+        calls(&[(id, "put", arguments.as_str())])
+    }
+
+    /// The tool answers the model was sent, in order.
+    fn tool_answers(model: &Script) -> Vec<String> {
+        let seen = model.seen.lock().unwrap();
+        let last = seen.last().cloned().unwrap_or_default();
+        last.iter()
+            .filter(|m| m.role == Role::Tool)
+            .filter_map(|m| m.content.clone())
+            .collect()
+    }
+
+    fn error_events(events: &[Event]) -> Vec<String> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Error { message } => Some(message.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// `echo` with a long text: one step of about 4,000 tokens (the call's arguments and its result).
+    fn echo_long(id: &str, prompt_tokens: u64) -> Reply {
+        let arguments = json!({ "text": "e".repeat(8_000) }).to_string();
+        let mut reply = calls(&[(id, "echo", arguments.as_str())]);
+        reply.usage.input_tokens = prompt_tokens;
+        reply
+    }
+
+    fn compactions(events: &[Event]) -> Vec<(u64, u64, usize)> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Compacted {
+                    before_tokens,
+                    after_tokens,
+                    replaced,
+                    ..
+                } => Some((*before_tokens, *after_tokens, *replaced)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_run_near_its_window_compacts_the_older_steps_before_the_next_call() {
+        // Window 30k, 1k output: compacts from 21,500 tokens and keeps the newest ~10k — two steps.
+        let model = Script::new(vec![
+            Ok(echo_long("c1", 10)),
+            Ok(echo_long("c2", 10)),
+            Ok(echo_long("c3", 10)),
+            Ok(echo_long("c4", 20_000)),
+            Ok(text("Echoed three long texts.")),
+            Ok(text("done")),
+        ]);
+        let mut config = RunConfig::new("/w");
+        config.compaction.context_window = Some(30_000);
+        config.max_output_tokens = Some(1_000);
+        let mut events = Vec::new();
+        let outcome = run(
+            &config,
+            &model,
+            &toolbox(),
+            "go",
+            &mut events,
+            &Cancel::new(),
+        )
+        .await;
+        assert_eq!(outcome.reason, FinishReason::Answered);
+        assert_eq!(outcome.answer.as_deref(), Some("done"));
+        let done = compactions(&events);
+        assert_eq!(done.len(), 1, "{done:?}");
+        let (before, after, replaced) = done[0];
+        assert!(before > 21_500 && after < before, "{done:?}");
+        assert_eq!(replaced, 4, "two older steps of two messages");
+        let seen = model.seen.lock().unwrap();
+        let last = seen.last().unwrap();
+        let roles: Vec<Role> = last.iter().map(|m| m.role).collect();
+        assert_eq!(
+            roles,
+            [
+                Role::System,
+                Role::User,
+                Role::Assistant,
+                Role::User,
+                Role::Assistant,
+                Role::Tool,
+                Role::Assistant,
+                Role::Tool
+            ]
+        );
+        let notes = last[1].content.as_deref().unwrap();
+        assert!(notes.contains("Echoed three long texts."), "{notes}");
+        assert!(
+            notes.contains("kept whole as result") && notes.contains("read_full_result"),
+            "{notes}"
+        );
+        assert_eq!(last[3].content.as_deref(), Some("go"));
+        let metered = events
+            .iter()
+            .filter(|e| matches!(e, Event::Usage { .. }))
+            .count();
+        assert_eq!(metered, 6, "five model calls and the summary");
+    }
+
+    #[tokio::test]
+    async fn a_too_long_prompt_compacts_once_and_asks_again() {
+        let overflow = || HarnessError::Http {
+            status: 400,
+            body: "This model's maximum context length is 8192 tokens".into(),
+        };
+        let earlier = vec![Message::user("before"), text("an earlier answer").message];
+        let model = Script::new(vec![
+            Err(overflow()),
+            Ok(text("They talked before.")),
+            Ok(text("done")),
+        ]);
+        let mut events = Vec::new();
+        let (outcome, conversation) = run_continuing(
+            &RunConfig::new("/w"),
+            &model,
+            &toolbox(),
+            earlier.clone(),
+            "go",
+            &mut events,
+            &Cancel::new(),
+        )
+        .await;
+        assert_eq!(outcome.reason, FinishReason::Answered);
+        assert_eq!(compactions(&events).len(), 1);
+        assert!(
+            conversation
+                .iter()
+                .all(|m| m.content.as_deref() != Some("before")),
+            "summarised away"
+        );
+
+        // Too long again after compacting: the run fails as before, without a second compaction.
+        let model = Script::new(vec![Err(overflow()), Ok(text("summary")), Err(overflow())]);
+        let mut events = Vec::new();
+        let (outcome, _) = run_continuing(
+            &RunConfig::new("/w"),
+            &model,
+            &toolbox(),
+            earlier.clone(),
+            "go",
+            &mut events,
+            &Cancel::new(),
+        )
+        .await;
+        assert_eq!(outcome.reason, FinishReason::Failed);
+        assert_eq!(compactions(&events).len(), 1);
+
+        // Switched off: no compaction, the provider's error stands.
+        let mut config = RunConfig::new("/w");
+        config.compaction.auto = false;
+        let model = Script::new(vec![Err(overflow())]);
+        let mut events = Vec::new();
+        let (outcome, _) = run_continuing(
+            &config,
+            &model,
+            &toolbox(),
+            earlier,
+            "go",
+            &mut events,
+            &Cancel::new(),
+        )
+        .await;
+        assert_eq!(outcome.reason, FinishReason::Failed);
+        assert!(compactions(&events).is_empty());
+    }
+
+    #[tokio::test]
+    async fn nothing_older_to_compact_says_so_once_and_the_run_goes_on() {
+        let model = Script::new(vec![Ok(echo_long("c1", 29_000)), Ok(text("done"))]);
+        let mut config = RunConfig::new("/w");
+        config.compaction.context_window = Some(30_000);
+        let mut events = Vec::new();
+        let outcome = run(
+            &config,
+            &model,
+            &toolbox(),
+            "go",
+            &mut events,
+            &Cancel::new(),
+        )
+        .await;
+        assert_eq!(outcome.reason, FinishReason::Answered);
+        let failed: Vec<String> = error_events(&events)
+            .into_iter()
+            .filter(|m| m.starts_with(COMPACTION_FAILED))
+            .collect();
+        assert_eq!(failed.len(), 1, "{failed:?}");
+    }
+
+    #[test]
+    fn a_small_window_still_compacts_from_half_of_it() {
+        assert_eq!(compact_from(8_192, None), 4_096);
+        assert_eq!(keep_for(Some(8_192), None), 2_048);
+        // A large one keeps the full reserve and output room.
+        assert_eq!(compact_from(131_072, None), 131_072 - 19_660 - 8_192);
+        assert_eq!(keep_for(Some(131_072), None), KEEP_RECENT_TOKENS);
+        assert_eq!(keep_for(None, None), KEEP_RECENT_TOKENS);
+    }
+
+    #[tokio::test]
+    async fn the_window_is_asked_for_once_when_it_matters_and_a_tiny_one_is_ignored() {
+        // A short run never asks.
+        let model = Script::new(vec![Ok(text("done"))]);
+        let config = RunConfig::new("/w");
+        run(
+            &config,
+            &model,
+            &toolbox(),
+            "go",
+            &mut Vec::new(),
+            &Cancel::new(),
+        )
+        .await;
+        assert_eq!(
+            model.window_asked.load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+
+        // Past 16k it asks once; a window below the floor counts as none — the run goes on without compacting.
+        let mut model = Script::new(vec![
+            Ok(echo_long("c1", 20_000)),
+            Ok(echo_long("c2", 21_000)),
+            Ok(text("done")),
+        ]);
+        model.window = Some(1_000);
+        let mut events = Vec::new();
+        let outcome = run(
+            &config,
+            &model,
+            &toolbox(),
+            "go",
+            &mut events,
+            &Cancel::new(),
+        )
+        .await;
+        assert_eq!(outcome.reason, FinishReason::Answered);
+        assert_eq!(
+            model.window_asked.load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+        assert!(compactions(&events).is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_run_ended_by_refusals_still_answers_every_call_of_its_last_reply() {
+        let two = || {
+            let (a, b) = (
+                json!({"path": "a"}).to_string(),
+                json!({"path": "b"}).to_string(),
+            );
+            calls(&[("x", "put", a.as_str()), ("y", "put", b.as_str())])
+        };
+        let model = Script::new(vec![Ok(put("c1", "a")), Ok(put("c2", "a")), Ok(two())]);
+        let mut events = Vec::new();
+        let (outcome, conversation) = run_continuing(
+            &RunConfig::new("/w"),
+            &model,
+            &refusing_tools(&[]),
+            Vec::new(),
+            "go",
+            &mut events,
+            &Cancel::new(),
+        )
+        .await;
+        assert_eq!(outcome.reason, FinishReason::Refused);
+        let last = conversation.last().unwrap();
+        assert_eq!(
+            last.tool_call_id.as_deref(),
+            Some("y"),
+            "the second call has its answer"
+        );
+        assert!(
+            last.content
+                .as_deref()
+                .unwrap()
+                .contains("not run, the run is ending")
+        );
+    }
+
+    #[tokio::test]
+    async fn the_same_refused_call_is_warned_about_once_and_ends_the_run_the_third_time() {
+        let model = Script::new(vec![
+            Ok(put("c1", "a.txt")),
+            Ok(put("c2", "a.txt")),
+            Ok(put("c3", "a.txt")),
+            Ok(text("never asked")),
+        ]);
+        let mut events = Vec::new();
+        let config = RunConfig::new("/w");
+        let tools = refusing_tools(&[]);
+        let outcome = run(&config, &model, &tools, "go", &mut events, &Cancel::new()).await;
+        assert_eq!(outcome.reason, FinishReason::Refused);
+        assert_eq!(outcome.turns, 3, "not at the step limit");
+        assert_eq!(outcome.refusals, 3);
+        let answers = tool_answers(&model);
+        assert!(!answers[0].contains("[Glut:"), "{}", answers[0]);
+        assert!(answers[1].contains("refused 2 times now"), "{}", answers[1]);
+        let errors = error_events(&events);
+        assert!(
+            errors
+                .iter()
+                .any(|m| m.starts_with("stopped: `put` a.txt was refused 3 times")),
+            "{errors:?}"
+        );
+        assert!(matches!(
+            events.last(),
+            Some(Event::Finished {
+                reason: FinishReason::Refused,
+                ..
+            })
+        ));
+    }
+
+    #[tokio::test]
+    async fn refusals_of_different_calls_end_the_run_at_the_total() {
+        let model = Script::new(vec![
+            Ok(put("c1", "a")),
+            Ok(put("c2", "b")),
+            Ok(put("c3", "c")),
+            Ok(put("c4", "d")),
+            Ok(text("never asked")),
+        ]);
+        let mut config = RunConfig::new("/w");
+        config.refusals = crate::config::RefusalLimits {
+            repeat: 3,
+            total: 4,
+        };
+        let mut events = Vec::new();
+        let tools = refusing_tools(&[]);
+        let outcome = run(&config, &model, &tools, "go", &mut events, &Cancel::new()).await;
+        assert_eq!(outcome.reason, FinishReason::Refused);
+        assert_eq!(outcome.turns, 4);
+        let answers = tool_answers(&model);
+        assert!(
+            answers[1].contains("2 calls were refused in this run; at 4 it ends"),
+            "{}",
+            answers[1]
+        );
+        assert!(
+            error_events(&events)
+                .iter()
+                .any(|m| m.starts_with("stopped: 4 calls were refused in this run")),
+        );
+    }
+
+    #[tokio::test]
+    async fn a_subagents_refusals_count_toward_the_runs_total() {
+        // The parent starts a subagent that is refused twice and answers; the parent's next refusal is the third.
+        let model = Script::new(vec![
+            Ok(task_call(
+                "t1",
+                json!({"description": "d", "prompt": "try"}),
+            )),
+            Ok(put("s1", "x")),
+            Ok(put("s2", "y")),
+            Ok(text("could not write")),
+            Ok(put("c2", "z")),
+            Ok(text("never asked")),
+        ]);
+        let mut config = RunConfig::new("/w");
+        config.refusals = crate::config::RefusalLimits {
+            repeat: 3,
+            total: 3,
+        };
+        let mut events = Vec::new();
+        let tools = refusing_tools(&["task"]);
+        let outcome = run(&config, &model, &tools, "go", &mut events, &Cancel::new()).await;
+        assert_eq!(
+            outcome.reason,
+            FinishReason::Refused,
+            "{:?}",
+            error_events(&events)
+        );
+        assert_eq!(outcome.refusals, 3);
+    }
+
+    #[tokio::test]
+    async fn a_run_with_an_allowed_call_counts_nothing() {
+        let model = Script::new(vec![Ok(put("c1", "a")), Ok(text("done"))]);
+        let mut events = Vec::new();
+        let tools = refusing_tools(&["Edit"]);
+        let outcome = run(
+            &RunConfig::new("/w"),
+            &model,
+            &tools,
+            "go",
+            &mut events,
+            &Cancel::new(),
+        )
+        .await;
+        assert_eq!(outcome.reason, FinishReason::Answered);
+        assert_eq!(outcome.refusals, 0);
     }
 
     #[tokio::test]

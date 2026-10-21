@@ -133,6 +133,15 @@ struct RunArgs {
     /// The run's time limit in seconds.
     #[arg(long)]
     timeout_secs: Option<u64>,
+    /// The model's context window in tokens, over `contextWindow` in ~/.axh/settings.json and the provider's model
+    /// list: the run compacts its older steps shortly before it is full.
+    #[arg(long)]
+    #[serde(default)]
+    context_window: Option<u32>,
+    /// Never compact the conversation automatically (`"compact": {"auto": false}` in ~/.axh/settings.json).
+    #[arg(long)]
+    #[serde(default)]
+    no_auto_compact: bool,
     /// default, accept_edits, plan, dont_ask or auto; otherwise the settings files', else default. Headless, an
     /// ask is refused: name what the run may do with --allow, or pick a mode.
     #[arg(long)]
@@ -309,6 +318,8 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
         instructions_file,
         max_turns,
         timeout_secs,
+        context_window,
+        no_auto_compact,
         permission_mode,
         allow,
         ask,
@@ -433,8 +444,23 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
         eprintln!("axh: {note}");
     }
     // HS7: the hooks run with what the settings say about the sandbox, like the shell's own commands (D5).
+    // #111, K2/K6: the flags over the owner's settings; without a window the run asks the provider's list.
+    config.compaction = built.compaction(&endpoint.model);
     config.hooks = built.hooks;
     config.sandbox = Some(built.sandbox.clone());
+    config.refusals = built.refusals;
+    if let Some(window) = context_window {
+        if window < axiomata_harness::config::MIN_CONTEXT_WINDOW {
+            return fail(format!(
+                "--context-window {window}: at least {}",
+                axiomata_harness::config::MIN_CONTEXT_WINDOW
+            ));
+        }
+        config.compaction.context_window = Some(window);
+    }
+    if no_auto_compact {
+        config.compaction.auto = false;
+    }
 
     // Slash commands (HS4), with the same home, folder and trust the gate was built with (C1).
     let mut registry = match Registry::load(&home, &cwd, trusted) {
@@ -525,7 +551,7 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
     };
     ExitCode::from(match outcome.reason {
         FinishReason::Answered => 0,
-        FinishReason::Failed => 1,
+        FinishReason::Failed | FinishReason::Refused => 1,
         FinishReason::MaxTurns | FinishReason::Timeout | FinishReason::Cancelled => 2,
     })
 }
@@ -588,5 +614,6 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(args.effort, None);
+        assert_eq!((args.context_window, args.no_auto_compact), (None, false));
     }
 }

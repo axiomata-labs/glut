@@ -25,6 +25,9 @@ pub enum FinishReason {
     Cancelled,
     /// The model API failed; the `error` event before says how.
     Failed,
+    /// Refused calls ended it (#112): the same one tried again too often, or too many in all; the `error` event
+    /// before names the call and the reason.
+    Refused,
 }
 
 /// Whether an MCP server of the run came up (HS5, M3).
@@ -164,6 +167,15 @@ pub enum Event {
         what: String,
         chars_before: usize,
         chars_after: usize,
+    },
+    /// The run compacted its conversation before the model's context was full, or after the provider said it was
+    /// too long (Glut robust, #111, K5): the older part became a summary. In tokens, estimated before and after.
+    Compacted {
+        turn: u32,
+        before_tokens: u64,
+        after_tokens: u64,
+        /// How many messages the summary replaced.
+        replaced: usize,
     },
     Finished {
         reason: FinishReason,

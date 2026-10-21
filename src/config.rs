@@ -125,6 +125,59 @@ impl fmt::Debug for ModelEndpoint {
     }
 }
 
+/// How often a run may be refused before it ends (Glut robust, #112, R2–R4): a model that is refused keeps trying
+/// the same call, or ways around it, until the step limit — each a paid turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RefusalLimits {
+    /// The same call (tool and target) refused this often ends the run; one time fewer, its answer warns.
+    pub repeat: u32,
+    /// Refusals of any kind in one run: from a third of it on each refused answer counts them, at it the run ends.
+    pub total: u32,
+}
+
+impl RefusalLimits {
+    /// The owner's go, 2026-10-21: the third identical refusal ends the run, and the fifteenth of any kind.
+    pub const DEFAULT: RefusalLimits = RefusalLimits {
+        repeat: 3,
+        total: 15,
+    };
+
+    /// From which refusal of the run on each refused answer says how many there were.
+    pub fn total_note_from(self) -> u32 {
+        (self.total / 3).max(2)
+    }
+}
+
+impl Default for RefusalLimits {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+/// The smallest context window taken from a flag, the settings, a catalog or a provider's list (#111): below it a
+/// number is no window a run could work in, and compacting against it would summarise at every step.
+pub const MIN_CONTEXT_WINDOW: u32 = 4_096;
+
+/// When a run compacts its conversation itself (Glut robust, #111, K1–K6): shortly before the model's context is
+/// full, the older part becomes a summary by the run's own model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Compaction {
+    /// Compact near the limit and when the provider says the prompt is too long. On by default.
+    pub auto: bool,
+    /// The model's context in tokens, when the caller knows it (a flag, the settings, Axiomata's catalog); `None`:
+    /// the run asks the provider's model list once the conversation is long enough to matter.
+    pub context_window: Option<u32>,
+}
+
+impl Default for Compaction {
+    fn default() -> Self {
+        Compaction {
+            auto: true,
+            context_window: None,
+        }
+    }
+}
+
 /// One run's settings.
 #[derive(Debug, Clone)]
 pub struct RunConfig {
@@ -182,6 +235,10 @@ pub struct RunConfig {
     /// Whether an edit's result carries the language server's errors for the file (Glut 2, D, G12). On by default;
     /// without an installed server for the file's language nothing is added.
     pub diagnostics: bool,
+    /// When refusals end the run (#112); the owner's `"refusals"` in `~/.axh/settings.json` sets them.
+    pub refusals: RefusalLimits,
+    /// When the run compacts itself (#111); the owner's `"compact"` and `"contextWindow"` set it.
+    pub compaction: Compaction,
 }
 
 impl RunConfig {
@@ -209,6 +266,8 @@ impl RunConfig {
             results: None,
             savings: None,
             diagnostics: true,
+            refusals: RefusalLimits::DEFAULT,
+            compaction: Compaction::default(),
         }
     }
 }
