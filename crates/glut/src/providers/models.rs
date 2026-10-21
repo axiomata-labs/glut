@@ -45,6 +45,19 @@ pub struct ModelInfo {
     /// Whether the model reasons before it answers (`supported_parameters` naming `reasoning`); `None`: unknown.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<bool>,
+    /// When the provider added the model (Unix seconds, OpenRouter's `created`): the picker's "newest".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created: Option<i64>,
+}
+
+impl ModelInfo {
+    /// Whether the model costs nothing: a price of 0 both ways, or OpenRouter's `:free` variant.
+    pub fn free(&self) -> bool {
+        self.id.ends_with(":free")
+            || self
+                .prices
+                .is_some_and(|prices| prices.input_per_m == 0.0 && prices.output_per_m == 0.0)
+    }
 }
 
 /// A provider's list as kept on disk.
@@ -58,12 +71,23 @@ pub struct ModelList {
     /// The root the list came from: a list of another root (the provider was moved) is not this provider's.
     pub root: String,
     pub models: Vec<ModelInfo>,
+    /// The ids the account may use, where the provider says (OpenRouter's `/models/user`: after its guardrails,
+    /// privacy and provider settings); `None`: every model of the list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed: Option<Vec<String>>,
 }
 
 impl ModelList {
     /// The model `id`.
     pub fn get(&self, id: &str) -> Option<&ModelInfo> {
         self.models.iter().find(|model| model.id == id)
+    }
+
+    /// Whether the account may use model `id`.
+    pub fn allows(&self, id: &str) -> bool {
+        self.allowed
+            .as_ref()
+            .is_none_or(|allowed| allowed.iter().any(|allowed| allowed == id))
     }
 
     /// Whether the list may be used without asking the provider: younger than [`FRESH_FOR`], or a fetch failed less
@@ -142,11 +166,41 @@ pub async fn fetch(endpoint: &ModelEndpoint) -> Result<ModelList, String> {
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|err| err.to_string())?;
-    let url = if endpoint.versioned {
-        format!("{root}/models")
+    let base = if endpoint.versioned {
+        root.to_owned()
     } else {
-        format!("{root}/v1/models")
+        format!("{root}/v1")
     };
+    let value = get_json(&client, &format!("{base}/models"), endpoint).await?;
+    let models = parse(&value).ok_or("no model list: no `data` array")?;
+    // OpenRouter says which of them this account may use; a provider without such a list allows them all, and a
+    // failed ask leaves the list as it is.
+    let allowed = if crate::model::is_openrouter(root) && endpoint.api_key.is_some() {
+        get_json(&client, &format!("{base}/models/user"), endpoint)
+            .await
+            .ok()
+            .and_then(|value| parse(&value))
+            .map(|models| models.into_iter().map(|model| model.id).collect::<Vec<_>>())
+            // An empty answer says nothing about the account: every model stays usable.
+            .filter(|allowed| !allowed.is_empty())
+    } else {
+        None
+    };
+    Ok(ModelList {
+        fetched_at: Utc::now(),
+        failed_at: None,
+        root: root.to_owned(),
+        models,
+        allowed,
+    })
+}
+
+/// `url`'s answer as JSON, asked with the endpoint's key; the size bounded, the error shown without the key.
+async fn get_json(
+    client: &reqwest::Client,
+    url: &str,
+    endpoint: &ModelEndpoint,
+) -> Result<Value, String> {
     let mut request = client.get(url);
     if let Some(key) = &endpoint.api_key {
         request = request.bearer_auth(key);
@@ -180,15 +234,7 @@ pub async fn fetch(endpoint: &ModelEndpoint) -> Result<ModelList, String> {
             printable(&crate::model::redact(&text, endpoint.api_key.as_deref()))
         ));
     }
-    let value: Value =
-        serde_json::from_slice(&body).map_err(|err| format!("no model list: {err}"))?;
-    let models = parse(&value).ok_or("no model list: no `data` array")?;
-    Ok(ModelList {
-        fetched_at: Utc::now(),
-        failed_at: None,
-        root: root.to_owned(),
-        models,
-    })
+    serde_json::from_slice(&body).map_err(|err| format!("no model list: {err}"))
 }
 
 /// The kept list when it is fresh, else a new one from the provider — kept for next time; a provider that does not
@@ -263,6 +309,7 @@ fn model(entry: &Value) -> Option<ModelInfo> {
         context_window,
         prices: entry.get("pricing").and_then(prices),
         reasoning,
+        created: entry.get("created").and_then(Value::as_i64),
     })
 }
 
@@ -342,6 +389,17 @@ mod tests {
         let local = models.iter().find(|m| m.id == "qwen3:8b").unwrap();
         assert_eq!((local.context_window, local.reasoning), (None, None));
         assert!(parse(&json!({"models": []})).is_none());
+        assert!(models.iter().any(|m| m.id == "openrouter/auto"));
+        let free = ModelInfo {
+            id: "x/y:free".into(),
+            name: None,
+            context_window: None,
+            prices: None,
+            reasoning: None,
+            created: None,
+        };
+        assert!(free.free());
+        assert!(!flash.free());
     }
 
     #[test]
@@ -363,7 +421,9 @@ mod tests {
                 context_window: None,
                 prices: None,
                 reasoning: None,
+                created: Some(1_700_000_000),
             }],
+            allowed: Some(vec!["a/b".into()]),
         };
         keep(&home, "openrouter", &list).unwrap();
         let back = cached(&home, "openrouter", "https://openrouter.ai/api/v1").unwrap();
@@ -392,5 +452,10 @@ mod tests {
         assert_eq!(back.matching("model b").count(), 1);
         assert_eq!(back.matching("A/").count(), 1);
         assert_eq!(back.matching("b nope").count(), 0);
+        assert!(
+            back.allows("a/b") && !back.allows("c/d"),
+            "only what the account may use"
+        );
+        assert_eq!(back.get("a/b").unwrap().created, Some(1_700_000_000));
     }
 }

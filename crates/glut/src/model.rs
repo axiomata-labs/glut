@@ -215,7 +215,7 @@ fn api_messages(messages: &[Message]) -> Vec<Value> {
 
 /// Whether `base_url` is OpenRouter's, which takes the effort as `reasoning.effort` (E3); everyone else is sent the
 /// OpenAI-compatible `reasoning_effort`.
-fn is_openrouter(base_url: &str) -> bool {
+pub(crate) fn is_openrouter(base_url: &str) -> bool {
     reqwest::Url::parse(base_url)
         .ok()
         .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
@@ -302,6 +302,15 @@ pub struct Reply {
     pub usage: Usage,
 }
 
+/// One piece of a streaming answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Piece<'a> {
+    /// Text of the answer.
+    Text(&'a str),
+    /// The model's thinking before or between its words (`reasoning`, `reasoning_content`).
+    Reasoning(&'a str),
+}
+
 /// What the loop needs of a model.
 pub trait ChatModel: Send + Sync {
     /// One call: the conversation so far and the tools on offer.
@@ -312,14 +321,15 @@ pub trait ChatModel: Send + Sync {
         max_output_tokens: Option<u32>,
     ) -> impl Future<Output = Result<Reply, HarnessError>> + Send;
 
-    /// [`Self::complete`], with each piece of the answer's text handed to `on_text` as it arrives (glut-round CP5). A
-    /// model that does not stream hands nothing over and answers as `complete` does.
+    /// [`Self::complete`], with each piece of the answer — its text, and the model's thinking where the provider sends
+    /// it (TUI T8) — handed to `on_text` as it arrives (glut-round CP5). A model that does not stream hands nothing
+    /// over and answers as `complete` does.
     fn complete_streaming(
         &self,
         messages: &[Message],
         tools: &[ToolSpec],
         max_output_tokens: Option<u32>,
-        on_text: &mut (dyn FnMut(&str) + Send),
+        on_text: &mut (dyn FnMut(Piece<'_>) + Send),
     ) -> impl Future<Output = Result<Reply, HarnessError>> + Send {
         let _ = on_text;
         self.complete(messages, tools, max_output_tokens)
@@ -475,7 +485,7 @@ impl ChatModel for OpenAiCompat {
         messages: &[Message],
         tools: &[ToolSpec],
         max_output_tokens: Option<u32>,
-        on_text: &mut (dyn FnMut(&str) + Send),
+        on_text: &mut (dyn FnMut(Piece<'_>) + Send),
     ) -> Result<Reply, HarnessError> {
         let mut request = self
             .client
@@ -663,7 +673,7 @@ fn usage_of(value: &Value) -> Usage {
 async fn read_stream(
     mut response: reqwest::Response,
     stall: Duration,
-    on_text: &mut (dyn FnMut(&str) + Send),
+    on_text: &mut (dyn FnMut(Piece<'_>) + Send),
 ) -> Result<Reply, HarnessError> {
     let mut reader = StreamReader::default();
     let mut total = 0usize;
@@ -725,7 +735,7 @@ impl StreamReader {
     fn feed(
         &mut self,
         bytes: &[u8],
-        on_text: &mut (dyn FnMut(&str) + Send),
+        on_text: &mut (dyn FnMut(Piece<'_>) + Send),
     ) -> Result<bool, HarnessError> {
         self.pending.extend_from_slice(bytes);
         while let Some(end) = self.pending.iter().position(|byte| *byte == b'\n') {
@@ -738,7 +748,7 @@ impl StreamReader {
     }
 
     /// The last line, when the stream ended without a line break after it.
-    fn end(&mut self, on_text: &mut (dyn FnMut(&str) + Send)) -> Result<(), HarnessError> {
+    fn end(&mut self, on_text: &mut (dyn FnMut(Piece<'_>) + Send)) -> Result<(), HarnessError> {
         if !self.pending.is_empty() {
             let line = std::mem::take(&mut self.pending);
             self.stream.line(&line, on_text)?;
@@ -781,7 +791,7 @@ impl Stream {
     fn line(
         &mut self,
         line: &[u8],
-        on_text: &mut (dyn FnMut(&str) + Send),
+        on_text: &mut (dyn FnMut(Piece<'_>) + Send),
     ) -> Result<bool, HarnessError> {
         let line = std::str::from_utf8(line)
             .map_err(|_| HarnessError::Protocol("the answer is not UTF-8".into()))?
@@ -826,14 +836,20 @@ impl Stream {
             && !text.is_empty()
         {
             self.text.push_str(text);
-            on_text(text);
+            on_text(Piece::Text(text));
         }
+        // Shown once: a provider that sends the same thinking under both names (some do) is reported by the first.
+        let mut shown = false;
         for (key, kept) in [
             ("reasoning", &mut self.reasoning),
             ("reasoning_content", &mut self.reasoning_content),
         ] {
             if let Some(text) = delta.get(key).and_then(Value::as_str) {
                 kept.push_str(text);
+                if !shown && !text.is_empty() {
+                    on_text(Piece::Reasoning(text));
+                    shown = true;
+                }
             }
         }
         for block in delta
@@ -1375,8 +1391,10 @@ mod tests {
         let model = OpenAiCompat::new(endpoint(&api.base_url, None)).unwrap();
         let mut pieces = Vec::new();
         let reply = model
-            .complete_streaming(&[Message::user("hi")], &[spec()], None, &mut |text| {
-                pieces.push(text.to_owned());
+            .complete_streaming(&[Message::user("hi")], &[spec()], None, &mut |piece| {
+                if let Piece::Text(text) = piece {
+                    pieces.push(text.to_owned());
+                }
             })
             .await
             .unwrap();
@@ -1465,6 +1483,32 @@ mod tests {
             "beside its blocks the plain text would be the same thinking twice"
         );
         assert_eq!(sent[3], json!({"role": "user", "content": "second"}));
+    }
+
+    #[tokio::test]
+    async fn streamed_thinking_is_handed_over_once_beside_the_text() {
+        let api = FakeApi::spawn(vec![Answer::stream(&[
+            json!({"choices": [{"delta": {"reasoning": "let me ", "reasoning_content": "let me "}}]}),
+            json!({"choices": [{"delta": {"reasoning_content": "see"}}]}),
+            json!({"choices": [{"delta": {"content": "Done."}, "finish_reason": "stop"}]}),
+        ])])
+        .await;
+        let model = OpenAiCompat::new(endpoint(&api.base_url, None)).unwrap();
+        let mut seen = Vec::new();
+        model
+            .complete_streaming(&[Message::user("hi")], &[], None, &mut |piece| {
+                seen.push(match piece {
+                    Piece::Text(text) => format!("text:{text}"),
+                    Piece::Reasoning(text) => format!("thinking:{text}"),
+                });
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            seen,
+            ["thinking:let me ", "thinking:see", "text:Done."],
+            "the same thinking under two names is handed over once"
+        );
     }
 
     #[tokio::test]
@@ -1624,7 +1668,11 @@ mod tests {
         for cut in 1..bytes.len() {
             let mut reader = StreamReader::default();
             let mut pieces = String::new();
-            let mut on_text = |text: &str| pieces.push_str(text);
+            let mut on_text = |piece: Piece<'_>| {
+                if let Piece::Text(text) = piece {
+                    pieces.push_str(text);
+                }
+            };
             let done = reader.feed(&bytes[..cut], &mut on_text).unwrap()
                 || reader.feed(&bytes[cut..], &mut on_text).unwrap();
             if !done {
@@ -1645,7 +1693,7 @@ mod tests {
     #[test]
     fn tool_calls_are_assembled_whatever_numbering_the_provider_uses() {
         let mut stream = Stream::default();
-        let mut quiet = |_: &str| {};
+        let mut quiet = |_: Piece<'_>| {};
         for piece in [
             json!({"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "a", "function": {"name": "read_file", "arguments": "{\"p"}}]}}]}),
             json!({"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "", "function": {"name": "read_file", "arguments": "\":1}"}}]}}]}),
@@ -1683,7 +1731,7 @@ mod tests {
     /// usage at the end keeps the real one before it.
     #[test]
     fn a_stream_cut_off_is_no_answer_and_an_empty_usage_keeps_the_count() {
-        let mut quiet = |_: &str| {};
+        let mut quiet = |_: Piece<'_>| {};
         let mut cut = Stream::default();
         cut.line(
             br#"data: {"choices":[{"delta":{"content":"half"}}]}"#,

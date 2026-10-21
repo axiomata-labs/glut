@@ -31,6 +31,9 @@ pub struct Prefs {
     /// How a file opens at a line: `nvim +{line} {file}`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub editor: Option<String>,
+    /// How much of the model's thinking the stream shows (T8).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<crate::transcript::Thinking>,
     #[serde(flatten)]
     other: serde_json::Map<String, serde_json::Value>,
 }
@@ -110,6 +113,17 @@ pub fn set_editor(home: &Path, command: &str) -> Result<String, String> {
     prefs.editor = Some(command.clone());
     prefs.save(home)?;
     Ok(command)
+}
+
+/// Keeps how the thinking is shown.
+///
+/// # Errors
+///
+/// A message when the file cannot be read (it is not written over) or written.
+pub fn set_thinking(home: &Path, thinking: crate::transcript::Thinking) -> Result<(), String> {
+    let mut prefs = Prefs::read(home)?;
+    prefs.thinking = Some(thinking);
+    prefs.save(home)
 }
 
 /// The editors of [`EDITORS`] that are on the `PATH`.

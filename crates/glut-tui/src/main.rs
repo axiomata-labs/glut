@@ -7,6 +7,8 @@ mod input;
 mod picker;
 mod prefs;
 mod session;
+mod setup;
+mod store;
 mod theme;
 mod transcript;
 mod view;
@@ -52,6 +54,12 @@ struct Cli {
     /// The model; the provider's default otherwise.
     #[arg(long)]
     model: Option<String>,
+    /// Go on with the newest session of the folder.
+    #[arg(short = 'c', long = "continue", conflicts_with = "resume")]
+    continue_last: bool,
+    /// Pick an earlier session of the folder to go on with.
+    #[arg(short = 'r', long)]
+    resume: bool,
     /// A first message, sent as soon as the session is up.
     prompt: Option<String>,
 }
@@ -60,6 +68,13 @@ struct Cli {
 async fn main() -> std::process::ExitCode {
     let cli = Cli::parse();
     let (reports, mut from_session) = mpsc::unbounded_channel();
+    // The first start asks for a provider instead of ending with an error.
+    if let Ok(home) = glut::permissions::settings::home_dir()
+        && let Err(reason) = setup::first_provider(&home).await
+    {
+        eprintln!("glut: {reason}");
+        return std::process::ExitCode::from(1);
+    }
     eprintln!("Glut is starting…");
     let (parts, engine) = match session::build(
         Start {
@@ -78,6 +93,21 @@ async fn main() -> std::process::ExitCode {
         }
     };
     let mut app = App::new(parts, engine, reports);
+    if cli.continue_last {
+        match store::Session::list(&app.parts.home, &app.parts.config.cwd)
+            .into_iter()
+            .next()
+        {
+            Some(session) => app.open(session),
+            None => app.transcript.note(
+                "no earlier session in this folder — a new one starts",
+                transcript::Tone::Quiet,
+            ),
+        }
+    }
+    if cli.resume {
+        app.picker = Some(app.session_picker());
+    }
     if let Some(prompt) = cli.prompt {
         app.send(prompt);
     }

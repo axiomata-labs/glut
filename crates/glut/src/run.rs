@@ -739,10 +739,16 @@ impl<M: ChatModel> Loop<'_, M> {
         sink: &mut dyn EventSink,
     ) -> Result<Result<crate::model::Reply, HarnessError>, FinishReason> {
         let turn = self.turns;
-        let mut on_text = |text: &str| {
-            sink.emit(Event::TextDelta {
-                turn,
-                text: text.to_owned(),
+        let mut on_text = |piece: crate::model::Piece<'_>| {
+            sink.emit(match piece {
+                crate::model::Piece::Text(text) => Event::TextDelta {
+                    turn,
+                    text: text.to_owned(),
+                },
+                crate::model::Piece::Reasoning(text) => Event::ReasoningDelta {
+                    turn,
+                    text: text.to_owned(),
+                },
             });
         };
         let completion = self.model.complete_streaming(

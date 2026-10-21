@@ -75,6 +75,12 @@ pub enum Event {
         turn: u32,
         text: String,
     },
+    /// A piece of the model's thinking as it streams (TUI T8), where the provider sends it. Nothing follows it as a
+    /// whole: a sink that shows thinking keeps the pieces; one that does not ignores them.
+    ReasoningDelta {
+        turn: u32,
+        text: String,
+    },
     /// Text the model wrote, its final answer or a remark beside tool calls.
     AssistantText {
         turn: u32,

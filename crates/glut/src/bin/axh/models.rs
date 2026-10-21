@@ -182,6 +182,7 @@ mod tests {
                 output_per_m: 0.4,
             }),
             reasoning: Some(true),
+            created: None,
         };
         assert_eq!(
             (window(1_048_576), window(2_000_000), window(131_072)),

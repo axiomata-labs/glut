@@ -46,6 +46,26 @@ pub enum Kind {
         text: String,
         tone: Tone,
     },
+    /// The model's thinking (T8), shown as the owner chose: hidden, a folded line, or open.
+    Thinking {
+        text: String,
+        streaming: bool,
+        /// Opened (or, in the open mode, folded) by hand.
+        flipped: bool,
+    },
+}
+
+/// How much of the model's thinking the stream shows (T8; `/thinking`, Ctrl+T).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Thinking {
+    /// None of it.
+    Off,
+    /// One line per block; a click opens one.
+    #[default]
+    Folded,
+    /// Every block open; a click folds one.
+    Open,
 }
 
 /// A note's colour.
@@ -60,7 +80,7 @@ pub enum Tone {
 #[derive(Debug, Clone)]
 pub struct Block {
     pub kind: Kind,
-    wrapped: Option<(u16, Vec<Line<'static>>)>,
+    wrapped: Option<(u16, Thinking, Vec<Line<'static>>)>,
 }
 
 impl Block {
@@ -76,15 +96,19 @@ impl Block {
         self.wrapped = None;
     }
 
-    /// The block's lines at `width`, made once per change and width.
-    pub fn lines(&mut self, width: u16) -> &[Line<'static>] {
-        if self.wrapped.as_ref().is_none_or(|(at, _)| *at != width) {
-            let lines = render(&self.kind, width);
-            self.wrapped = Some((width, lines));
+    /// The block's lines at `width`, made once per change, width and way of showing thinking.
+    pub fn lines(&mut self, width: u16, thinking: Thinking) -> &[Line<'static>] {
+        if self
+            .wrapped
+            .as_ref()
+            .is_none_or(|(at, shown, _)| *at != width || *shown != thinking)
+        {
+            let lines = render(&self.kind, width, thinking);
+            self.wrapped = Some((width, thinking, lines));
         }
         self.wrapped
             .as_ref()
-            .map(|(_, lines)| lines.as_slice())
+            .map(|(_, _, lines)| lines.as_slice())
             .unwrap_or(&[])
     }
 }
@@ -93,6 +117,8 @@ impl Block {
 #[derive(Debug, Default)]
 pub struct Transcript {
     pub blocks: Vec<Block>,
+    /// How the model's thinking is shown.
+    pub thinking: Thinking,
 }
 
 impl Transcript {
@@ -114,7 +140,11 @@ impl Transcript {
 
     fn take_at(&mut self, event: &Event, depth: u32) {
         match event {
-            Event::TextDelta { text, .. } if depth == 0 => self.stream(text),
+            Event::ReasoningDelta { text, .. } if depth == 0 => self.think(text),
+            Event::TextDelta { text, .. } if depth == 0 => {
+                self.close_thinking();
+                self.stream(text)
+            }
             Event::AssistantText { text, .. } if depth == 0 => self.answered(text),
             Event::ToolCall {
                 id,
@@ -122,8 +152,9 @@ impl Transcript {
                 arguments,
                 ..
             } => {
-                // A streamed answer that stopped for a tool call is complete: the call comes after it.
+                // A streamed answer (or thinking) that stopped for a tool call is complete: the call comes after it.
                 self.close_answer();
+                self.close_thinking();
                 self.push(Kind::Tool {
                     id: id.clone(),
                     name: name.clone(),
@@ -195,6 +226,48 @@ impl Transcript {
         }
     }
 
+    /// A piece of the model's thinking as it streams.
+    fn think(&mut self, piece: &str) {
+        // Thinking after streamed text: the text so far is complete, the thought comes after it.
+        self.close_answer();
+        if let Some(block) = self.blocks.last_mut()
+            && let Kind::Thinking {
+                text,
+                streaming: true,
+                ..
+            } = &mut block.kind
+        {
+            text.push_str(piece);
+            block.touch();
+            return;
+        }
+        self.push(Kind::Thinking {
+            text: piece.to_owned(),
+            streaming: true,
+            flipped: false,
+        });
+    }
+
+    fn close_thinking(&mut self) {
+        if let Some(block) = self.blocks.last_mut()
+            && let Kind::Thinking { streaming, .. } = &mut block.kind
+            && *streaming
+        {
+            *streaming = false;
+            block.touch();
+        }
+    }
+
+    /// Shows the thinking as `thinking` says from now on; a block opened or folded by hand keeps it.
+    pub fn show_thinking(&mut self, thinking: Thinking) {
+        self.thinking = thinking;
+        for block in &mut self.blocks {
+            if let Kind::Thinking { flipped, .. } = &mut block.kind {
+                *flipped = false;
+            }
+        }
+    }
+
     /// A piece of Glut's answer as it streams.
     fn stream(&mut self, piece: &str) {
         if let Some(block) = self.blocks.last_mut()
@@ -215,6 +288,7 @@ impl Transcript {
 
     /// The answer's whole text: it replaces what streamed, or stands alone when nothing did.
     fn answered(&mut self, whole: &str) {
+        self.close_thinking();
         if let Some(block) = self.blocks.last_mut()
             && let Kind::Answer { text, streaming } = &mut block.kind
             && *streaming
@@ -245,6 +319,7 @@ impl Transcript {
     /// The turn ended: whatever still runs or streams is settled.
     pub fn settle(&mut self) {
         self.close_answer();
+        self.close_thinking();
         for block in &mut self.blocks {
             if let Kind::Tool { state, .. } = &mut block.kind
                 && *state == ToolState::Running
@@ -283,10 +358,12 @@ impl Transcript {
 
     /// Folds or unfolds block `at`, when it is a tool line.
     pub fn toggle(&mut self, at: usize) {
-        if let Some(block) = self.blocks.get_mut(at)
-            && let Kind::Tool { unfolded, .. } = &mut block.kind
-        {
-            *unfolded = !*unfolded;
+        if let Some(block) = self.blocks.get_mut(at) {
+            match &mut block.kind {
+                Kind::Tool { unfolded, .. } => *unfolded = !*unfolded,
+                Kind::Thinking { flipped, .. } => *flipped = !*flipped,
+                _ => return,
+            }
             block.touch();
         }
     }
@@ -339,7 +416,7 @@ fn cut(text: &str, max: usize) -> String {
 }
 
 /// A block as lines of the screen's width.
-fn render(kind: &Kind, width: u16) -> Vec<Line<'static>> {
+fn render(kind: &Kind, width: u16, thinking: Thinking) -> Vec<Line<'static>> {
     let width = usize::from(width.max(8));
     let mut lines = Vec::new();
     match kind {
@@ -420,6 +497,36 @@ fn render(kind: &Kind, width: u16) -> Vec<Line<'static>> {
                 }
             }
         }
+        Kind::Thinking {
+            text,
+            streaming,
+            flipped,
+        } => {
+            let open = match thinking {
+                Thinking::Off => return lines,
+                Thinking::Folded => *flipped,
+                Thinking::Open => !*flipped,
+            };
+            // About four characters to a token: the size of the thought, not a count to bill by.
+            let size = text.chars().count().div_ceil(4);
+            let state = if *streaming { "thinking…" } else { "thought" };
+            let style = if *streaming {
+                theme::glow()
+            } else {
+                theme::quiet()
+            };
+            lines.push(Line::default());
+            lines.push(Line::from(vec![
+                Span::styled(if open { "▾ " } else { "▸ " }, style),
+                Span::styled(format!("{state} · ~{} tokens", tokens_short(size)), style),
+            ]));
+            if open {
+                let italic = theme::quiet().add_modifier(Modifier::ITALIC);
+                for row in wrap(text.trim(), width.saturating_sub(2)) {
+                    lines.push(Line::from(vec![Span::raw("  "), Span::styled(row, italic)]));
+                }
+            }
+        }
         Kind::Note { text, tone } => {
             let style = match tone {
                 Tone::Quiet => theme::quiet(),
@@ -435,6 +542,15 @@ fn render(kind: &Kind, width: u16) -> Vec<Line<'static>> {
         }
     }
     lines
+}
+
+/// A count as people read it: 840, 1.2k.
+fn tokens_short(count: usize) -> String {
+    if count < 1000 {
+        count.to_string()
+    } else {
+        format!("{:.1}k", count as f64 / 1000.0)
+    }
 }
 
 /// `text` broken into rows of at most `width` cells: at spaces where it can (the spaces at a break dropped), inside a
@@ -584,14 +700,55 @@ mod tests {
             &stream.blocks[1].kind,
             Kind::Tool { target, state: ToolState::Done, .. } if target == "src/main.rs"
         ));
-        assert_eq!(stream.blocks[1].lines(80).len(), 1, "folded: one line");
+        assert_eq!(
+            stream.blocks[1].lines(80, Thinking::Folded).len(),
+            1,
+            "folded: one line"
+        );
         stream.toggle(1);
         assert_eq!(
-            stream.blocks[1].lines(80).len(),
+            stream.blocks[1].lines(80, Thinking::Folded).len(),
             2,
             "unfolded: the result below"
         );
         assert!(matches!(&stream.blocks[2].kind, Kind::Answer { text, .. } if text == "Done."));
+    }
+
+    #[test]
+    fn thinking_streams_into_one_block_shown_as_the_owner_chose_and_opened_by_hand() {
+        let mut stream = Transcript::default();
+        for piece in ["Let me ", "think."] {
+            stream.take(&Event::ReasoningDelta {
+                turn: 1,
+                text: piece.into(),
+            });
+        }
+        stream.take(&Event::TextDelta {
+            turn: 1,
+            text: "Answer.".into(),
+        });
+        assert_eq!(stream.blocks.len(), 2);
+        assert!(matches!(
+            &stream.blocks[0].kind,
+            Kind::Thinking { text, streaming: false, .. } if text == "Let me think."
+        ));
+        let rows = |stream: &mut Transcript| {
+            let thinking = stream.thinking;
+            stream.blocks[0].lines(80, thinking).len()
+        };
+        assert_eq!(
+            rows(&mut stream),
+            2,
+            "folded: a blank line and the one line"
+        );
+        stream.toggle(0);
+        assert_eq!(rows(&mut stream), 3, "opened by hand: the text below");
+        stream.show_thinking(Thinking::Off);
+        assert_eq!(rows(&mut stream), 0, "off: nothing");
+        stream.show_thinking(Thinking::Open);
+        assert_eq!(rows(&mut stream), 3);
+        stream.toggle(0);
+        assert_eq!(rows(&mut stream), 2, "in the open mode a click folds one");
     }
 
     #[test]

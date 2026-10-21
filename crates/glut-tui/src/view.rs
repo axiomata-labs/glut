@@ -143,8 +143,9 @@ fn draw_stream(frame: &mut Frame, app: &mut App, area: Rect) {
     let wanted = height + app.scroll;
     let mut taken: Vec<(usize, Line<'static>)> = Vec::new();
     let mut total = 0;
+    let thinking = app.transcript.thinking;
     for at in (0..app.transcript.blocks.len()).rev() {
-        let lines = app.transcript.blocks[at].lines(width);
+        let lines = app.transcript.blocks[at].lines(width, thinking);
         total += lines.len();
         if taken.len() < wanted {
             for line in lines.iter().rev() {
@@ -343,6 +344,23 @@ fn draw_picker(frame: &mut Frame, app: &App, area: Rect) {
         .borders(Borders::ALL)
         .border_style(theme::glow())
         .title(Span::styled(format!(" {} ", picker.title), theme::glow()));
+    let block = match picker.sort {
+        Some(sort) => {
+            let free = if picker.free_only {
+                " · free only"
+            } else {
+                ""
+            };
+            block.title_bottom(Span::styled(
+                format!(
+                    " sorted by {}{free} · Ctrl+S sort · Ctrl+F free ",
+                    sort.label()
+                ),
+                theme::quiet(),
+            ))
+        }
+        None => block,
+    };
     let shown = picker.shown();
     let rows = usize::from(height.saturating_sub(3));
     let first = picker.selected.saturating_sub(rows.saturating_sub(1));
@@ -353,15 +371,20 @@ fn draw_picker(frame: &mut Frame, app: &App, area: Rect) {
     for (at, item) in shown.iter().enumerate().skip(first).take(rows) {
         let chosen = at == picker.selected;
         let mark = if chosen { "▸ " } else { "  " };
-        let style = if chosen {
-            theme::glow()
+        let style = match (chosen, item.dim) {
+            (true, _) => theme::glow(),
+            (false, true) => theme::quiet().add_modifier(Modifier::DIM),
+            (false, false) => Style::default(),
+        };
+        let detail = if item.dim {
+            format!("  {} · not allowed for this account", item.detail)
         } else {
-            Style::default()
+            format!("  {}", item.detail)
         };
         lines.push(Line::from(vec![
             Span::styled(mark, theme::glow()),
             Span::styled(item.label.clone(), style),
-            Span::styled(format!("  {}", item.detail), theme::quiet()),
+            Span::styled(detail, theme::quiet()),
         ]));
     }
     if shown.is_empty() {

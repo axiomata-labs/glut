@@ -12,10 +12,11 @@ use glut::{Cancel, Effort, Event, FinishReason, Message, Usage};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::input::Input;
-use crate::picker::{Item, Pick, Picker};
+use crate::picker::{Facts, Item, Pick, Picker};
 use crate::prefs::{self, Prefs};
 use crate::session::{self, Engine, Parts, Report};
-use crate::transcript::{Tone, Transcript};
+use crate::store::Session;
+use crate::transcript::{Thinking, Tone, Transcript};
 
 /// How long a second Ctrl+C has to come to quit.
 const QUIT_WINDOW: Duration = Duration::from_millis(1500);
@@ -26,19 +27,28 @@ const ASK_SETTLE: Duration = Duration::from_millis(400);
 
 /// What `/help` says.
 const HELP: &str = "Commands: /model [id] · /provider [id] · /effort [level] · /context [tokens] · /compact · \
-                    /editor [command] · /clear · /help · /quit\n\
+                    /editor [command] · /thinking off|folded|open · /clear · /help · /quit\n\
                     Keys: Enter send · Shift+Enter or Alt+Enter new line · ↑ history · Shift+Tab plan → ask → edits \
-                    → auto · Esc stop · Ctrl+O tool results · PgUp/PgDn scroll · Ctrl+C twice quit";
+                    → auto · Esc stop · Ctrl+O tool results · Ctrl+T thinking · PgUp/PgDn scroll · Ctrl+C twice quit";
 
 /// The session's commands with what each does, as the list under a typed `/` shows them.
-pub const COMMANDS: [(&str, &str); 10] = [
+pub const COMMANDS: [(&str, &str); 13] = [
     ("model", "pick the model, or /model <id>"),
     ("provider", "switch the provider, or /provider <id>"),
     ("effort", "how hard the model thinks, or /effort <level>"),
     ("context", "how full the window is; /context 64k sets it"),
     ("compact", "summarise the conversation so far"),
+    (
+        "handoff",
+        "/handoff write: what was done and what comes next; /handoff read in a new session",
+    ),
     ("editor", "pick your editor, or /editor <command>"),
-    ("clear", "start the conversation afresh"),
+    (
+        "thinking",
+        "the model's thinking: /thinking off, folded or open",
+    ),
+    ("resume", "open an earlier session of this folder"),
+    ("clear", "start a new session"),
     ("help", "commands and keys"),
     ("quit", "end the session"),
     ("exit", "end the session"),
@@ -58,6 +68,7 @@ enum Busy {
     Turn,
     Compacting,
     Switching,
+    HandingOff,
 }
 
 pub struct App {
@@ -71,6 +82,8 @@ pub struct App {
     pub suggested: usize,
     /// The conversation between turns; taken while a turn runs.
     conversation: Vec<Message>,
+    /// The session as it is kept (T25).
+    pub session: Session,
     busy: Option<Busy>,
     /// The turn under way: its cancel.
     running: Option<Cancel>,
@@ -95,7 +108,11 @@ pub struct App {
 impl App {
     pub fn new(parts: Arc<Parts>, engine: Engine, reports: mpsc::UnboundedSender<Report>) -> Self {
         let folder = session::shown_folder(&parts.config.cwd);
-        let mut transcript = Transcript::default();
+        let session = Session::new(&parts.config.cwd, &engine.provider, engine.model_name());
+        let mut transcript = Transcript {
+            thinking: Prefs::load(&parts.home).thinking.unwrap_or_default(),
+            ..Transcript::default()
+        };
         for note in &parts.notes {
             transcript.note(note.clone(), Tone::Quiet);
         }
@@ -108,6 +125,7 @@ impl App {
             picker: None,
             suggested: 0,
             conversation: Vec::new(),
+            session,
             busy: None,
             running: None,
             ask: None,
@@ -123,6 +141,50 @@ impl App {
             quit: false,
             reports,
         }
+    }
+
+    /// Keeps the session as it stands now; a failure is said, the session goes on.
+    fn keep(&mut self) {
+        self.session.conversation.clone_from(&self.conversation);
+        self.session.provider.clone_from(&self.engine.provider);
+        self.engine.model_name().clone_into(&mut self.session.model);
+        self.session.cost = self.cost;
+        if let Err(reason) = self.session.save(&self.parts.home) {
+            self.transcript.note(
+                format!("the session could not be kept: {reason}"),
+                Tone::Fault,
+            );
+        }
+    }
+
+    /// Opens session `session`: its conversation goes on, its stream is shown again.
+    pub fn open(&mut self, session: Session) {
+        self.transcript = Transcript {
+            thinking: self.transcript.thinking,
+            ..Transcript::default()
+        };
+        session.transcript(&mut self.transcript);
+        let title = if session.title.is_empty() {
+            "it".to_owned()
+        } else {
+            crate::transcript::clean(&session.title)
+        };
+        self.transcript.note(
+            format!(
+                "session of {} opened — {title} goes on from here",
+                session
+                    .updated
+                    .with_timezone(&chrono::Local)
+                    .format("%Y-%m-%d %H:%M"),
+            ),
+            Tone::Fine,
+        );
+        self.conversation.clone_from(&session.conversation);
+        self.cost = session.cost;
+        self.usage = Usage::default();
+        self.context_used = 0;
+        self.scroll = 0;
+        self.session = session;
     }
 
     /// Whether Glut works on something: a turn, a summary, a switch of model.
@@ -150,8 +212,14 @@ impl App {
         if prompt.trim().is_empty() || self.working() {
             return;
         }
+        // A picker left open (glut -r with a first message) is no place to choose from while the turn runs.
+        self.picker = None;
         self.transcript
             .push(crate::transcript::Kind::Owner(prompt.clone()));
+        // The session is named by the owner's first own message, not by a handoff read in front of it.
+        if self.session.title.is_empty() {
+            self.session.title = crate::store::title_of(&prompt);
+        }
         self.scroll = 0;
         let cancel = Cancel::new();
         self.running = Some(cancel.clone());
@@ -202,6 +270,7 @@ impl App {
                 self.conversation = conversation;
                 self.running = None;
                 self.busy = None;
+                self.keep();
                 // A turn that ended (cancelled, timed out) while asking dropped the question: its card goes too.
                 self.ask = None;
                 self.transcript.settle();
@@ -223,6 +292,7 @@ impl App {
                         self.usage += compacted.usage;
                         self.conversation = compacted.conversation;
                         self.context_used = 0;
+                        self.keep();
                         self.transcript.note(
                             format!(
                                 "compacted: {} messages became a summary",
@@ -236,6 +306,28 @@ impl App {
                         self.transcript
                             .note(format!("not compacted: {reason}"), Tone::Fault);
                     }
+                }
+            }
+            Report::HandedOff(result, conversation) => {
+                self.busy = None;
+                self.conversation = conversation;
+                match result {
+                    Ok((path, usage)) => {
+                        if let Some(prices) = self.engine.prices {
+                            *self.cost.get_or_insert(0.0) += prices.cost_usd(&usage);
+                        }
+                        self.usage += usage;
+                        self.transcript.note(
+                            format!(
+                                "handoff written to {} — /handoff read in the next session",
+                                session::shown_folder(&path)
+                            ),
+                            Tone::Fine,
+                        );
+                    }
+                    Err(reason) => self
+                        .transcript
+                        .note(format!("no handoff: {reason}"), Tone::Fault),
                 }
             }
             Report::Switched(result) => {
@@ -341,6 +433,14 @@ impl App {
                 self.quit = true
             }
             KeyCode::Char('o') if ctrl => self.transcript.unfold_all(),
+            // Ctrl+T: every thought open, or all folded again (an "off" choice comes back as folded).
+            KeyCode::Char('t') if ctrl => {
+                let next = match self.transcript.thinking {
+                    Thinking::Open => Thinking::Folded,
+                    Thinking::Folded | Thinking::Off => Thinking::Open,
+                };
+                self.set_thinking(next);
+            }
             KeyCode::Char('w') if ctrl => self.input.delete_word(),
             KeyCode::Char('u') if ctrl => self.input.delete_to_start(),
             KeyCode::Char('a') if ctrl => self.input.home(),
@@ -457,7 +557,18 @@ impl App {
             "quit" | "exit" | "q" => self.quit = true,
             "clear" => {
                 self.conversation.clear();
-                self.transcript = Transcript::default();
+                // A new session counts from nothing.
+                self.cost = None;
+                self.usage = Usage::default();
+                self.session = Session::new(
+                    &self.parts.config.cwd,
+                    &self.engine.provider,
+                    self.engine.model_name(),
+                );
+                self.transcript = Transcript {
+                    thinking: self.transcript.thinking,
+                    ..Transcript::default()
+                };
                 self.context_used = 0;
                 self.scroll = 0;
             }
@@ -497,7 +608,56 @@ impl App {
             "editor" if rest.is_empty() => {
                 self.picker = Some(editor_picker(Prefs::load(&self.parts.home).editor()))
             }
+            "handoff" => match rest {
+                // A paid call: written only when asked by name.
+                "" => self.transcript.note(
+                    "/handoff write — what was done and what comes next, for the next session; /handoff read — \
+                     take the folder's handoff into this one",
+                    Tone::Quiet,
+                ),
+                "write" => {
+                    self.busy = Some(Busy::HandingOff);
+                    self.transcript.note("writing the handoff…", Tone::Quiet);
+                    session::write_handoff(
+                        Arc::clone(&self.parts),
+                        self.engine.clone(),
+                        std::mem::take(&mut self.conversation),
+                        self.reports.clone(),
+                    );
+                }
+                "read" => match session::read_handoff(&self.parts) {
+                    Ok((message, _)) if self.conversation.contains(&message) => self
+                        .transcript
+                        .note("this session has the handoff already", Tone::Quiet),
+                    Ok((message, text)) => {
+                        self.conversation.push(message);
+                        self.keep();
+                        let head: Vec<&str> = text.lines().take(12).collect();
+                        self.transcript.note(
+                            format!(
+                                "handoff read — Glut knows it from the next message on:\n{}",
+                                head.join("\n")
+                            ),
+                            Tone::Fine,
+                        );
+                    }
+                    Err(reason) => self.transcript.note(reason, Tone::Fault),
+                },
+                other => self
+                    .transcript
+                    .note(format!("/handoff {other}: write or read"), Tone::Fault),
+            },
             "editor" => self.set_editor(rest),
+            "resume" => self.picker = Some(self.session_picker()),
+            "thinking" => match rest {
+                "off" => self.set_thinking(Thinking::Off),
+                "folded" | "fold" | "" => self.set_thinking(Thinking::Folded),
+                "open" | "on" => self.set_thinking(Thinking::Open),
+                other => self.transcript.note(
+                    format!("/thinking {other}: off, folded or open"),
+                    Tone::Fault,
+                ),
+            },
             other => self.transcript.note(
                 format!("no command /{other} — /help lists them"),
                 Tone::Fault,
@@ -570,6 +730,20 @@ impl App {
         }
     }
 
+    /// Shows the thinking as `thinking` says and keeps the choice.
+    fn set_thinking(&mut self, thinking: Thinking) {
+        self.transcript.show_thinking(thinking);
+        let said = match thinking {
+            Thinking::Off => "thinking: hidden",
+            Thinking::Folded => "thinking: folded — a click opens one, Ctrl+T all",
+            Thinking::Open => "thinking: open — a click folds one, Ctrl+T folds all",
+        };
+        match prefs::set_thinking(&self.parts.home, thinking) {
+            Ok(()) => self.transcript.note(said, Tone::Quiet),
+            Err(reason) => self.transcript.note(reason, Tone::Fault),
+        }
+    }
+
     fn set_editor(&mut self, command: &str) {
         match prefs::set_editor(&self.parts.home, command) {
             Ok(command) => self
@@ -586,13 +760,24 @@ impl App {
         if let Ok(list) = Providers::load(&self.parts.home) {
             for (id, entry) in &list.providers {
                 match models::cached(&self.parts.home, id, entry.root().trim_end_matches('/')) {
-                    Some(models) => items.extend(models.models.iter().map(|model| Item {
-                        label: format!("{id} · {}", crate::transcript::clean(&model.id)),
-                        detail: model_detail(model),
-                        pick: Pick::Model {
-                            provider: id.clone(),
-                            model: model.id.clone(),
-                        },
+                    Some(list) => items.extend(list.models.iter().map(|model| {
+                        Item {
+                            label: format!("{id} · {}", crate::transcript::clean(&model.id)),
+                            detail: model_detail(model),
+                            pick: Pick::Model {
+                                provider: id.clone(),
+                                model: model.id.clone(),
+                            },
+                            dim: !list.allows(&model.id),
+                            facts: Facts {
+                                created: model.created,
+                                price: model
+                                    .prices
+                                    .map(|prices| prices.input_per_m + prices.output_per_m),
+                                window: model.context_window,
+                                free: model.free(),
+                            },
+                        }
                     })),
                     None => missing.push(id.clone()),
                 }
@@ -609,7 +794,36 @@ impl App {
             provider: self.engine.provider.clone(),
             model: self.engine.model_name().to_owned(),
         };
-        Picker::new(title, items, Some(&current))
+        Picker::new(title, items, Some(&current)).sorting()
+    }
+
+    /// The folder's sessions, newest first.
+    pub fn session_picker(&self) -> Picker {
+        let items: Vec<Item> = Session::list(&self.parts.home, &self.parts.config.cwd)
+            .into_iter()
+            .filter(|session| session.id != self.session.id)
+            .map(|session| {
+                let when = session
+                    .updated
+                    .with_timezone(&chrono::Local)
+                    .format("%Y-%m-%d %H:%M");
+                let cost = session
+                    .cost
+                    .map(|cost| format!(" · ${cost:.4}"))
+                    .unwrap_or_default();
+                Item::plain(
+                    crate::transcript::clean(&session.title),
+                    format!("{when} · {} · {}{cost}", session.provider, session.model),
+                    Pick::Session(session.id),
+                )
+            })
+            .collect();
+        let title = if items.is_empty() {
+            "Sessions (none kept for this folder yet)"
+        } else {
+            "Sessions of this folder"
+        };
+        Picker::new(title, items, None)
     }
 
     fn provider_picker(&self) -> Picker {
@@ -617,14 +831,16 @@ impl App {
             .map(|list| {
                 list.providers
                     .iter()
-                    .map(|(id, entry)| Item {
-                        label: id.clone(),
-                        detail: format!(
-                            "{} · {}",
-                            entry.kind,
-                            entry.model.as_deref().unwrap_or("no default model")
-                        ),
-                        pick: Pick::Provider(id.clone()),
+                    .map(|(id, entry)| {
+                        Item::plain(
+                            id.clone(),
+                            format!(
+                                "{} · {}",
+                                entry.kind,
+                                entry.model.as_deref().unwrap_or("no default model")
+                            ),
+                            Pick::Provider(id.clone()),
+                        )
                     })
                     .collect()
             })
@@ -640,8 +856,11 @@ impl App {
         let Some(picker) = &mut self.picker else {
             return;
         };
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
             KeyCode::Esc => self.picker = None,
+            KeyCode::Char('s') if ctrl => picker.next_sort(),
+            KeyCode::Char('f') if ctrl => picker.toggle_free(),
             KeyCode::Up => picker.up(),
             KeyCode::Down | KeyCode::Tab => picker.down(),
             KeyCode::Backspace => picker.backspace(),
@@ -659,6 +878,15 @@ impl App {
                     }
                     Some(Pick::Effort(effort)) => self.switch_effort(effort),
                     Some(Pick::Editor(command)) => self.set_editor(&command),
+                    // A turn under way holds the conversation: opening another now would save the turn into it.
+                    Some(Pick::Session(_)) if self.working() => self.transcript.note(
+                        "a session opens when Glut is done — /resume again then",
+                        Tone::Quiet,
+                    ),
+                    Some(Pick::Session(id)) => match Session::load(&self.parts.home, &id) {
+                        Ok(session) => self.open(session),
+                        Err(reason) => self.transcript.note(reason, Tone::Fault),
+                    },
                     None => {}
                 }
             }
@@ -730,16 +958,16 @@ impl App {
 
 /// The effort levels, and "the provider's default".
 fn effort_picker(current: Option<Effort>) -> Picker {
-    let mut items = vec![Item {
-        label: "default".into(),
-        detail: "the provider decides".into(),
-        pick: Pick::Effort(None),
-    }];
-    items.extend(Effort::ALL.iter().map(|effort| Item {
-        label: effort.to_string(),
-        detail: String::new(),
-        pick: Pick::Effort(Some(*effort)),
-    }));
+    let mut items = vec![Item::plain(
+        "default",
+        "the provider decides",
+        Pick::Effort(None),
+    )];
+    items.extend(
+        Effort::ALL
+            .iter()
+            .map(|effort| Item::plain(effort.to_string(), "", Pick::Effort(Some(*effort)))),
+    );
     Picker::new("Effort", items, Some(&Pick::Effort(current)))
 }
 
@@ -747,11 +975,7 @@ fn effort_picker(current: Option<Effort>) -> Picker {
 fn editor_picker(current: Option<String>) -> Picker {
     let items = prefs::installed_editors()
         .into_iter()
-        .map(|(program, command)| Item {
-            label: program.into(),
-            detail: command.into(),
-            pick: Pick::Editor(command.into()),
-        })
+        .map(|(program, command)| Item::plain(program, command, Pick::Editor(command.into())))
         .collect();
     let now = current.as_deref().unwrap_or("none yet");
     let title = format!("Editor — now {now} (or /editor <command with {{file}} and {{line}}>)");
@@ -802,8 +1026,10 @@ fn parse_tokens(text: &str) -> Option<u32> {
 /// Whether command `name` (with `rest`) waits while Glut works: what changes the model, the conversation or the
 /// window the turn counts with.
 fn waits(name: &str, rest: &str) -> bool {
-    matches!(name, "model" | "provider" | "effort" | "compact" | "clear")
-        || (name == "context" && !rest.is_empty())
+    matches!(
+        name,
+        "model" | "provider" | "effort" | "compact" | "clear" | "handoff" | "resume"
+    ) || (name == "context" && !rest.is_empty())
 }
 
 /// A finish reason in words.
@@ -1018,6 +1244,32 @@ mod tests {
             before,
         ));
         assert_eq!(app.conversation, vec![Message::user("summary")]);
+    }
+
+    #[tokio::test]
+    async fn a_handoff_is_read_into_the_conversation_and_a_missing_one_is_said() {
+        let (mut app, _reports) = app();
+        typed(&mut app, "/handoff read");
+        assert!(app.conversation.is_empty());
+        let path = session::handoff_path(&app.parts.home, &app.parts.config.cwd);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "## Done\n- the parser\n## Next\n- tests").unwrap();
+        typed(&mut app, "/handoff read");
+        assert_eq!(app.conversation.len(), 1);
+        let said = app.conversation[0].content.clone().unwrap_or_default();
+        assert!(
+            said.contains("the parser") && said.contains("no instruction of the owner"),
+            "{said}"
+        );
+        typed(&mut app, "/handoff read");
+        assert_eq!(app.conversation.len(), 1, "read once, not twice");
+        typed(&mut app, "/handoff");
+        assert!(
+            !app.working(),
+            "a bare /handoff writes nothing: it says how"
+        );
+        typed(&mut app, "/handoff write");
+        assert!(app.working(), "writing runs in the background");
     }
 
     #[test]
