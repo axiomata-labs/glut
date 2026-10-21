@@ -18,10 +18,11 @@ pub const EDITORS: [(&str, &str); 10] = [
     ("micro", "micro {file}:{line}"),
     ("nano", "nano +{line} {file}"),
     ("emacs", "emacs +{line} {file}"),
-    ("zed", "zed {file}:{line}"),
-    ("code", "code -g {file}:{line}"),
-    ("cursor", "cursor -g {file}:{line}"),
-    ("subl", "subl {file}:{line}"),
+    // The windowed editors return at once unless told to wait: Glut would read the file before anything was written.
+    ("zed", "zed --wait {file}:{line}"),
+    ("code", "code --wait -g {file}:{line}"),
+    ("cursor", "cursor --wait -g {file}:{line}"),
+    ("subl", "subl --wait {file}:{line}"),
 ];
 
 /// The prefs, with whatever else a later Glut or the owner put in the file kept as it was.
@@ -34,6 +35,9 @@ pub struct Prefs {
     /// How much of the model's thinking the stream shows (T8).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking: Option<crate::transcript::Thinking>,
+    /// Whether the side panel is shown (T28).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub panel: Option<bool>,
     #[serde(flatten)]
     other: serde_json::Map<String, serde_json::Value>,
 }
@@ -126,6 +130,37 @@ pub fn set_thinking(home: &Path, thinking: crate::transcript::Thinking) -> Resul
     prefs.save(home)
 }
 
+/// Keeps whether the side panel is shown.
+///
+/// # Errors
+///
+/// A message when the file cannot be read (it is not written over) or written.
+pub fn set_panel(home: &Path, shown: bool) -> Result<(), String> {
+    let mut prefs = Prefs::read(home)?;
+    prefs.panel = Some(shown);
+    prefs.save(home)
+}
+
+/// The editor's command for `file` at `line`: `{file}` and `{line}` put in — the file at the end when the template
+/// names none (`$EDITOR=nvim`) — split into the program and its arguments at spaces. No shell and no quoting: the
+/// path stays one argument whatever it holds, but a program path with spaces needs a template without them.
+pub fn editor_command(template: &str, file: &Path, line: usize) -> Option<(String, Vec<String>)> {
+    if template.trim().is_empty() {
+        return None;
+    }
+    let template = if template.contains("{file}") {
+        template.to_owned()
+    } else {
+        format!("{template} {{file}}")
+    };
+    let mut parts = template.split_whitespace().map(|part| {
+        part.replace("{line}", &line.to_string())
+            .replace("{file}", &file.to_string_lossy())
+    });
+    let program = parts.next()?;
+    Some((program, parts.collect()))
+}
+
 /// The editors of [`EDITORS`] that are on the `PATH`.
 pub fn installed_editors() -> Vec<(&'static str, &'static str)> {
     let path = std::env::var_os("PATH").unwrap_or_default();
@@ -174,5 +209,27 @@ mod tests {
         assert!(set_editor(&home, "hx").is_err());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "{ broken");
         assert!(set_editor(&home, "  ").is_err());
+    }
+
+    #[test]
+    fn an_editor_command_takes_the_file_and_line_and_keeps_a_spaced_path_whole() {
+        let file = Path::new("/tmp/my notes.md");
+        assert_eq!(
+            editor_command("nvim +{line} {file}", file, 3),
+            Some(("nvim".into(), vec!["+3".into(), "/tmp/my notes.md".into()]))
+        );
+        assert_eq!(
+            editor_command("code -g {file}:{line}", file, 1),
+            Some((
+                "code".into(),
+                vec!["-g".into(), "/tmp/my notes.md:1".into()]
+            ))
+        );
+        assert_eq!(editor_command("   ", file, 1), None);
+        assert_eq!(
+            editor_command("nvim", file, 1),
+            Some(("nvim".into(), vec!["/tmp/my notes.md".into()])),
+            "an editor from $EDITOR gets the file"
+        );
     }
 }

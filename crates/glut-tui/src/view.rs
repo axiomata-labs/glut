@@ -15,6 +15,9 @@ use crate::{glimm, session, theme};
 const INPUT_ROWS: usize = 8;
 /// The most rows of its target an ask shows.
 const ASK_ROWS: usize = 12;
+/// The side panel's width, and the screen it needs beside the stream.
+const PANEL_WIDTH: u16 = 38;
+pub const PANEL_MIN_SCREEN: u16 = 100;
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
@@ -39,6 +42,18 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     ])
     .areas(area);
     draw_header(frame, app, header);
+    // The side panel (T28) takes the right of the stream where the screen is wide enough for both.
+    app.stream_width = stream.x + stream.width;
+    let stream = if app.panel == Some(true) && stream.width >= PANEL_MIN_SCREEN {
+        let [stream, panel] =
+            Layout::horizontal([Constraint::Min(40), Constraint::Length(PANEL_WIDTH)])
+                .areas(stream);
+        draw_panel(frame, app, panel);
+        app.stream_width = stream.x + stream.width;
+        stream
+    } else {
+        stream
+    };
     if app.transcript.blocks.is_empty() {
         draw_welcome(frame, app, stream);
     } else {
@@ -283,6 +298,68 @@ fn draw_keys(frame: &mut Frame, app: &App, area: Rect) {
         Span::styled(format!(" {hints}"), theme::quiet()),
     ]);
     frame.render_widget(Paragraph::new(line), area);
+}
+
+/// The side panel: its tabs (Plan now; Files, Diff and Git follow with their phases) and the plan the run keeps —
+/// done quiet, under way glowing, open plain.
+fn draw_panel(frame: &mut Frame, app: &App, area: Rect) {
+    use glut::planning::TodoStatus;
+    let block = Block::default()
+        .borders(Borders::LEFT)
+        .border_style(theme::quiet())
+        .title(Span::styled(
+            " Plan ",
+            theme::glow().add_modifier(Modifier::BOLD),
+        ));
+    let width = usize::from(area.width.saturating_sub(4)).max(8);
+    let mut lines: Vec<Line> = Vec::new();
+    if app.todos.is_empty() {
+        lines.push(Line::default());
+        for row in wrap(
+            "No plan yet. For work of several steps Glut writes its task list here, and ticks it off as it goes.",
+            width,
+        ) {
+            lines.push(Line::from(Span::styled(format!(" {row}"), theme::quiet())));
+        }
+    } else {
+        let done = app
+            .todos
+            .iter()
+            .filter(|item| item.status == TodoStatus::Done)
+            .count();
+        lines.push(Line::from(Span::styled(
+            format!(" {done} of {} done", app.todos.len()),
+            theme::quiet(),
+        )));
+        lines.push(Line::default());
+        for item in &app.todos {
+            let (mark, style) = match item.status {
+                TodoStatus::Done => ("✓", theme::quiet()),
+                TodoStatus::InProgress => ("◆", theme::glow()),
+                TodoStatus::Pending => ("○", Style::default()),
+            };
+            for (at, row) in wrap(&item.text, width.saturating_sub(2))
+                .into_iter()
+                .enumerate()
+            {
+                let lead = if at == 0 {
+                    format!(" {mark} ")
+                } else {
+                    "   ".to_owned()
+                };
+                lines.push(Line::from(vec![
+                    Span::styled(lead, style),
+                    Span::styled(row, style),
+                ]));
+            }
+        }
+    }
+    lines.push(Line::default());
+    lines.push(Line::from(Span::styled(
+        " Ctrl+B hides the panel",
+        theme::quiet(),
+    )));
+    frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
 /// The commands a typed `/` fits, in a small list just above the input, the chosen one marked.

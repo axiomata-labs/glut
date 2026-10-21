@@ -131,8 +131,9 @@ async fn main() -> std::process::ExitCode {
     }));
 
     let stop = Arc::new(AtomicBool::new(false));
-    let mut keys = terminal_events(Arc::clone(&stop));
-    let outcome = run(&mut app, &mut keys, &mut from_session).await;
+    let pause = Arc::new(Pause::default());
+    let mut keys = terminal_events(Arc::clone(&stop), Arc::clone(&pause));
+    let outcome = run(&mut app, &mut keys, &mut from_session, enhanced, &pause).await;
     stop.store(true, Ordering::Relaxed);
     leave(enhanced);
     let _ = std::panic::take_hook();
@@ -160,6 +161,8 @@ async fn run(
     app: &mut App,
     keys: &mut mpsc::UnboundedReceiver<event::Event>,
     from_session: &mut mpsc::UnboundedReceiver<session::Report>,
+    enhanced: bool,
+    pause: &Pause,
 ) -> io::Result<()> {
     // The first frame starts from a blank screen, whatever the terminal showed before (a terminal without an
     // alternate screen keeps the old text, and ratatui would leave every cell it thinks blank as it was). Cleared
@@ -182,6 +185,24 @@ async fn run(
         if app.quit {
             app.stop_turn();
             return Ok(());
+        }
+        // Ctrl+X E: the editor gets the terminal, and the input comes back from it (T29).
+        if let Some(text) = app.edit_request.take() {
+            pause.ask.store(true, Ordering::SeqCst);
+            // The reader says when it stopped reading (after its poll ends): only then has the editor the keys.
+            while !pause.idle.load(Ordering::SeqCst) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            leave(enhanced);
+            let edited = edit_in_editor(&app.parts.home, &text);
+            let entered = enter();
+            pause.ask.store(false, Ordering::SeqCst);
+            // The text is the owner's even when the terminal cannot be taken back.
+            app.edited(edited);
+            entered?;
+            execute!(io::stdout(), Clear(ClearType::All))?;
+            terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
+            continue;
         }
         tokio::select! {
             // A closed window or a kill ends the session cleanly: the turn stopped, the terminal given back.
@@ -207,10 +228,27 @@ async fn run(
 }
 
 /// The terminal's keys, pastes and clicks, read on a thread of their own and handed to the loop.
-fn terminal_events(stop: Arc<AtomicBool>) -> mpsc::UnboundedReceiver<event::Event> {
+/// The reader thread's pause for the editor: the loop asks, the reader answers once it no longer reads.
+#[derive(Default)]
+struct Pause {
+    ask: AtomicBool,
+    idle: AtomicBool,
+}
+
+fn terminal_events(
+    stop: Arc<AtomicBool>,
+    pause: Arc<Pause>,
+) -> mpsc::UnboundedReceiver<event::Event> {
     let (send, receive) = mpsc::unbounded_channel();
     std::thread::spawn(move || {
         while !stop.load(Ordering::Relaxed) {
+            // While the editor has the terminal, its keys are the editor's.
+            if pause.ask.load(Ordering::SeqCst) {
+                pause.idle.store(true, Ordering::SeqCst);
+                std::thread::sleep(Duration::from_millis(10));
+                continue;
+            }
+            pause.idle.store(false, Ordering::SeqCst);
             match event::poll(POLL) {
                 Ok(true) => match event::read() {
                     Ok(event) => {
@@ -226,6 +264,58 @@ fn terminal_events(stop: Arc<AtomicBool>) -> mpsc::UnboundedReceiver<event::Even
         }
     });
     receive
+}
+
+/// The input written in the owner's editor: into a file only the owner can read, the editor on it, the file read
+/// back and removed. Without an editor set (and no `$VISUAL`/`$EDITOR`) it says how to set one.
+fn edit_in_editor(home: &std::path::Path, text: &str) -> Result<String, String> {
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    /// Removes the file whatever happens after it was made.
+    struct Gone(std::path::PathBuf);
+
+    impl Drop for Gone {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    let template = prefs::Prefs::load(home)
+        .editor()
+        .ok_or("no editor yet — /editor picks one")?;
+    // A folder only the owner can list: the name of the file is nobody else's to guess.
+    let dir = home.join(glut::providers::DIR).join("tmp");
+    glut::providers::make_private_dir(&dir)
+        .map_err(|err| format!("cannot use {}: {err}", dir.display()))?;
+    let file = dir.join(format!(
+        "message-{}-{}.md",
+        std::process::id(),
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    ));
+    let mut out = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&file)
+        .map_err(|err| format!("cannot write {}: {err}", file.display()))?;
+    let _gone = Gone(file.clone());
+    out.write_all(text.as_bytes())
+        .map_err(|err| format!("cannot write {}: {err}", file.display()))?;
+    drop(out);
+    let line = text.lines().count().max(1);
+    let (program, args) = prefs::editor_command(&template, &file, line)
+        .ok_or("the editor's command is empty — /editor picks one")?;
+    match std::process::Command::new(&program).args(&args).status() {
+        Ok(status) if status.success() => std::fs::read_to_string(&file)
+            .map_err(|err| format!("cannot read {}: {err}", file.display())),
+        Ok(status) => Err(format!(
+            "{program} ended with {status}: the input stays as it was"
+        )),
+        Err(err) => Err(format!(
+            "cannot start {program}: {err} — /editor picks another"
+        )),
+    }
 }
 
 /// Takes the terminal: raw mode, the alternate screen, pastes as one, the mouse, and — where the terminal has it —

@@ -29,10 +29,10 @@ const ASK_SETTLE: Duration = Duration::from_millis(400);
 const HELP: &str = "Commands: /model [id] · /provider [id] · /effort [level] · /context [tokens] · /compact · \
                     /editor [command] · /thinking off|folded|open · /clear · /help · /quit\n\
                     Keys: Enter send · Shift+Enter or Alt+Enter new line · ↑ history · Shift+Tab plan → ask → edits \
-                    → auto · Esc stop · Ctrl+O tool results · Ctrl+T thinking · PgUp/PgDn scroll · Ctrl+C twice quit";
+                    → auto · Esc stop · Ctrl+O tool results · Ctrl+T thinking · Ctrl+B panel · Ctrl+X E editor · PgUp/PgDn scroll · Ctrl+C twice quit";
 
 /// The session's commands with what each does, as the list under a typed `/` shows them.
-pub const COMMANDS: [(&str, &str); 13] = [
+pub const COMMANDS: [(&str, &str); 14] = [
     ("model", "pick the model, or /model <id>"),
     ("provider", "switch the provider, or /provider <id>"),
     ("effort", "how hard the model thinks, or /effort <level>"),
@@ -46,6 +46,10 @@ pub const COMMANDS: [(&str, &str); 13] = [
     (
         "thinking",
         "the model's thinking: /thinking off, folded or open",
+    ),
+    (
+        "panel",
+        "show or hide the side panel with the plan (Ctrl+B)",
     ),
     ("resume", "open an earlier session of this folder"),
     ("clear", "start a new session"),
@@ -84,6 +88,14 @@ pub struct App {
     conversation: Vec<Message>,
     /// The session as it is kept (T25).
     pub session: Session,
+    /// The run's task list as `todo_write` last sent it (the Plan tab, T28).
+    pub todos: Vec<glut::planning::TodoItem>,
+    /// Whether the side panel is shown; `None` until the owner or a first plan decides.
+    pub panel: Option<bool>,
+    /// Ctrl+X was pressed: the next key finishes a chord (Ctrl+X E: the editor).
+    chord: bool,
+    /// The input, handed to the editor by the main loop (T29), which owns the terminal.
+    pub edit_request: Option<String>,
     busy: Option<Busy>,
     /// The turn under way: its cancel.
     running: Option<Cancel>,
@@ -99,6 +111,8 @@ pub struct App {
     pub stream_height: usize,
     /// Which block each row of the stream showed at the last frame (for a click).
     pub rows: Vec<(u16, usize)>,
+    /// Where the stream ended at the last frame, the panel right of it: a click there is not the stream's.
+    pub stream_width: u16,
     pub frame: usize,
     quit_armed: Option<Instant>,
     pub quit: bool,
@@ -109,6 +123,7 @@ impl App {
     pub fn new(parts: Arc<Parts>, engine: Engine, reports: mpsc::UnboundedSender<Report>) -> Self {
         let folder = session::shown_folder(&parts.config.cwd);
         let session = Session::new(&parts.config.cwd, &engine.provider, engine.model_name());
+        let panel = Prefs::load(&parts.home).panel;
         let mut transcript = Transcript {
             thinking: Prefs::load(&parts.home).thinking.unwrap_or_default(),
             ..Transcript::default()
@@ -126,6 +141,10 @@ impl App {
             suggested: 0,
             conversation: Vec::new(),
             session,
+            todos: Vec::new(),
+            panel,
+            chord: false,
+            edit_request: None,
             busy: None,
             running: None,
             ask: None,
@@ -136,6 +155,7 @@ impl App {
             stream_lines: 0,
             stream_height: 0,
             rows: Vec::new(),
+            stream_width: u16::MAX,
             frame: 0,
             quit_armed: None,
             quit: false,
@@ -180,6 +200,7 @@ impl App {
             Tone::Fine,
         );
         self.conversation.clone_from(&session.conversation);
+        self.todos.clear();
         self.cost = session.cost;
         self.usage = Usage::default();
         self.context_used = 0;
@@ -256,9 +277,18 @@ impl App {
                     self.usage += call;
                     self.context_used = *input_tokens;
                 }
+                if let Event::Todo { items, .. } = &event {
+                    self.todos.clone_from(items);
+                    // The first plan opens the panel, unless the owner closed it once.
+                    if self.panel.is_none() {
+                        self.panel = Some(true);
+                    }
+                }
                 self.transcript.take(&event);
             }
             Report::Ask(request, reply) => {
+                // A chord begun before the question came does not take the first key after it.
+                self.chord = false;
                 self.ask = Some(OpenAsk {
                     request,
                     reply,
@@ -374,7 +404,7 @@ impl App {
             TermEvent::Mouse(mouse) => match mouse.kind {
                 MouseEventKind::ScrollUp => self.scroll_by(WHEEL_LINES as isize),
                 MouseEventKind::ScrollDown => self.scroll_by(-(WHEEL_LINES as isize)),
-                MouseEventKind::Down(MouseButton::Left) => {
+                MouseEventKind::Down(MouseButton::Left) if mouse.column < self.stream_width => {
                     if let Some((_, block)) = self.rows.iter().find(|(row, _)| *row == mouse.row) {
                         self.transcript.toggle(*block);
                     }
@@ -419,7 +449,18 @@ impl App {
                 _ => {}
             }
         }
+        if self.picker.is_some() {
+            self.chord = false;
+        }
+        if std::mem::take(&mut self.chord) {
+            if matches!(key.code, KeyCode::Char('e' | 'E')) {
+                self.edit_request = Some(self.input.text());
+            }
+            return;
+        }
         match key.code {
+            KeyCode::Char('x') if ctrl => self.chord = true,
+            KeyCode::Char('b') if ctrl => self.toggle_panel(),
             KeyCode::Enter if shift || alt => self.input.newline(),
             KeyCode::Char('j') if ctrl => self.input.newline(),
             KeyCode::Enter => self.submit(),
@@ -557,6 +598,7 @@ impl App {
             "quit" | "exit" | "q" => self.quit = true,
             "clear" => {
                 self.conversation.clear();
+                self.todos.clear();
                 // A new session counts from nothing.
                 self.cost = None;
                 self.usage = Usage::default();
@@ -649,6 +691,7 @@ impl App {
             },
             "editor" => self.set_editor(rest),
             "resume" => self.picker = Some(self.session_picker()),
+            "panel" => self.toggle_panel(),
             "thinking" => match rest {
                 "off" => self.set_thinking(Thinking::Off),
                 "folded" | "fold" | "" => self.set_thinking(Thinking::Folded),
@@ -725,6 +768,32 @@ impl App {
                     ),
                     Tone::Fine,
                 );
+            }
+            Err(reason) => self.transcript.note(reason, Tone::Fault),
+        }
+    }
+
+    /// Shows or hides the side panel, and keeps the choice.
+    pub fn toggle_panel(&mut self) {
+        let shown = !self.panel.unwrap_or(false);
+        self.panel = Some(shown);
+        if shown && self.stream_width < crate::view::PANEL_MIN_SCREEN {
+            self.transcript.note(
+                "the panel shows when the window is at least 100 columns wide",
+                Tone::Quiet,
+            );
+        }
+        if let Err(reason) = prefs::set_panel(&self.parts.home, shown) {
+            self.transcript.note(reason, Tone::Fault);
+        }
+    }
+
+    /// The editor's text is back (or why not): it becomes the input.
+    pub fn edited(&mut self, result: Result<String, String>) {
+        match result {
+            Ok(text) => {
+                self.input.clear();
+                self.input.insert_text(text.trim_end());
             }
             Err(reason) => self.transcript.note(reason, Tone::Fault),
         }
@@ -1270,6 +1339,36 @@ mod tests {
         );
         typed(&mut app, "/handoff write");
         assert!(app.working(), "writing runs in the background");
+    }
+
+    #[test]
+    fn a_plan_opens_the_panel_once_and_ctrl_x_e_hands_the_input_to_the_editor() {
+        let (mut app, _reports) = app();
+        let todo = |text: &str| glut::planning::TodoItem {
+            text: text.into(),
+            status: glut::planning::TodoStatus::Pending,
+        };
+        app.on_report(Report::Event(Event::Todo {
+            turn: 1,
+            items: vec![todo("read"), todo("fix")],
+        }));
+        assert_eq!(app.todos.len(), 2);
+        assert_eq!(app.panel, Some(true), "the first plan opens the panel");
+        app.on_terminal(key(KeyCode::Char('b'), KeyModifiers::CONTROL));
+        assert_eq!(app.panel, Some(false));
+        app.input.insert_text("a long thought");
+        app.on_terminal(key(KeyCode::Char('x'), KeyModifiers::CONTROL));
+        app.on_terminal(key(KeyCode::Char('e'), KeyModifiers::NONE));
+        assert_eq!(app.edit_request.as_deref(), Some("a long thought"));
+        app.edited(Ok("an edited thought\n".into()));
+        assert_eq!(app.input.text(), "an edited thought");
+        app.on_terminal(key(KeyCode::Char('x'), KeyModifiers::CONTROL));
+        app.on_terminal(key(KeyCode::Char('q'), KeyModifiers::NONE));
+        assert_eq!(
+            app.input.text(),
+            "an edited thought",
+            "another key ends the chord, typing nothing"
+        );
     }
 
     #[test]
