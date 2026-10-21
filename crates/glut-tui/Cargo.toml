@@ -1,0 +1,22 @@
+[package]
+name = "glut-tui"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Glut's terminal interface (docs/plans/glut-tui.md): a full-screen session over the glut harness."
+
+[[bin]]
+name = "glut"
+path = "src/main.rs"
+# The binary shares its name with the harness crate: no second set of docs under the same name.
+doc = false
+
+[dependencies]
+glut = { path = "../glut" }
+# Layout and widgets (T2); the stream itself is our own model.
+ratatui.workspace = true
+crossterm.workspace = true
+tokio = { workspace = true }
+clap.workspace = true
+serde_json.workspace = true
+unicode-width.workspace = true

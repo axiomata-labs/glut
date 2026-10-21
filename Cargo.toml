@@ -33,4 +33,12 @@ sha2 = "0.10"
 # The terminal UI's terminal (docs/plans/glut-tui.md, T2): raw mode, events (keys, mouse, paste, resize, focus), the
 # kitty keyboard protocol, synchronized output; `osc52` puts text on the clipboard over SSH and in tmux.
 crossterm = { version = "0.29", features = ["osc52"] }
+# The terminal UI's layout and widgets (T2): only the crossterm backend, on the crossterm above.
+ratatui = { version = "0.30", default-features = false, features = [
+    "crossterm_0_29",
+    "underline-color",
+    "layout-cache",
+] }
+# How many cells a character takes (wide characters, emoji): the TUI wraps by cells, not by chars.
+unicode-width = "0.2"
 

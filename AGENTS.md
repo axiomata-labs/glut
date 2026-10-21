@@ -29,11 +29,13 @@ too when a public item changes.
 ## Commands
 
 ```sh
-cargo build                      # the library and axh
+cargo build                      # the library, axh and glut (the TUI, crates/glut-tui)
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test                       # live tests are #[ignore]d (tests/live.rs: AXH_* variables)
 cargo run --bin axh -- run --base-url https://openrouter.ai/api --model <id> "prompt"   # key in AXH_API_KEY
+cargo run --bin axh -- providers add openrouter --model <id>   # once: a provider, its key in the Keychain
+cargo run --release --bin glut   # the TUI in the current folder, on the default provider
 ```
 
 ## Traps worth knowing before you touch things
@@ -77,3 +79,7 @@ cargo run --bin axh -- run --base-url https://openrouter.ai/api --model <id> "pr
   provider key variable — the catalog's and the owner's `keyEnv` — is kept out of MCP headers' `${…}`
   (`mcp::client::header_value`); a new catalog entry gets a variable of its own (a coding plan's key is not its
   pay-as-you-go key). `ModelEndpoint.versioned`: a provider's root already holds its version.
+- **The TUI never lets a key answer a question it did not show** (`crates/glut-tui/src/app.rs` `on_ask_key`): plain
+  keys only, no repeat, nothing in the first 400 ms; a turn that ends drops its open card; an ask shows the head and
+  the tail of a long target. Model and tool text goes through `transcript::wrap`/`clean` (control characters as
+  spaces, bidi and zero-width characters out) before it reaches the terminal.
