@@ -1,0 +1,12 @@
+[package]
+name = "glut-probe"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Measures what a terminal offers a full-screen TUI (docs/plans/glut-tui.md, TUI0): queries it answers by itself, and a short guided test of colours, keys, mouse, paste and the clipboard. Writes a report."
+
+[dependencies]
+crossterm.workspace = true
+# `event`: the terminal's answers to the probe's queries are read with a time limit (poll), before the event reader
+# of crossterm takes over the input.
+rustix = { workspace = true, features = ["event", "stdio"] }
