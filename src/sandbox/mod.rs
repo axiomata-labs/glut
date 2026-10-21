@@ -232,6 +232,32 @@ impl Policy {
         for path in &self.read_denied {
             out.push_str(&format!("  (subpath {})\n", quoted(path)));
         }
+        out.push_str(")\n");
+        // A working folder inside a hidden one — a Studio session's worktree lives in `~/.axiomata/worktrees` — is read
+        // again, and only it: the rest of the hidden folder stays hidden, and a secret inside the working folder too.
+        if self
+            .read_denied
+            .iter()
+            .any(|hidden| self.root != *hidden && self.root.starts_with(hidden))
+        {
+            out.push_str(&format!(
+                "(allow file-read*\n  (subpath {}))\n",
+                quoted(&self.root)
+            ));
+            let inside: Vec<&PathBuf> = self
+                .read_denied
+                .iter()
+                .filter(|hidden| hidden.starts_with(&self.root))
+                .collect();
+            if !inside.is_empty() {
+                out.push_str("(deny file-read*\n");
+                for path in inside {
+                    out.push_str(&format!("  (subpath {})\n", quoted(path)));
+                }
+                out.push_str(")\n");
+            }
+        }
+        out.push_str("(deny file-read*\n");
         out.push_str(&format!(
             "  (regex #\"^{root}/(.*/)?(\\.env(\\..*)?|[^/]*\\.env|\\.envrc(\\..*)?)$\"))\n"
         ));
@@ -415,6 +441,34 @@ mod tests {
             "echo tmp > \"$TMPDIR/axh-sandbox-probe\" && echo tmp-ok",
         );
         assert!(out.contains("tmp-ok"), "{out}");
+    }
+
+    #[test]
+    fn a_working_folder_inside_a_hidden_one_is_read_but_the_rest_of_it_stays_hidden() {
+        if !available() {
+            return;
+        }
+        // A Studio session's worktree: `~/.axiomata/worktrees/<project>/<session>`, below the hidden `~/.axiomata`.
+        let home = temp("hidden-home").canonicalize().unwrap();
+        let root = home.join(".axiomata/worktrees/p/s");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("README.md"), "hello").unwrap();
+        std::fs::write(root.join(".env"), "SECRET=1").unwrap();
+        std::fs::write(home.join(".axiomata/config.toml"), "api_key").unwrap();
+        let policy = Policy::new(&root, &home, &[], &[]);
+        assert_eq!(sandboxed(&policy, "cat README.md"), "hello");
+        let out = sandboxed(&policy, "echo more >> README.md && echo wrote");
+        assert!(out.contains("wrote"), "{out}");
+        for (script, what) in [
+            (
+                format!("cat {}/.axiomata/config.toml", home.display()),
+                "the rest of the hidden folder",
+            ),
+            ("cat .env".to_owned(), "the working folder's .env"),
+        ] {
+            let out = sandboxed(&policy, &format!("{script} || echo REFUSED"));
+            assert!(out.contains("REFUSED"), "{what}: {out}");
+        }
     }
 
     #[test]
