@@ -23,6 +23,7 @@ pub mod model;
 pub mod permissions;
 pub mod planning;
 pub mod prompt;
+pub mod providers;
 mod refusals;
 pub mod results;
 pub mod run;

@@ -1,8 +1,9 @@
 //! `axh` — the harness as a program of its own: runs one prompt headless and writes every step as a JSON line on
 //! stdout (`docs/plans/harness.md`, H3). Logs go to stderr, so stdout stays machine-readable.
 //!
-//! The key comes from the environment (`AXH_API_KEY`), never from an argument: an argument shows in `ps` and in a
-//! shell's history.
+//! The key comes from the environment (`AXH_API_KEY`) or, for a provider of `~/.axh/providers.json`, from its own
+//! variable or the secret store (`axh providers`, `docs/plans/glut-providers.md`) — never from an argument: an
+//! argument shows in `ps` and in a shell's history.
 //!
 //! Exit codes: 0 answered, 1 failed (model API, bad folder), 2 stopped at a limit (turns, time) or cancelled.
 
@@ -10,6 +11,8 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
+
+mod providers;
 
 use clap::{Args, Parser, Subcommand};
 use glut::commands::{PermissionsView, Registry};
@@ -75,6 +78,9 @@ enum Command {
         #[arg(long)]
         days: Option<u32>,
     },
+    /// The model providers runs use (`docs/plans/glut-providers.md`): ~/.axh/providers.json, keys in a secret store.
+    #[command(subcommand)]
+    Providers(providers::ProvidersCommand),
 }
 
 /// Writes each event as one JSON line, flushed at once so a reader sees it while the run goes on.
@@ -112,11 +118,19 @@ fn env_search() -> glut::tools::search::WebSearch {
 /// `axh run`'s flags — kept in a run's journal, so `axh resume` builds the run again as it began.
 #[derive(Args, Clone, Serialize, Deserialize)]
 struct RunArgs {
-    /// The API's base, without /v1 (https://openrouter.ai/api, http://localhost:11434).
+    /// A provider of ~/.axh/providers.json (axh providers list); without it and without --base-url the default one.
+    #[arg(long, conflicts_with = "base_url")]
+    #[serde(default)]
+    provider: Option<String>,
+    /// A one-off endpoint instead of a provider: the API's base, without /v1 (https://openrouter.ai/api,
+    /// http://localhost:11434); the key from AXH_API_KEY.
     #[arg(long)]
-    base_url: String,
+    #[serde(default)]
+    base_url: Option<String>,
+    /// The model; with a provider, its default model when left out.
     #[arg(long)]
-    model: String,
+    #[serde(default)]
+    model: Option<String>,
     /// How hard the model reasons: none, minimal, low, medium, high, xhigh or max. Otherwise a skill's or a
     /// command's `effort:`, else `effort` in ~/.axh/settings.json, else the provider's own default.
     #[arg(long)]
@@ -204,6 +218,7 @@ async fn main() -> ExitCode {
         Command::Run(args) => execute(args, None).await,
         Command::Resume { run, list, discard } => resume_command(run, list, discard).await,
         Command::Gain { days } => gain(days),
+        Command::Providers(command) => providers::run(command).await,
     }
 }
 
@@ -230,6 +245,47 @@ fn gain(days: Option<u32>) -> ExitCode {
         }
         Err(err) => fail(format!("cannot read the count of savings: {err}")),
     }
+}
+
+/// The run's endpoint: a one-off `--base-url` with `AXH_API_KEY`, else a provider of `~/.axh/providers.json` — then
+/// with the provider's id, so the journal keeps the provider and model the run began with, not "the default".
+fn endpoint(
+    provider: Option<&str>,
+    base_url: Option<String>,
+    model: Option<String>,
+) -> Result<(ModelEndpoint, Option<String>), String> {
+    if let Some(base_url) = base_url {
+        // The key goes in a header, never in the URL — and a journal keeps the URL as it was given.
+        if has_userinfo(&base_url) {
+            return Err(
+                "--base-url must not hold a user or a password; the key comes from AXH_API_KEY"
+                    .into(),
+            );
+        }
+        let model = model.ok_or("--base-url needs --model")?;
+        return Ok((
+            ModelEndpoint {
+                base_url,
+                api_key: std::env::var(KEY_ENV).ok().filter(|key| !key.is_empty()),
+                model,
+                effort: None,
+                versioned: false,
+            },
+            None,
+        ));
+    }
+    let home = glut::permissions::settings::home_dir().map_err(|err| err.to_string())?;
+    let list = glut::providers::Providers::load(&home).map_err(|err| err.to_string())?;
+    let store = list.store(&home).map_err(|err| err.to_string())?;
+    let resolved =
+        glut::providers::resolve(&list, store.as_ref(), provider, model.as_deref(), |name| {
+            std::env::var(name).ok()
+        })?;
+    eprintln!(
+        "axh: provider {} · model {}",
+        resolved.id, resolved.endpoint.model
+    );
+    Ok((resolved.endpoint, Some(resolved.id)))
 }
 
 /// Whether `url` names a user or a password before its host (`https://user:pw@host`).
@@ -309,10 +365,14 @@ async fn resume_command(run: Option<String>, list: bool, discard: bool) -> ExitC
     };
     // What the run goes on with, said before it does: the flags come from the journal, not from this command line.
     eprintln!(
-        "axh resume: {} with --base-url {} --model {} --effort {} --cwd {} --permission-mode {} --allow {:?} --deny {:?}",
+        "axh resume: {} with {} --model {} --effort {} --cwd {} --permission-mode {} --allow {:?} --deny {:?}",
         entry.run,
-        args.base_url,
-        args.model,
+        match (&args.base_url, &args.provider) {
+            (Some(base_url), _) => format!("--base-url {base_url}"),
+            (None, Some(provider)) => format!("--provider {provider}"),
+            (None, None) => "the default provider".to_owned(),
+        },
+        args.model.as_deref().unwrap_or("(the provider's)"),
         args.effort.as_deref().unwrap_or("(settings)"),
         args.cwd.display(),
         args.permission_mode.as_deref().unwrap_or("(settings)"),
@@ -326,6 +386,7 @@ async fn resume_command(run: Option<String>, list: bool, discard: bool) -> ExitC
 async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
     let journal_args = args.clone();
     let RunArgs {
+        provider,
         base_url,
         model,
         effort,
@@ -354,12 +415,10 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
     if prompt.is_none() && skill.is_none() {
         return fail("name a prompt, or run a skill with --skill <name>".into());
     }
-    // The key goes in a header, never in the URL — and a journal keeps the URL as it was given.
-    if has_userinfo(&base_url) {
-        return fail(
-            "--base-url must not hold a user or a password; the key comes from AXH_API_KEY".into(),
-        );
-    }
+    let (endpoint, provider) = match endpoint(provider.as_deref(), base_url, model) {
+        Ok(found) => found,
+        Err(reason) => return fail(reason),
+    };
     let effort = match effort.as_deref().map(Effort::parse_or_explain).transpose() {
         Ok(effort) => effort,
         Err(reason) => return fail(format!("--effort: {reason}")),
@@ -383,6 +442,11 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
         }
         let mut kept = journal_args;
         kept.cwd = cwd.clone();
+        // A resume goes on with the provider and model the run began with, whatever the default is by then.
+        if provider.is_some() {
+            kept.provider = provider.clone();
+            kept.model = Some(endpoint.model.clone());
+        }
         config.journal = Some(glut::journal::JournalSpec {
             dir,
             run,
@@ -410,12 +474,7 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
     if let Some(secs) = timeout_secs {
         config.timeout = std::time::Duration::from_secs(secs);
     }
-    let endpoint = ModelEndpoint {
-        base_url,
-        api_key: std::env::var(KEY_ENV).ok().filter(|key| !key.is_empty()),
-        model,
-        effort,
-    };
+    let endpoint = ModelEndpoint { effort, ..endpoint };
     let mode = match permission_mode
         .as_deref()
         .map(|text| (text, Mode::parse(text)))
@@ -641,6 +700,40 @@ mod tests {
     use super::*;
 
     /// A journal written before `--effort` existed still resumes, with no effort of its own.
+    #[test]
+    fn a_journal_of_a_provider_run_reads_without_a_base_url() {
+        let args: RunArgs = serde_json::from_value(serde_json::json!({
+            "provider": "openrouter", "model": "m", "cwd": "/w", "instructions_file": null,
+            "max_turns": null, "timeout_secs": null, "permission_mode": null, "allow": [], "ask": [],
+            "deny": [], "skill": null, "skill_dir": [], "prompt": "hi"
+        }))
+        .unwrap();
+        assert_eq!(args.provider.as_deref(), Some("openrouter"));
+        assert_eq!(args.base_url, None);
+    }
+
+    #[test]
+    fn a_base_url_needs_a_model_and_no_password() {
+        assert!(
+            endpoint(None, Some("https://x.test/api".into()), None)
+                .unwrap_err()
+                .contains("--model")
+        );
+        assert!(
+            endpoint(
+                None,
+                Some("https://u:p@x.test/api".into()),
+                Some("m".into())
+            )
+            .unwrap_err()
+            .contains("password")
+        );
+        let (one_off, provider) =
+            endpoint(None, Some("https://x.test/api".into()), Some("m".into())).unwrap();
+        assert!(!one_off.versioned);
+        assert_eq!(provider, None);
+    }
+
     #[test]
     fn a_journaled_run_without_an_effort_still_reads() {
         let args: RunArgs = serde_json::from_value(serde_json::json!({

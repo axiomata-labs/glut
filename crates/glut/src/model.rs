@@ -419,10 +419,17 @@ impl OpenAiCompat {
     }
 
     fn url(&self) -> String {
-        format!(
-            "{}/v1/chat/completions",
-            self.endpoint.base_url.trim_end_matches('/')
-        )
+        self.api_url("chat/completions")
+    }
+
+    /// `path` below the API's root: `{base_url}/v1/{path}`, or `{base_url}/{path}` for a versioned base.
+    fn api_url(&self, path: &str) -> String {
+        let base = self.endpoint.base_url.trim_end_matches('/');
+        if self.endpoint.versioned {
+            format!("{base}/{path}")
+        } else {
+            format!("{base}/v1/{path}")
+        }
     }
 
     fn body(
@@ -524,7 +531,7 @@ impl ChatModel for OpenAiCompat {
     }
 
     async fn context_window(&self) -> Option<u32> {
-        let url = format!("{}/v1/models", self.endpoint.base_url.trim_end_matches('/'));
+        let url = self.api_url("models");
         let mut request = self.client.get(url).timeout(MODEL_LIST_TIMEOUT);
         if let Some(key) = &self.endpoint.api_key {
             request = request.bearer_auth(key);
@@ -1197,6 +1204,7 @@ mod tests {
             api_key: key.map(str::to_owned),
             model: "test-model".into(),
             effort: None,
+            versioned: false,
         }
     }
 
@@ -1232,6 +1240,34 @@ mod tests {
                 .unwrap();
             assert_eq!(reply.usage.cached_input_tokens, want);
         }
+    }
+
+    #[tokio::test]
+    async fn a_versioned_base_is_called_without_another_v1() {
+        let api = FakeApi::spawn(vec![Answer::ok(json!({
+            "choices": [{"message": {"role": "assistant", "content": "OK"}}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1}
+        }))])
+        .await;
+        let model = OpenAiCompat::new(ModelEndpoint {
+            base_url: format!("{}/api/paas/v4/", api.base_url),
+            versioned: true,
+            ..endpoint(&api.base_url, None)
+        })
+        .unwrap();
+        model
+            .complete(&[Message::user("hi")], &[], None)
+            .await
+            .unwrap();
+        let (head, _) = api.seen.lock().unwrap()[0].clone();
+        assert!(
+            head.starts_with("POST /api/paas/v4/chat/completions "),
+            "{head}"
+        );
+        assert_eq!(
+            model.api_url("models"),
+            format!("{}/api/paas/v4/models", api.base_url)
+        );
     }
 
     #[tokio::test]

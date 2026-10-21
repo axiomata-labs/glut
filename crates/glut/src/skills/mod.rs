@@ -710,6 +710,7 @@ mod tests {
             api_key: None,
             model: model.into(),
             effort: None,
+            versioned: false,
         }
     }
 

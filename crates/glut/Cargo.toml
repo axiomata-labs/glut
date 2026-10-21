@@ -7,7 +7,7 @@ description = "Glut, an agent harness: a lean tool-calling loop over an OpenAI-c
 
 [[bin]]
 name = "axh"
-path = "src/bin/axh.rs"
+path = "src/bin/axh/main.rs"
 
 [dependencies]
 # The guarded file service the file tools go through, shared with the other Axiomata apps (Axiomata-Foundation).
@@ -27,7 +27,7 @@ gray_matter.workspace = true
 # A hook's `matcher` is a regex, Claude's own spelling (HS7, D1/D2).
 regex.workspace = true
 # `process`: the shell tools kill a command's whole process group (HS2, S4).
-rustix = { workspace = true, features = ["process"] }
+rustix = { workspace = true, features = ["process", "termios"] }
 chrono.workspace = true
 clap.workspace = true
 tracing-subscriber.workspace = true
@@ -35,6 +35,10 @@ tracing-subscriber.workspace = true
 sha2.workspace = true
 # Code mode (Glut 2, G2): the QuickJS runtime a script runs in.
 rquickjs.workspace = true
+
+# The macOS Keychain, where a provider's key waits between runs (docs/plans/glut-providers.md, P4).
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3"
 
 [dev-dependencies]
 # The fake model server of the tests listens on the loopback.

@@ -381,12 +381,24 @@ impl Http {
     }
 }
 
-/// A header's value with its `${NAME}`s put in from `env` (M3) — except the harness's own model key, which is
-/// never a server's to have: a repository's `.mcp.json` asking for `${AXH_API_KEY}` would send it to a host of
-/// its choosing.
+/// A header's value with its `${NAME}`s put in from `env` (M3) — except the model keys, which are never a server's
+/// to have: a repository's `.mcp.json` asking for `${AXH_API_KEY}`, `${OPENROUTER_API_KEY}` or a variable the
+/// owner's `providers.json` names would send it to a host of its choosing.
 fn header_value(value: &str, env: impl Fn(&str) -> Option<String>) -> Result<String, String> {
+    header_value_without(value, &crate::providers::configured_key_envs(), env)
+}
+
+/// [`header_value`] with the owner's configured key variables handed in, so it is testable without a home.
+fn header_value_without(
+    value: &str,
+    configured: &[String],
+    env: impl Fn(&str) -> Option<String>,
+) -> Result<String, String> {
     expand_vars(value, |key| {
-        (key != API_KEY_ENV).then(|| env(key)).flatten()
+        let model_key = key == API_KEY_ENV
+            || crate::providers::catalog::key_envs().any(|name| name == key)
+            || configured.iter().any(|name| name == key);
+        (!model_key).then(|| env(key)).flatten()
     })
 }
 
@@ -859,6 +871,26 @@ mod tests {
         );
         let refused = header_value("Bearer ${AXH_API_KEY}", env).unwrap_err();
         assert!(!refused.contains("sk-model-key"), "{refused}");
+    }
+
+    #[test]
+    fn a_header_never_receives_a_providers_key_of_the_catalog_or_the_owners_own() {
+        let env = |key: &str| match key {
+            "OPENROUTER_API_KEY" => Some("sk-or".to_owned()),
+            "MY_PROXY_KEY" => Some("sk-proxy".to_owned()),
+            "BRAVE_API_KEY" => Some("brave".to_owned()),
+            _ => None,
+        };
+        let configured = ["MY_PROXY_KEY".to_owned()];
+        for header in ["Bearer ${OPENROUTER_API_KEY}", "Bearer ${MY_PROXY_KEY}"] {
+            let refused = header_value_without(header, &configured, env).unwrap_err();
+            assert!(!refused.contains("sk-"), "{refused}");
+        }
+        assert_eq!(
+            header_value_without("${BRAVE_API_KEY}", &configured, env).unwrap(),
+            "brave",
+            "a server's own key still reaches it"
+        );
     }
 
     #[tokio::test]

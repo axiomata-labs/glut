@@ -2900,6 +2900,7 @@ mod tests {
             api_key: None,
             model: "m".into(),
             effort: None,
+            versioned: false,
         })
         .unwrap();
         let outcome = run(
@@ -2937,6 +2938,7 @@ mod tests {
             api_key: None,
             model: "m".into(),
             effort: None,
+            versioned: false,
         })
         .unwrap();
         let mut events = Vec::new();

@@ -253,6 +253,7 @@ mod tests {
                     api_key: None,
                     model: "caller/model".into(),
                     effort: None,
+                    versioned: false,
                 },
                 gate: Gate::new(RuleSet::default(), Mode::Default, Arc::new(Nobody)),
             }

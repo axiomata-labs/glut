@@ -69,3 +69,11 @@ cargo run --bin axh -- run --base-url https://openrouter.ai/api --model <id> "pr
   `task`, rules then mode; headless an unanswered ask refuses it). A declaration alone never allows, the
   subagent gets the parent's toolbox minus `task` (one level only), and its events arrive wrapped as
   `Event::Sub { depth, event }` — sinks must recurse (`Notes`, `Readable`) or they drop them.
+- **A provider's key is bound to its host and never comes from `AXH_API_KEY`** (`docs/plans/glut-providers.md`,
+  `crates/glut/src/providers/`): providers live in `~/.axh/providers.json` (a file of their own — Glut rewrites it,
+  never the owner's `settings.json`), keys in the Keychain or `~/.axh/credentials.json` (0600 from the first byte,
+  `write_replacing`) under the account `<id>@<host>`, so a root changed in the file finds no key instead of sending
+  the old one elsewhere. `AXH_API_KEY` belongs to a one-off `--base-url` (and to hosts like Axiomata) only. Every
+  provider key variable — the catalog's and the owner's `keyEnv` — is kept out of MCP headers' `${…}`
+  (`mcp::client::header_value`); a new catalog entry gets a variable of its own (a coding plan's key is not its
+  pay-as-you-go key). `ModelEndpoint.versioned`: a provider's root already holds its version.

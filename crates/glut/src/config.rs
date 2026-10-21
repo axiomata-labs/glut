@@ -33,11 +33,12 @@ pub const DEFAULT_SUBAGENT_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 /// that factor while staying inside every other limit.
 pub const DEFAULT_MAX_SUBAGENTS: u32 = 8;
 
-/// A model behind an OpenAI-compatible chat API (`POST {base_url}/v1/chat/completions`): OpenRouter, Ollama and most
-/// others speak it.
+/// A model behind an OpenAI-compatible chat API (`POST {base_url}/v1/chat/completions`, or
+/// `{base_url}/chat/completions` when [`Self::versioned`]): OpenRouter, Ollama and most others speak it.
 #[derive(Clone)]
 pub struct ModelEndpoint {
-    /// The API's base, without `/v1` (`https://openrouter.ai/api`, `http://localhost:11434`).
+    /// The API's base, without `/v1` (`https://openrouter.ai/api`, `http://localhost:11434`) — or, when
+    /// [`Self::versioned`], with its version (`https://openrouter.ai/api/v1`).
     pub base_url: String,
     /// Sent as a bearer token; `None` for an endpoint without one (a local Ollama).
     pub api_key: Option<String>,
@@ -45,6 +46,10 @@ pub struct ModelEndpoint {
     pub model: String,
     /// How hard the model reasons before it answers; `None` sends nothing and leaves it to the provider.
     pub effort: Option<Effort>,
+    /// `base_url` already ends in the API's version (`…/v1beta/openai`, `…/api/paas/v4`), as a provider of the
+    /// catalog names it (`docs/plans/glut-providers.md`): requests go to `{base_url}/chat/completions`, not
+    /// `{base_url}/v1/chat/completions`.
+    pub versioned: bool,
 }
 
 /// How hard a reasoning model thinks before it answers (Glut effort, E2): the levels OpenRouter names. A model that
@@ -121,6 +126,7 @@ impl fmt::Debug for ModelEndpoint {
             .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
             .field("model", &self.model)
             .field("effort", &self.effort)
+            .field("versioned", &self.versioned)
             .finish()
     }
 }
@@ -439,6 +445,7 @@ mod tests {
             api_key: Some("sk-secret-123".into()),
             model: "m".into(),
             effort: None,
+            versioned: false,
         };
         let printed = format!("{endpoint:?}");
         assert!(!printed.contains("sk-secret-123"), "{printed}");
