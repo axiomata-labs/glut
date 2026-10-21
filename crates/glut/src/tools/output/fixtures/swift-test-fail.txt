@@ -1,0 +1,36 @@
+Building for debugging...
+[1 / 21]
+[2 / 13] CalcTests-product
+[4 / 15] CalcTests-product
+[9 / 13] CalcTests-product
+Build complete! (1,50 Sek.)
+Test Suite 'All tests' started at 2026-10-20 18:31:22.552.
+Test Suite 'CalcTests.xctest' started at 2026-10-20 18:31:22.553.
+Test Suite 'CalcXCTests' started at 2026-10-20 18:31:22.553.
+Test Case '-[CalcTests.CalcXCTests testBad]' started.
+/work/sw/Tests/CalcTests/CalcTests.swift:11: error: -[CalcTests.CalcXCTests testBad] : XCTAssertEqual failed: ("3") is not equal to ("4")
+Test Case '-[CalcTests.CalcXCTests testBad]' failed (0.030 seconds).
+Test Case '-[CalcTests.CalcXCTests testOk]' started.
+Test Case '-[CalcTests.CalcXCTests testOk]' passed (0.000 seconds).
+Test Suite 'CalcXCTests' failed at 2026-10-20 18:31:22.583.
+	 Executed 2 tests, with 1 failure (0 unexpected) in 0.030 (0.030) seconds
+Test Suite 'CalcTests.xctest' failed at 2026-10-20 18:31:22.583.
+	 Executed 2 tests, with 1 failure (0 unexpected) in 0.030 (0.030) seconds
+Test Suite 'All tests' failed at 2026-10-20 18:31:22.583.
+	 Executed 2 tests, with 1 failure (0 unexpected) in 0.030 (0.032) seconds
+◇ Test run started.
+↳ Testing Library Version: 2084
+↳ Target Platform: arm64e-apple-macos14.0
+◇ Test more() started.
+◇ Test adds() started.
+◇ Test addsWrong() started.
+✔ Test adds() passed after 0.001 seconds.
+✔ Test more() passed after 0.001 seconds.
+✘ Test addsWrong() recorded an issue at CalcTests.swift:6:26: Expectation failed: add(2, 2) == 5
+↳ add(2, 2) == 5 → false
+↳   add(2, 2) → 4
+✘ Test addsWrong() failed after 0.001 seconds with 1 issue.
+✘ Test run with 3 tests in 0 suites failed after 0.001 seconds with 1 issue.
+Note: Some test targets reported failures:
+  - CalcTests (XCTest)
+  - CalcTests (Swift Testing)

@@ -1,0 +1,779 @@
+diff --git a/crates/axiomata-harness/src/codemode.rs b/crates/axiomata-harness/src/codemode.rs
+index 80f4bfd..17a232d 100644
+--- a/crates/axiomata-harness/src/codemode.rs
++++ b/crates/axiomata-harness/src/codemode.rs
+@@ -25,7 +25,7 @@ use rquickjs::{
+ use serde_json::{Value, json};
+ use tokio::sync::{Semaphore, mpsc, oneshot};
+ 
+-use crate::history::ResultStore;
++use crate::results::ResultStore;
+ use crate::model::ToolSpec;
+ 
+ /// The tool's name.
+@@ -575,19 +575,7 @@ fn install<'js>(
+ 
+ /// The output as the model gets it: whole up to [`MAX_OUTPUT_CHARS`]; beyond, head and tail and the whole in `store`.
+ pub(crate) fn bounded(text: String, store: &ResultStore) -> String {
+-    let total = text.chars().count();
+-    if total <= MAX_OUTPUT_CHARS {
+-        return text;
+-    }
+-    let half = MAX_OUTPUT_CHARS / 2;
+-    let head: String = text.chars().take(half).collect();
+-    let tail: String = text.chars().skip(total - half).collect();
+-    let id = store.put(text);
+-    format!(
+-        "{head}\n\n[… {} characters left out of the middle; `{}` with id \"{id}\" gives the whole output …]\n\n{tail}",
+-        total - 2 * half,
+-        crate::history::NAME
+-    )
++    crate::results::bounded(text, store, MAX_OUTPUT_CHARS)
+ }
+ 
+ #[cfg(test)]
+diff --git a/crates/axiomata-harness/src/config.rs b/crates/axiomata-harness/src/config.rs
+index a367d86..de6d459 100644
+--- a/crates/axiomata-harness/src/config.rs
++++ b/crates/axiomata-harness/src/config.rs
+@@ -84,10 +84,6 @@ pub struct RunConfig {
+     pub subagent_timeout: Duration,
+     /// How many subagents the run may start in all; a `task` call past it is answered with an error.
+     pub max_subagents: u32,
+-    /// Whether long tool results the model has answered on shrink in the conversation, their whole text kept for
+-    /// `read_full_result` (Glut 2, B). Off by default (owner, 2026-10-20): measured on news-web it halved the context a
+-    /// step but not the run's total, which took more steps — on again only once a measurement shows it pays.
+-    pub shrink_results: bool,
+     /// Whether the run offers `codemode` and keeps its MCP tools behind it (Glut 2, A + E, G3/G8): the model then sees
+     /// the core tools and `codemode`, and reaches the MCP tools from a script. On by default.
+     pub codemode: bool,
+@@ -126,7 +122,6 @@ impl RunConfig {
+             subagent_max_turns: DEFAULT_SUBAGENT_MAX_TURNS,
+             subagent_timeout: DEFAULT_SUBAGENT_TIMEOUT,
+             max_subagents: DEFAULT_MAX_SUBAGENTS,
+-            shrink_results: false,
+             codemode: true,
+             mcp_behind_code: true,
+             todos: true,
+diff --git a/crates/axiomata-harness/src/lib.rs b/crates/axiomata-harness/src/lib.rs
+index 6a483c9..1f0fdba 100644
+--- a/crates/axiomata-harness/src/lib.rs
++++ b/crates/axiomata-harness/src/lib.rs
+@@ -15,7 +15,7 @@ pub mod config;
+ mod diagnostics;
+ pub mod error;
+ pub mod event;
+-pub mod history;
++pub mod results;
+ pub mod hooks;
+ pub mod journal;
+ pub mod mcp;
+diff --git a/crates/axiomata-harness/src/results.rs b/crates/axiomata-harness/src/results.rs
+index 3bef933..ea5c44b 100644
+--- a/crates/axiomata-harness/src/results.rs
++++ b/crates/axiomata-harness/src/results.rs
+@@ -1,39 +1,27 @@
+-//! Old tool results shrink in the conversation (Glut 2, B, G6): once the conversation grows past a budget, the oldest
+-//! long results the model has answered on are replaced by their head and a note, and their whole text stays with the
+-//! run — `read_full_result` gives it back.
++//! The run's store of whole texts (Glut lean, N2): a tool result too long for the conversation is never cut — the model
++//! gets its head and tail and a note, the whole text stays here, and `read_full_result` reads it on in parts.
+ //!
+-//! Measured on Glut rund's news-web run: every fetched page rode along in every later step (1.7 M input tokens for 18
+-//! steps). A result the model has already worked with is rarely needed whole again; when it is, one call fetches it.
+-//!
+-//! * **Relocation, never loss**: the whole text is kept in the run's [`ResultStore`], the note names its id.
+-//! * **Each result shrinks once**: the conversation before it stays byte for byte the same afterwards, so a provider's
+-//!   prompt cache breaks once at that point and holds from there on — not on every turn.
+-//! * **The newest results stay whole**, and nothing shrinks while the conversation fits the budget.
++//! * **Relocation, never loss**: every character of a relocated result can be read back.
++//! * **Once, at the moment it arrives**: a result is bounded before it enters the conversation and never touched
++//!   again, so the conversation before it stays byte for byte the same and a provider's prompt cache holds.
+ //!
+ //! Like `task`, `read_full_result` has no [`crate::tools::Tool`] impl: the store belongs to the loop, which answers
+-//! the call itself (`run.rs`).
++//! the call itself (`run.rs`). Code mode bounds a script's output the same way.
+ 
+ use std::sync::{Arc, Mutex};
+ 
+ use serde_json::{Value, json};
+ 
+-use crate::model::{Message, Role, ToolSpec};
++use crate::model::ToolSpec;
+ use crate::tools::MAX_TOOL_OUTPUT_CHARS;
+ 
+-/// A result longer than this many characters shrinks once the model has answered on it (G6).
+-pub const SHRINK_OVER_CHARS: usize = 2_000;
+-/// What stays of a shrunk result: its first characters (G6).
+-pub const KEEP_HEAD_CHARS: usize = 1_200;
+-/// Results shrink only while the conversation is longer than this, in characters (~20k tokens): a data-gathering
+-/// task's results stay whole as long as they fit. Once over it, they shrink until the conversation is at 60 % of it.
+-pub const SHRINK_BUDGET_CHARS: usize = 80_000;
+-/// What a run's store keeps of shrunk texts and over-long script outputs, in bytes; past it the oldest are dropped.
++/// What a run's store keeps of relocated results and script outputs, in bytes; past it the oldest are dropped.
+ const MAX_STORED_BYTES: usize = 32 * 1024 * 1024;
+ 
+ /// The tool's name.
+ pub(crate) const NAME: &str = "read_full_result";
+ 
+-/// The whole texts of the results that shrank. Shared, so code mode can put an over-long output here too.
++/// The whole texts of relocated results. Shared, so code mode can put an over-long output here too.
+ ///
+ /// An id is `<tag>-<n>`: the tag is the run's own, so a note from an earlier turn of a chat (whose run, and store, is
+ /// gone) is answered "no longer available" — never with another run's text under the same number.
+@@ -122,13 +110,13 @@ impl ResultStore {
+ pub(crate) fn spec() -> ToolSpec {
+     ToolSpec {
+         name: NAME.into(),
+-        description: "Read the whole text of an earlier tool result that was shortened in the conversation (its note \
+-                      names the id). Long texts come in parts: read on with the offset the answer names."
++        description: "Read the whole text of a tool result that was too long for the conversation (its note names \
++                      the id). Long texts come in parts: read on with the offset the answer names."
+             .into(),
+         parameters: json!({
+             "type": "object",
+             "properties": {
+-                "id": { "type": "string", "description": "The id the shortening note names." },
++                "id": { "type": "string", "description": "The id the note names." },
+                 "offset": { "type": "integer", "description": "Character to start at; default 0." }
+             },
+             "required": ["id"]
+@@ -155,126 +143,28 @@ pub(crate) fn answer(store: &ResultStore, arguments: &str) -> (bool, String) {
+     }
+ }
+ 
+-/// Shrinks long tool results the model has already answered on, oldest first, while the conversation is over
+-/// `budget` characters; their whole text goes into `store`. Returns the index before which every result has been
+-/// dealt with — the next call starts there, so no result shrinks twice.
+-///
+-/// Over a budget, not as soon as the model answered (measured 2026-10-20, Glut 2 CP2): a task that gathers data for
+-/// its final answer — a calendar digest writes every event out again — still needs results it has "answered on" with
+-/// another call; shrinking them sent the model fetching them back until the turn limit. Under the budget nothing
+-/// shrinks; above it the oldest results go first, the newest stay whole.
+-pub(crate) fn shrink_over_budget(
+-    messages: &mut [Message],
+-    from: usize,
+-    store: &ResultStore,
+-    budget: usize,
+-) -> usize {
+-    let mut total: usize = messages.iter().map(size_of).sum();
+-    if total <= budget {
+-        return from;
++/// `text` as the conversation gets it: whole up to `max` characters; beyond, its head and tail with a note between them,
++/// and the whole text in `store`.
++pub(crate) fn bounded(text: String, store: &ResultStore, max: usize) -> String {
++    let total = text.chars().count();
++    if total <= max {
++        return text;
+     }
+-    let Some(last_answer) = messages.iter().rposition(|m| m.role == Role::Assistant) else {
+-        return from;
+-    };
+-    // Once over, down to well below the budget (hysteresis): shrinking just under it would shrink again on the next
+-    // turn, and each time the cached prefix of the prompt breaks at that result.
+-    let target = budget / 10 * 6;
+-    let mut done = from;
+-    for (index, message) in messages.iter_mut().enumerate().take(last_answer).skip(from) {
+-        if total <= target {
+-            break;
+-        }
+-        done = index + 1;
+-        if message.role != Role::Tool {
+-            continue;
+-        }
+-        let Some(text) = message.content.as_deref() else {
+-            continue;
+-        };
+-        let chars = text.chars().count();
+-        if chars <= SHRINK_OVER_CHARS {
+-            continue;
+-        }
+-        let head: String = text.chars().take(KEEP_HEAD_CHARS).collect();
+-        let id = store.put(message.content.take().unwrap_or_default());
+-        let removed = chars - KEEP_HEAD_CHARS;
+-        let shrunk = format!(
+-            "{head}\n\n[shortened: {removed} more characters were taken out of the conversation to keep it small; \
+-             `{NAME}` with id \"{id}\" gives the whole text]"
+-        );
+-        total = total - chars + shrunk.chars().count();
+-        message.content = Some(shrunk);
+-    }
+-    done
+-}
+-
+-/// What a message adds to the prompt, in characters: its text and its tool calls' arguments.
+-fn size_of(message: &Message) -> usize {
+-    message.content.as_deref().map_or(0, |t| t.chars().count())
+-        + message
+-            .tool_calls
+-            .iter()
+-            .map(|c| c.function.arguments.chars().count())
+-            .sum::<usize>()
++    let half = max / 2;
++    let head: String = text.chars().take(half).collect();
++    let tail: String = text.chars().skip(total - half).collect();
++    let id = store.put(text);
++    format!(
++        "{head}\n\n[… {} of {total} characters left out of the middle; `{NAME}` with id \"{id}\" and an offset reads \
++         the whole text …]\n\n{tail}",
++        total - 2 * half
++    )
+ }
+ 
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+ 
+-    fn assistant() -> Message {
+-        Message {
+-            role: Role::Assistant,
+-            content: Some("thinking".into()),
+-            tool_calls: Vec::new(),
+-            tool_call_id: None,
+-        }
+-    }
+-
+-    #[test]
+-    fn over_the_budget_answered_long_results_shrink_once_and_the_newest_stay_whole() {
+-        let store = ResultStore::new("r");
+-        let long = "a".repeat(SHRINK_OVER_CHARS + 500);
+-        let mut messages = vec![
+-            Message::system("s"),
+-            Message::user("u"),
+-            assistant(),
+-            Message::tool("1", long.clone()),
+-            Message::tool("2", "short"),
+-            assistant(),
+-            Message::tool("3", long.clone()),
+-        ];
+-        // Under a generous budget nothing shrinks.
+-        let untouched = messages.clone();
+-        assert_eq!(shrink_over_budget(&mut messages, 0, &store, usize::MAX), 0);
+-        assert_eq!(messages, untouched);
+-        let done = shrink_over_budget(&mut messages, 0, &store, 0);
+-        assert_eq!(done, 5);
+-        let shrunk = messages[3].content.as_deref().unwrap();
+-        assert!(shrunk.starts_with(&"a".repeat(KEEP_HEAD_CHARS)));
+-        assert!(shrunk.contains("id \"r-1\"") && shrunk.contains("1300 more characters"));
+-        assert_eq!(messages[4].content.as_deref(), Some("short"));
+-        // The newest result has no answer after it yet.
+-        assert_eq!(messages[6].content.as_deref(), Some(long.as_str()));
+-        assert_eq!(store.read("r-1", 0).unwrap(), long);
+-
+-        // Nothing new answered: nothing changes, and what shrank is not touched again.
+-        let before = messages.clone();
+-        assert_eq!(shrink_over_budget(&mut messages, done, &store, 0), done);
+-        assert_eq!(messages, before);
+-
+-        messages.push(assistant());
+-        assert_eq!(shrink_over_budget(&mut messages, done, &store, 0), 7);
+-        assert!(
+-            messages[6]
+-                .content
+-                .as_deref()
+-                .unwrap()
+-                .contains("id \"r-2\"")
+-        );
+-        assert_eq!(messages[3], before[3]);
+-    }
+-
+     #[test]
+     fn the_whole_text_comes_back_in_parts_and_only_from_this_run() {
+         let store = ResultStore::new("run7");
+@@ -330,51 +220,22 @@ mod budget_tests {
+     }
+ 
+     #[test]
+-    fn the_oldest_shrink_first_and_only_until_the_conversation_fits() {
++    fn an_over_long_result_keeps_head_and_tail_and_every_character_comes_back() {
+         let store = ResultStore::new("b");
+-        let long = || "z".repeat(10_000);
+-        let assistant = || Message {
+-            role: Role::Assistant,
+-            content: None,
+-            tool_calls: Vec::new(),
+-            tool_call_id: None,
+-        };
+-        let mut messages = vec![
+-            Message::user("u"),
+-            assistant(),
+-            Message::tool("1", long()),
+-            assistant(),
+-            Message::tool("2", long()),
+-            assistant(),
+-            Message::tool("3", long()),
+-        ];
+-        // ~30k characters, a budget of 25k: down to 60 % of it, so the two oldest shrink; the newest stays whole.
+-        let done = shrink_over_budget(&mut messages, 0, &store, 25_000);
+-        assert_eq!(done, 5);
+-        assert!(
+-            messages[2]
+-                .content
+-                .as_deref()
+-                .unwrap()
+-                .contains("id \"b-1\"")
+-        );
+-        assert!(
+-            messages[4]
+-                .content
+-                .as_deref()
+-                .unwrap()
+-                .contains("id \"b-2\"")
+-        );
+-        assert_eq!(messages[6].content.as_deref().unwrap().len(), 10_000);
+-
+-        // The next turns add a little each: under the budget again, nothing shrinks — the prefix stays as it is.
+-        let before = messages.clone();
+-        for turn in 0..3 {
+-            messages.push(assistant());
+-            messages.push(Message::tool(format!("small{turn}"), "s".repeat(500)));
+-            let now = shrink_over_budget(&mut messages, done, &store, 25_000);
+-            assert_eq!(now, done, "turn {turn}");
++        assert_eq!(bounded("short".into(), &store, 100), "short");
++        let text: String = (0..5_000).map(|n| char::from(b'a' + (n % 26) as u8)).collect();
++        let shown = bounded(text.clone(), &store, 1_000);
++        assert!(shown.starts_with(&text[..500]) && shown.ends_with(&text[4_500..]));
++        assert!(shown.contains("4000 of 5000 characters left out") && shown.contains("\"b-1\""));
++        // Read back in parts, the whole text is there: nothing was lost.
++        let mut back = String::new();
++        let mut offset = 0;
++        while offset < 5_000 {
++            let part = store.read("b-1", offset).unwrap();
++            let part = part.split("\n\n[characters").next().unwrap().to_owned();
++            offset += part.chars().count();
++            back.push_str(&part);
+         }
+-        assert_eq!(messages[..before.len()], before[..]);
++        assert_eq!(back, text);
+     }
+ }
+diff --git a/crates/axiomata-harness/src/run.rs b/crates/axiomata-harness/src/run.rs
+index 2472275..8acdeb9 100644
+--- a/crates/axiomata-harness/src/run.rs
++++ b/crates/axiomata-harness/src/run.rs
+@@ -10,7 +10,7 @@ use tokio::time::Instant;
+ use crate::codemode;
+ use crate::config::RunConfig;
+ use crate::event::{EVENT_RESULT_CHARS, Event, EventSink, FinishReason};
+-use crate::history::{self, ResultStore};
++use crate::results::{self, ResultStore};
+ use crate::hooks::{self, HookEvent, HookOutcome};
+ use crate::journal::{self, Journal, Line, Recorded};
+ use crate::model::{ChatModel, Message, Role, ToolCall, ToolSpec, Usage};
+@@ -192,7 +192,7 @@ enum Opening<'p> {
+ }
+ 
+ /// The tools the loop answers itself that only read or note (D4): an interrupted call of them may simply run again.
+-const LOOP_REPLAY_SAFE: [&str; 2] = [history::NAME, planning::TODO];
++const LOOP_REPLAY_SAFE: [&str; 2] = [results::NAME, planning::TODO];
+ 
+ /// The loop at nesting `depth` (HS8, D3): depth 0 is the run itself — it offers the `task` tool, runs
+ /// `SessionStart` and speaks the caller's system prompt; depth ≥ 1 is a subagent, which gets the prompt of
+@@ -253,7 +253,6 @@ async fn run_inner<M: ChatModel>(
+         journaled: 0,
+         subagents_started: 0,
+         results: ResultStore::new(store_tag()),
+-        settled: 0,
+         offer,
+         kept: codemode::Kept::default(),
+         todos: Vec::new(),
+@@ -394,10 +393,8 @@ struct Loop<'a, M: ChatModel> {
+     turns: u32,
+     /// HS8: the subagents this run started, counted against `config.max_subagents`.
+     subagents_started: u32,
+-    /// Glut 2, B: the whole texts of the results that shrank.
++    /// Glut lean, N2: the whole texts of results too long for the conversation.
+     results: ResultStore,
+-    /// Up to which message the conversation has been looked at for results to shrink.
+-    settled: usize,
+     /// What the model is offered, and what a script can find; built anew when the mode changes (`exit_plan`).
+     offer: Offer,
+     /// Glut 2, A: what the run's scripts `store()`.
+@@ -455,9 +452,7 @@ impl Offer {
+             specs.push(crate::task::spec());
+         }
+         // Offered from the first turn on, so the tool list — and with it the prompt's cached head — stays put.
+-        if config.shrink_results {
+-            specs.push(history::spec());
+-        }
++        specs.push(results::spec());
+         if config.todos {
+             specs.push(planning::todo_spec());
+         }
+@@ -574,14 +569,6 @@ impl<M: ChatModel> Loop<'_, M> {
+         sink: &mut dyn EventSink,
+     ) -> Result<Vec<ToolCall>, FinishReason> {
+         let turn = self.turns;
+-        if self.config.shrink_results {
+-            self.settled = history::shrink_over_budget(
+-                &mut self.messages,
+-                self.settled,
+-                &self.results,
+-                history::SHRINK_BUDGET_CHARS,
+-            );
+-        }
+         let reply = {
+             // The answer's text goes out as it streams in (CP5); the whole text follows below either way.
+             let mut on_text = |text: &str| {
+@@ -792,6 +779,8 @@ impl<M: ChatModel> Loop<'_, M> {
+         sink: &mut dyn EventSink,
+     ) -> Result<(), FinishReason> {
+         let output = self.perform(&call, sink).await?;
++        // Relocated, never cut (Glut lean, N2): the conversation gets head and tail, the store keeps the whole.
++        let output = results::bounded(output, &self.results, crate::tools::MAX_TOOL_OUTPUT_CHARS);
+         self.messages.push(Message::tool(call.id, output));
+         Ok(())
+     }
+@@ -905,8 +894,8 @@ impl<M: ChatModel> Loop<'_, M> {
+             return Ok(self.run_task(call, sink).await);
+         }
+         // Only the run's own store: nothing for the gate to judge, like `bash_output`.
+-        if self.config.shrink_results && name == history::NAME {
+-            return Ok(history::answer(&self.results, &call.function.arguments));
++        if name == results::NAME {
++            return Ok(results::answer(&self.results, &call.function.arguments));
+         }
+         if self.config.todos && name == planning::TODO {
+             return Ok(match planning::parse_todos(&call.function.arguments) {
+@@ -1212,8 +1201,8 @@ impl<M: ChatModel> Loop<'_, M> {
+             sink.emit(Event::tool_result(self.turns, &id, &name, false, &text));
+             return Ok((false, text));
+         }
+-        if name == history::NAME {
+-            let (ok, text) = history::answer(&self.results, &arguments);
++        if name == results::NAME {
++            let (ok, text) = results::answer(&self.results, &arguments);
+             sink.emit(Event::tool_result(self.turns, &id, &name, ok, &text));
+             return Ok((ok, text.trim_start_matches("error: ").to_owned()));
+         }
+@@ -1310,8 +1299,8 @@ impl<M: ChatModel> Loop<'_, M> {
+         self.subagents_started += 1;
+         match outcome.reason {
+             FinishReason::Answered => match outcome.answer {
+-                // Cut like every tool result — the model gets the whole, already capped, answer.
+-                Some(answer) => (true, crate::tools::cap(answer)),
++                // Bounded like every tool result when it enters the conversation (`run_call`).
++                Some(answer) => (true, answer),
+                 None => (true, "the subagent finished without text".to_owned()),
+             },
+             reason => (
+@@ -1593,28 +1582,17 @@ mod tests {
+     }
+ 
+     #[tokio::test]
+-    async fn a_long_result_shrinks_after_the_model_answered_on_it_and_comes_back_whole() {
+-        let long = "x".repeat(crate::history::SHRINK_BUDGET_CHARS + 100);
++    async fn an_over_long_result_enters_the_conversation_bounded_once_and_stays_as_it_was() {
++        let long: String = "x".repeat(crate::tools::MAX_TOOL_OUTPUT_CHARS) + &"y".repeat(5_000);
+         let args = json!({ "text": long }).to_string();
+         let model = Script::new(vec![
+             Ok(calls(&[("c1", "echo", args.as_str())])),
+             Ok(calls(&[("c2", "echo", r#"{"text":"short"}"#)])),
+-            // By now c1's result is shortened; the model asks for it whole. The id's tag is the run's own.
+-            Ok(calls(&[(
+-                "c3",
+-                crate::history::NAME,
+-                r#"{"id": "PLACEHOLDER"}"#,
+-            )])),
+             Ok(text("Done.")),
+         ]);
+         let mut events = Vec::new();
+-        // The id is only known once the run shrank c1; the script reads it from the third request below.
+-        let config = RunConfig {
+-            shrink_results: true,
+-            ..RunConfig::new("/w")
+-        };
+         let outcome = run(
+-            &config,
++            &RunConfig::new("/w"),
+             &model,
+             &toolbox(),
+             "go",
+@@ -1623,36 +1601,21 @@ mod tests {
+         )
+         .await;
+         assert_eq!(outcome.reason, FinishReason::Answered);
+-
+         let seen = model.seen.lock().unwrap();
+-        // Second request: c1 is the newest result, still whole (as long as the toolbox lets any result be).
+-        let second = seen[1][3].content.as_deref().unwrap();
+-        assert!(
+-            second.len() > crate::tools::MAX_TOOL_OUTPUT_CHARS,
+-            "{}",
+-            second.len()
+-        );
+-        // Third request: the model answered after c1 (with c2's call), so c1 shrank; c2 is short and stays.
+-        let shrunk = seen[2][3].content.as_deref().unwrap();
+-        assert!(
+-            shrunk.len() < 1_500 && shrunk.contains(crate::history::NAME),
+-            "{shrunk}"
+-        );
++        // Head and tail with the note between them — the end of the output is there, not cut away.
++        let bounded = seen[1][3].content.as_deref().unwrap();
++        assert!(bounded.chars().count() < crate::tools::MAX_TOOL_OUTPUT_CHARS + 300);
++        assert!(bounded.starts_with("xxx") && bounded.ends_with("yyy"));
++        assert!(bounded.contains(crate::results::NAME), "{bounded}");
++        // The next request sends it byte for byte the same: the cached prefix holds.
++        assert_eq!(seen[2][3].content.as_deref(), Some(bounded));
+         assert_eq!(seen[2][5].content.as_deref(), Some("short"));
+-        // The made-up id is answered as another run's, never with some other text.
+-        assert!(
+-            seen[3][7]
+-                .content
+-                .as_deref()
+-                .unwrap()
+-                .contains("no longer available")
+-        );
+         // The tool is offered from the first request on.
+         let started = events.iter().find_map(|e| match e {
+             Event::Started { tools, .. } => Some(tools.clone()),
+             _ => None,
+         });
+-        assert!(started.unwrap().iter().any(|t| t == crate::history::NAME));
++        assert!(started.unwrap().iter().any(|t| t == crate::results::NAME));
+     }
+ 
+     #[tokio::test]
+diff --git a/crates/axiomata-harness/src/tools/mod.rs b/crates/axiomata-harness/src/tools/mod.rs
+index 127e1f3..b859a47 100644
+--- a/crates/axiomata-harness/src/tools/mod.rs
++++ b/crates/axiomata-harness/src/tools/mod.rs
+@@ -18,8 +18,9 @@ use serde_json::Value;
+ use crate::model::ToolSpec;
+ use crate::permissions::{Access, Gate};
+ 
+-/// The most characters of one tool result the model gets. A bigger result (a huge file, a broad search) would eat the
+-/// context window in one step; the model is told it was cut and can narrow its call.
++/// The most characters of one tool result the conversation gets (Glut lean, N2). A bigger result (a huge file, a broad
++/// search) would eat the context window in one step: the loop keeps its head and tail and relocates the whole into the
++/// run's store (`results::bounded`), where `read_full_result` reads it back. The toolbox itself hands back the whole.
+ pub const MAX_TOOL_OUTPUT_CHARS: usize = 30_000;
+ 
+ /// What a tool call returns: its text, or the text of its error.
+@@ -162,8 +163,8 @@ impl Toolbox {
+             .is_ok_and(|parsed| parsed.is_object() && tool.replay_safe(&parsed))
+     }
+ 
+-    /// Runs the tool `name` with the model's argument text. Returns whether it succeeded and the text for the model,
+-    /// cut to [`MAX_TOOL_OUTPUT_CHARS`].
++    /// Runs the tool `name` with the model's argument text. Returns whether it succeeded and its whole text; the loop
++    /// bounds it for the conversation.
+     pub async fn call(&self, name: &str, arguments: &str) -> (bool, String) {
+         self.call_until(name, arguments, &StopFlag::default()).await
+     }
+@@ -212,7 +213,7 @@ impl Toolbox {
+             Ok(text) => (true, text),
+             Err(text) => (false, format!("error: {text}")),
+         };
+-        (ok, cap(text))
++        (ok, text)
+     }
+ }
+ 
+@@ -230,19 +231,6 @@ pub(crate) fn as_data(text: &str, end_mark: &str) -> String {
+     plain.replace(end_mark, "[…]")
+ }
+ 
+-/// `text` cut to [`MAX_TOOL_OUTPUT_CHARS`], with a note for the model when it was. `pub(crate)` since HS8: the
+-/// loop's own `task` arm caps a subagent's answer with it, like every tool result.
+-pub(crate) fn cap(text: String) -> String {
+-    if text.chars().count() <= MAX_TOOL_OUTPUT_CHARS {
+-        return text;
+-    }
+-    let mut cut: String = text.chars().take(MAX_TOOL_OUTPUT_CHARS).collect();
+-    cut.push_str(&format!(
+-        "\n[output cut at {MAX_TOOL_OUTPUT_CHARS} characters; narrow the call to see the rest]"
+-    ));
+-    cut
+-}
+-
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+@@ -367,12 +355,11 @@ mod tests {
+     }
+ 
+     #[tokio::test]
+-    async fn a_huge_result_is_cut_with_a_note() {
++    async fn the_toolbox_hands_back_a_huge_result_whole() {
+         let long = "y".repeat(MAX_TOOL_OUTPUT_CHARS + 10);
+         let (_, text) = toolbox()
+             .call("echo", &json!({"text": long}).to_string())
+             .await;
+-        assert!(text.starts_with(&"y".repeat(MAX_TOOL_OUTPUT_CHARS)));
+-        assert!(text.ends_with("narrow the call to see the rest]"));
++        assert_eq!(text.chars().count(), MAX_TOOL_OUTPUT_CHARS + 10);
+     }
+ }
+diff --git a/crates/axiomata-harness/src/tools/shell.rs b/crates/axiomata-harness/src/tools/shell.rs
+index 5c1a27d..bcd7c0b 100644
+--- a/crates/axiomata-harness/src/tools/shell.rs
++++ b/crates/axiomata-harness/src/tools/shell.rs
+@@ -483,7 +483,7 @@ impl Session {
+             .map_err(|err| format!("could not start {}: {err}", self.shell.display()))?;
+         // Dropped with this future (the run timed out or was stopped while waiting here): the group goes with it.
+         let group = GroupGuard(Group::of(&child));
+-        let output = Arc::new(Mutex::new(Capture::keep_head(MAX_FOREGROUND_BYTES)));
++        let output = Arc::new(Mutex::new(Capture::keep_ends(MAX_FOREGROUND_BYTES)));
+         let mut reader = collect(&mut child, Arc::clone(&output));
+         let waited = tokio::time::timeout(limit, async {
+             loop {
+@@ -626,12 +626,21 @@ impl Session {
+         let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+         text.push_str(&String::from_utf8_lossy(&output.stderr));
+         if text.len() > MAX_FOREGROUND_BYTES {
+-            let mut end = MAX_FOREGROUND_BYTES;
+-            while !text.is_char_boundary(end) {
+-                end -= 1;
++            // Head and end, as a shell command's output: a CLI reports its outcome last.
++            let mut head = MAX_FOREGROUND_BYTES / 2;
++            while !text.is_char_boundary(head) {
++                head -= 1;
+             }
+-            text.truncate(end);
+-            text.push_str("\n[output cut]");
++            let mut tail = text.len() - MAX_FOREGROUND_BYTES / 2;
++            while !text.is_char_boundary(tail) {
++                tail += 1;
++            }
++            let dropped = tail - head;
++            text = format!(
++                "{}\n[… {dropped} bytes of output in the middle were not kept …]\n{}",
++                &text[..head],
++                &text[tail..]
++            );
+         }
+         if output.status.success() {
+             Ok(if text.trim().is_empty() {
+@@ -980,12 +989,14 @@ where
+     })
+ }
+ 
+-/// A capped output buffer: the first bytes (a foreground command) or the latest ones (a job), and how many were
+-/// written in all.
++/// A capped output buffer: the first bytes (a hook), the first and the latest ones (a foreground command — its end is
++/// where a build or a test run reports), or the latest ones (a job), and how many were written in all.
+ struct Capture {
+     data: Vec<u8>,
+     cap: usize,
+     keep_tail: bool,
++    /// With [`Capture::keep_ends`]: the latest bytes once `data` holds its half of the cap.
++    tail: Option<Vec<u8>>,
+     total: u64,
+ }
+ 
+@@ -995,6 +1006,18 @@ impl Capture {
+             data: Vec::new(),
+             cap,
+             keep_tail: false,
++            tail: None,
++            total: 0,
++        }
++    }
++
++    /// Keeps the first half of `cap` and, after it, the latest bytes (between half of `cap` and `cap` of them).
++    fn keep_ends(cap: usize) -> Self {
++        Capture {
++            data: Vec::new(),
++            cap: cap / 2,
++            keep_tail: false,
++            tail: Some(Vec::new()),
+             total: 0,
+         }
+     }
+@@ -1006,6 +1029,7 @@ impl Capture {
+             data: Vec::new(),
+             cap,
+             keep_tail: true,
++            tail: None,
+             total: 0,
+         }
+     }
+@@ -1014,25 +1038,33 @@ impl Capture {
+         self.total += bytes.len() as u64;
+         if self.keep_tail {
+             self.data.extend_from_slice(bytes);
+-            if self.data.len() > 2 * self.cap {
+-                let mut cut = self.data.len() - self.cap;
+-                // Never into the middle of a character.
+-                while cut < self.data.len() && is_continuation(self.data[cut]) {
+-                    cut += 1;
+-                }
+-                self.data.drain(..cut);
+-            }
++            trim_front(&mut self.data, self.cap);
+         } else {
+             let room = self.cap.saturating_sub(self.data.len());
+-            self.data.extend_from_slice(&bytes[..bytes.len().min(room)]);
++            let taken = bytes.len().min(room);
++            self.data.extend_from_slice(&bytes[..taken]);
++            if let Some(tail) = &mut self.tail {
++                tail.extend_from_slice(&bytes[taken..]);
++                trim_front(tail, self.cap);
++            }
+         }
+     }
+ 
+-    /// Everything kept, with a note when something was dropped.
++    /// Everything kept, with a note where something was dropped.
+     fn text(&self) -> String {
+         let mut text = String::from_utf8_lossy(&self.data).into_owned();
+-        let dropped = self.total - self.data.len() as u64;
+-        if dropped > 0 {
++        let tail = self.tail.as_deref().unwrap_or_default();
++        let dropped = self.total - (self.data.len() + tail.len()) as u64;
++        if self.tail.is_some() {
++            if dropped > 0 {
++                text.push_str(&format!("\n[… {dropped} bytes of output in the middle were not kept …]\n"));
++            }
++            let mut from = 0;
++            while from < tail.len() && is_continuation(tail[from]) {
++                from += 1;
++            }
++            text.push_str(&String::from_utf8_lossy(&tail[from..]));
++        } else if dropped > 0 {
+             text.push_str(&format!("\n[{dropped} more bytes of output were not kept]"));
+         }
+         text
+@@ -1067,6 +1099,19 @@ impl Capture {
+     }
+ }
+ 
++/// Keeps between `cap` and twice `cap` of the latest bytes: trimming in steps of `cap` rather than on every chunk keeps
++/// a chatty command from moving a megabyte per read.
++fn trim_front(data: &mut Vec<u8>, cap: usize) {
++    if data.len() > 2 * cap {
++        let mut cut = data.len() - cap;
++        // Never into the middle of a character.
++        while cut < data.len() && is_continuation(data[cut]) {
++            cut += 1;
++        }
++        data.drain(..cut);
++    }
++}
++
+ /// Whether `byte` continues a UTF-8 character rather than starting one.
+ fn is_continuation(byte: u8) -> bool {
+     byte & 0b1100_0000 == 0b1000_0000
+@@ -1514,6 +1559,21 @@ mod tests {
+         assert_eq!(head.text(), "abc\n[3 more bytes of output were not kept]");
+     }
+ 
++    #[test]
++    fn a_foreground_capture_keeps_the_start_and_the_end_where_a_build_reports() {
++        let mut ends = Capture::keep_ends(8);
++        ends.push(b"abcd");
++        assert_eq!(ends.text(), "abcd");
++        // Past the head's half, the latest bytes are kept (up to twice the other half), the middle is said.
++        for chunk in [&b"efgh"[..], b"ijkl", b"mnop", b"qrst", b"E1"] {
++            ends.push(chunk);
++        }
++        let text = ends.text();
++        assert!(text.starts_with("abcd\n[… "), "{text}");
++        assert!(text.ends_with("stE1"), "{text}");
++        assert!(text.contains("bytes of output in the middle were not kept"));
++    }
++
+     #[test]
+     fn a_split_character_waits_for_its_last_byte() {
+         let mut capture = Capture::keep_tail(64);

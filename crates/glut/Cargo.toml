@@ -1,0 +1,40 @@
+[package]
+name = "axiomata-harness"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Axiomata-OS's own agent harness: a lean tool-calling loop over an OpenAI-compatible model API, with guarded file tools. No axiomata-core/Tauri dependency, so it can be lifted out into an app of its own (docs/plans/harness.md)."
+
+[[bin]]
+name = "axh"
+path = "src/bin/axh.rs"
+
+[dependencies]
+axiomata-files = { path = "../axiomata-files" }
+# HTTPS for remote model APIs (OpenRouter); rustls rather than the platform stack, like the rest of the tree would
+# want it — no Security.framework link for a crate meant to stand alone.
+reqwest = { workspace = true, features = ["rustls-tls"] }
+htmd.workspace = true
+# `signal`: a run ends cleanly on Ctrl-C/SIGTERM/SIGHUP; `net`: the sandbox's network proxy (HS3b).
+tokio = { workspace = true, features = ["signal", "net"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+globset.workspace = true
+# A skill's `SKILL.md` frontmatter, like the roster's `AGENT.md` (HS6, K3).
+gray_matter.workspace = true
+# A hook's `matcher` is a regex, Claude's own spelling (HS7, D1/D2).
+regex.workspace = true
+# `process`: the shell tools kill a command's whole process group (HS2, S4).
+rustix = { workspace = true, features = ["process"] }
+chrono.workspace = true
+clap.workspace = true
+tracing-subscriber.workspace = true
+# The fingerprint of an MCP server's config, which a project's server is approved by (HS5, M2).
+sha2.workspace = true
+# Code mode (Glut 2, G2): the QuickJS runtime a script runs in.
+rquickjs.workspace = true
+
+[dev-dependencies]
+# The fake model server of the tests listens on the loopback.
+tokio = { workspace = true, features = ["net"] }

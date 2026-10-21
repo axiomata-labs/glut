@@ -1,0 +1,14 @@
+
+ RUN  v5.0.0 /Users/owner/Documents/Development/Axiomata-OS/apps/axiomata
+
+Not implemented: navigation to another Document
+
+ Test Files  209 passed (209)
+      Tests  2699 passed (2699)
+   Start at  18:31:30
+   Duration  9.66s (environment 75%, transform 15%, import 5%, tests 4%, worker 1%)
+
+Environment  jsdom was created 209 times · 82.95s total, 75% of tracked time
+             create it once per worker with pool: 'vmThreads' (keeps per-file isolation) or isolate: false (shares it across files)
+             learn more: https://vitest.dev/guide/improving-performance#test-environments
+
