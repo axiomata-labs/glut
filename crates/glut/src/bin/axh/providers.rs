@@ -20,7 +20,7 @@ const TEST_MAX_TOKENS: u32 = 64;
 
 #[derive(Subcommand)]
 pub enum ProvidersCommand {
-    /// The configured providers, the default, and where each one's key comes from (never the key).
+    /// The configured providers, the default (marked *), and where each one's key comes from (never the key).
     List,
     /// Every provider Glut knows by name — the kinds `add` takes.
     Catalog,

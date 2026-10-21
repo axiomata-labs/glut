@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
+mod models;
 mod providers;
 
 use clap::{Args, Parser, Subcommand};
@@ -81,6 +82,9 @@ enum Command {
     /// The model providers runs use (`docs/plans/glut-providers.md`): ~/.axh/providers.json, keys in a secret store.
     #[command(subcommand)]
     Providers(providers::ProvidersCommand),
+    /// The models the providers offer (`docs/plans/glut-providers.md`, PV2), from lists kept in ~/.axh/models.
+    #[command(subcommand)]
+    Models(models::ModelsCommand),
 }
 
 /// Writes each event as one JSON line, flushed at once so a reader sees it while the run goes on.
@@ -219,6 +223,7 @@ async fn main() -> ExitCode {
         Command::Resume { run, list, discard } => resume_command(run, list, discard).await,
         Command::Gain { days } => gain(days),
         Command::Providers(command) => providers::run(command).await,
+        Command::Models(command) => models::run(command).await,
     }
 }
 
@@ -247,13 +252,27 @@ fn gain(days: Option<u32>) -> ExitCode {
     }
 }
 
+/// A run's context window: the flag, else the owner's `contextWindow`, else the provider's list; none, the run asks
+/// the provider when it needs one (#111, K2; PV2).
+fn window_for(flag: Option<u32>, settings: Option<u32>, listed: Option<u32>) -> Option<u32> {
+    flag.or(settings).or(listed)
+}
+
+/// What a provider run starts from: its id (the journal keeps it) and its model list, where there is one.
+#[derive(Debug)]
+struct FromProvider {
+    id: String,
+    list: Option<glut::providers::models::ModelList>,
+}
+
 /// The run's endpoint: a one-off `--base-url` with `AXH_API_KEY`, else a provider of `~/.axh/providers.json` — then
-/// with the provider's id, so the journal keeps the provider and model the run began with, not "the default".
-fn endpoint(
+/// with the provider's id, so the journal keeps the provider and model the run began with, not "the default", and
+/// its model list (PV2), which gives the run the model's window and prices where the owner's settings name none.
+async fn endpoint(
     provider: Option<&str>,
     base_url: Option<String>,
     model: Option<String>,
-) -> Result<(ModelEndpoint, Option<String>), String> {
+) -> Result<(ModelEndpoint, Option<FromProvider>), String> {
     if let Some(base_url) = base_url {
         // The key goes in a header, never in the URL — and a journal keeps the URL as it was given.
         if has_userinfo(&base_url) {
@@ -285,7 +304,29 @@ fn endpoint(
         "axh: provider {} · model {}",
         resolved.id, resolved.endpoint.model
     );
-    Ok((resolved.endpoint, Some(resolved.id)))
+    let list = match glut::providers::models::current(&home, &resolved.id, &resolved.endpoint).await
+    {
+        Ok(list) => {
+            if list.get(&resolved.endpoint.model).is_none() {
+                eprintln!(
+                    "axh: {} is not in {}'s model list (axh models list --provider {})",
+                    resolved.endpoint.model, resolved.id, resolved.id
+                );
+            }
+            Some(list)
+        }
+        Err(reason) => {
+            eprintln!("axh: no model list of {}: {reason}", resolved.id);
+            None
+        }
+    };
+    Ok((
+        resolved.endpoint,
+        Some(FromProvider {
+            id: resolved.id,
+            list,
+        }),
+    ))
 }
 
 /// Whether `url` names a user or a password before its host (`https://user:pw@host`).
@@ -415,7 +456,7 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
     if prompt.is_none() && skill.is_none() {
         return fail("name a prompt, or run a skill with --skill <name>".into());
     }
-    let (endpoint, provider) = match endpoint(provider.as_deref(), base_url, model) {
+    let (endpoint, provider) = match endpoint(provider.as_deref(), base_url, model).await {
         Ok(found) => found,
         Err(reason) => return fail(reason),
     };
@@ -443,8 +484,8 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
         let mut kept = journal_args;
         kept.cwd = cwd.clone();
         // A resume goes on with the provider and model the run began with, whatever the default is by then.
-        if provider.is_some() {
-            kept.provider = provider.clone();
+        if let Some(from) = &provider {
+            kept.provider = Some(from.id.clone());
             kept.model = Some(endpoint.model.clone());
         }
         config.journal = Some(glut::journal::JournalSpec {
@@ -523,6 +564,14 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
     // HS7: the hooks run with what the settings say about the sandbox, like the shell's own commands (D5).
     // #111, K2/K6: the flags over the owner's settings; without a window the run asks the provider's list.
     config.compaction = built.compaction(&endpoint.model);
+    // PV2: what the provider's list knows, where the owner's settings say nothing.
+    let listed = |model: &str| {
+        provider
+            .as_ref()
+            .and_then(|from| from.list.as_ref())
+            .and_then(|list| list.get(model))
+            .cloned()
+    };
     config.hooks = built.hooks;
     config.sandbox = Some(built.sandbox.clone());
     config.refusals = built.refusals;
@@ -578,16 +627,26 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
         endpoint,
         gate,
     } = draft;
+    // The window of the model the run ends up with — a skill or a command may name its own (C2, K5).
+    config.compaction.context_window = window_for(
+        context_window,
+        built.context_windows.get(&endpoint.model).copied(),
+        listed(&endpoint.model).and_then(|info| info.context_window),
+    );
     // C6 of docs/plans/glut-cards.md: the budget at the prices of the model the run ends up with (a skill or a
     // command may name its own).
     config.budget = glut::Budget {
         max_tokens,
         max_usd,
-        prices: built.prices.get(&endpoint.model).copied(),
+        prices: built
+            .prices
+            .get(&endpoint.model)
+            .copied()
+            .or_else(|| listed(&endpoint.model).and_then(|info| info.prices)),
     };
     if max_usd.is_some() && config.budget.prices.is_none() {
         eprintln!(
-            "axh: --max-usd has no prices for {} in ~/.axh/settings.json: the run has no budget in money",
+            "axh: --max-usd has no prices for {} in ~/.axh/settings.json or the provider's list: no budget in money",
             endpoint.model
         );
     }
@@ -699,7 +758,17 @@ fn undo(cwd: &std::path::Path, run: Option<String>, step: Option<u32>, list: boo
 mod tests {
     use super::*;
 
-    /// A journal written before `--effort` existed still resumes, with no effort of its own.
+    #[test]
+    fn the_window_is_the_flags_then_the_owners_then_the_lists() {
+        assert_eq!(
+            window_for(Some(8_192), Some(32_768), Some(131_072)),
+            Some(8_192)
+        );
+        assert_eq!(window_for(None, Some(32_768), Some(131_072)), Some(32_768));
+        assert_eq!(window_for(None, None, Some(131_072)), Some(131_072));
+        assert_eq!(window_for(None, None, None), None);
+    }
+
     #[test]
     fn a_journal_of_a_provider_run_reads_without_a_base_url() {
         let args: RunArgs = serde_json::from_value(serde_json::json!({
@@ -712,10 +781,11 @@ mod tests {
         assert_eq!(args.base_url, None);
     }
 
-    #[test]
-    fn a_base_url_needs_a_model_and_no_password() {
+    #[tokio::test]
+    async fn a_base_url_needs_a_model_and_no_password() {
         assert!(
             endpoint(None, Some("https://x.test/api".into()), None)
+                .await
                 .unwrap_err()
                 .contains("--model")
         );
@@ -725,15 +795,19 @@ mod tests {
                 Some("https://u:p@x.test/api".into()),
                 Some("m".into())
             )
+            .await
             .unwrap_err()
             .contains("password")
         );
         let (one_off, provider) =
-            endpoint(None, Some("https://x.test/api".into()), Some("m".into())).unwrap();
+            endpoint(None, Some("https://x.test/api".into()), Some("m".into()))
+                .await
+                .unwrap();
         assert!(!one_off.versioned);
-        assert_eq!(provider, None);
+        assert!(provider.is_none());
     }
 
+    /// A journal written before `--effort` existed still resumes, with no effort of its own.
     #[test]
     fn a_journaled_run_without_an_effort_still_reads() {
         let args: RunArgs = serde_json::from_value(serde_json::json!({

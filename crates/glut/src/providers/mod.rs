@@ -3,6 +3,7 @@
 //! provider) gets its endpoint from here; a host that passes its own endpoint never comes here (P7).
 
 pub mod catalog;
+pub mod models;
 pub mod secrets;
 
 use std::collections::BTreeMap;

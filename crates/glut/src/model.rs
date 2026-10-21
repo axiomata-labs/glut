@@ -589,7 +589,7 @@ async fn read_capped(mut response: reqwest::Response) -> Result<String, HarnessE
 
 /// `text` with the key, and any longer stretch of its start, replaced — so an API that echoes it does not put it into
 /// an event or a log.
-fn redact(text: &str, key: Option<&str>) -> String {
+pub(crate) fn redact(text: &str, key: Option<&str>) -> String {
     /// Enough of a key's start to recognise it in an error, too short to be the key.
     const KEY_PREFIX_CHARS: usize = 8;
     let Some(key) = key.filter(|key| key.chars().count() >= KEY_PREFIX_CHARS) else {
