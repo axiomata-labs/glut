@@ -30,6 +30,20 @@ const HELP: &str = "Commands: /model [id] · /provider [id] · /effort [level] �
                     Keys: Enter send · Shift+Enter or Alt+Enter new line · ↑ history · Shift+Tab plan → ask → edits \
                     → auto · Esc stop · Ctrl+O tool results · PgUp/PgDn scroll · Ctrl+C twice quit";
 
+/// The session's commands with what each does, as the list under a typed `/` shows them.
+pub const COMMANDS: [(&str, &str); 10] = [
+    ("model", "pick the model, or /model <id>"),
+    ("provider", "switch the provider, or /provider <id>"),
+    ("effort", "how hard the model thinks, or /effort <level>"),
+    ("context", "how full the window is; /context 64k sets it"),
+    ("compact", "summarise the conversation so far"),
+    ("editor", "pick your editor, or /editor <command>"),
+    ("clear", "start the conversation afresh"),
+    ("help", "commands and keys"),
+    ("quit", "end the session"),
+    ("exit", "end the session"),
+];
+
 /// A question of the gate on the screen.
 pub struct OpenAsk {
     pub request: AskRequest,
@@ -53,6 +67,8 @@ pub struct App {
     pub transcript: Transcript,
     pub input: Input,
     pub picker: Option<Picker>,
+    /// The entry chosen in the list of commands a typed `/` shows.
+    pub suggested: usize,
     /// The conversation between turns; taken while a turn runs.
     conversation: Vec<Message>,
     busy: Option<Busy>,
@@ -90,6 +106,7 @@ impl App {
             transcript,
             input: Input::new(),
             picker: None,
+            suggested: 0,
             conversation: Vec::new(),
             busy: None,
             running: None,
@@ -290,6 +307,26 @@ impl App {
         if self.picker.is_some() {
             return self.on_picker_key(key);
         }
+        let suggestions = self.suggestions();
+        if !suggestions.is_empty() {
+            let chosen = suggestions[self.suggested.min(suggestions.len() - 1)].0;
+            match key.code {
+                KeyCode::Up => return self.suggested = self.suggested.saturating_sub(1),
+                KeyCode::Down => {
+                    return self.suggested = (self.suggested + 1).min(suggestions.len() - 1);
+                }
+                KeyCode::Tab => {
+                    self.input.clear();
+                    return self.input.insert_text(&format!("/{chosen} "));
+                }
+                // Enter on a part of a name takes the chosen command.
+                KeyCode::Enter if !shift && !alt && self.input.text() != format!("/{chosen}") => {
+                    self.input.clear();
+                    self.input.insert_text(&format!("/{chosen}"));
+                }
+                _ => {}
+            }
+        }
         match key.code {
             KeyCode::Enter if shift || alt => self.input.newline(),
             KeyCode::Char('j') if ctrl => self.input.newline(),
@@ -326,9 +363,28 @@ impl App {
             KeyCode::PageUp => self.scroll_by(self.page()),
             KeyCode::PageDown => self.scroll_by(-self.page()),
             KeyCode::Tab => self.input.insert(' '),
-            KeyCode::Char(c) if !ctrl => self.input.insert(c),
+            KeyCode::Char(c) if !ctrl => {
+                self.input.insert(c);
+                self.suggested = 0;
+            }
             _ => {}
         }
+    }
+
+    /// The commands that fit what is typed: the input is a `/` and part of a name, nothing after it yet.
+    pub fn suggestions(&self) -> Vec<(&'static str, &'static str)> {
+        let text = self.input.text();
+        let Some(typed) = text.strip_prefix('/') else {
+            return Vec::new();
+        };
+        if typed.contains([' ', '\n', '/']) {
+            return Vec::new();
+        }
+        COMMANDS
+            .iter()
+            .filter(|(name, _)| name.starts_with(typed))
+            .copied()
+            .collect()
     }
 
     /// Enter: a command when the input is one, else the next message. A command that has to wait while Glut works
@@ -891,6 +947,39 @@ mod tests {
         assert!(app.picker.is_none());
         typed(&mut app, "/quit");
         assert!(app.quit);
+    }
+
+    #[test]
+    fn a_slash_lists_the_commands_and_tab_or_enter_takes_the_chosen_one() {
+        let (mut app, _reports) = app();
+        app.on_terminal(key(KeyCode::Char('/'), KeyModifiers::NONE));
+        assert_eq!(
+            app.suggestions().len(),
+            COMMANDS.len(),
+            "a lone slash shows them all"
+        );
+        app.on_terminal(key(KeyCode::Char('c'), KeyModifiers::NONE));
+        assert_eq!(
+            app.suggestions()
+                .iter()
+                .map(|(name, _)| *name)
+                .collect::<Vec<_>>(),
+            ["context", "compact", "clear"]
+        );
+        app.on_terminal(key(KeyCode::Down, KeyModifiers::NONE));
+        app.on_terminal(key(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(app.input.text(), "/compact ");
+        assert!(app.suggestions().is_empty(), "a space ends the list");
+        app.input.clear();
+        app.input.insert_text("/hel");
+        app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(
+            app.transcript.blocks.iter().any(|block| matches!(
+                &block.kind,
+                crate::transcript::Kind::Note { text, .. } if text.starts_with("Commands:")
+            )),
+            "Enter on a part of a name ran /help"
+        );
     }
 
     #[tokio::test]

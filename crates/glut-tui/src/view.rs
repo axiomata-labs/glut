@@ -51,6 +51,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     draw_keys(frame, app, keys);
     if app.picker.is_some() {
         draw_picker(frame, app, stream);
+    } else {
+        draw_suggestions(frame, app, stream);
     }
 }
 
@@ -282,14 +284,58 @@ fn draw_keys(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(Paragraph::new(line), area);
 }
 
+/// The commands a typed `/` fits, in a small list just above the input, the chosen one marked.
+fn draw_suggestions(frame: &mut Frame, app: &App, area: Rect) {
+    let suggestions = app.suggestions();
+    if suggestions.is_empty() || area.height < 3 {
+        return;
+    }
+    let shown = suggestions.len().min(usize::from(area.height) - 2);
+    let height = shown as u16 + 2;
+    let width = area.width.min(72);
+    let place = Rect {
+        x: area.x,
+        y: area.y + area.height - height,
+        width,
+        height,
+    };
+    let chosen = app.suggested.min(suggestions.len() - 1);
+    let first = chosen.saturating_sub(shown.saturating_sub(1));
+    let lines: Vec<Line> = suggestions
+        .iter()
+        .enumerate()
+        .skip(first)
+        .take(shown)
+        .map(|(at, (name, what))| {
+            let style = if at == chosen {
+                theme::glow()
+            } else {
+                Style::default()
+            };
+            Line::from(vec![
+                Span::styled(if at == chosen { "▸ " } else { "  " }, theme::glow()),
+                Span::styled(format!("/{name:<10}"), style),
+                Span::styled(format!(" {what}"), theme::quiet()),
+            ])
+        })
+        .collect();
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(theme::quiet())
+        .title(Span::styled(" Tab completes · Enter runs ", theme::quiet()));
+    frame.render_widget(Clear, place);
+    frame.render_widget(Paragraph::new(lines).block(block), place);
+}
+
 /// The picker over the stream: its title, what was typed, and the entries that match, the chosen one marked.
 fn draw_picker(frame: &mut Frame, app: &App, area: Rect) {
     let Some(picker) = &app.picker else { return };
     let width = area.width.saturating_sub(4).min(100);
-    let height = area.height.saturating_sub(2).min(20);
+    let height = area.height.saturating_sub(4).min(20);
+    // Two rows above the input: the stream's last line, often what led to the picker, stays readable.
     let place = Rect {
         x: area.x + (area.width.saturating_sub(width)) / 2,
-        y: area.y + area.height.saturating_sub(height),
+        y: area.y + area.height.saturating_sub(height + 2),
         width,
         height,
     };
