@@ -244,6 +244,23 @@ impl Policy {
                 "(allow file-read*\n  (subpath {}))\n",
                 quoted(&self.root)
             ));
+            // The folders on the way there, as entries only (no listing, no content): a program that resolves where
+            // it is — git, `pwd -P` — looks at each of them.
+            let ways: Vec<&Path> = self
+                .root
+                .ancestors()
+                .skip(1)
+                .filter(|way| {
+                    self.read_denied
+                        .iter()
+                        .any(|hidden| way.starts_with(hidden))
+                })
+                .collect();
+            out.push_str("(allow file-read-metadata\n");
+            for way in ways {
+                out.push_str(&format!("  (literal {})\n", quoted(way)));
+            }
+            out.push_str(")\n");
             let inside: Vec<&PathBuf> = self
                 .read_denied
                 .iter()
@@ -455,8 +472,28 @@ mod tests {
         std::fs::write(root.join("README.md"), "hello").unwrap();
         std::fs::write(root.join(".env"), "SECRET=1").unwrap();
         std::fs::write(home.join(".axiomata/config.toml"), "api_key").unwrap();
+        let git = |args: &[&str]| {
+            let status = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&root)
+                .output()
+                .unwrap();
+            assert!(status.status.success(), "{status:?}");
+        };
+        git(&["init", "-q"]);
         let policy = Policy::new(&root, &home, &[], &[]);
         assert_eq!(sandboxed(&policy, "cat README.md"), "hello");
+        // Git resolves the folder it is in, up through the hidden one.
+        let out = sandboxed(&policy, "git status --short && echo GIT-OK");
+        assert!(out.contains("GIT-OK"), "{out}");
+        let here = sandboxed(&policy, "pwd -P");
+        assert!(here.trim_end().ends_with("/s"), "{here}");
+        // The folders on the way stay closed to a look inside.
+        let out = sandboxed(
+            &policy,
+            &format!("ls {}/.axiomata || echo REFUSED", home.display()),
+        );
+        assert!(out.contains("REFUSED"), "listing the hidden folder: {out}");
         let out = sandboxed(&policy, "echo more >> README.md && echo wrote");
         assert!(out.contains("wrote"), "{out}");
         for (script, what) in [
