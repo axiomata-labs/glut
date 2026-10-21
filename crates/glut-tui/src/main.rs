@@ -4,6 +4,8 @@
 mod app;
 mod glimm;
 mod input;
+mod picker;
+mod prefs;
 mod session;
 mod theme;
 mod transcript;
@@ -21,7 +23,7 @@ use crossterm::event::{
     KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::terminal::{
-    self, BeginSynchronizedUpdate, EndSynchronizedUpdate, EnterAlternateScreen,
+    self, BeginSynchronizedUpdate, Clear, ClearType, EndSynchronizedUpdate, EnterAlternateScreen,
     LeaveAlternateScreen,
 };
 use crossterm::{cursor, execute};
@@ -59,7 +61,7 @@ async fn main() -> std::process::ExitCode {
     let cli = Cli::parse();
     let (reports, mut from_session) = mpsc::unbounded_channel();
     eprintln!("Glut is starting…");
-    let parts = match session::build(
+    let (parts, engine) = match session::build(
         Start {
             cwd: cli.cwd,
             provider: cli.provider,
@@ -69,13 +71,13 @@ async fn main() -> std::process::ExitCode {
     )
     .await
     {
-        Ok(parts) => Arc::new(parts),
+        Ok((parts, engine)) => (Arc::new(parts), engine),
         Err(reason) => {
             eprintln!("glut: {reason}");
             return std::process::ExitCode::from(1);
         }
     };
-    let mut app = App::new(parts, reports);
+    let mut app = App::new(parts, engine, reports);
     if let Some(prompt) = cli.prompt {
         app.send(prompt);
     }
@@ -129,6 +131,11 @@ async fn run(
     keys: &mut mpsc::UnboundedReceiver<event::Event>,
     from_session: &mut mpsc::UnboundedReceiver<session::Report>,
 ) -> io::Result<()> {
+    // The first frame starts from a blank screen, whatever the terminal showed before (a terminal without an
+    // alternate screen keeps the old text, and ratatui would leave every cell it thinks blank as it was). Cleared
+    // directly: ratatui's own clear asks the terminal for the cursor, which a terminal without answers (Axiomata's,
+    // TUI0) never gives.
+    execute!(io::stdout(), Clear(ClearType::All))?;
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
     let mut tick = tokio::time::interval(TICK);
     // Ticks missed while Glut waited are not made up in a burst when it starts working again.

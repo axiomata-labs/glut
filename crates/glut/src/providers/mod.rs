@@ -62,6 +62,10 @@ pub struct Entry {
     /// Whether a run needs a key: `false` for a local server. Only for `openai-compatible`; the catalog knows its own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<bool>,
+    /// The context windows the owner set for this provider's models (`/context 65536` in the TUI, T30): Glut counts
+    /// with these, over `contextWindow` in `settings.json` and over the provider's list.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub windows: BTreeMap<String, u32>,
 }
 
 impl Providers {
@@ -168,7 +172,7 @@ impl Providers {
 }
 
 /// Opens `path` for reading without following a link in its last component.
-pub(crate) fn open_no_follow(path: &Path) -> std::io::Result<std::fs::File> {
+pub fn open_no_follow(path: &Path) -> std::io::Result<std::fs::File> {
     use std::os::unix::fs::OpenOptionsExt as _;
     std::fs::OpenOptions::new()
         .read(true)
@@ -177,7 +181,7 @@ pub(crate) fn open_no_follow(path: &Path) -> std::io::Result<std::fs::File> {
 }
 
 /// `~/.axh` as only the owner may list it — the folder of the keys file and the providers.
-pub(crate) fn make_private_dir(dir: &Path) -> std::io::Result<()> {
+pub fn make_private_dir(dir: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::DirBuilderExt as _;
     std::fs::DirBuilder::new()
         .recursive(true)
@@ -187,12 +191,7 @@ pub(crate) fn make_private_dir(dir: &Path) -> std::io::Result<()> {
 
 /// Writes `bytes` to `path` whole: into a new file of `mode` beside it (never an existing one, never through a
 /// link), synced, then renamed into place.
-pub(crate) fn write_replacing(
-    dir: &Path,
-    path: &Path,
-    bytes: &[u8],
-    mode: u32,
-) -> std::io::Result<()> {
+pub fn write_replacing(dir: &Path, path: &Path, bytes: &[u8], mode: u32) -> std::io::Result<()> {
     use std::os::unix::fs::OpenOptionsExt as _;
     let name = path
         .file_name()
@@ -267,6 +266,16 @@ impl Entry {
             return Err(format!(
                 "a key is only sent over https, or over http to this machine — not to {}",
                 self.root()
+            ));
+        }
+        if let Some((model, window)) = self
+            .windows
+            .iter()
+            .find(|(_, window)| **window < crate::config::MIN_CONTEXT_WINDOW)
+        {
+            return Err(format!(
+                "windows: {model} has {window} tokens, at least {}",
+                crate::config::MIN_CONTEXT_WINDOW
             ));
         }
         if let Some(name) = &self.key_env
@@ -472,6 +481,7 @@ mod tests {
             model: Some("deepseek/deepseek-v4.1-flash".into()),
             key_env: None,
             key: None,
+            windows: BTreeMap::new(),
         }
     }
 
@@ -647,6 +657,14 @@ mod tests {
         let mut flagged = entry("openrouter");
         flagged.key = Some(false);
         assert!(flagged.check().is_err(), "the catalog decides");
+        let mut windowed = entry("openrouter");
+        windowed.windows.insert("m".into(), 65_536);
+        assert!(windowed.check().is_ok());
+        windowed.windows.insert("tiny".into(), 512);
+        assert!(
+            windowed.check().unwrap_err().contains("at least"),
+            "a window no run fits in"
+        );
     }
 
     #[test]

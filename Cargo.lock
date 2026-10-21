@@ -831,6 +831,7 @@ dependencies = [
  "crossterm",
  "glut",
  "ratatui",
+ "serde",
  "serde_json",
  "tokio",
  "unicode-width",

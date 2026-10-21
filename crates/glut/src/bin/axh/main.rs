@@ -252,10 +252,16 @@ fn gain(days: Option<u32>) -> ExitCode {
     }
 }
 
-/// A run's context window: the flag, else the owner's `contextWindow`, else the provider's list; none, the run asks
-/// the provider when it needs one (#111, K2; PV2).
-fn window_for(flag: Option<u32>, settings: Option<u32>, listed: Option<u32>) -> Option<u32> {
-    flag.or(settings).or(listed)
+/// A run's context window: the flag, else the window the owner set for the model in Glut (`/context`, T30), else the
+/// owner's `contextWindow`, else the provider's list; none, the run asks the provider when it needs one (#111, K2;
+/// PV2).
+fn window_for(
+    flag: Option<u32>,
+    set: Option<u32>,
+    settings: Option<u32>,
+    listed: Option<u32>,
+) -> Option<u32> {
+    flag.or(set).or(settings).or(listed)
 }
 
 /// What a provider run starts from: its id (the journal keeps it) and its model list, where there is one.
@@ -263,6 +269,8 @@ fn window_for(flag: Option<u32>, settings: Option<u32>, listed: Option<u32>) -> 
 struct FromProvider {
     id: String,
     list: Option<glut::providers::models::ModelList>,
+    /// The windows the owner set for the provider's models (T30).
+    windows: std::collections::BTreeMap<String, u32>,
 }
 
 /// The run's endpoint: a one-off `--base-url` with `AXH_API_KEY`, else a provider of `~/.axh/providers.json` — then
@@ -294,12 +302,15 @@ async fn endpoint(
         ));
     }
     let home = glut::permissions::settings::home_dir().map_err(|err| err.to_string())?;
-    let list = glut::providers::Providers::load(&home).map_err(|err| err.to_string())?;
-    let store = list.store(&home).map_err(|err| err.to_string())?;
-    let resolved =
-        glut::providers::resolve(&list, store.as_ref(), provider, model.as_deref(), |name| {
-            std::env::var(name).ok()
-        })?;
+    let providers_file = glut::providers::Providers::load(&home).map_err(|err| err.to_string())?;
+    let store = providers_file.store(&home).map_err(|err| err.to_string())?;
+    let resolved = glut::providers::resolve(
+        &providers_file,
+        store.as_ref(),
+        provider,
+        model.as_deref(),
+        |name| std::env::var(name).ok(),
+    )?;
     eprintln!(
         "axh: provider {} · model {}",
         resolved.id, resolved.endpoint.model
@@ -323,6 +334,11 @@ async fn endpoint(
     Ok((
         resolved.endpoint,
         Some(FromProvider {
+            windows: providers_file
+                .providers
+                .get(&resolved.id)
+                .map(|entry| entry.windows.clone())
+                .unwrap_or_default(),
             id: resolved.id,
             list,
         }),
@@ -630,6 +646,9 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
     // The window of the model the run ends up with — a skill or a command may name its own (C2, K5).
     config.compaction.context_window = window_for(
         context_window,
+        provider
+            .as_ref()
+            .and_then(|from| from.windows.get(&endpoint.model).copied()),
         built.context_windows.get(&endpoint.model).copied(),
         listed(&endpoint.model).and_then(|info| info.context_window),
     );
@@ -759,14 +778,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_window_is_the_flags_then_the_owners_then_the_lists() {
+    fn the_window_is_the_flags_then_the_one_set_in_glut_then_the_owners_then_the_lists() {
+        let all = window_for(Some(8_192), Some(16_384), Some(32_768), Some(131_072));
+        assert_eq!(all, Some(8_192));
+        let set = window_for(None, Some(16_384), Some(32_768), Some(131_072));
+        assert_eq!(set, Some(16_384));
         assert_eq!(
-            window_for(Some(8_192), Some(32_768), Some(131_072)),
-            Some(8_192)
+            window_for(None, None, Some(32_768), Some(131_072)),
+            Some(32_768)
         );
-        assert_eq!(window_for(None, Some(32_768), Some(131_072)), Some(32_768));
-        assert_eq!(window_for(None, None, Some(131_072)), Some(131_072));
-        assert_eq!(window_for(None, None, None), None);
+        assert_eq!(window_for(None, None, None, Some(131_072)), Some(131_072));
+        assert_eq!(window_for(None, None, None, None), None);
     }
 
     #[test]

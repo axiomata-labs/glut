@@ -197,6 +197,12 @@ fn add(home: &Path, added: Added) -> Result<(), String> {
         model: added.model,
         key_env: added.key_env,
         key: (custom && added.keyless).then_some(false),
+        // A provider added again keeps the windows the owner set for its models.
+        windows: providers
+            .providers
+            .get(&id)
+            .map(|old| old.windows.clone())
+            .unwrap_or_default(),
     };
     // The same checks a load makes, before anything is asked or stored.
     entry.check()?;

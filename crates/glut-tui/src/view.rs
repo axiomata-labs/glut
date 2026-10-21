@@ -4,12 +4,12 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::App;
 use crate::transcript::wrap;
-use crate::{glimm, theme};
+use crate::{glimm, session, theme};
 
 /// The most rows the input grows to before it scrolls.
 const INPUT_ROWS: usize = 8;
@@ -49,6 +49,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
     draw_input(frame, app, input, &rows, cursor);
     draw_keys(frame, app, keys);
+    if app.picker.is_some() {
+        draw_picker(frame, app, stream);
+    }
 }
 
 fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
@@ -65,14 +68,28 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
         ),
         Span::styled("Glut", theme::strong()),
         Span::raw("  "),
-        Span::raw(format!("{} · {}", app.parts.provider, app.parts.model_name)),
-        Span::styled(format!("  {}", app.folder), theme::quiet()),
+        Span::raw(format!(
+            "{} · {}",
+            app.engine.provider,
+            app.engine.model_name()
+        )),
     ];
+    let mut left = left;
+    if let Some(effort) = app.engine.endpoint.effort {
+        left.push(Span::styled(format!(" · {effort}"), theme::quiet()));
+    }
+    left.push(Span::styled(format!("  {}", app.folder), theme::quiet()));
     let mut meter = format!(
         "{} in · {} out",
         tokens(app.usage.input_tokens),
         tokens(app.usage.output_tokens)
     );
+    if let Some((window, _)) = app.engine.window {
+        meter.push_str(&format!(
+            " · {}%",
+            app.context_used * 100 / u64::from(window.max(1))
+        ));
+    }
     if let Some(cost) = app.cost {
         meter.push_str(&format!(" · ${cost:.4}"));
     }
@@ -103,7 +120,7 @@ fn draw_welcome(frame: &mut Frame, app: &mut App, area: Rect) {
     lines.push(Line::default());
     lines.push(Line::from(Span::styled("Glut", theme::strong())));
     lines.push(Line::from(Span::styled(
-        format!("{} · {}", app.parts.provider, app.parts.model_name),
+        format!("{} · {}", app.engine.provider, app.engine.model_name()),
         theme::quiet(),
     )));
     lines.push(Line::from(Span::styled(app.folder.clone(), theme::quiet())));
@@ -233,7 +250,7 @@ fn draw_input(frame: &mut Frame, app: &App, area: Rect, rows: &[String], cursor:
         })
         .collect();
     frame.render_widget(Paragraph::new(lines), text);
-    if app.ask.is_none() {
+    if app.ask.is_none() && app.picker.is_none() {
         frame.set_cursor_position(Position {
             x: text.x + 2 + cursor.1 as u16,
             y: text.y + (cursor.0 - first) as u16,
@@ -242,14 +259,73 @@ fn draw_input(frame: &mut Frame, app: &App, area: Rect, rows: &[String], cursor:
 }
 
 fn draw_keys(frame: &mut Frame, app: &App, area: Rect) {
-    let text = if app.ask.is_some() {
-        " y allow · a always · n refuse · Ctrl+C refuse and clear"
-    } else if app.working() {
-        " Glut works · Esc stops · PgUp/PgDn scroll · Ctrl+O tool results"
-    } else {
-        " Enter send · Shift+Enter new line · ↑ history · PgUp/PgDn scroll · Ctrl+O tool results · Ctrl+C quit"
+    let mode = app.mode();
+    // The mode is where the owner looks before sending: auto glows, it does the most without asking.
+    let mode_style = match mode {
+        glut::permissions::Mode::Auto => theme::glow().add_modifier(Modifier::BOLD),
+        glut::permissions::Mode::Plan => Style::default().fg(theme::OWNER),
+        _ => theme::quiet(),
     };
-    frame.render_widget(Paragraph::new(Span::styled(text, theme::quiet())), area);
+    let hints = if app.ask.is_some() {
+        "y allow · a always · n refuse · Ctrl+C refuse and clear"
+    } else if app.picker.is_some() {
+        "type to filter · ↑↓ choose · Enter take · Esc close"
+    } else if app.working() {
+        "Glut works · Esc stops · PgUp/PgDn scroll · Ctrl+O tool results"
+    } else {
+        "Enter send · Shift+Enter new line · Shift+Tab mode · /help · Ctrl+O tool results · Ctrl+C quit"
+    };
+    let line = Line::from(vec![
+        Span::styled(format!(" {} ", session::mode_label(mode)), mode_style),
+        Span::styled(format!(" {hints}"), theme::quiet()),
+    ]);
+    frame.render_widget(Paragraph::new(line), area);
+}
+
+/// The picker over the stream: its title, what was typed, and the entries that match, the chosen one marked.
+fn draw_picker(frame: &mut Frame, app: &App, area: Rect) {
+    let Some(picker) = &app.picker else { return };
+    let width = area.width.saturating_sub(4).min(100);
+    let height = area.height.saturating_sub(2).min(20);
+    let place = Rect {
+        x: area.x + (area.width.saturating_sub(width)) / 2,
+        y: area.y + area.height.saturating_sub(height),
+        width,
+        height,
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(theme::glow())
+        .title(Span::styled(format!(" {} ", picker.title), theme::glow()));
+    let shown = picker.shown();
+    let rows = usize::from(height.saturating_sub(3));
+    let first = picker.selected.saturating_sub(rows.saturating_sub(1));
+    let mut lines = vec![Line::from(vec![
+        Span::styled("› ", theme::glow()),
+        Span::raw(picker.query.clone()),
+    ])];
+    for (at, item) in shown.iter().enumerate().skip(first).take(rows) {
+        let chosen = at == picker.selected;
+        let mark = if chosen { "▸ " } else { "  " };
+        let style = if chosen {
+            theme::glow()
+        } else {
+            Style::default()
+        };
+        lines.push(Line::from(vec![
+            Span::styled(mark, theme::glow()),
+            Span::styled(item.label.clone(), style),
+            Span::styled(format!("  {}", item.detail), theme::quiet()),
+        ]));
+    }
+    if shown.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  nothing matches",
+            theme::quiet(),
+        )));
+    }
+    frame.render_widget(Clear, place);
+    frame.render_widget(Paragraph::new(lines).block(block), place);
 }
 
 #[cfg(test)]
