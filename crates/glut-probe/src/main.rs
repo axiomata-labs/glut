@@ -37,7 +37,7 @@ const CLIPBOARD_TEXT: &str = "glut-probe-osc52-7f3a";
 
 /// One finding of the report.
 struct Finding {
-    what: &'static str,
+    what: String,
     result: String,
 }
 
@@ -48,20 +48,83 @@ struct Report {
 
 impl Report {
     fn add(&mut self, what: &'static str, result: impl Into<String>) {
-        self.findings.push(Finding {
-            what,
-            result: result.into(),
-        });
+        self.add_owned(what.to_owned(), result.into());
+    }
+
+    fn add_owned(&mut self, what: String, result: String) {
+        self.findings.push(Finding { what, result });
     }
 }
 
+/// The parts a run measures: all of them, or those `--only a,b` names (to measure one part again after a fix).
+struct Parts(Option<Vec<String>>);
+
+impl Parts {
+    /// The parts named on the command line; an unknown name ends the probe before it touches the terminal.
+    fn from_args() -> io::Result<Self> {
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        match args.as_slice() {
+            [] => Ok(Self(None)),
+            [flag, names] if flag == "--only" => {
+                let names: Vec<String> = names
+                    .split(',')
+                    .map(|name| name.trim().to_owned())
+                    .collect();
+                if let Some(unknown) = names.iter().find(|name| !PARTS.contains(&name.as_str())) {
+                    return Err(io::Error::other(format!(
+                        "unknown part {unknown}; the parts are {}",
+                        PARTS.join(", ")
+                    )));
+                }
+                Ok(Self(Some(names)))
+            }
+            _ => Err(io::Error::other(format!(
+                "usage: glut-probe [--only part,part]; the parts are {}",
+                PARTS.join(", ")
+            ))),
+        }
+    }
+
+    fn wants(&self, part: &str) -> bool {
+        self.0
+            .as_ref()
+            .is_none_or(|names| names.iter().any(|name| name == part))
+    }
+
+    /// The report's name suffix: nothing for a full run, `-only-keys-tearing` for a partial one.
+    fn suffix(&self) -> String {
+        self.0
+            .as_ref()
+            .map(|names| format!("-only-{}", names.join("-")))
+            .unwrap_or_default()
+    }
+}
+
+/// Every part `--only` may name.
+const PARTS: [&str; 11] = [
+    "queries",
+    "colours",
+    "styles",
+    "wide",
+    "link",
+    "tearing",
+    "keys",
+    "mouse",
+    "paste",
+    "resize",
+    "altscreen",
+];
+
 fn main() -> io::Result<()> {
+    let parts = Parts::from_args()?;
     let mut report = Report::default();
     environment(&mut report);
     terminal::enable_raw_mode()?;
     let outcome = (|| -> io::Result<()> {
-        queries(&mut report)?;
-        guided(&mut report)
+        if parts.wants("queries") {
+            queries(&mut report)?;
+        }
+        guided(&mut report, &parts)
     })();
     // Whatever happened, the terminal is given back as it was.
     let mut out = io::stdout();
@@ -77,7 +140,7 @@ fn main() -> io::Result<()> {
     );
     terminal::disable_raw_mode()?;
     outcome?;
-    let path = write_report(&report)?;
+    let path = write_report(&report, &parts.suffix())?;
     println!("\nReport written to {}", path.display());
     Ok(())
 }
@@ -225,7 +288,7 @@ fn describe(answer: &Option<String>) -> String {
 }
 
 /// The guided part: what only a person can see or do.
-fn guided(report: &mut Report) -> io::Result<()> {
+fn guided(report: &mut Report, parts: &Parts) -> io::Result<()> {
     let mut out = io::stdout();
     execute!(
         out,
@@ -233,7 +296,80 @@ fn guided(report: &mut Report) -> io::Result<()> {
         Clear(ClearType::All),
         cursor::MoveTo(0, 0)
     )?;
-    let colours = show(&mut out, "Colours", |out| {
+    if parts.wants("colours") {
+        report.add("truecolor gradient smooth", colours(&mut out)?);
+    }
+    if parts.wants("styles") {
+        styles(&mut out, report)?;
+    }
+    if parts.wants("wide") {
+        let widths = show(&mut out, "Wide characters", |out| {
+            queue!(
+                out,
+                Print("|⬡ hex|日本|🙂 x|é|\r\n"),
+                Print("|----|----|----|-|\r\n"),
+                Print("┌──┬──┐\r\n│ab│cd│\r\n└──┴──┘")
+            )?;
+            Ok("Do the bars | line up in both rows, and is the box closed?")
+        })?;
+        report.add("wide characters and box drawing aligned", widths);
+    }
+    if parts.wants("link") {
+        let link = show(&mut out, "Link (OSC 8)", |out| {
+            queue!(
+                out,
+                Print(
+                    "\x1b]8;;https://example.com\x1b\\this text is a link to example.com\x1b]8;;\x1b\\"
+                )
+            )?;
+            Ok("Can you click (or Cmd-click) the text to open the link?")
+        })?;
+        report.add("hyperlinks (OSC 8) clickable", link);
+    }
+    if parts.wants("tearing") {
+        report.add(
+            "half frames without synchronized output",
+            tearing(&mut out, false)?,
+        );
+        report.add(
+            "half frames with synchronized output",
+            tearing(&mut out, true)?,
+        );
+    }
+    if parts.wants("keys") {
+        keys(&mut out, report)?;
+    }
+    if parts.wants("mouse") {
+        mouse(&mut out, report)?;
+    }
+    if parts.wants("paste") {
+        paste_and_clipboard(&mut out, report)?;
+    }
+    if parts.wants("resize") {
+        let resized = step(
+            &mut out,
+            "Resize",
+            "Change the window's size now (or press s to skip).",
+            |event| match event {
+                Event::Resize(cols, rows) => Some(format!("reported: {cols} × {rows}")),
+                _ => None,
+            },
+        )?;
+        report.add("resize reported", resized);
+    }
+    execute!(out, LeaveAlternateScreen)?;
+    if parts.wants("altscreen") {
+        let back = question(
+            "Back on the normal screen: is what was there before the probe visible again (y/n)?",
+        )?;
+        report.add("alternate screen restores the screen", back);
+    }
+    Ok(())
+}
+
+/// A truecolor gradient and the 256-colour cube.
+fn colours(out: &mut io::Stdout) -> io::Result<String> {
+    show(out, "Colours", |out| {
         queue!(out, Print("A smooth gradient (truecolor):\r\n"))?;
         for i in 0..72u8 {
             let r = 255 - i * 3;
@@ -250,81 +386,99 @@ fn guided(report: &mut Report) -> io::Result<()> {
         }
         queue!(out, ResetColor)?;
         Ok("Is the first row a smooth gradient without visible steps?")
-    })?;
-    report.add("truecolor gradient smooth", colours);
-    let styles = show(&mut out, "Styles", |out| {
-        for (attribute, name) in [
-            (Attribute::Bold, "bold"),
-            (Attribute::Dim, "dim"),
-            (Attribute::Italic, "italic"),
-            (Attribute::Underlined, "underlined"),
-            (Attribute::Undercurled, "curly underline"),
-            (Attribute::CrossedOut, "crossed out"),
-            (Attribute::Reverse, "reverse"),
-        ] {
-            queue!(
-                out,
-                SetAttribute(attribute),
-                Print(name),
-                SetAttribute(Attribute::Reset),
-                Print("   ")
-            )?;
-        }
-        queue!(
-            out,
-            Print("\r\n\r\n"),
-            Print("\x1b[4:3m\x1b[58:2::255:120:40mcurly orange underline\x1b[59m\x1b[24m")
-        )?;
-        Ok("Does every word look as it says (the last one with an orange curly line)?")
-    })?;
-    report.add(
-        "styles (bold, dim, italic, underline, curly, strike, reverse)",
-        styles,
-    );
-    let widths = show(&mut out, "Wide characters", |out| {
-        queue!(
-            out,
-            Print("|⬡ hex|日本|🙂 x|é|\r\n"),
-            Print("|----|----|----|-|\r\n"),
-            Print("┌──┬──┐\r\n│ab│cd│\r\n└──┴──┘")
-        )?;
-        Ok("Do the bars | line up in both rows, and is the box closed?")
-    })?;
-    report.add("wide characters and box drawing aligned", widths);
-    let link = show(&mut out, "Link (OSC 8)", |out| {
-        queue!(
-            out,
-            Print(
-                "\x1b]8;;https://example.com\x1b\\this text is a link to example.com\x1b]8;;\x1b\\"
-            )
-        )?;
-        Ok("Can you click (or Cmd-click) the text to open the link?")
-    })?;
-    report.add("hyperlinks (OSC 8) clickable", link);
-    report.add(
-        "tearing without synchronized output",
-        tearing(&mut out, false)?,
-    );
-    report.add("tearing with synchronized output", tearing(&mut out, true)?);
-    keys(&mut out, report)?;
-    mouse(&mut out, report)?;
-    paste_and_clipboard(&mut out, report)?;
-    let resized = step(
-        &mut out,
-        "Resize",
-        "Change the window's size now (or press s to skip).",
-        |event| match event {
-            Event::Resize(cols, rows) => Some(format!("reported: {cols} × {rows}")),
-            _ => None,
-        },
+    })
+}
+
+/// The styles a TUI uses, numbered: the person names the ones that do not look as they say, so each gets a finding.
+fn styles(out: &mut io::Stdout, report: &mut Report) -> io::Result<()> {
+    queue!(
+        out,
+        Clear(ClearType::All),
+        cursor::MoveTo(0, 0),
+        SetAttribute(Attribute::Bold),
+        Print("Styles"),
+        SetAttribute(Attribute::Reset),
+        Print("\r\n\r\n")
     )?;
-    report.add("resize reported", resized);
-    execute!(out, LeaveAlternateScreen)?;
-    let back = question(
-        "Back on the normal screen: is what was there before the probe visible again (y/n)?",
+    for (number, (attribute, name)) in (1..).zip(STYLES) {
+        queue!(
+            out,
+            Print(format!("{number}  ")),
+            SetAttribute(attribute),
+            Print(name),
+            SetAttribute(Attribute::Reset),
+            Print("\r\n")
+        )?;
+    }
+    queue!(
+        out,
+        Print(format!("{}  ", STYLES.len() + 1)),
+        Print("\x1b[4:3m\x1b[58:2::255:120:40mcurly orange underline\x1b[59m\x1b[24m\r\n\r\n"),
+        Print(
+            "Type the numbers of the lines that do NOT look as they say, then Enter (only Enter: all fine).  "
+        )
     )?;
-    report.add("alternate screen restores the screen", back);
+    out.flush()?;
+    let wrong = digits_until_enter(out)?;
+    for (number, (_, name)) in (1..).zip(STYLES) {
+        report.add_owned(
+            format!("style {name}"),
+            style_verdict(wrong.as_deref(), number),
+        );
+    }
+    report.add_owned(
+        "style curly orange underline (SGR 4:3 + 58)".into(),
+        style_verdict(wrong.as_deref(), STYLES.len() + 1),
+    );
     Ok(())
+}
+
+/// The styles the probe shows, each with its name.
+const STYLES: [(Attribute, &str); 7] = [
+    (Attribute::Bold, "bold"),
+    (Attribute::Dim, "dim"),
+    (Attribute::Italic, "italic"),
+    (Attribute::Underlined, "underlined"),
+    (Attribute::Undercurled, "curly underline"),
+    (Attribute::CrossedOut, "crossed out"),
+    (Attribute::Reverse, "reverse"),
+];
+
+/// A style's finding from the numbers the person typed; `None` when no answer came.
+fn style_verdict(wrong: Option<&[usize]>, number: usize) -> String {
+    match wrong {
+        None => "no answer in time".into(),
+        Some(wrong) if wrong.contains(&number) => "looks wrong".into(),
+        Some(_) => "yes".into(),
+    }
+}
+
+/// The digits typed (echoed) until Enter; `None` when nothing ends the line in time.
+fn digits_until_enter(out: &mut io::Stdout) -> io::Result<Option<Vec<usize>>> {
+    let mut typed = Vec::new();
+    let until = Instant::now() + STEP_WAIT;
+    while Instant::now() < until {
+        if !event::poll(Duration::from_millis(200))? {
+            continue;
+        }
+        let Event::Key(KeyEvent {
+            code,
+            kind: KeyEventKind::Press,
+            ..
+        }) = event::read()?
+        else {
+            continue;
+        };
+        match code {
+            KeyCode::Enter => return Ok(Some(typed)),
+            KeyCode::Char(c) if c.is_ascii_digit() => {
+                typed.push(usize::from(c as u8 - b'0'));
+                execute!(out, Print(c))?;
+            }
+            _ => {}
+        }
+    }
+    Ok(None)
 }
 
 /// Draws a test with `draw` under a title and asks its question; the answer is y, n or skipped.
@@ -413,36 +567,51 @@ fn step(
     Ok("nothing in time".into())
 }
 
-/// Redraws the whole screen many times, with or without synchronized output, and asks whether it tore.
+/// Redraws the screen slowly in two halves, with or without synchronized output, and asks whether half frames showed.
+///
+/// Each frame writes its top half, waits, then its bottom half: without synchronized output a terminal shows the half
+/// frame in between (top new, bottom old), with it a terminal that honours `?2026` holds the screen until the frame is
+/// whole. A fast full-screen flip would only show flicker, which nobody can tell from tearing by eye.
 fn tearing(out: &mut io::Stdout, synchronized: bool) -> io::Result<String> {
     let (cols, rows) = terminal::size()?;
-    for frame in 0..120u16 {
+    let rows = rows.saturating_sub(2);
+    for frame in 0..HALF_FRAME_COUNT {
         if synchronized {
             queue!(out, BeginSynchronizedUpdate)?;
         }
-        queue!(out, cursor::MoveTo(0, 0))?;
         let fill = if frame % 2 == 0 { '█' } else { '░' };
         let line: String = std::iter::repeat_n(fill, usize::from(cols)).collect();
-        for row in 0..rows.saturating_sub(2) {
+        for row in 0..rows / 2 {
+            queue!(out, cursor::MoveTo(0, row), Print(&line))?;
+        }
+        out.flush()?;
+        std::thread::sleep(HALF_FRAME_PAUSE);
+        for row in rows / 2..rows {
             queue!(out, cursor::MoveTo(0, row), Print(&line))?;
         }
         if synchronized {
             queue!(out, EndSynchronizedUpdate)?;
         }
         out.flush()?;
-        std::thread::sleep(Duration::from_millis(16));
+        std::thread::sleep(HALF_FRAME_PAUSE);
     }
     queue!(out, Clear(ClearType::All), cursor::MoveTo(0, 0))?;
     let how = if synchronized { "with" } else { "without" };
     question(&format!(
-        "That was 120 full redraws {how} synchronized output. Did you see a frame torn in two (y) or only clean flips (n)?"
+        "That was {HALF_FRAME_COUNT} slow redraws {how} synchronized output. Was the screen ever split — top half one \
+         pattern, bottom half the other (y) — or did it always change as a whole (n)?"
     ))
     .map(|answer| match answer.as_str() {
-        "yes" => "torn frames seen".to_owned(),
-        "no" => "clean".to_owned(),
+        "yes" => "half frames seen".to_owned(),
+        "no" => "always whole".to_owned(),
         other => other.to_owned(),
     })
 }
+
+/// How many frames the tearing test draws.
+const HALF_FRAME_COUNT: u16 = 16;
+/// The pause between a frame's two halves, and after it: long enough to see the half frame.
+const HALF_FRAME_PAUSE: Duration = Duration::from_millis(150);
 
 /// Which keys arrive, and how, with the kitty keyboard protocol on when the terminal has it.
 fn keys(out: &mut io::Stdout, report: &mut Report) -> io::Result<()> {
@@ -475,14 +644,14 @@ fn keys(out: &mut io::Stdout, report: &mut Report) -> io::Result<()> {
         ("F2", "hand the mouse back"),
         ("Alt+Up", "take a queued message back"),
     ] {
+        // What the last combination left behind (its release, a modifier) must not count for this one.
+        drain()?;
         let found = step(
             out,
             "Keys",
             &format!("Press {name} ({wanted}) — or s to skip."),
             |event| match event {
-                Event::Key(key) if key.kind != KeyEventKind::Release => {
-                    Some(format!("{:?} with {:?}", key.code, key.modifiers))
-                }
+                Event::Key(key) => key_seen(key),
                 _ => None,
             },
         )?;
@@ -490,6 +659,24 @@ fn keys(out: &mut io::Stdout, report: &mut Report) -> io::Result<()> {
     }
     if enhanced {
         execute!(out, PopKeyboardEnhancementFlags)?;
+    }
+    Ok(())
+}
+
+/// A key event as the report names it; `None` for what is no key of its own: a release, a repeat, or a modifier
+/// pressed alone (the kitty protocol with all keys as escape codes reports Shift, Alt and Ctrl by themselves).
+fn key_seen(key: &KeyEvent) -> Option<String> {
+    if key.kind != KeyEventKind::Press || matches!(key.code, KeyCode::Modifier(_)) {
+        return None;
+    }
+    Some(format!("{:?} with {:?}", key.code, key.modifiers))
+}
+
+/// Reads and drops every event already waiting.
+fn drain() -> io::Result<()> {
+    std::thread::sleep(Duration::from_millis(150));
+    while event::poll(Duration::ZERO)? {
+        event::read()?;
     }
     Ok(())
 }
@@ -628,7 +815,7 @@ fn base64_into(bytes: &[u8], out: &mut String) {
 }
 
 /// Writes the report into the current folder, named after the terminal, and returns its path.
-fn write_report(report: &Report) -> io::Result<std::path::PathBuf> {
+fn write_report(report: &Report, suffix: &str) -> io::Result<std::path::PathBuf> {
     let terminal_name = std::env::var("TERM_PROGRAM")
         .ok()
         .filter(|name| !name.trim().is_empty())
@@ -648,7 +835,7 @@ fn write_report(report: &Report) -> io::Result<std::path::PathBuf> {
         let result = finding.result.replace('|', "\\|");
         let _ = writeln!(text, "| {} | {} |", finding.what, result);
     }
-    let path = std::env::current_dir()?.join(format!("glut-probe-{slug}.md"));
+    let path = std::env::current_dir()?.join(format!("glut-probe-{slug}{suffix}.md"));
     std::fs::write(&path, text)?;
     Ok(path)
 }
@@ -681,6 +868,46 @@ mod tests {
             "not recognised"
         );
         assert!(interpret("\x1b[?2026$p", &None).starts_with("no answer"));
+    }
+
+    #[test]
+    fn a_modifier_alone_a_release_or_a_repeat_is_no_key_of_its_own() {
+        use crossterm::event::{KeyEventState, ModifierKeyCode};
+        let key = |code, modifiers, kind| KeyEvent {
+            code,
+            modifiers,
+            kind,
+            state: KeyEventState::NONE,
+        };
+        let shift = KeyModifiers::SHIFT;
+        assert_eq!(
+            key_seen(&key(
+                KeyCode::Modifier(ModifierKeyCode::LeftShift),
+                shift,
+                KeyEventKind::Press
+            )),
+            None
+        );
+        assert_eq!(
+            key_seen(&key(KeyCode::Enter, shift, KeyEventKind::Release)),
+            None
+        );
+        assert_eq!(
+            key_seen(&key(KeyCode::Enter, shift, KeyEventKind::Repeat)),
+            None
+        );
+        assert_eq!(
+            key_seen(&key(KeyCode::Enter, shift, KeyEventKind::Press)).as_deref(),
+            Some("Enter with KeyModifiers(SHIFT)")
+        );
+    }
+
+    #[test]
+    fn a_style_is_wrong_only_when_its_number_was_typed() {
+        assert_eq!(style_verdict(Some(&[2, 7]), 2), "looks wrong");
+        assert_eq!(style_verdict(Some(&[2, 7]), 3), "yes");
+        assert_eq!(style_verdict(Some(&[]), 1), "yes");
+        assert_eq!(style_verdict(None, 1), "no answer in time");
     }
 
     #[test]
