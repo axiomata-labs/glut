@@ -1,0 +1,32 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+
+# The versions as Axiomata-OS has them: Axiomata builds Glut in its own tree, one version of each crate.
+[workspace.dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "process", "time", "fs", "io-util", "macros", "sync"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive"] }
+gray_matter = "0.3"
+regex = "1"
+globset = "0.4"
+# HTTP client; `glut` adds `rustls-tls` for remote model APIs (HTTPS to OpenRouter) in its own manifest. No other
+# features — bodies are read chunk by chunk (`Response::chunk`), JSON goes through `serde_json`.
+reqwest = { version = "0.12", default-features = false }
+# Glut 2's code mode (docs/plans/glut-2.md, G2): QuickJS, compiled in. `futures` turns an async Rust function into a
+# JavaScript promise (a tool call from a script); `parallel` makes the runtime Send, so a run stays a Send future.
+rquickjs = { version = "0.14", default-features = false, features = ["std", "futures", "parallel"] }
+# HTML → Markdown for Glut's `web_fetch` (docs/plans/glut-round.md, W1): a turndown port, no JavaScript runtime.
+htmd = "0.5.6"
+# Process groups and files opened without following a link; `glut` adds the features it needs.
+rustix = { version = "1.1", default-features = false, features = ["std", "fs"] }
+# The fingerprint of an MCP server's config, which a project's server is approved by (HS5, M2).
+sha2 = "0.10"

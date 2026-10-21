@@ -822,7 +822,7 @@ mod tests {
         assert_eq!(tool.access(&json!({"query": "x"})), Access::Other);
     }
 
-    /// Live searches, for the developer: `cargo test -p axiomata-harness -- --ignored web_search_live`.
+    /// Live searches, for the developer: `cargo test -p glut -- --ignored web_search_live`.
     #[tokio::test]
     #[ignore = "reaches the internet"]
     async fn web_search_live_exa() {

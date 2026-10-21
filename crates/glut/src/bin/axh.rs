@@ -11,21 +11,21 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use axiomata_harness::commands::{PermissionsView, Registry};
-use axiomata_harness::mcp;
-use axiomata_harness::permissions::settings::Trust;
-use axiomata_harness::permissions::{GateOptions, Mode, Nobody, build_gate};
-use axiomata_harness::setup::{self, Draft, Prepared};
-use axiomata_harness::skills;
-use axiomata_harness::{
+use clap::{Args, Parser, Subcommand};
+use glut::commands::{PermissionsView, Registry};
+use glut::mcp;
+use glut::permissions::settings::Trust;
+use glut::permissions::{GateOptions, Mode, Nobody, build_gate};
+use glut::setup::{self, Draft, Prepared};
+use glut::skills;
+use glut::{
     Cancel, Effort, Event, EventSink, FinishReason, ModelEndpoint, OpenAiCompat, RunConfig,
     SharedSink, Usage, run,
 };
-use clap::{Args, Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 
 /// The environment variable the key is read from.
-const KEY_ENV: &str = axiomata_harness::config::API_KEY_ENV;
+const KEY_ENV: &str = glut::config::API_KEY_ENV;
 
 #[derive(Parser)]
 #[command(name = "axh", version, about = "Axiomata's own agent harness")]
@@ -92,8 +92,8 @@ impl EventSink for JsonLines {
 
 /// `axh`'s web search: the providers' keys from the environment (`EXA_API_KEY`, `TINYFISH_API_KEY`, `TAVILY_API_KEY`;
 /// Exa answers without one) and no budget — the app keeps the limits for its own runs (glut-round CP3).
-fn env_search() -> axiomata_harness::tools::search::WebSearch {
-    use axiomata_harness::tools::search::{SearchKeys, Unlimited, WebSearch};
+fn env_search() -> glut::tools::search::WebSearch {
+    use glut::tools::search::{SearchKeys, Unlimited, WebSearch};
     let key = |name: &str| {
         std::env::var(name)
             .ok()
@@ -209,9 +209,9 @@ async fn main() -> ExitCode {
 
 /// The count of savings in the harness's home (`$AXH_HOME` or `$HOME`, as the app's runs find it).
 fn savings_file() -> Option<PathBuf> {
-    axiomata_harness::permissions::settings::home_dir()
+    glut::permissions::settings::home_dir()
         .ok()
-        .map(|home| home.join(".axh").join(axiomata_harness::lean::FILE))
+        .map(|home| home.join(".axh").join(glut::lean::FILE))
 }
 
 /// `axh gain`: the count of savings as a table.
@@ -223,7 +223,7 @@ fn gain(days: Option<u32>) -> ExitCode {
     let Some(path) = savings_file() else {
         return fail("no home folder: set HOME or AXH_HOME".to_owned());
     };
-    match axiomata_harness::lean::report(&path, days) {
+    match glut::lean::report(&path, days) {
         Ok(table) => {
             print!("{table}");
             ExitCode::SUCCESS
@@ -250,7 +250,7 @@ fn journal_dir() -> Option<PathBuf> {
 
 /// `axh resume`: lists the unfinished runs, gives one up, or goes on with one — built from the flags it began with.
 async fn resume_command(run: Option<String>, list: bool, discard: bool) -> ExitCode {
-    use axiomata_harness::journal;
+    use glut::journal;
     let fail = |message: String| {
         eprintln!("axh resume: {message}");
         ExitCode::from(1)
@@ -383,7 +383,7 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
         }
         let mut kept = journal_args;
         kept.cwd = cwd.clone();
-        config.journal = Some(axiomata_harness::journal::JournalSpec {
+        config.journal = Some(glut::journal::JournalSpec {
             dir,
             run,
             meta: serde_json::json!({ "args": kept }),
@@ -468,10 +468,10 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
     config.sandbox = Some(built.sandbox.clone());
     config.refusals = built.refusals;
     if let Some(window) = context_window {
-        if window < axiomata_harness::config::MIN_CONTEXT_WINDOW {
+        if window < glut::config::MIN_CONTEXT_WINDOW {
             return fail(format!(
                 "--context-window {window}: at least {}",
-                axiomata_harness::config::MIN_CONTEXT_WINDOW
+                glut::config::MIN_CONTEXT_WINDOW
             ));
         }
         config.compaction.context_window = Some(window);
@@ -521,7 +521,7 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
     } = draft;
     // C6 of docs/plans/glut-cards.md: the budget at the prices of the model the run ends up with (a skill or a
     // command may name its own).
-    config.budget = axiomata_harness::Budget {
+    config.budget = glut::Budget {
         max_tokens,
         max_usd,
         prices: built.prices.get(&endpoint.model).copied(),
@@ -568,21 +568,19 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
     };
     // A skill run's task is the skill's body already: loading skills would only cost a turn (glut-round CP4).
     if skill.is_some() {
-        tools.withdraw(axiomata_harness::skills::tool::NAME);
+        tools.withdraw(glut::skills::tool::NAME);
     }
 
     // Ctrl-C, SIGTERM and SIGHUP end the run cleanly, with its `finished` line and every background job stopped.
     let cancel = Cancel::new();
-    axiomata_harness::run::cancel_on_signals(&cancel);
+    glut::run::cancel_on_signals(&cancel);
 
     let outcome = match &resumed {
         None => run(&config, &model, &tools, &prompt, &mut sink, &cancel).await,
-        Some(id) => {
-            match axiomata_harness::resume(&config, &model, &tools, id, &mut sink, &cancel).await {
-                Ok((outcome, _)) => outcome,
-                Err(reason) => return fail(reason),
-            }
-        }
+        Some(id) => match glut::resume(&config, &model, &tools, id, &mut sink, &cancel).await {
+            Ok((outcome, _)) => outcome,
+            Err(reason) => return fail(reason),
+        },
     };
     ExitCode::from(match outcome.reason {
         FinishReason::Answered => 0,
@@ -596,7 +594,7 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
 
 /// `axh undo`: lists a folder's runs with snapshots, or puts the folder back before a run or one of its steps.
 fn undo(cwd: &std::path::Path, run: Option<String>, step: Option<u32>, list: bool) -> ExitCode {
-    use axiomata_harness::snapshot;
+    use glut::snapshot;
     let fail = |message: String| {
         eprintln!("axh undo: {message}");
         ExitCode::from(1)

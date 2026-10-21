@@ -1,12 +1,10 @@
 //! A run against a real model API. Ignored by default: it needs a key and costs a few tokens.
 //!
 //! `AXH_LIVE_BASE_URL=https://openrouter.ai/api AXH_LIVE_MODEL=deepseek/deepseek-chat AXH_API_KEY=… \
-//!  cargo test -p axiomata-harness --test live -- --ignored --nocapture`
+//!  cargo test -p glut --test live -- --ignored --nocapture`
 
-use axiomata_harness::tools::files::{SkillRoots, file_tools};
-use axiomata_harness::{
-    Cancel, Event, FinishReason, ModelEndpoint, OpenAiCompat, RunConfig, Toolbox, run,
-};
+use glut::tools::files::{SkillRoots, file_tools};
+use glut::{Cancel, Event, FinishReason, ModelEndpoint, OpenAiCompat, RunConfig, Toolbox, run};
 
 #[tokio::test]
 #[ignore = "needs a model API and a key"]
@@ -53,13 +51,13 @@ async fn a_real_model_reads_a_file_and_answers() {
 /// reached from the app, not from a test.
 ///
 /// `AXH_LIVE_MCP="npx -y @modelcontextprotocol/server-everything" \
-///  cargo test -p axiomata-harness --test live -- --ignored --nocapture`
+///  cargo test -p glut --test live -- --ignored --nocapture`
 #[tokio::test]
 #[ignore = "needs AXH_LIVE_MCP"]
 async fn a_real_stdio_server_connects_and_lists_its_tools() {
     use std::collections::BTreeMap;
 
-    use axiomata_harness::mcp::{Client, config::ServerConfig};
+    use glut::mcp::{Client, config::ServerConfig};
 
     let command = std::env::var("AXH_LIVE_MCP").expect("AXH_LIVE_MCP");
     let mut parts = command.split_whitespace();

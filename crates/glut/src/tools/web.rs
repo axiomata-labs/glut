@@ -494,7 +494,7 @@ mod tests {
         assert!(markdown.contains("[link](https://x.org)"), "{markdown}");
     }
 
-    /// A live fetch of a real page, for the developer: `cargo test -p axiomata-harness -- --ignored web_fetch_live`.
+    /// A live fetch of a real page, for the developer: `cargo test -p glut -- --ignored web_fetch_live`.
     #[tokio::test]
     #[ignore = "reaches the internet"]
     async fn web_fetch_live() {
