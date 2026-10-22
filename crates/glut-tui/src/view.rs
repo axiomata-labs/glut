@@ -552,7 +552,7 @@ fn draw_keys(frame: &mut Frame, app: &App, area: Rect) {
             .to_owned()
     } else {
         concat!(
-            "Enter send · Shift+Enter new line · Shift+Tab mode · Ctrl+K everything · @ file · !cmd · ",
+            "Enter send · Shift+Enter new line · Shift+Tab mode · Ctrl+K keys · @ file · !cmd · ",
             "Ctrl+F search · Ctrl+C quit"
         )
         .to_owned()
@@ -642,7 +642,13 @@ fn draw_suggestions(frame: &mut Frame, app: &App, area: Rect) {
     }
     let shown = suggestions.len().min(usize::from(area.height) - 2);
     let height = shown as u16 + 2;
-    let width = area.width.min(72);
+    // As wide as the longest help text needs (mark, name, gap, text and the frame), as far as the screen goes.
+    let needed = suggestions
+        .iter()
+        .map(|(_, what)| what.width() + 18)
+        .max()
+        .unwrap_or(40);
+    let width = area.width.min(needed as u16);
     let place = Rect {
         x: area.x,
         y: area.y + area.height - height,
@@ -669,10 +675,14 @@ fn draw_suggestions(frame: &mut Frame, app: &App, area: Rect) {
             ])
         })
         .collect();
+    // Framed as the pickers are (Ctrl+K, /model): the glow, it waits for the owner's choice.
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(theme::quiet())
-        .title(Span::styled(" Tab completes · Enter runs ", theme::quiet()));
+        .border_style(theme::glow())
+        .title(Span::styled(
+            " Commands · Tab completes · Enter runs ",
+            theme::glow(),
+        ));
     frame.render_widget(Clear, place);
     frame.render_widget(Paragraph::new(lines).block(block), place);
 }

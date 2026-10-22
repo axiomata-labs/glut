@@ -34,7 +34,7 @@ const HELP: &str = "Commands: /model [id] · /provider [id] · /effort [level] �
                     build → auto · Esc stop · Ctrl+O tool results · Ctrl+T thinking · Ctrl+B panel · \
                     Ctrl+X E editor · PgUp/PgDn scroll · Ctrl+F search · drag to copy · F2 mouse to the terminal \
                     and back · F3 scrollback · Ctrl+C twice quit\n\
-                    Also: Ctrl+K every command and key · @ mentions a file · !cmd runs a command and shows Glut \
+                    Also: Ctrl+K every key · @ mentions a file · !cmd runs a command and shows Glut \
                     its output · !!cmd runs it for you alone · a large paste stands as [pasted N lines]\n\
                     While Glut works: Enter steers it (taken in before its next step) · Tab queues for after the \
                     turn · Alt+↑ takes the last back\n\
@@ -1673,66 +1673,119 @@ impl App {
     }
 }
 
-/// The command palette (Ctrl+K, T12): every session command and every action with its key, to find by typing.
+/// The keys (Ctrl+K, T12): every action Glut has a key for, the key first, the `/` command beside it where there is
+/// one — found by typing, done on Enter. A command without a key is in the `/` list, not here (owner, 2026-10-22).
 fn palette() -> Picker {
     let press = |code: KeyCode, modifiers: KeyModifiers| KeyEvent::new(code, modifiers);
     let ctrl = KeyModifiers::CONTROL;
     let none = KeyModifiers::NONE;
-    let mut items: Vec<Item> = COMMANDS
-        .iter()
-        .map(|(name, what)| Item::plain(format!("/{name}"), *what, Pick::Run((*name).to_owned())))
-        .collect();
-    let keys = [
+    let keys: Vec<(&str, &str, &str, Pick)> = vec![
         (
-            "search the stream",
+            "/",
+            "the commands",
+            "",
+            Pick::Keys(vec![press(KeyCode::Char('/'), none)]),
+        ),
+        ("@", "mention a file", "", Pick::Mention),
+        (
             "Ctrl+F",
-            vec![press(KeyCode::Char('f'), ctrl)],
+            "search the stream",
+            "",
+            Pick::Keys(vec![press(KeyCode::Char('f'), ctrl)]),
         ),
         (
-            "unfold or fold every tool result",
             "Ctrl+O",
-            vec![press(KeyCode::Char('o'), ctrl)],
+            "unfold or fold every tool result",
+            "",
+            Pick::Keys(vec![press(KeyCode::Char('o'), ctrl)]),
         ),
         (
-            "open or fold every thought",
             "Ctrl+T",
-            vec![press(KeyCode::Char('t'), ctrl)],
+            "open or fold every thought",
+            "/thinking",
+            Pick::Keys(vec![press(KeyCode::Char('t'), ctrl)]),
         ),
         (
-            "the next mode: plan → ask → build → auto",
+            "Ctrl+B",
+            "show or hide the side panel",
+            "/panel",
+            Pick::Keys(vec![press(KeyCode::Char('b'), ctrl)]),
+        ),
+        (
             "Shift+Tab",
-            vec![press(KeyCode::BackTab, KeyModifiers::SHIFT)],
+            "the next mode: plan → ask → build → auto",
+            "",
+            Pick::Keys(vec![press(KeyCode::BackTab, KeyModifiers::SHIFT)]),
         ),
         (
-            "edit the input in your editor",
             "Ctrl+X E",
-            vec![
+            "edit the input in your editor",
+            "/editor picks it",
+            Pick::Keys(vec![
                 press(KeyCode::Char('x'), ctrl),
                 press(KeyCode::Char('e'), none),
-            ],
+            ]),
         ),
         (
-            "hand the mouse to the terminal and back",
+            "Shift+Enter",
+            "a new line in the input",
+            "",
+            Pick::Keys(vec![press(KeyCode::Enter, KeyModifiers::SHIFT)]),
+        ),
+        (
+            "PgUp",
+            "scroll the stream up",
+            "",
+            Pick::Keys(vec![press(KeyCode::PageUp, none)]),
+        ),
+        (
+            "PgDn",
+            "scroll the stream down",
+            "",
+            Pick::Keys(vec![press(KeyCode::PageDown, none)]),
+        ),
+        (
             "F2",
-            vec![press(KeyCode::F(2), none)],
+            "hand the mouse to the terminal and back",
+            "",
+            Pick::Keys(vec![press(KeyCode::F(2), none)]),
         ),
         (
-            "the conversation into the terminal's scrollback",
             "F3",
-            vec![press(KeyCode::F(3), none)],
+            "the conversation into the terminal's scrollback",
+            "/scrollback",
+            Pick::Keys(vec![press(KeyCode::F(3), none)]),
         ),
-        ("stop Glut", "Esc", vec![press(KeyCode::Esc, none)]),
+        (
+            "Tab",
+            "while Glut works: queue the message for after",
+            "",
+            Pick::Keys(vec![press(KeyCode::Tab, none)]),
+        ),
+        (
+            "Alt+↑",
+            "take the last waiting message back",
+            "",
+            Pick::Keys(vec![press(KeyCode::Up, KeyModifiers::ALT)]),
+        ),
+        (
+            "Esc",
+            "stop Glut",
+            "",
+            Pick::Keys(vec![press(KeyCode::Esc, none)]),
+        ),
+        (
+            "Ctrl+C twice",
+            "quit",
+            "/quit",
+            Pick::Run("quit".to_owned()),
+        ),
     ];
-    items.extend(
-        keys.into_iter()
-            .map(|(what, key, keys)| Item::plain(what, key, Pick::Keys(keys))),
-    );
-    items.push(Item::plain(
-        "mention a file",
-        "@ at a word's start",
-        Pick::Mention,
-    ));
-    Picker::new("Commands and keys", items, None)
+    let items = keys
+        .into_iter()
+        .map(|(key, what, command, pick)| Item::plain(format!("{key:<13}{what}"), command, pick))
+        .collect();
+    Picker::new("Keys", items, None)
 }
 
 /// The file picker's title, by which a finished walk finds it open.
@@ -2033,7 +2086,10 @@ mod tests {
             app.on_terminal(key(KeyCode::Char(c), KeyModifiers::NONE));
         }
         app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
-        assert!(app.scrollback_request, "the command ran");
+        assert!(
+            app.scrollback_request,
+            "the action ran, found by its command's name"
+        );
         app.scrollback_request = false;
         app.on_terminal(key(KeyCode::Char('k'), KeyModifiers::CONTROL));
         for c in "search the".chars() {
