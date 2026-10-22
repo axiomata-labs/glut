@@ -478,6 +478,10 @@ pub fn glow() -> Style {
     Style::default().fg(c().glow)
 }
 
+pub fn fault() -> Style {
+    Style::default().fg(c().fault)
+}
+
 pub fn strong() -> Style {
     Style::default().add_modifier(Modifier::BOLD)
 }

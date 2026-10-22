@@ -28,10 +28,10 @@ const ASK_SETTLE: Duration = Duration::from_millis(400);
 
 /// What `/help` says.
 const HELP: &str = "Commands: /model [id] · /provider [id] · /effort [level] · /context [tokens] · /compact · \
-                    /editor [command] · /thinking off|folded|open · /theme [name] · /vim on|off · /scrollback · \
+                    /editor [command] · /gate · /thinking off|folded|open · /theme [name] · /vim on|off · /scrollback · \
                     /clear · /help · /quit\n\
                     Keys: Enter send · Shift+Enter or Alt+Enter new line · ↑ history · Shift+Tab plan → ask → \
-                    build → auto · Esc stop · Ctrl+O tool results · Ctrl+T thinking · Ctrl+B panel · \
+                    build → auto · Esc stop · Ctrl+O tool results · Ctrl+T thinking · Ctrl+B panel · Ctrl+G gate · \
                     Ctrl+X E editor · PgUp/PgDn scroll · Ctrl+F search · drag to copy · F2 mouse to the terminal \
                     and back · F3 scrollback · Ctrl+C twice quit\n\
                     Also: Ctrl+K every key · @ mentions a file · !cmd runs a command and shows Glut \
@@ -43,7 +43,7 @@ const HELP: &str = "Commands: /model [id] · /provider [id] · /effort [level] �
                     or doubled · counts · p P · u Ctrl+R), i a I A o O to Insert; Esc in Normal mode stops Glut";
 
 /// The session's commands with what each does, as the list under a typed `/` shows them.
-pub const COMMANDS: [(&str, &str); 18] = [
+pub const COMMANDS: [(&str, &str); 19] = [
     (
         "model",
         "pick a model of the provider in use, or /model <id>",
@@ -64,6 +64,10 @@ pub const COMMANDS: [(&str, &str); 18] = [
     (
         "panel",
         "show or hide the side panel with the plan (Ctrl+B)",
+    ),
+    (
+        "gate",
+        "the rules in force; take an \"always\" back (Ctrl+G: the gate, live)",
     ),
     (
         "resume",
@@ -96,6 +100,15 @@ pub struct OpenAsk {
     opened: Instant,
 }
 
+/// The side panel's tabs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tab {
+    /// The run's task list.
+    Plan,
+    /// The gate, live (T15).
+    Gate,
+}
+
 /// What runs in the background besides the screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Busy {
@@ -125,6 +138,10 @@ pub struct App {
     pub last_turn: Option<bool>,
     /// Whether the side panel is shown; `None` until the owner or a first plan decides.
     pub panel: Option<bool>,
+    /// Which tab the side panel shows.
+    pub tab: Tab,
+    /// The gate's judgements of the session, for the panel's Gate tab (T15).
+    pub watch: crate::watch::Watch,
     /// Ctrl+X was pressed: the next key finishes a chord (Ctrl+X E: the editor).
     chord: bool,
     /// The input, handed to the editor by the main loop (T29), which owns the terminal.
@@ -216,6 +233,8 @@ impl App {
             todos: Vec::new(),
             last_turn: None,
             panel,
+            tab: Tab::Plan,
+            watch: crate::watch::Watch::default(),
             chord: false,
             edit_request: None,
             busy: None,
@@ -465,8 +484,10 @@ impl App {
                     // The first plan opens the panel, unless the owner closed it once.
                     if self.panel.is_none() {
                         self.panel = Some(true);
+                        self.tab = Tab::Plan;
                     }
                 }
+                self.watch.take(&event);
                 self.transcript.take(&event);
             }
             Report::Ask(request, reply) => {
@@ -811,6 +832,7 @@ impl App {
         match key.code {
             KeyCode::Char('x') if ctrl => self.chord = true,
             KeyCode::Char('b') if ctrl => self.toggle_panel(),
+            KeyCode::Char('g') if ctrl => self.show_gate(),
             KeyCode::Enter if shift || alt => self.input.newline(),
             KeyCode::Char('j') if ctrl => self.input.newline(),
             KeyCode::Enter => {
@@ -1231,6 +1253,7 @@ impl App {
             "editor" => self.set_editor(rest),
             "resume" => self.picker = Some(self.session_picker()),
             "panel" => self.toggle_panel(),
+            "gate" => self.picker = Some(self.gate_picker()),
             "scrollback" => self.scrollback_request = true,
             "vim" => match rest {
                 "on" | "" => self.set_vi(true),
@@ -1333,6 +1356,126 @@ impl App {
         }
         if let Err(reason) = prefs::set_panel(&self.parts.home, shown) {
             self.transcript.note(reason, Tone::Fault);
+        }
+    }
+
+    /// Ctrl+G: the panel on its Gate tab; on it already, the panel goes.
+    pub fn show_gate(&mut self) {
+        if self.panel == Some(true) && self.tab == Tab::Gate {
+            return self.toggle_panel();
+        }
+        self.tab = Tab::Gate;
+        if self.panel != Some(true) {
+            self.toggle_panel();
+        }
+    }
+
+    /// How the session is guarded now, for the Gate tab.
+    pub fn guard_facts(&self) -> (String, Option<bool>, Vec<String>, (usize, usize, usize)) {
+        let gate = self.parts.tools.gate();
+        let mode = gate.map_or("none", |gate| session::mode_label(gate.mode()));
+        let sandbox = self
+            .parts
+            .config
+            .sandbox
+            .as_ref()
+            .filter(|sandbox| sandbox.enabled)
+            .map(|_| glut::sandbox::available());
+        let granted = gate.map(|gate| gate.granted()).unwrap_or_default();
+        let given: Vec<&String> = granted.iter().flat_map(|given| &given.rules).collect();
+        let rules = gate.map(|gate| gate.rules()).unwrap_or_default();
+        // The settings' allow rules: those an "always" answer added are counted under it.
+        let allow = rules.allow.len().saturating_sub(given.len());
+        (
+            mode.to_owned(),
+            sandbox,
+            granted
+                .into_iter()
+                .map(|given| given.rules.join(", "))
+                .collect(),
+            (allow, rules.ask.len(), rules.deny.len()),
+        )
+    }
+
+    /// `/gate`: what an "always" answer allowed this session, each to take back, then the settings' rules in force.
+    fn gate_picker(&self) -> Picker {
+        let Some(gate) = self.parts.tools.gate() else {
+            return Picker::new("No gate: every call runs", Vec::new(), None);
+        };
+        let granted = gate.granted();
+        let mut items: Vec<Item> = granted
+            .iter()
+            .map(|given| {
+                // The rules, not the ask's label: reading and editing one path share a label.
+                Item::plain(
+                    format!(
+                        "allow {}",
+                        crate::transcript::clean(&given.rules.join(", "))
+                    ),
+                    "your \"always\" this session · Enter takes it back",
+                    Pick::TakeBack(given.rules.clone()),
+                )
+            })
+            .collect();
+        // An "always" rule stands in the allow list too: shown once, above, where it can be taken back.
+        let mut given: Vec<&str> = granted
+            .iter()
+            .flat_map(|given| given.rules.iter().map(String::as_str))
+            .collect();
+        let rules = gate.rules();
+        let mut settings = Vec::new();
+        for rule in rules.allow.iter().rev() {
+            if let Some(at) = given.iter().position(|text| *text == rule.text()) {
+                given.remove(at);
+            } else {
+                settings.push(("allow", rule.text().to_owned()));
+            }
+        }
+        settings.reverse();
+        settings.extend(rules.ask.iter().map(|rule| ("ask", rule.text().to_owned())));
+        settings.extend(
+            rules
+                .deny
+                .iter()
+                .map(|rule| ("deny", rule.text().to_owned())),
+        );
+        items.extend(settings.into_iter().map(|(verdict, text)| {
+            Item::plain(
+                format!("{verdict} {}", crate::transcript::clean(&text)),
+                "from the settings (~/.axh/settings.json, the project's .axh/)",
+                Pick::Shown,
+            )
+        }));
+        let title = format!(
+            "Gate · mode {} · {} — the rules in force",
+            session::mode_label(gate.mode()),
+            if granted.is_empty() {
+                "no \"always\" given yet".to_owned()
+            } else {
+                format!("{} \"always\" given", granted.len())
+            }
+        );
+        Picker::new(title, items, None)
+    }
+
+    /// Takes back what an "always" answer allowed: the next such call is asked again.
+    fn take_back_always(&mut self, rules: &[String]) {
+        let taken = self
+            .parts
+            .tools
+            .gate()
+            .is_some_and(|gate| gate.take_back(rules));
+        let clean = crate::transcript::clean(&rules.join(", "));
+        if taken {
+            self.transcript.note(
+                format!("taken back: {clean} — Glut asks again next time"),
+                Tone::Quiet,
+            );
+        } else {
+            self.transcript.note(
+                format!("{clean} was not allowed with \"always\""),
+                Tone::Fault,
+            );
         }
     }
 
@@ -1893,6 +2036,8 @@ impl App {
                     Some(Pick::File(path)) => self.input.insert_text(&format!("{path} ")),
                     Some(Pick::Mention) => self.mention(),
                     Some(Pick::Theme(name)) => self.set_theme(&name),
+                    Some(Pick::TakeBack(rules)) => self.take_back_always(&rules),
+                    Some(Pick::Shown) => {}
                     Some(Pick::RewindTo(mark)) => self.picker = Some(self.rewind_how(mark)),
                     Some(Pick::Fork(mark)) => self.fork(mark),
                     Some(Pick::Step { run, turn }) => self.picker = Some(step_do(run, turn)),
@@ -2154,6 +2299,12 @@ fn palette() -> Picker {
             "show or hide the side panel",
             "/panel",
             Pick::Keys(vec![press(KeyCode::Char('b'), ctrl)]),
+        ),
+        (
+            "Ctrl+G",
+            "the gate, live: every judgement, the hosts, the refusals",
+            "/gate",
+            Pick::Keys(vec![press(KeyCode::Char('g'), ctrl)]),
         ),
         (
             "Shift+Tab",
@@ -2832,6 +2983,58 @@ mod tests {
             .collect();
         assert_eq!(labels, ["work", "└─⑂ ● work (fork)"], "{labels:?}");
         assert_eq!(picker.chosen(), Some(Pick::Session(app.session.id.clone())));
+        let _ = std::fs::remove_dir_all(&app.parts.home);
+    }
+
+    #[tokio::test]
+    async fn the_gate_tab_follows_the_judgements_and_gate_takes_an_always_back() {
+        /// Says "always" to every ask.
+        struct Yes;
+        impl glut::permissions::Asker for Yes {
+            fn ask<'a>(&'a self, _request: &'a AskRequest) -> glut::permissions::AnswerFuture<'a> {
+                Box::pin(async { Answer::AllowAlways })
+            }
+        }
+        let (mut parts, engine) = session::for_tests();
+        let rules = glut::RuleSet {
+            deny: vec![glut::Rule::parse("Bash(rm:*)").unwrap()],
+            ..glut::RuleSet::default()
+        };
+        let gate = Arc::new(glut::Gate::new(rules, glut::Mode::Default, Arc::new(Yes)));
+        parts.tools.set_gate(gate.clone());
+        let (send, _reports) = mpsc::unbounded_channel();
+        let mut app = App::new(Arc::new(parts), engine, send);
+        let make = glut::Access::Bash {
+            command: "make build".into(),
+            folder: "/tmp".into(),
+            unsandboxed: false,
+            sandboxed: false,
+        };
+        assert!(gate.judge("bash", &make).await.is_ok());
+        for judged in gate.take_log() {
+            app.on_report(Report::Event(Event::permission(1, "c1", &judged)));
+        }
+        assert_eq!(app.watch.seen.len(), 1);
+
+        app.on_terminal(key(KeyCode::Char('g'), KeyModifiers::CONTROL));
+        assert_eq!((app.panel, app.tab), (Some(true), Tab::Gate));
+        let (_, _, granted, rules) = app.guard_facts();
+        assert_eq!(granted, ["Bash(make build)"]);
+        assert_eq!(rules, (0, 0, 1), "the always is no settings rule");
+
+        let picker = app.gate_picker();
+        let labels: Vec<&str> = picker
+            .shown()
+            .iter()
+            .map(|item| item.label.as_str())
+            .collect();
+        assert_eq!(labels, ["allow Bash(make build)", "deny Bash(rm:*)"]);
+        app.picker = Some(picker);
+        app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(gate.granted().is_empty(), "taken back");
+
+        app.on_terminal(key(KeyCode::Char('g'), KeyModifiers::CONTROL));
+        assert_eq!(app.panel, Some(false), "Ctrl+G on the gate hides the panel");
         let _ = std::fs::remove_dir_all(&app.parts.home);
     }
 

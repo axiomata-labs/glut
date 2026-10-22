@@ -40,6 +40,10 @@ pub enum Pick {
         turn: u32,
         restore: bool,
     },
+    /// `/gate`: take back what an "always" answer allowed, by the rules it became.
+    TakeBack(Vec<String>),
+    /// An entry only to be read (a rule of the settings in `/gate`): picking it closes the list.
+    Shown,
     /// Rewind: how far — the conversation, the files, or both.
     Rewind {
         mark: usize,

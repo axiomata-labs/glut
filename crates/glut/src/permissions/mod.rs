@@ -908,6 +908,13 @@ pub struct Judgement {
     pub reason: String,
 }
 
+/// An allowance an "always" answer gave: the scope as the ask named it (`git status *`) and the rules it became.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Granted {
+    pub label: String,
+    pub rules: Vec<String>,
+}
+
 /// Judges every tool call of a run.
 pub struct Gate {
     rules: Mutex<RuleSet>,
@@ -918,6 +925,9 @@ pub struct Gate {
     /// would mix their answers.
     asking: tokio::sync::Mutex<()>,
     log: Mutex<Vec<Judgement>>,
+    /// What the owner's "always" answers allowed from then on, oldest first: the scope as the owner read it and the
+    /// rules it became — shown and taken back through [`Gate::granted`] and [`Gate::take_back`] (TUI T15).
+    granted: Mutex<Vec<(String, Vec<Rule>)>>,
     /// The `allowed-tools` lists that narrow this run (HS4 C3, HS6 K5, HS6b B3) — a command's, a skill's, or both.
     /// Every one of them must name a call, so a second narrowing can only take away from the first, never give
     /// back what it left out. Added through [`Gate::narrow`].
@@ -941,8 +951,54 @@ impl Gate {
             asker,
             asking: tokio::sync::Mutex::new(()),
             log: Mutex::new(Vec::new()),
+            granted: Mutex::new(Vec::new()),
             narrowings: Vec::new(),
         }
+    }
+
+    /// What the owner's "always" answers allowed from then on, oldest first.
+    pub fn granted(&self) -> Vec<Granted> {
+        self.granted
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .iter()
+            .map(|(label, rules)| Granted {
+                label: label.clone(),
+                rules: rules.iter().map(|rule| rule.text.clone()).collect(),
+            })
+            .collect()
+    }
+
+    /// Takes back the allowance an "always" answer gave as `rules` ([`Granted::rules`]: a label alone can stand for
+    /// two, reading and editing one path): they leave the allow list — the last copy of each, the one the answer
+    /// added, so the same rule in a settings file stays. `false` when no answer gave these rules.
+    pub fn take_back(&self, rules: &[String]) -> bool {
+        let taken = {
+            let mut granted = self
+                .granted
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            let Some(at) = granted.iter().rposition(|(_, given)| {
+                given.len() == rules.len()
+                    && given
+                        .iter()
+                        .zip(rules)
+                        .all(|(rule, text)| rule.text == *text)
+            }) else {
+                return false;
+            };
+            granted.remove(at).1
+        };
+        let mut rules = self
+            .rules
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        for rule in taken {
+            if let Some(at) = rules.allow.iter().rposition(|held| held.text == rule.text) {
+                rules.allow.remove(at);
+            }
+        }
+        true
     }
 
     /// Narrows the run to the calls `rules` name (HS4 C3, HS6 K5), on top of every narrowing it already has: a
@@ -1166,6 +1222,10 @@ impl Gate {
                                 .unwrap_or_else(|poison| poison.into_inner())
                                 .allow
                                 .extend(scope.rules.iter().cloned());
+                            self.granted
+                                .lock()
+                                .unwrap_or_else(|poison| poison.into_inner())
+                                .push((scope.label.clone(), scope.rules.clone()));
                         }
                         true
                     }
@@ -1726,6 +1786,39 @@ mod tests {
                 && log[1].reason.contains("rule Bash(make build)")
         );
         assert!(gate.take_log().is_empty());
+        assert_eq!(
+            gate.granted(),
+            [Granted {
+                label: "make build".into(),
+                rules: vec!["Bash(make build)".into()]
+            }]
+        );
+        let given = ["Bash(make build)".to_owned()];
+        assert!(gate.take_back(&given));
+        assert!(!gate.take_back(&given), "given once, taken back once");
+        assert!(gate.granted().is_empty());
+        assert!(gate.judge("bash", &bash("make build")).await.is_ok());
+        assert_eq!(*asker.1.lock().unwrap(), 2, "asked again once taken back");
+    }
+
+    #[tokio::test]
+    async fn taking_an_always_back_leaves_the_same_rule_of_the_settings() {
+        let asker = Arc::new(Always(Answer::AllowAlways, Mutex::new(0)));
+        let rules = RuleSet {
+            allow: vec![Rule::parse("Bash(make build)").unwrap()],
+            ..RuleSet::default()
+        };
+        let gate = Gate::new(rules, Mode::Default, asker.clone());
+        assert!(gate.judge("bash", &bash("make test")).await.is_ok());
+        assert!(gate.take_back(&["Bash(make test)".to_owned()]));
+        assert_eq!(
+            gate.rules()
+                .allow
+                .iter()
+                .map(Rule::text)
+                .collect::<Vec<_>>(),
+            ["Bash(make build)"]
+        );
     }
 
     #[tokio::test]

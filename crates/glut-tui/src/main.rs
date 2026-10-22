@@ -18,6 +18,7 @@ mod theme;
 mod transcript;
 mod vi;
 mod view;
+mod watch;
 
 use std::io::{self, Write as _};
 use std::path::PathBuf;

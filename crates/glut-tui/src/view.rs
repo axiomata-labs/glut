@@ -567,23 +567,56 @@ fn draw_keys(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(Paragraph::new(line), area);
 }
 
-/// The side panel: its tabs (Plan now; Files, Diff and Git follow with their phases) and the plan the run keeps —
-/// done quiet, under way glowing, open plain.
+/// The side panel: its tabs — the plan the run keeps (done quiet, under way glowing, open plain) and the gate, live
+/// (T15) — under Glimm, who heads it with the session's mood.
 fn draw_panel(frame: &mut Frame, app: &App, area: Rect) {
+    use crate::app::Tab;
     use glut::planning::TodoStatus;
+    let tab = |name: &str, shown: bool| {
+        if shown {
+            Span::styled(
+                format!(" {name} "),
+                theme::glow().add_modifier(Modifier::BOLD),
+            )
+        } else {
+            Span::styled(format!(" {name} "), theme::quiet())
+        }
+    };
     let block = Block::default()
         .borders(Borders::LEFT)
         .border_style(theme::quiet())
-        .title(Span::styled(
-            " Plan ",
-            theme::glow().add_modifier(Modifier::BOLD),
-        ));
+        .title(Line::from(vec![
+            tab("Plan", app.tab == Tab::Plan),
+            Span::styled("·", theme::quiet()),
+            tab("Gate", app.tab == Tab::Gate),
+        ]));
     let width = usize::from(area.width.saturating_sub(4)).max(8);
     // Glimm heads the panel with the session's mood: working, waiting for the owner, pleased or gone out.
     let mut lines: Vec<Line> = vec![Line::default()];
     for mut row in glimm::lines(glimm::Size::Small, app.mood(), app.frame) {
         row.spans.insert(0, Span::raw(" "));
         lines.push(row);
+    }
+    if app.tab == Tab::Gate {
+        lines.push(Line::default());
+        let (mode, sandbox, granted, rules) = app.guard_facts();
+        let guard = crate::watch::Guard {
+            mode: &mode,
+            sandbox,
+            limits: app.parts.config.refusals,
+            granted: &granted,
+            rules,
+        };
+        // The last row is the panel's hint.
+        let room = usize::from(area.height).saturating_sub(lines.len() + 2);
+        lines.extend(app.watch.lines(&guard, width + 2, room));
+        lines.push(Line::default());
+        lines.push(Line::from(Span::styled(
+            " Ctrl+G hides · Ctrl+B the plan",
+            theme::quiet(),
+        )));
+        frame.render_widget(Paragraph::new(lines).block(block), area);
+        return;
     }
     if app.todos.is_empty() {
         lines.push(Line::default());
@@ -628,7 +661,7 @@ fn draw_panel(frame: &mut Frame, app: &App, area: Rect) {
     }
     lines.push(Line::default());
     lines.push(Line::from(Span::styled(
-        " Ctrl+B hides the panel",
+        " Ctrl+B hides · Ctrl+G the gate",
         theme::quiet(),
     )));
     frame.render_widget(Paragraph::new(lines).block(block), area);
