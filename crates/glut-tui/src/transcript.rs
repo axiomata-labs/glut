@@ -154,6 +154,12 @@ impl Transcript {
                 self.stream(text)
             }
             Event::AssistantText { text, .. } if depth == 0 => self.answered(text),
+            // The owner's message sent while Glut worked, where the run took it in.
+            Event::Steered { text, .. } if depth == 0 => {
+                self.close_answer();
+                self.close_thinking();
+                self.push(Kind::Owner(text.clone()));
+            }
             Event::ToolCall {
                 id,
                 name,

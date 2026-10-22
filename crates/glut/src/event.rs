@@ -179,6 +179,11 @@ pub enum Event {
         chars_before: usize,
         chars_after: usize,
     },
+    /// The owner's message sent while the run worked joined the conversation before this turn's model call (T10).
+    Steered {
+        turn: u32,
+        text: String,
+    },
     /// The run compacted its conversation before the model's context was full, or after the provider said it was
     /// too long (Glut robust, #111, K5): the older part became a summary. In tokens, estimated before and after.
     Compacted {

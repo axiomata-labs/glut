@@ -34,7 +34,9 @@ const HELP: &str = "Commands: /model [id] · /provider [id] · /effort [level] �
                     Ctrl+X E editor · PgUp/PgDn scroll · Ctrl+F search · drag to copy · F2 mouse to the terminal \
                     and back · F3 scrollback · Ctrl+C twice quit\n\
                     Also: Ctrl+K every command and key · @ mentions a file · !cmd runs a command and shows Glut \
-                    its output · !!cmd runs it for you alone · a large paste stands as [pasted N lines]";
+                    its output · !!cmd runs it for you alone · a large paste stands as [pasted N lines]\n\
+                    While Glut works: Enter steers it (taken in before its next step) · Tab queues for after the \
+                    turn · Alt+↑ takes the last back";
 
 /// The session's commands with what each does, as the list under a typed `/` shows them.
 pub const COMMANDS: [(&str, &str); 15] = [
@@ -143,6 +145,12 @@ pub struct App {
     pub mouse_request: Option<bool>,
     /// F3 or `/scrollback`: the main loop prints the stream where the terminal keeps it (TUI2c).
     pub scrollback_request: bool,
+    /// The turn's inbox: what Enter sends while Glut works, taken before its next step (T10).
+    pub steering: Option<glut::Inbox>,
+    /// Messages queued with Tab while Glut works, sent one by one as turns end.
+    pub queue: Vec<String>,
+    /// The queue was filled while Glut compacted, handed off or switched: it goes as soon as that is done.
+    send_when_free: bool,
     /// The owner's `!cmd` outputs waiting for the conversation to be the session's again.
     pending: Vec<Message>,
     /// How many `!` commands ran: each one's block has an id of its own, whatever `/clear` did since.
@@ -203,6 +211,9 @@ impl App {
             mouse_held: true,
             mouse_request: None,
             scrollback_request: false,
+            steering: None,
+            queue: Vec::new(),
+            send_when_free: false,
             pending: Vec::new(),
             shells: 0,
             files: None,
@@ -230,6 +241,9 @@ impl App {
 
     /// Opens session `session`: its conversation goes on, its stream is shown again.
     pub fn open(&mut self, session: Session) {
+        // What waited for the other session is not this one's.
+        self.queue.clear();
+        self.pending.clear();
         self.transcript = Transcript {
             thinking: self.transcript.thinking,
             ..Transcript::default()
@@ -348,12 +362,15 @@ impl App {
         let cancel = Cancel::new();
         self.running = Some(cancel.clone());
         self.busy = Some(Busy::Turn);
+        let inbox = glut::Inbox::default();
+        self.steering = Some(inbox.clone());
         session::turn(
             Arc::clone(&self.parts),
             self.engine.clone(),
             std::mem::take(&mut self.conversation),
             prompt,
             cancel,
+            inbox,
             self.reports.clone(),
         );
     }
@@ -366,6 +383,12 @@ impl App {
         if !self.working() && self.busy.is_none() && !self.pending.is_empty() {
             self.conversation.append(&mut self.pending);
             self.keep();
+        }
+        // A message queued while Glut compacted, handed off or switched goes once it is free again.
+        if self.busy.is_none() && std::mem::take(&mut self.send_when_free) && !self.queue.is_empty()
+        {
+            let next = self.queue.remove(0);
+            self.send(next);
         }
     }
 
@@ -411,9 +434,16 @@ impl App {
             }
             Report::Done(outcome, conversation) => {
                 self.conversation = conversation;
+                self.conversation.append(&mut self.pending);
                 self.running = None;
                 self.busy = None;
                 self.keep();
+                // What was sent to steer and never taken (the turn ended first) waits as the next message.
+                if let Some(inbox) = self.steering.take() {
+                    let mut late = inbox.take();
+                    late.append(&mut self.queue);
+                    self.queue = late;
+                }
                 // A turn that ended (cancelled, timed out) while asking dropped the question: its card goes too.
                 self.ask = None;
                 self.transcript.settle();
@@ -428,6 +458,12 @@ impl App {
                     other => self
                         .transcript
                         .note(format!("the turn ended: {}", reason(other)), Tone::Fault),
+                }
+                // The next queued message follows a turn that answered; after a stop, a failure or a limit it waits
+                // for Enter, or it would run into the same wall.
+                if outcome.reason == FinishReason::Answered && !self.queue.is_empty() {
+                    let next = self.queue.remove(0);
+                    self.send(next);
                 }
             }
             Report::Compacted(result, before) => {
@@ -708,12 +744,16 @@ impl App {
             KeyCode::Right => self.input.right(),
             KeyCode::Home => self.input.home(),
             KeyCode::End => self.input.end(),
+            KeyCode::Up if ctrl || alt => self.take_back(),
             KeyCode::Up if shift => self.scroll_by(1),
             KeyCode::Down if shift => self.scroll_by(-1),
             KeyCode::Up => self.input.up(),
             KeyCode::Down => self.input.down(),
             KeyCode::PageUp => self.scroll_by(self.page()),
             KeyCode::PageDown => self.scroll_by(-self.page()),
+            // Tab while Glut works queues the message for after the turn (T10; Alt+Enter is a new line in many
+            // terminals); idle, it is a space.
+            KeyCode::Tab if self.working() => self.queue_next(),
             KeyCode::Tab => self.input.insert(' '),
             KeyCode::Char(c) if !ctrl => {
                 self.input.insert(c);
@@ -781,14 +821,58 @@ impl App {
             return self.shell(command, !alone);
         }
         if self.working() {
-            self.transcript.note(
-                "Glut is working — Esc stops it; the message waits in the input",
-                Tone::Quiet,
-            );
+            // While a turn runs, Enter steers it: the message joins before its next step. While Glut compacts or
+            // switches, it waits as the next message.
+            if self.input.is_empty() {
+                return;
+            }
+            let text = self.input.take();
+            match &self.steering {
+                Some(inbox) => {
+                    inbox.send(text);
+                    self.say("Glut takes this in before its next step — Alt+↑ takes it back");
+                }
+                None => {
+                    self.queue.push(text);
+                    self.send_when_free = true;
+                    self.say("queued: it goes when Glut is free — Alt+↑ takes it back");
+                }
+            }
             return;
+        }
+        // Enter on an empty input sends what waits in the queue (after a turn the owner stopped).
+        if self.input.is_empty() && !self.queue.is_empty() {
+            let next = self.queue.remove(0);
+            return self.send(next);
         }
         let prompt = self.input.take();
         self.send(prompt);
+    }
+
+    /// Tab while Glut works: the message waits until the turn is done and goes as the next one.
+    fn queue_next(&mut self) {
+        if self.input.is_empty() {
+            return;
+        }
+        let text = self.input.take();
+        self.queue.push(text);
+        self.say("queued for after this turn — Alt+↑ takes it back");
+    }
+
+    /// Alt+↑ (or Ctrl+↑, which macOS keeps for Mission Control): the last message waiting — queued, or sent to steer
+    /// and not yet taken — back into the input.
+    fn take_back(&mut self) {
+        if !self.input.is_empty() {
+            return self.say("the input holds a message: send or clear it first");
+        }
+        let back = self
+            .queue
+            .pop()
+            .or_else(|| self.steering.as_ref().and_then(glut::Inbox::take_back));
+        match back {
+            Some(text) => self.input.insert_text(&text),
+            None => self.say("nothing waits to be taken back"),
+        }
     }
 
     /// Runs the owner's own command in the folder, beside the session; its output comes back as a report.
@@ -917,6 +1001,7 @@ impl App {
                 self.selection = None;
                 self.search = None;
                 self.pending.clear();
+                self.queue.clear();
                 self.conversation.clear();
                 self.todos.clear();
                 self.last_turn = None;
@@ -1922,6 +2007,85 @@ mod tests {
             })
             .count();
         assert_eq!(done, 2);
+    }
+
+    #[test]
+    fn enter_while_working_steers_tab_queues_and_ctrl_up_takes_back() {
+        let (mut app, _reports) = app();
+        let inbox = glut::Inbox::default();
+        app.steering = Some(inbox.clone());
+        app.busy = Some(Busy::Turn);
+        app.running = Some(Cancel::new());
+        typed(&mut app, "also check the tests");
+        assert_eq!(inbox.waiting(), ["also check the tests"], "Enter steers");
+        app.input.insert_text("then write the docs");
+        app.on_terminal(key(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(app.queue, ["then write the docs"], "Tab queues");
+        assert!(app.input.is_empty());
+        app.on_terminal(key(KeyCode::Up, KeyModifiers::CONTROL));
+        assert_eq!(
+            app.input.text(),
+            "then write the docs",
+            "the last waiting comes back first"
+        );
+        app.input.clear();
+        app.on_terminal(key(KeyCode::Up, KeyModifiers::CONTROL));
+        assert_eq!(
+            app.input.text(),
+            "also check the tests",
+            "then the one sent to steer"
+        );
+        assert!(inbox.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_failed_turn_keeps_the_queue_for_enter() {
+        let (mut app, _reports) = app();
+        app.busy = Some(Busy::Turn);
+        app.running = Some(Cancel::new());
+        app.queue.push("queued".into());
+        app.on_report(Report::Done(
+            RunOutcome {
+                reason: FinishReason::Failed,
+                answer: None,
+                turns: 1,
+                usage: Usage::default(),
+                refusals: 0,
+            },
+            Vec::new(),
+        ));
+        assert!(!app.working(), "nothing ran into the same wall");
+        assert_eq!(app.queue, ["queued"]);
+        typed(&mut app, "");
+        assert!(app.working(), "Enter on an empty input sends it");
+        assert!(app.queue.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_turn_that_ends_sends_the_queue_and_what_was_never_taken_in() {
+        let (mut app, _reports) = app();
+        let inbox = glut::Inbox::default();
+        inbox.send("late steer");
+        app.steering = Some(inbox);
+        app.busy = Some(Busy::Turn);
+        app.running = Some(Cancel::new());
+        app.queue.push("queued".into());
+        app.on_report(Report::Done(
+            RunOutcome {
+                reason: FinishReason::Answered,
+                answer: None,
+                turns: 1,
+                usage: Usage::default(),
+                refusals: 0,
+            },
+            Vec::new(),
+        ));
+        assert!(app.working(), "the next message went out");
+        assert_eq!(
+            app.queue,
+            ["queued"],
+            "the late steer first, the queued one after it"
+        );
     }
 
     #[test]

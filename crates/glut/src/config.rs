@@ -336,6 +336,48 @@ pub struct RunConfig {
     pub compaction: Compaction,
     /// What the run may spend (C6 of `docs/plans/glut-cards.md`); none by default.
     pub budget: Budget,
+    /// What the owner sends while the run works (T10 of `docs/plans/glut-tui.md`, steering): taken before the run's
+    /// next model call, never between a reply and its results, and only by the run itself, never a subagent.
+    pub inbox: Option<Inbox>,
+}
+
+/// Messages for a run under way, from whoever started it (the TUI's Enter while Glut works). Shared: the sender keeps
+/// one end, the run the other.
+#[derive(Debug, Clone, Default)]
+pub struct Inbox(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
+
+impl Inbox {
+    /// A message for the run's next step.
+    pub fn send(&self, text: impl Into<String>) {
+        self.lock().push(text.into());
+    }
+
+    /// Every message waiting, in the order sent; the inbox is empty after.
+    pub fn take(&self) -> Vec<String> {
+        std::mem::take(&mut *self.lock())
+    }
+
+    /// The last message waiting, taken back before the run saw it.
+    pub fn take_back(&self) -> Option<String> {
+        self.lock().pop()
+    }
+
+    /// The messages waiting, as they stand.
+    pub fn waiting(&self) -> Vec<String> {
+        self.lock().clone()
+    }
+
+    /// Whether no message waits.
+    pub fn is_empty(&self) -> bool {
+        self.lock().is_empty()
+    }
+
+    /// A poisoned lock still holds the messages: a sender that panicked loses nothing of the others'.
+    fn lock(&self) -> std::sync::MutexGuard<'_, Vec<String>> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
 }
 
 impl RunConfig {
@@ -366,6 +408,7 @@ impl RunConfig {
             refusals: RefusalLimits::DEFAULT,
             compaction: Compaction::default(),
             budget: Budget::default(),
+            inbox: None,
         }
     }
 }
@@ -373,6 +416,19 @@ impl RunConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_inbox_gives_its_messages_in_order_and_takes_back_the_last() {
+        let inbox = Inbox::default();
+        let sender = inbox.clone();
+        sender.send("a");
+        sender.send("b");
+        sender.send("c");
+        assert_eq!(inbox.waiting(), ["a", "b", "c"]);
+        assert_eq!(inbox.take_back().as_deref(), Some("c"));
+        assert_eq!(inbox.take(), ["a", "b"]);
+        assert!(inbox.is_empty() && sender.is_empty(), "one inbox, two ends");
+    }
 
     fn usage(input: u64, cached: u64, output: u64) -> crate::model::Usage {
         crate::model::Usage {

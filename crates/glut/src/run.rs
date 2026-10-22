@@ -641,6 +641,7 @@ impl<M: ChatModel> Loop<'_, M> {
                 return FinishReason::Budget;
             }
             self.turns += 1;
+            self.take_steering(sink);
             if let Err(ending) = self.compact_if_full(sink).await {
                 return ending;
             }
@@ -649,7 +650,11 @@ impl<M: ChatModel> Loop<'_, M> {
                 Ok(calls) => calls,
                 Err(ending) => return ending,
             };
-            let ended = if calls.is_empty() {
+            let ended = if calls.is_empty() && self.steering_waits() {
+                // The owner wrote while the answer came: the run goes on with what they wrote, and the Stop hooks
+                // wait for the answer that ends it.
+                Ok(())
+            } else if calls.is_empty() {
                 match self.stop_hooks(stop_hook_active, sink).await {
                     Ok(Ending::Done) => return FinishReason::Answered,
                     Ok(Ending::Refused) => {
@@ -665,6 +670,31 @@ impl<M: ChatModel> Loop<'_, M> {
                 return ending;
             }
         }
+    }
+
+    /// The owner's messages sent while the run worked, into the conversation before the next model call — the run's
+    /// own inbox only (depth 0): a subagent shares the run's config but not its owner's words.
+    fn take_steering(&mut self, sink: &mut dyn EventSink) {
+        let Some(inbox) = self.config.inbox.as_ref().filter(|_| self.depth == 0) else {
+            return;
+        };
+        for text in inbox.take() {
+            sink.emit(Event::Steered {
+                turn: self.turns,
+                text: text.clone(),
+            });
+            self.messages.push(Message::user(text));
+        }
+    }
+
+    /// Whether a message of the owner's waits for the run.
+    fn steering_waits(&self) -> bool {
+        self.depth == 0
+            && self
+                .config
+                .inbox
+                .as_ref()
+                .is_some_and(|inbox| !inbox.is_empty())
     }
 
     /// One model call: its usage and text reported, its message kept, its tool calls handed back.
@@ -3602,6 +3632,39 @@ mod tests {
                 .unwrap()
                 .contains("not run, the run is ending")
         );
+    }
+
+    #[tokio::test]
+    async fn a_message_sent_while_the_run_works_joins_before_its_next_call() {
+        let mut model = Script::new(vec![Ok(text("first")), Ok(text("second"))]);
+        model.delay = Duration::from_millis(80);
+        let inbox = crate::config::Inbox::default();
+        let config = RunConfig {
+            inbox: Some(inbox.clone()),
+            ..RunConfig::new("/w")
+        };
+        let tools = Toolbox::new();
+        let sender = inbox.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            sender.send("also do X");
+        });
+        let mut events = Vec::new();
+        let outcome = run(&config, &model, &tools, "go", &mut events, &Cancel::new()).await;
+        assert_eq!(outcome.reason, FinishReason::Answered);
+        let seen = model.seen.lock().unwrap();
+        assert_eq!(seen.len(), 2, "an answer with a message waiting goes on");
+        let last = seen[1].last().unwrap();
+        assert_eq!(
+            (last.role, last.content.as_deref()),
+            (Role::User, Some("also do X"))
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, Event::Steered { text, .. } if text == "also do X"))
+        );
+        assert!(inbox.is_empty());
     }
 
     #[tokio::test]

@@ -52,14 +52,19 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             };
             inner.max(glimm) + 2
         });
-    let [header, stream, ask, input, keys] = Layout::vertical([
+    let waiting = waiting_lines(app, usize::from(area.width));
+    let [header, stream, ask, queue, input, keys] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(1),
         Constraint::Length(ask_height),
+        Constraint::Length(waiting.len() as u16),
         Constraint::Length(input_height),
         Constraint::Length(1),
     ])
     .areas(area);
+    if !waiting.is_empty() {
+        frame.render_widget(Paragraph::new(waiting), queue);
+    }
     draw_header(frame, app, header);
     // The side panel (T28) takes the right of the stream where the screen is wide enough for both.
     app.stream_width = stream.x + stream.width;
@@ -153,6 +158,48 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
     spans.push(Span::raw(" ".repeat(gap)));
     spans.push(Span::styled(meter, theme::quiet()));
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// The most waiting messages shown above the input; the rest are counted.
+const WAITING_ROWS: usize = 4;
+
+/// What waits above the input (T10): messages sent to steer the turn, not taken in yet, and the ones queued for
+/// after it — one line each, cut to the width.
+fn waiting_lines(app: &App, width: usize) -> Vec<Line<'static>> {
+    let steering = app
+        .steering
+        .as_ref()
+        .map(glut::Inbox::waiting)
+        .unwrap_or_default();
+    let mut all: Vec<(bool, String)> = steering.into_iter().map(|text| (true, text)).collect();
+    all.extend(app.queue.iter().map(|text| (false, text.clone())));
+    // The mark, the gap and the longest label beside the text.
+    let room = width.saturating_sub(26).max(8);
+    let working = app.working();
+    let mut lines: Vec<Line<'static>> = all
+        .iter()
+        .take(WAITING_ROWS)
+        .map(|(steer, text)| {
+            let first = crate::transcript::clean(text.lines().next().unwrap_or(""));
+            let (mark, word) = match (steer, working) {
+                (true, _) => (Span::styled("↪ ", theme::glow()), "before its next step"),
+                (false, true) => (Span::styled("⏭ ", theme::quiet()), "after this turn"),
+                (false, false) => (Span::styled("⏭ ", theme::quiet()), "Enter sends it"),
+            };
+            Line::from(vec![
+                mark,
+                Span::raw(crate::transcript::cut(&first, room)),
+                Span::styled(format!("  {word}"), theme::quiet()),
+            ])
+        })
+        .collect();
+    if all.len() > WAITING_ROWS {
+        lines.push(Line::from(Span::styled(
+            format!("  … {} more waiting", all.len() - WAITING_ROWS),
+            theme::quiet(),
+        )));
+    }
+    lines
 }
 
 /// A token count as people read it: 840, 12.3k, 1.2M.
@@ -494,7 +541,8 @@ fn draw_keys(frame: &mut Frame, app: &App, area: Rect) {
     } else if app.picker.is_some() {
         "type to filter · ↑↓ choose · Enter take · Esc close".to_owned()
     } else if app.working() {
-        "Glut works · Esc stops · PgUp/PgDn scroll · Ctrl+O tool results".to_owned()
+        "Glut works · Enter steers it · Tab queues for after · Alt+↑ takes back · Esc stops"
+            .to_owned()
     } else {
         concat!(
             "Enter send · Shift+Enter new line · Shift+Tab mode · Ctrl+K everything · @ file · !cmd · ",

@@ -390,12 +390,17 @@ pub fn turn(
     conversation: Vec<Message>,
     prompt: String,
     cancel: Cancel,
+    inbox: glut::Inbox,
     reports: mpsc::UnboundedSender<Report>,
 ) {
     let kept = conversation.clone();
     let run = tokio::spawn(async move {
         let mut sink = parts.sink.clone();
-        let config = engine.config(&parts);
+        // What the owner sends while it works joins before its next step (T10).
+        let config = RunConfig {
+            inbox: Some(inbox),
+            ..engine.config(&parts)
+        };
         glut::run_continuing(
             &config,
             engine.model.as_ref(),
