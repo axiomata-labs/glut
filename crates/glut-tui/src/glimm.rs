@@ -23,6 +23,8 @@ pub enum Mood {
 pub enum Size {
     Large,
     Small,
+    /// Five by four pixels (5 columns by 2 rows), in front of a thought while the model thinks.
+    Mini,
 }
 
 /// One drawing of Glimm: its pixels as letters of [`color`], its eyes' pixels, and where its extras go.
@@ -87,6 +89,16 @@ const BREATH_STEP: usize = 3;
 const BLINK_EVERY: usize = 42;
 const BLINK_TICKS: usize = 2;
 
+const MINI: Design = Design {
+    rows: &["..y..", ".oao.", "oayao", ".rar."],
+    eyes: &[(2, 1), (2, 3)],
+    tip_rows: 1,
+    sparks: &[(0, 0), (0, 4), (1, 0), (1, 4)],
+    bang: (4, &[0], 1),
+    twinkle: (0, 0),
+    smoke: &[&[(0, 1)], &[(0, 3)]],
+};
+
 /// A pixel's colour by its letter: the flame from deep red at its edge to white-hot in its heart, the eyes, the ember
 /// and the smoke. `.` is no pixel.
 fn color(pixel: char, ash: bool) -> Option<Color> {
@@ -150,6 +162,7 @@ fn pixels(size: Size, mood: Mood, tick: usize) -> (Vec<Vec<char>>, bool) {
     let design = match size {
         Size::Large => &LARGE,
         Size::Small => &SMALL,
+        Size::Mini => &MINI,
     };
     let mut grid: Vec<Vec<char>> = design
         .rows
@@ -268,6 +281,7 @@ pub fn cells(size: Size) -> (u16, u16) {
     let design = match size {
         Size::Large => &LARGE,
         Size::Small => &SMALL,
+        Size::Mini => &MINI,
     };
     (
         design.rows[0].len() as u16,
@@ -299,7 +313,7 @@ mod tests {
 
     #[test]
     fn every_mood_and_frame_keeps_glimms_size() {
-        for size in [Size::Large, Size::Small] {
+        for size in [Size::Large, Size::Small, Size::Mini] {
             let (cols, rows) = cells(size);
             for mood in MOODS {
                 for tick in 0..12 {
@@ -313,11 +327,12 @@ mod tests {
         }
         assert_eq!(cells(Size::Large), (12, 7));
         assert_eq!(cells(Size::Small), (8, 4));
+        assert_eq!(cells(Size::Mini), (5, 2));
     }
 
     #[test]
     fn every_mood_looks_different_and_a_failed_glimm_has_gone_grey_but_its_ember() {
-        for size in [Size::Large, Size::Small] {
+        for size in [Size::Large, Size::Small, Size::Mini] {
             let looks: Vec<Vec<Vec<char>>> =
                 MOODS.iter().map(|&mood| pixels(size, mood, 0).0).collect();
             for (at, look) in looks.iter().enumerate() {

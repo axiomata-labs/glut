@@ -83,7 +83,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             .transcript
             .blocks
             .iter_mut()
-            .map(|block| block.lines(width, thinking).len())
+            .map(|block| block.lines(width, thinking, 0).len())
             .sum();
         let notes = (notes as u16).min(stream.height / 2);
         let [welcome, below] =
@@ -193,7 +193,7 @@ fn draw_stream(frame: &mut Frame, app: &mut App, area: Rect) {
     let mut total = 0;
     let thinking = app.transcript.thinking;
     for at in (0..app.transcript.blocks.len()).rev() {
-        let lines = app.transcript.blocks[at].lines(width, thinking);
+        let lines = app.transcript.blocks[at].lines(width, thinking, app.frame);
         total += lines.len();
         if taken.len() < wanted {
             for line in lines.iter().rev() {

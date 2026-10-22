@@ -80,7 +80,8 @@ pub enum Tone {
 #[derive(Debug, Clone)]
 pub struct Block {
     pub kind: Kind,
-    wrapped: Option<(u16, Thinking, Vec<Line<'static>>)>,
+    /// The lines made last, for the width, way of showing thinking and animation step they were made for.
+    wrapped: Option<(u16, Thinking, usize, Vec<Line<'static>>)>,
 }
 
 impl Block {
@@ -96,19 +97,26 @@ impl Block {
         self.wrapped = None;
     }
 
-    /// The block's lines at `width`, made once per change, width and way of showing thinking.
-    pub fn lines(&mut self, width: u16, thinking: Thinking) -> &[Line<'static>] {
+    /// The block's lines at `width`, made once per change, width and way of showing thinking — and, for a thought
+    /// still streaming, once per animation step `frame`: Glimm flickers in front of it.
+    pub fn lines(&mut self, width: u16, thinking: Thinking, frame: usize) -> &[Line<'static>] {
+        let step = match self.kind {
+            Kind::Thinking {
+                streaming: true, ..
+            } => frame,
+            _ => 0,
+        };
         if self
             .wrapped
             .as_ref()
-            .is_none_or(|(at, shown, _)| *at != width || *shown != thinking)
+            .is_none_or(|(at, shown, made, _)| *at != width || *shown != thinking || *made != step)
         {
-            let lines = render(&self.kind, width, thinking);
-            self.wrapped = Some((width, thinking, lines));
+            let lines = render(&self.kind, width, thinking, step);
+            self.wrapped = Some((width, thinking, step, lines));
         }
         self.wrapped
             .as_ref()
-            .map(|(_, _, lines)| lines.as_slice())
+            .map(|(_, _, _, lines)| lines.as_slice())
             .unwrap_or(&[])
     }
 }
@@ -416,7 +424,7 @@ pub(crate) fn cut(text: &str, max: usize) -> String {
 }
 
 /// A block as lines of the screen's width.
-fn render(kind: &Kind, width: u16, thinking: Thinking) -> Vec<Line<'static>> {
+fn render(kind: &Kind, width: u16, thinking: Thinking, frame: usize) -> Vec<Line<'static>> {
     let width = usize::from(width.max(8));
     let mut lines = Vec::new();
     match kind {
@@ -516,10 +524,27 @@ fn render(kind: &Kind, width: u16, thinking: Thinking) -> Vec<Line<'static>> {
                 theme::quiet()
             };
             lines.push(Line::default());
-            lines.push(Line::from(vec![
+            let header = vec![
                 Span::styled(if open { "▾ " } else { "▸ " }, style),
                 Span::styled(format!("{state} · ~{} tokens", tokens_short(size)), style),
-            ]));
+            ];
+            if *streaming {
+                // While the model thinks, a small Glimm flickers in front of it — two rows, with eyes, so it reads
+                // as Glimm and not as a dot; the thought goes back to one row once it is done.
+                let mut glimm = crate::glimm::lines(
+                    crate::glimm::Size::Mini,
+                    crate::glimm::Mood::Working,
+                    frame,
+                );
+                let lower = glimm.pop().unwrap_or_default();
+                let mut upper = glimm.pop().unwrap_or_default();
+                upper.spans.push(Span::raw(" "));
+                upper.spans.extend(header);
+                lines.push(upper);
+                lines.push(lower);
+            } else {
+                lines.push(Line::from(header));
+            }
             if open {
                 let italic = theme::quiet().add_modifier(Modifier::ITALIC);
                 for row in wrap(text.trim(), width.saturating_sub(2)) {
@@ -701,13 +726,13 @@ mod tests {
             Kind::Tool { target, state: ToolState::Done, .. } if target == "src/main.rs"
         ));
         assert_eq!(
-            stream.blocks[1].lines(80, Thinking::Folded).len(),
+            stream.blocks[1].lines(80, Thinking::Folded, 0).len(),
             1,
             "folded: one line"
         );
         stream.toggle(1);
         assert_eq!(
-            stream.blocks[1].lines(80, Thinking::Folded).len(),
+            stream.blocks[1].lines(80, Thinking::Folded, 0).len(),
             2,
             "unfolded: the result below"
         );
@@ -734,7 +759,7 @@ mod tests {
         ));
         let rows = |stream: &mut Transcript| {
             let thinking = stream.thinking;
-            stream.blocks[0].lines(80, thinking).len()
+            stream.blocks[0].lines(80, thinking, 0).len()
         };
         assert_eq!(
             rows(&mut stream),
