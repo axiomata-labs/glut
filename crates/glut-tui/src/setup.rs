@@ -7,6 +7,7 @@ use std::path::Path;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::terminal;
 use glut::providers::catalog::{self, CATALOG, SignIn};
+use glut::providers::secrets::SecretStore;
 use glut::providers::{self, Entry, Providers, models};
 
 /// How many models the setup offers by number.
@@ -53,15 +54,69 @@ pub async fn first_provider(home: &Path) -> Result<bool, String> {
         store.set(&account, &key).map_err(|err| err.to_string())?;
         println!("The key is in {}.", store.place());
     }
-    // The list as the provider gives it, to pick the model from.
     list.providers.insert(known.id.to_owned(), entry.clone());
-    let resolved = providers::resolve(&list, store.as_ref(), Some(known.id), Some("-"), |name| {
+    entry.model = Some(choose_model(home, &list, store.as_ref(), known.id, known.name).await?);
+    list.providers.insert(known.id.to_owned(), entry);
+    list.default = Some(known.id.to_owned());
+    list.save(home).map_err(|err| err.to_string())?;
+    println!(
+        "Done — {} is your provider; /model and /provider change it later.\n",
+        known.name
+    );
+    Ok(true)
+}
+
+/// Asks for the model of a provider that has none — `axh providers add` without `--model` keeps it so — and keeps the
+/// answer, so the start goes on instead of ending with "no model". Nothing to do when `--model` names one for this
+/// run or the provider has its model.
+///
+/// # Errors
+///
+/// A message when the provider is unknown, gives no key, or the owner chooses no model.
+pub async fn missing_model(
+    home: &Path,
+    provider: Option<&str>,
+    model: Option<&str>,
+) -> Result<(), String> {
+    if model.is_some() {
+        return Ok(());
+    }
+    let mut list = Providers::load(home).map_err(|err| err.to_string())?;
+    let (id, entry) = list.pick(provider)?;
+    if entry.model.is_some() {
+        return Ok(());
+    }
+    let id = id.to_owned();
+    let name = catalog::known(&entry.kind)
+        .map_or(id.as_str(), |known| known.name)
+        .to_owned();
+    println!("{name} has no model yet. Pick the one Glut takes when none is named:\n");
+    let store = list.store(home).map_err(|err| err.to_string())?;
+    let chosen = choose_model(home, &list, store.as_ref(), &id, &name).await?;
+    if let Some(entry) = list.providers.get_mut(&id) {
+        entry.model = Some(chosen);
+    }
+    list.save(home).map_err(|err| err.to_string())?;
+    println!("Done — /model changes it later.\n");
+    Ok(())
+}
+
+/// The model the owner picks from the provider's list (the newest first), or types by id when there is no list.
+async fn choose_model(
+    home: &Path,
+    list: &Providers,
+    store: &dyn SecretStore,
+    id: &str,
+    name: &str,
+) -> Result<String, String> {
+    // `-` only stands in for the model to reach the endpoint: the list is what is asked for.
+    let resolved = providers::resolve(list, store, Some(id), Some("-"), |name| {
         std::env::var(name).ok()
     })?;
-    println!("Asking {} for its models…", known.name);
+    println!("Asking {name} for its models…");
     let offered = match models::fetch(&resolved.endpoint, resolved.protocol).await {
         Ok(found) => {
-            let _ = models::keep(home, known.id, &found);
+            let _ = models::keep(home, id, &found);
             let mut usable: Vec<&models::ModelInfo> = found
                 .models
                 .iter()
@@ -83,23 +138,14 @@ pub async fn first_provider(home: &Path) -> Result<bool, String> {
         println!("  {:>2}  {}", at + 1, models::printable(id));
     }
     let answer = ask("Model (the number, or its id): ")?;
-    let model = answer
+    answer
         .trim()
         .parse::<usize>()
         .ok()
         .and_then(|at| at.checked_sub(1))
         .and_then(|at| offered.get(at).cloned())
         .or_else(|| Some(answer.trim().to_owned()).filter(|id| !id.is_empty()))
-        .ok_or("no model chosen — `glut` again starts the setup")?;
-    entry.model = Some(model);
-    list.providers.insert(known.id.to_owned(), entry);
-    list.default = Some(known.id.to_owned());
-    list.save(home).map_err(|err| err.to_string())?;
-    println!(
-        "Done — {} is your provider; /model and /provider change it later.\n",
-        known.name
-    );
-    Ok(true)
+        .ok_or_else(|| "no model chosen — `glut` again asks for one".to_owned())
 }
 
 /// A line typed by the owner.

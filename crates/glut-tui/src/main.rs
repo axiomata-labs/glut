@@ -75,6 +75,13 @@ async fn main() -> std::process::ExitCode {
         eprintln!("glut: {reason}");
         return std::process::ExitCode::from(1);
     }
+    if let Ok(home) = glut::permissions::settings::home_dir()
+        && let Err(reason) =
+            setup::missing_model(&home, cli.provider.as_deref(), cli.model.as_deref()).await
+    {
+        eprintln!("glut: {reason}");
+        return std::process::ExitCode::from(1);
+    }
     eprintln!("Glut is starting…");
     let (parts, engine) = match session::build(
         Start {
