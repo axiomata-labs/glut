@@ -76,12 +76,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         stream
     };
     // Before the first message there are only notes (the guides read, a provider's word): Glimm welcomes above them.
-    let only_notes = app
-        .transcript
-        .blocks
-        .iter()
-        .all(|block| matches!(block.kind, crate::transcript::Kind::Note { .. }));
-    if only_notes {
+    if app.welcoming() {
         let width = stream.width.saturating_sub(1).max(8);
         let thinking = app.transcript.thinking;
         let notes: usize = app

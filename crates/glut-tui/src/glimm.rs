@@ -79,6 +79,14 @@ const SMALL: Design = Design {
     smoke: &[&[(1, 3)], &[(0, 4)], &[(1, 4)]],
 };
 
+/// How the resting flame's tip leans, step by step (columns, negative to the left): mostly still, a sway each way.
+const BREATH: [isize; 12] = [0, 0, 0, 1, 1, 0, 0, 0, 0, -1, -1, 0];
+/// Ticks per step of the breath — at the screen's 120 ms tick a breath takes about four seconds.
+const BREATH_STEP: usize = 3;
+/// A blink every this many ticks (about five seconds), with the eyes shut this many.
+const BLINK_EVERY: usize = 42;
+const BLINK_TICKS: usize = 2;
+
 /// A pixel's colour by its letter: the flame from deep red at its edge to white-hot in its heart, the eyes, the ember
 /// and the smoke. `.` is no pixel.
 fn color(pixel: char, ash: bool) -> Option<Color> {
@@ -153,9 +161,16 @@ fn pixels(size: Size, mood: Mood, tick: usize) -> (Vec<Vec<char>>, bool) {
     let mut ash = false;
     match mood {
         Mood::Resting => {
-            lean(&mut grid, design.tip_rows, (tick / 4 % 2) as isize);
-            for &(row, col) in design.eyes {
-                set(&mut grid, row, col, 'e');
+            // A slow breath: the tip leans one way, rests, leans the other — and now and then Glimm blinks.
+            lean(
+                &mut grid,
+                design.tip_rows,
+                BREATH[tick / BREATH_STEP % BREATH.len()],
+            );
+            if tick % BLINK_EVERY >= BLINK_TICKS {
+                for &(row, col) in design.eyes {
+                    set(&mut grid, row, col, 'e');
+                }
             }
         }
         Mood::Working => {
@@ -317,6 +332,26 @@ mod tests {
                 "{size:?}: the ember still glows"
             );
         }
+    }
+
+    #[test]
+    fn a_resting_glimm_breathes_and_blinks_now_and_then() {
+        let eyes_open = |tick| {
+            let (grid, _) = pixels(Size::Large, Mood::Resting, tick);
+            LARGE.eyes.iter().all(|&(row, col)| grid[row][col] == 'e')
+        };
+        assert!(
+            !eyes_open(0),
+            "the first ticks of a blink cycle are a blink"
+        );
+        assert!(eyes_open(BLINK_TICKS));
+        assert!(eyes_open(BLINK_EVERY - 1));
+        let tip = |tick| pixels(Size::Large, Mood::Resting, tick).0[0].clone();
+        assert_ne!(
+            tip(3 * BREATH_STEP),
+            tip(9 * BREATH_STEP),
+            "the tip sways both ways"
+        );
     }
 
     #[test]

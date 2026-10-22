@@ -217,6 +217,20 @@ impl App {
         self.busy.is_some()
     }
 
+    /// Whether the welcome is up: before the first message only notes are in the stream (the guides read, …).
+    pub fn welcoming(&self) -> bool {
+        self.transcript
+            .blocks
+            .iter()
+            .all(|block| matches!(block.kind, crate::transcript::Kind::Note { .. }))
+    }
+
+    /// Whether the screen moves on its own: while Glut works, and while Glimm is in view — on the welcome or at the
+    /// head of the side panel.
+    pub fn animated(&self) -> bool {
+        self.working() || self.welcoming() || self.panel == Some(true)
+    }
+
     /// What Glimm shows of the session: it waits for the owner's answer, works, or is pleased or gone out after the
     /// last turn — at rest before any.
     pub fn mood(&self) -> crate::glimm::Mood {

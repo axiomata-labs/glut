@@ -37,7 +37,7 @@ use tokio::sync::mpsc;
 use app::App;
 use session::Start;
 
-/// How often the screen moves on its own while Glut works (Glimm's flicker).
+/// How often the screen moves on its own while Glut works or Glimm is in view (its flicker, its breath).
 const TICK: Duration = Duration::from_millis(120);
 /// How long the terminal thread waits for a key before it looks whether it should stop.
 const POLL: Duration = Duration::from_millis(100);
@@ -221,8 +221,8 @@ async fn run(
                     app.on_report(report);
                 }
             }
-            // Nothing moves while Glut waits: the tick only runs, and a frame is only drawn, while it works.
-            _ = tick.tick(), if app.working() => app.frame = app.frame.wrapping_add(1),
+            // The tick runs, and a frame is drawn, only while something moves: Glut works, or Glimm is in view.
+            _ = tick.tick(), if app.animated() => app.frame = app.frame.wrapping_add(1),
         }
     }
 }
