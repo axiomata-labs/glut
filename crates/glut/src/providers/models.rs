@@ -36,6 +36,8 @@ pub const FORMAT: u32 = 2;
 const DESCRIPTIONS_URL: &str = "https://models.dev/api.json";
 /// The largest catalog read: about six MB in October 2026, with room to grow.
 const MAX_DESCRIPTIONS_BYTES: usize = 16 * 1024 * 1024;
+/// models.dev's id of OpenCode Zen, whose free models serve OpenCode alone.
+const ZEN: &str = "opencode";
 /// The longest display name taken from models.dev.
 const MAX_NAME_CHARS: usize = 80;
 /// The largest window taken from models.dev: beyond it a description is a mistake, and Glut would never compact.
@@ -337,9 +339,13 @@ async fn gateway_list(
             }
         }
     }
+    // Zen's free models answer only OpenCode itself (`FreeTierError` for any other client): greyed, not offered.
+    let only_in_opencode = |model: &ModelInfo| {
+        described_by == Some(ZEN) && (model.free() || model.id.ends_with("-free"))
+    };
     let allowed = models
         .iter()
-        .filter(|model| model.api.is_some_and(Api::spoken))
+        .filter(|model| model.api.is_some_and(Api::spoken) && !only_in_opencode(model))
         .map(|model| model.id.clone())
         .collect();
     // A list without its description (models.dev did not answer) has guesses and no prices: it is asked for again
