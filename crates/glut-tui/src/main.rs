@@ -3,7 +3,9 @@
 
 mod app;
 mod glimm;
+mod highlight;
 mod input;
+mod markdown;
 mod picker;
 mod prefs;
 mod session;

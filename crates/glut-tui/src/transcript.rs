@@ -441,9 +441,7 @@ fn render(kind: &Kind, width: u16, thinking: Thinking, frame: usize) -> Vec<Line
         }
         Kind::Answer { text, streaming } => {
             lines.push(Line::default());
-            for row in wrap(text, width) {
-                lines.push(Line::from(row));
-            }
+            lines.extend(crate::markdown::render(text, width));
             if *streaming {
                 lines.push(Line::from(Span::styled("▍", theme::glow())));
             }

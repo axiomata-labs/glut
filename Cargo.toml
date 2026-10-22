@@ -41,4 +41,21 @@ ratatui = { version = "0.30", default-features = false, features = [
 ] }
 # How many cells a character takes (wide characters, emoji): the TUI wraps by cells, not by chars.
 unicode-width = "0.2"
+# The TUI's Markdown (docs/plans/glut-tui.md, T7): the answer is parsed as CommonMark with tables and task lists.
+pulldown-cmark = { version = "0.13", default-features = false }
+# Code blocks in colour (T7): tree-sitter's highlighter with the grammars of the owner's languages, built in.
+tree-sitter = "0.27"
+tree-sitter-highlight = "0.27"
+tree-sitter-rust = "0.24"
+tree-sitter-typescript = "0.23"
+tree-sitter-javascript = "0.25"
+tree-sitter-python = "0.25"
+tree-sitter-swift = "0.7"
+tree-sitter-toml-ng = "0.7"
+tree-sitter-json = "0.24"
+tree-sitter-bash = "0.25"
+tree-sitter-css = "0.25"
+tree-sitter-html = "0.23"
+tree-sitter-yaml = "0.7"
+tree-sitter-svelte-ng = "1.0"
 
