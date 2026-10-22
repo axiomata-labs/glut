@@ -1746,24 +1746,40 @@ impl App {
         Picker::new(title, items, Some(&current)).sorting()
     }
 
-    /// The folder's sessions, newest first.
+    /// The folder's sessions, newest first, each followed by its forks as a tree; this session among them, marked.
     pub fn session_picker(&self) -> Picker {
-        let listed: Vec<Session> = Session::list(&self.parts.home, &self.parts.config.cwd)
-            .into_iter()
-            .filter(|session| session.id != self.session.id)
-            .collect();
-        // A fork of this session has its parent outside the list: it says whose fork it is.
+        let mut listed = Session::list(&self.parts.home, &self.parts.config.cwd);
         let own = self.session.id.clone();
-        let items: Vec<Item> = Session::as_tree(listed)
-            .into_iter()
-            .map(|(depth, session)| {
-                let branch = if depth > 0 {
-                    format!("{}└ ", "  ".repeat(depth - 1))
-                } else if session.parent.as_deref() == Some(own.as_str()) {
-                    "↳ fork of this session · ".to_owned()
+        // This session belongs in its tree even before its first save: a fork shows where it hangs. A new, empty one
+        // (glut -r) is no entry.
+        let started = !self.session.conversation.is_empty() || self.session.parent.is_some();
+        if started && !listed.iter().any(|session| session.id == own) {
+            listed.insert(0, self.session.clone());
+        }
+        let tree = Session::as_tree(listed);
+        let items: Vec<Item> = tree
+            .iter()
+            .enumerate()
+            .map(|(at, (depth, session))| {
+                let branch = if *depth > 0 {
+                    // A fork with a sibling below it continues the line, the last one closes it.
+                    let more = tree[at + 1..]
+                        .iter()
+                        .take_while(|(next, _)| next >= depth)
+                        .any(|(next, _)| next == depth);
+                    format!(
+                        "{}{}─⑂ ",
+                        "   ".repeat(depth - 1),
+                        if more { "├" } else { "└" }
+                    )
                 } else {
                     String::new()
                 };
+                let title = match crate::transcript::clean(&session.title) {
+                    title if title.trim().is_empty() => "(no message)".to_owned(),
+                    title => title,
+                };
+                let here = if session.id == own { "● " } else { "" };
                 let when = session
                     .updated
                     .with_timezone(&chrono::Local)
@@ -1772,19 +1788,28 @@ impl App {
                     .cost
                     .map(|cost| format!(" · ${cost:.4}"))
                     .unwrap_or_default();
+                let note = if session.id == own {
+                    "this session · "
+                } else {
+                    ""
+                };
                 Item::plain(
-                    format!("{branch}{}", crate::transcript::clean(&session.title)),
-                    format!("{when} · {} · {}{cost}", session.provider, session.model),
-                    Pick::Session(session.id),
+                    format!("{branch}{here}{title}"),
+                    format!(
+                        "{note}{when} · {} · {}{cost}",
+                        session.provider, session.model
+                    ),
+                    Pick::Session(session.id.clone()),
                 )
             })
             .collect();
-        let title = if items.is_empty() {
-            "Sessions (none kept for this folder yet)"
+        let others = tree.iter().filter(|(_, session)| session.id != own).count();
+        let title = if others == 0 {
+            "Sessions (no other kept for this folder yet)"
         } else {
-            "Sessions of this folder"
+            "Sessions of this folder — ⑂ a fork, ● this one"
         };
-        Picker::new(title, items, None)
+        Picker::new(title, items, Some(&Pick::Session(own)))
     }
 
     fn provider_picker(&self) -> Picker {
@@ -1844,6 +1869,7 @@ impl App {
                         "a session opens when Glut is done — /resume again then",
                         Tone::Quiet,
                     ),
+                    Some(Pick::Session(id)) if id == self.session.id => {}
                     Some(Pick::Session(id)) => match Session::load(&self.parts.home, &id) {
                         Ok(session) => self.open(session),
                         Err(reason) => self.transcript.note(reason, Tone::Fault),
@@ -2797,6 +2823,15 @@ mod tests {
         assert_eq!(app.input.text(), "second");
         let kept = Session::load(&app.parts.home, &old).unwrap();
         assert_eq!(kept.conversation.len(), 3, "the session left is kept whole");
+        // In /resume the fork hangs under its session, drawn as one and marked as the session in use.
+        let picker = app.session_picker();
+        let labels: Vec<&str> = picker
+            .shown()
+            .iter()
+            .map(|item| item.label.as_str())
+            .collect();
+        assert_eq!(labels, ["work", "└─⑂ ● work (fork)"], "{labels:?}");
+        assert_eq!(picker.chosen(), Some(Pick::Session(app.session.id.clone())));
         let _ = std::fs::remove_dir_all(&app.parts.home);
     }
 
