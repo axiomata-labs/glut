@@ -35,6 +35,25 @@ pub struct Session {
     #[serde(default)]
     pub cost: Option<f64>,
     pub conversation: Vec<Message>,
+    /// Where each of the owner's messages began, for rewinding to before it (T11, TUI4a).
+    #[serde(default)]
+    pub marks: Vec<Mark>,
+    /// The session this one was forked from (T14, TUI4b): the sessions are a tree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+}
+
+/// One of the owner's messages that started a turn: how long the conversation was before it, its first line, and the
+/// run it started — whose first snapshot is the folder as it was before the message.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Mark {
+    /// `None` once a compaction rewrote the conversation before it.
+    #[serde(default)]
+    pub at: Option<usize>,
+    pub prompt: String,
+    #[serde(default)]
+    pub run: Option<String>,
 }
 
 impl Session {
@@ -42,7 +61,8 @@ impl Session {
     pub fn new(cwd: &Path, provider: &str, model: &str) -> Self {
         let now = Utc::now();
         Session {
-            id: format!("{}-{}", now.format("%Y%m%d-%H%M%S"), std::process::id()),
+            // To the millisecond: a fork made in the same second as its parent gets an id of its own.
+            id: format!("{}-{}", now.format("%Y%m%d-%H%M%S%3f"), std::process::id()),
             cwd: cwd.to_path_buf(),
             title: String::new(),
             created: now,
@@ -51,6 +71,8 @@ impl Session {
             model: model.to_owned(),
             cost: None,
             conversation: Vec::new(),
+            marks: Vec::new(),
+            parent: None,
         }
     }
 
@@ -58,18 +80,19 @@ impl Session {
         home.join(glut::providers::DIR).join(DIR)
     }
 
-    /// Keeps the session; a session without a message yet is not worth a file.
+    /// Keeps the session; a session without a message yet is not worth a file — unless it had one and was rewound
+    /// to its start.
     ///
     /// # Errors
     ///
     /// A message when it cannot be written.
     pub fn save(&mut self, home: &Path) -> Result<(), String> {
-        if self.conversation.is_empty() {
+        let dir = Self::dir(home);
+        let path = dir.join(format!("{}.json", self.id));
+        if self.conversation.is_empty() && !path.exists() {
             return Ok(());
         }
         self.updated = Utc::now();
-        let dir = Self::dir(home);
-        let path = dir.join(format!("{}.json", self.id));
         let text = serde_json::to_string(self).map_err(|err| err.to_string())?;
         glut::providers::make_private_dir(&dir)
             .and_then(|()| glut::providers::write_replacing(&dir, &path, text.as_bytes(), 0o600))
@@ -102,6 +125,44 @@ impl Session {
         sessions.sort_by_key(|session| std::cmp::Reverse(session.updated));
         sessions.truncate(LISTED);
         sessions
+    }
+
+    /// `sessions` as a tree: each session followed by its forks, indented by how deep they are; roots (and forks
+    /// whose parent is not among them) newest first.
+    pub fn as_tree(sessions: Vec<Session>) -> Vec<(usize, Session)> {
+        let ids: Vec<String> = sessions.iter().map(|session| session.id.clone()).collect();
+        let (roots, mut forks): (Vec<Session>, Vec<Session>) =
+            sessions.into_iter().partition(|session| {
+                session
+                    .parent
+                    .as_ref()
+                    .is_none_or(|parent| !ids.contains(parent))
+            });
+        let mut out = Vec::new();
+        fn walk(
+            session: Session,
+            depth: usize,
+            forks: &mut Vec<Session>,
+            out: &mut Vec<(usize, Session)>,
+        ) {
+            let id = session.id.clone();
+            out.push((depth, session));
+            let (children, rest): (Vec<Session>, Vec<Session>) = std::mem::take(forks)
+                .into_iter()
+                .partition(|fork| fork.parent.as_deref() == Some(id.as_str()));
+            *forks = rest;
+            for child in children {
+                walk(child, depth + 1, forks, out);
+            }
+        }
+        for root in roots {
+            walk(root, 0, &mut forks, &mut out);
+        }
+        // A parent chain that runs in a circle (a file edited by hand) has no root: its sessions stand as roots.
+        for left in std::mem::take(&mut forks) {
+            out.push((0, left));
+        }
+        out
     }
 
     /// The stream as it was: the owner's messages, the answers, a line for each tool call with its result.
@@ -200,6 +261,37 @@ pub fn title_of(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn forks_hang_under_their_session_and_an_orphan_is_a_root() {
+        let session = |id: &str, parent: Option<&str>| {
+            let mut session = Session::new(Path::new("/w"), "p", "m");
+            session.id = id.into();
+            session.parent = parent.map(str::to_owned);
+            session
+        };
+        let tree = Session::as_tree(vec![
+            session("b", None),
+            session("a1", Some("a")),
+            session("a", None),
+            session("a1x", Some("a1")),
+            session("gone", Some("deleted")),
+        ]);
+        let shown: Vec<(usize, &str)> = tree
+            .iter()
+            .map(|(depth, s)| (*depth, s.id.as_str()))
+            .collect();
+        assert_eq!(
+            shown,
+            [(0, "b"), (0, "a"), (1, "a1"), (2, "a1x"), (0, "gone")]
+        );
+        let circle = Session::as_tree(vec![
+            session("x", Some("y")),
+            session("y", Some("x")),
+            session("z", Some("z")),
+        ]);
+        assert_eq!(circle.len(), 3, "a circle loses no session");
+    }
 
     fn home() -> PathBuf {
         let home = std::env::temp_dir().join(format!(

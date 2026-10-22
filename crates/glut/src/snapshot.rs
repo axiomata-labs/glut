@@ -287,6 +287,91 @@ pub fn restore(
     Ok(commit.to_owned())
 }
 
+/// Records the folder as it is now in a run of its own, before an undo puts it back (`before-undo-…`): what the
+/// owner had since is not lost, `axh undo --run <it>` brings it back. Returns that run.
+///
+/// # Errors
+///
+/// Why no snapshot could be taken.
+pub fn keep_now(root: &Path, work_tree: &Path) -> Result<String, String> {
+    let run = format!(
+        "before-undo-{}",
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map_or(0, |since| since.as_millis())
+    );
+    let mut snaps = Snapshots::open(root, work_tree, &run)?;
+    snaps.take(0)?;
+    Ok(run)
+}
+
+/// The most of a step's change [`diff`] gives: a large change is cut, and says so.
+pub const MAX_DIFF_BYTES: usize = 256 * 1024;
+
+/// What step `step` of `run` changed in `work_tree`: from the folder before it to the folder before the next step —
+/// or, for the run's last step, to the folder as it is now. A unified diff of the recorded files, cut at
+/// [`MAX_DIFF_BYTES`]; empty when nothing recorded changed.
+///
+/// # Errors
+///
+/// No such run or step, a malformed record, or a git failure.
+pub fn diff(root: &Path, work_tree: &Path, run: &str, step: u32) -> Result<String, String> {
+    let run = checked_run(run)?;
+    let work_tree = work_tree
+        .canonicalize()
+        .map_err(|err| format!("cannot use {}: {err}", work_tree.display()))?;
+    let record = runs(root, &work_tree)
+        .into_iter()
+        .find(|record| record.run == run)
+        .ok_or_else(|| format!("no snapshots of a run {run:?} for {}", work_tree.display()))?;
+    let at = record
+        .steps
+        .iter()
+        .position(|s| s.turn == step)
+        .ok_or_else(|| format!("run {run} has no snapshot before step {step}"))?;
+    let from = checked_commit(&record.steps[at].commit)?.to_owned();
+    let to = match record.steps.get(at + 1) {
+        Some(next) => Some(checked_commit(&next.commit)?.to_owned()),
+        None => None,
+    };
+    let git_dir = store_of(root, &work_tree);
+    let _locked = lock(&git_dir)?;
+    // To the folder as it is now: recorded into a throwaway index, so a file made since counts as a snapshot would
+    // count it (the store's exclude list as the snapshots left it), and the run's own index stays as it was.
+    let to = match to {
+        Some(to) => to,
+        None => {
+            let scratch = git_dir.join(format!("index-diff-{run}-{}", std::process::id()));
+            let _ = std::fs::copy(git_dir.join(format!("index-{run}")), &scratch);
+            let tree = git_with_index(&git_dir, &work_tree, &scratch, &["add", "--all"])
+                .and_then(|_| git_with_index(&git_dir, &work_tree, &scratch, &["write-tree"]));
+            let _ = std::fs::remove_file(&scratch);
+            let tree = tree?.trim().to_owned();
+            checked_commit(&tree)?.to_owned()
+        }
+    };
+    let args = [
+        "diff",
+        "--no-color",
+        "--no-ext-diff",
+        "--no-renames",
+        from.as_str(),
+        to.as_str(),
+        "--",
+    ];
+    let mut text = git(&git_dir, &work_tree, &args)?;
+    if text.len() > MAX_DIFF_BYTES {
+        let mut cut = MAX_DIFF_BYTES;
+        while !text.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        let left = text.len() - cut;
+        text.truncate(cut);
+        text.push_str(&format!("\n… {left} more bytes of the change left out\n"));
+    }
+    Ok(text)
+}
+
 /// Removes the records older than [`KEEP`] and their refs from every store under `root`, and collects a store's
 /// garbage at most once a day. Best effort: a store that cannot be swept is left as it is.
 pub fn sweep(root: &Path) {
@@ -507,6 +592,43 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         dir.canonicalize().unwrap()
+    }
+
+    #[test]
+    fn a_steps_change_reads_as_a_diff_to_the_next_step_or_to_now() {
+        let (root, folder) = (temp("root"), temp("folder"));
+        std::fs::write(folder.join("a.txt"), "one\n").unwrap();
+        let mut snaps = Snapshots::open(&root, &folder, "run1").unwrap();
+        snaps.take(1).unwrap().unwrap();
+        std::fs::write(folder.join("a.txt"), "two\n").unwrap();
+        snaps.take(2).unwrap().unwrap();
+        std::fs::write(folder.join("a.txt"), "three\n").unwrap();
+        std::fs::write(folder.join("made-since.txt"), "new\n").unwrap();
+        let first = diff(&root, &folder, "run1", 1).unwrap();
+        assert!(first.contains("-one") && first.contains("+two"), "{first}");
+        let last = diff(&root, &folder, "run1", 2).unwrap();
+        assert!(last.contains("-two") && last.contains("+three"), "{last}");
+        assert!(
+            last.contains("made-since.txt"),
+            "a file made since is part of the change: {last}"
+        );
+        let kept = keep_now(&root, &folder).unwrap();
+        restore(&root, &folder, "run1", None).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(folder.join("a.txt")).unwrap(),
+            "one\n"
+        );
+        restore(&root, &folder, &kept, None).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(folder.join("a.txt")).unwrap(),
+            "three\n",
+            "what was there before the undo comes back"
+        );
+        assert!(diff(&root, &folder, "run1", 9).is_err());
+        assert!(
+            diff(&root, &folder, "--output=x", 1).is_err(),
+            "no run id is an option"
+        );
     }
 
     #[test]

@@ -37,12 +37,13 @@ const HELP: &str = "Commands: /model [id] · /provider [id] · /effort [level] �
                     Also: Ctrl+K every key · @ mentions a file · !cmd runs a command and shows Glut \
                     its output · !!cmd runs it for you alone · a large paste stands as [pasted N lines]\n\
                     While Glut works: Enter steers it (taken in before its next step) · Tab queues for after the \
-                    turn · Alt+↑ takes the last back\n\
+                    turn · Alt+↑ takes the last back · Esc Esc rewinds (or forks) to before a message · /steps \
+                    shows what a step changed\n\
                     /vim on: Esc to Normal mode (h j k l w b e 0 ^ $ gg G · x r ~ J D C s S · d c y with a motion \
                     or doubled · counts · p P · u Ctrl+R), i a I A o O to Insert; Esc in Normal mode stops Glut";
 
 /// The session's commands with what each does, as the list under a typed `/` shows them.
-pub const COMMANDS: [(&str, &str); 17] = [
+pub const COMMANDS: [(&str, &str); 18] = [
     (
         "model",
         "pick a model of the provider in use, or /model <id>",
@@ -64,7 +65,14 @@ pub const COMMANDS: [(&str, &str); 17] = [
         "panel",
         "show or hide the side panel with the plan (Ctrl+B)",
     ),
-    ("resume", "open an earlier session of this folder"),
+    (
+        "resume",
+        "open an earlier session of this folder — the forks under theirs",
+    ),
+    (
+        "steps",
+        "the steps that changed files: what each changed, or the files back",
+    ),
     (
         "theme",
         "Glut's colours, or an Axiomata theme's: /theme <name>",
@@ -153,6 +161,8 @@ pub struct App {
     pub mouse_request: Option<bool>,
     /// F3 or `/scrollback`: the main loop prints the stream where the terminal keeps it (TUI2c).
     pub scrollback_request: bool,
+    /// When Esc was last pressed with nothing to stop: a second one soon after opens rewind (T11).
+    last_esc: Option<Instant>,
     /// The input's vi mode, when the owner turned it on (`/vim`).
     pub vi: Option<crate::vi::Vi>,
     /// The turn's inbox: what Enter sends while Glut works, taken before its next step (T10).
@@ -227,6 +237,7 @@ impl App {
             mouse_held: true,
             mouse_request: None,
             scrollback_request: false,
+            last_esc: None,
             vi: vi.then(crate::vi::Vi::default),
             steering: None,
             queue: Vec::new(),
@@ -381,6 +392,12 @@ impl App {
         self.busy = Some(Busy::Turn);
         let inbox = glut::Inbox::default();
         self.steering = Some(inbox.clone());
+        // Where this message begins, to rewind to before it; its run is known with its first snapshot.
+        self.session.marks.push(crate::store::Mark {
+            at: Some(self.conversation.len()),
+            prompt: crate::store::title_of(&prompt),
+            run: None,
+        });
         session::turn(
             Arc::clone(&self.parts),
             self.engine.clone(),
@@ -430,6 +447,19 @@ impl App {
                     self.usage += call;
                     self.context_used = *input_tokens;
                 }
+                // A compaction in the turn rewrote what came before: no mark's place in the conversation holds.
+                if let Event::Compacted { .. } = &event {
+                    for mark in &mut self.session.marks {
+                        mark.at = None;
+                    }
+                }
+                // The run this turn started is known by its first snapshot: the folder before the owner's message.
+                if let Event::Snapshot { run, .. } = &event
+                    && let Some(mark) = self.session.marks.last_mut()
+                    && mark.run.is_none()
+                {
+                    mark.run = Some(run.clone());
+                }
                 if let Event::Todo { items, .. } = &event {
                     self.todos.clone_from(items);
                     // The first plan opens the panel, unless the owner closed it once.
@@ -450,6 +480,16 @@ impl App {
                 self.scroll = 0;
             }
             Report::Done(outcome, conversation) => {
+                // A turn that broke off before its message joined the conversation leaves no place to rewind to.
+                if self
+                    .session
+                    .marks
+                    .last()
+                    .and_then(|mark| mark.at)
+                    .is_some_and(|at| conversation.len() <= at)
+                {
+                    self.session.marks.pop();
+                }
                 self.conversation = conversation;
                 self.conversation.append(&mut self.pending);
                 self.running = None;
@@ -493,6 +533,9 @@ impl App {
                         self.usage += compacted.usage;
                         self.conversation = compacted.conversation;
                         self.context_used = 0;
+                        for mark in &mut self.session.marks {
+                            mark.at = None;
+                        }
                         self.keep();
                         self.transcript.note(
                             format!(
@@ -561,6 +604,43 @@ impl App {
                     self.say("Glut reads this output with your next message");
                 }
             }
+            Report::Diff(turn, change) => match change {
+                Ok(change) if change.trim().is_empty() => self
+                    .transcript
+                    .note(format!("step {turn} changed no recorded file"), Tone::Quiet),
+                Ok(change) => {
+                    self.shells += 1;
+                    let id = format!("diff-{}", self.shells);
+                    self.transcript.push(crate::transcript::Kind::Tool {
+                        id,
+                        name: "diff".into(),
+                        target: format!("what step {turn} changed"),
+                        state: crate::transcript::ToolState::Done,
+                        gate: None,
+                        output: change,
+                        unfolded: true,
+                        depth: 0,
+                    });
+                    self.scroll = 0;
+                }
+                Err(reason) => self
+                    .transcript
+                    .note(format!("no change to show: {reason}"), Tone::Fault),
+            },
+            Report::Restored(result) => match result {
+                Ok((commit, kept)) => self.transcript.note(
+                    format!(
+                        "the files are back as they were (snapshot {}); what they were just now is kept as run \
+                         {kept} — axh undo --run {kept} brings it back",
+                        &commit[..commit.len().min(8)]
+                    ),
+                    Tone::Fine,
+                ),
+                Err(reason) => self.transcript.note(
+                    format!("the files could not go back: {reason}"),
+                    Tone::Fault,
+                ),
+            },
             Report::Files(found) => {
                 let (files, truncated) = found;
                 self.files = Some((Instant::now(), files, truncated));
@@ -655,6 +735,10 @@ impl App {
             return self.interrupt();
         }
         self.quit_armed = None;
+        // Esc Esc is two Esc in a row: any other key between them makes it none.
+        if key.code != KeyCode::Esc {
+            self.last_esc = None;
+        }
         if self.ask.is_some() {
             return self.on_ask_key(key);
         }
@@ -744,6 +828,19 @@ impl App {
             KeyCode::Esc => {
                 if let Some(cancel) = &self.running {
                     cancel.cancel();
+                    self.last_esc = None;
+                } else if self.working() {
+                    // Compacting, handing off or switching: nothing to stop, nothing to rewind yet.
+                    self.last_esc = None;
+                } else if self
+                    .last_esc
+                    .is_some_and(|pressed| pressed.elapsed() < DOUBLE_ESC)
+                {
+                    // Esc Esc: go back to before one of the owner's messages (T11).
+                    self.last_esc = None;
+                    self.picker = Some(self.rewind_picker());
+                } else {
+                    self.last_esc = Some(Instant::now());
                 }
             }
             KeyCode::Char('d') if ctrl && self.input.is_empty() && !self.working() => {
@@ -1140,6 +1237,7 @@ impl App {
                 "off" => self.set_vi(false),
                 other => self.transcript.note(format!("/vim {other}: on or off"), Tone::Fault),
             },
+            "steps" => self.picker = Some(self.steps_picker()),
             "theme" if rest.is_empty() => self.picker = Some(theme_picker()),
             "theme" => self.set_theme(rest),
             "thinking" => match rest {
@@ -1263,6 +1361,305 @@ impl App {
         }
     }
 
+    /// The owner's messages of this session, newest first, to go back to before one (Esc Esc).
+    fn rewind_picker(&self) -> Picker {
+        let items: Vec<Item> = self
+            .session
+            .marks
+            .iter()
+            .enumerate()
+            .rev()
+            .map(|(at, mark)| {
+                let detail = match (mark.at.is_some(), self.files_run(at).is_some()) {
+                    (true, true) => "files changed since",
+                    (true, false) => "no file changed since",
+                    (false, true) => "compacted since: files only",
+                    (false, false) => "compacted since, no file changed",
+                };
+                Item::plain(
+                    crate::transcript::clean(&mark.prompt),
+                    detail,
+                    Pick::RewindTo(at),
+                )
+            })
+            .collect();
+        let title = if items.is_empty() {
+            "Rewind (none of your messages yet — or the session is older than rewinding)"
+        } else {
+            "Rewind to before which message?"
+        };
+        Picker::new(title, items, None)
+    }
+
+    /// How far to go back to before mark `mark`: the conversation (while it is still as the message left it — a
+    /// compaction rewrote what came before), the files (where a run's snapshot of them is still kept), both, or a
+    /// fork from there.
+    fn rewind_how(&self, mark: usize) -> Picker {
+        let mut items = Vec::new();
+        let files = self.files_run(mark).is_some();
+        let talk = self.session.marks[mark].at.is_some();
+        let choice = |label: &str, detail: &str, conversation, files| {
+            Item::plain(
+                label,
+                detail,
+                Pick::Rewind {
+                    mark,
+                    conversation,
+                    files,
+                },
+            )
+        };
+        if files && talk {
+            items.push(choice(
+                "conversation and files",
+                "your edits since go too (kept aside first: /steps or axh undo)",
+                true,
+                true,
+            ));
+        }
+        if talk {
+            items.push(choice(
+                "conversation only",
+                "the files stay as they are",
+                true,
+                false,
+            ));
+        }
+        if files {
+            items.push(choice(
+                "files only",
+                "the conversation stays; your edits since are kept aside first",
+                false,
+                true,
+            ));
+        }
+        if talk {
+            items.push(Item::plain(
+                "fork: a new session from here",
+                "this one stays as it is (/resume shows both); the files stay",
+                Pick::Fork(mark),
+            ));
+        }
+        let title = if talk {
+            "Rewind: what goes back?"
+        } else {
+            "Rewind: the conversation was compacted since — only the files can go back"
+        };
+        Picker::new(title, items, None)
+    }
+
+    /// The first run at or after mark `mark` that took a snapshot still kept: its first one is the folder before
+    /// that message (no run between changed a file).
+    fn files_run(&self, mark: usize) -> Option<String> {
+        let root = self.parts.config.snapshots.as_ref()?;
+        let kept = glut::snapshot::runs(root, &self.parts.config.cwd);
+        self.session.marks[mark..]
+            .iter()
+            .filter_map(|later| later.run.clone())
+            .find(|run| kept.iter().any(|record| &record.run == run))
+    }
+
+    /// Puts the files back to before `step` of `run` (its start for `None`), the folder as it was just now kept aside
+    /// first in a run of its own; the outcome comes back as a report.
+    fn restore_files(&self, run: String, step: Option<u32>) {
+        let Some(root) = self.parts.config.snapshots.clone() else {
+            return;
+        };
+        let cwd = self.parts.config.cwd.clone();
+        let reports = self.reports.clone();
+        tokio::task::spawn_blocking(move || {
+            let restored = glut::snapshot::keep_now(&root, &cwd).and_then(|kept| {
+                glut::snapshot::restore(&root, &cwd, &run, step).map(|commit| (commit, kept))
+            });
+            let _ = reports.send(Report::Restored(restored));
+        });
+    }
+
+    /// The owner's message at `at` (or after it), to put back in the input.
+    fn message_at(&self, at: usize) -> String {
+        self.conversation
+            .get(at..)
+            .and_then(|rest| {
+                rest.iter()
+                    .find(|message| message.role == glut::model::Role::User)
+            })
+            .and_then(|message| message.content.clone())
+            .unwrap_or_default()
+    }
+
+    /// Goes back to before mark `mark`: the conversation cut there (its message back in the input to edit), the files
+    /// put back from the snapshot — or one of the two.
+    fn rewind(&mut self, mark: usize, conversation: bool, files: bool) {
+        if self.working() {
+            return self
+                .transcript
+                .note("rewind waits until Glut is done; Esc stops it", Tone::Quiet);
+        }
+        let Some(target) = self.session.marks.get(mark).cloned() else {
+            return;
+        };
+        let at = target.at.filter(|at| *at <= self.conversation.len());
+        if conversation && at.is_none() {
+            return self.transcript.note(
+                "the conversation was compacted since: it cannot go back to before this message",
+                Tone::Fault,
+            );
+        }
+        if files {
+            match self.files_run(mark) {
+                Some(run) => self.restore_files(run, None),
+                None => self
+                    .transcript
+                    .note("no snapshot to put the files back from", Tone::Quiet),
+            }
+            // A conversation that stays is told: the model must not trust what it read of the files before.
+            if !conversation {
+                self.pending.push(Message::user(format!(
+                    "(I put the folder's files back as they were before my message \"{}\": what you read or \
+                     changed since may no longer be there.)",
+                    target.prompt
+                )));
+                self.keep();
+            }
+        }
+        let Some(at) = at.filter(|_| conversation) else {
+            return;
+        };
+        let message = self.message_at(at);
+        self.conversation.truncate(at);
+        self.session.marks.truncate(mark);
+        self.session.conversation.clone_from(&self.conversation);
+        self.transcript = Transcript {
+            thinking: self.transcript.thinking,
+            ..Transcript::default()
+        };
+        self.session.transcript(&mut self.transcript);
+        self.selection = None;
+        self.search = None;
+        self.queue.clear();
+        self.todos.clear();
+        self.last_turn = None;
+        self.context_used = 0;
+        self.scroll = 0;
+        self.keep();
+        if self.input.is_empty() {
+            self.input.insert_text(&message);
+        } else {
+            self.transcript.note(
+                "the input held text: your earlier message is not put back",
+                Tone::Quiet,
+            );
+        }
+        self.transcript.note(
+            "rewound: the conversation is as it was before this message",
+            Tone::Fine,
+        );
+    }
+
+    /// A new session from before mark `mark` — this one kept as it is, the new one its fork (T14) — with that message
+    /// back in the input.
+    fn fork(&mut self, mark: usize) {
+        if self.working() {
+            return self
+                .transcript
+                .note("a fork waits until Glut is done; Esc stops it", Tone::Quiet);
+        }
+        let Some(target) = self.session.marks.get(mark).cloned() else {
+            return;
+        };
+        let Some(at) = target.at.filter(|at| *at <= self.conversation.len()) else {
+            return self.transcript.note(
+                "the conversation was compacted since: no fork from before this message",
+                Tone::Fault,
+            );
+        };
+        self.keep();
+        let mut fork = Session::new(
+            &self.parts.config.cwd,
+            &self.engine.provider,
+            self.engine.model_name(),
+        );
+        fork.parent = Some(self.session.id.clone());
+        // A fork is named for what it began from; a fork of a fork is no "(fork) (fork)".
+        let base = if self.session.title.is_empty() {
+            target.prompt.clone()
+        } else {
+            self.session.title.trim_end_matches(" (fork)").to_owned()
+        };
+        fork.title = format!("{base} (fork)");
+        fork.cost = None;
+        fork.conversation = self.conversation[..at].to_vec();
+        fork.marks = self.session.marks[..mark].to_vec();
+        let message = self.message_at(at);
+        self.open(fork);
+        self.keep();
+        if self.input.is_empty() {
+            self.input.insert_text(&message);
+        }
+        self.transcript.note(
+            "forked: a new session from before this message; the one you left is in /resume",
+            Tone::Fine,
+        );
+    }
+
+    /// The snapshot steps of this session's runs, newest first (`/steps`, T13): a step's change, or the files back
+    /// to before it.
+    fn steps_picker(&self) -> Picker {
+        let Some(root) = self.parts.config.snapshots.clone() else {
+            return Picker::new("Steps (no snapshots in this session)", Vec::new(), None);
+        };
+        let runs = glut::snapshot::runs(&root, &self.parts.config.cwd);
+        let mut items = Vec::new();
+        for mark in self.session.marks.iter().rev() {
+            let Some(run) = &mark.run else { continue };
+            let Some(record) = runs.iter().find(|record| &record.run == run) else {
+                continue;
+            };
+            for step in record.steps.iter().rev() {
+                items.push(Item::plain(
+                    format!(
+                        "step {} · {}",
+                        step.turn,
+                        crate::transcript::clean(&mark.prompt)
+                    ),
+                    &step.commit[..step.commit.len().min(8)],
+                    Pick::Step {
+                        run: run.clone(),
+                        turn: step.turn,
+                    },
+                ));
+            }
+        }
+        let title = if items.is_empty() {
+            "Steps (no step changed a file yet)"
+        } else {
+            "Steps that changed files"
+        };
+        Picker::new(title, items, None)
+    }
+
+    /// A step's change shown in the stream, or the files put back to before it.
+    fn step_do(&mut self, run: String, turn: u32, restore: bool) {
+        let Some(root) = self.parts.config.snapshots.clone() else {
+            return;
+        };
+        let cwd = self.parts.config.cwd.clone();
+        let reports = self.reports.clone();
+        if restore {
+            if self.working() {
+                return self.transcript.note(
+                    "the files go back when Glut is done; Esc stops it",
+                    Tone::Quiet,
+                );
+            }
+            return self.restore_files(run, Some(turn));
+        }
+        tokio::task::spawn_blocking(move || {
+            let change = glut::snapshot::diff(&root, &cwd, &run, turn);
+            let _ = reports.send(Report::Diff(turn, change));
+        });
+    }
+
     /// Turns the vi mode on (in Insert mode, as a message starts) or off, and keeps it.
     fn set_vi(&mut self, on: bool) {
         self.vi = on.then(crate::vi::Vi::default);
@@ -1351,10 +1748,22 @@ impl App {
 
     /// The folder's sessions, newest first.
     pub fn session_picker(&self) -> Picker {
-        let items: Vec<Item> = Session::list(&self.parts.home, &self.parts.config.cwd)
+        let listed: Vec<Session> = Session::list(&self.parts.home, &self.parts.config.cwd)
             .into_iter()
             .filter(|session| session.id != self.session.id)
-            .map(|session| {
+            .collect();
+        // A fork of this session has its parent outside the list: it says whose fork it is.
+        let own = self.session.id.clone();
+        let items: Vec<Item> = Session::as_tree(listed)
+            .into_iter()
+            .map(|(depth, session)| {
+                let branch = if depth > 0 {
+                    format!("{}└ ", "  ".repeat(depth - 1))
+                } else if session.parent.as_deref() == Some(own.as_str()) {
+                    "↳ fork of this session · ".to_owned()
+                } else {
+                    String::new()
+                };
                 let when = session
                     .updated
                     .with_timezone(&chrono::Local)
@@ -1364,7 +1773,7 @@ impl App {
                     .map(|cost| format!(" · ${cost:.4}"))
                     .unwrap_or_default();
                 Item::plain(
-                    crate::transcript::clean(&session.title),
+                    format!("{branch}{}", crate::transcript::clean(&session.title)),
                     format!("{when} · {} · {}{cost}", session.provider, session.model),
                     Pick::Session(session.id),
                 )
@@ -1458,6 +1867,15 @@ impl App {
                     Some(Pick::File(path)) => self.input.insert_text(&format!("{path} ")),
                     Some(Pick::Mention) => self.mention(),
                     Some(Pick::Theme(name)) => self.set_theme(&name),
+                    Some(Pick::RewindTo(mark)) => self.picker = Some(self.rewind_how(mark)),
+                    Some(Pick::Fork(mark)) => self.fork(mark),
+                    Some(Pick::Step { run, turn }) => self.picker = Some(step_do(run, turn)),
+                    Some(Pick::StepDo { run, turn, restore }) => self.step_do(run, turn, restore),
+                    Some(Pick::Rewind {
+                        mark,
+                        conversation,
+                        files,
+                    }) => self.rewind(mark, conversation, files),
                     None => {}
                 }
             }
@@ -1787,6 +2205,34 @@ fn palette() -> Picker {
         .collect();
     Picker::new("Keys", items, None)
 }
+
+/// What to do with a step of `/steps`.
+fn step_do(run: String, turn: u32) -> Picker {
+    let items = vec![
+        Item::plain(
+            "show what it changed",
+            "the change from before it to the next step, or to now",
+            Pick::StepDo {
+                run: run.clone(),
+                turn,
+                restore: false,
+            },
+        ),
+        Item::plain(
+            "files back to before it",
+            "your edits since go too; the conversation stays",
+            Pick::StepDo {
+                run,
+                turn,
+                restore: true,
+            },
+        ),
+    ];
+    Picker::new(format!("Step {turn}"), items, None)
+}
+
+/// How soon a second Esc opens rewind.
+const DOUBLE_ESC: Duration = Duration::from_millis(600);
 
 /// The file picker's title, by which a finished walk finds it open.
 const FILE_PICKER: &str = "File to mention";
@@ -2233,6 +2679,125 @@ mod tests {
             ["queued"],
             "the late steer first, the queued one after it"
         );
+    }
+
+    #[test]
+    fn esc_esc_rewinds_the_conversation_to_before_a_message_and_gives_it_back() {
+        let (mut app, _reports) = app();
+        app.conversation = vec![
+            Message::user("first"),
+            Message::system("one"),
+            Message::user("second"),
+            Message::system("two"),
+        ];
+        app.session.marks = vec![
+            crate::store::Mark {
+                at: Some(0),
+                prompt: "first".into(),
+                run: None,
+            },
+            crate::store::Mark {
+                at: Some(2),
+                prompt: "second".into(),
+                run: None,
+            },
+        ];
+        app.on_terminal(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.picker.is_none(), "one Esc is no rewind");
+        app.on_terminal(key(KeyCode::Esc, KeyModifiers::NONE));
+        let picker = app.picker.as_ref().expect("Esc Esc opens rewind");
+        assert_eq!(
+            picker.chosen(),
+            Some(Pick::RewindTo(1)),
+            "the newest message first"
+        );
+        app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
+        let how = app.picker.as_ref().expect("then how far");
+        assert_eq!(
+            how.chosen(),
+            Some(Pick::Rewind {
+                mark: 1,
+                conversation: true,
+                files: false
+            }),
+            "no run changed a file: the conversation only"
+        );
+        app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.conversation.len(), 2);
+        assert_eq!(app.session.marks.len(), 1);
+        assert_eq!(app.input.text(), "second", "the message comes back to edit");
+    }
+
+    #[test]
+    fn after_a_compaction_the_conversation_cannot_go_back_and_a_snapshot_names_the_run() {
+        let (mut app, _reports) = app();
+        app.conversation = vec![Message::user("first"), Message::system("one")];
+        app.session.marks = vec![crate::store::Mark {
+            at: Some(0),
+            prompt: "first".into(),
+            run: None,
+        }];
+        app.on_report(Report::Event(Event::Snapshot {
+            turn: 1,
+            run: "run-a".into(),
+            commit: "0".repeat(40),
+        }));
+        app.on_report(Report::Event(Event::Snapshot {
+            turn: 2,
+            run: "run-b".into(),
+            commit: "1".repeat(40),
+        }));
+        assert_eq!(
+            app.session.marks[0].run.as_deref(),
+            Some("run-a"),
+            "the first snapshot names the run"
+        );
+        app.on_report(Report::Event(Event::Compacted {
+            turn: 1,
+            before_tokens: 10_000,
+            after_tokens: 1_000,
+            replaced: 2,
+        }));
+        assert_eq!(app.session.marks[0].at, None);
+        app.rewind(0, true, false);
+        assert_eq!(
+            app.conversation.len(),
+            2,
+            "nothing is cut at a place that no longer holds"
+        );
+    }
+
+    #[test]
+    fn a_fork_is_a_new_session_from_before_the_message_and_the_old_one_stays() {
+        let (mut app, _reports) = app();
+        app.session.title = "work".into();
+        app.conversation = vec![
+            Message::user("first"),
+            Message::system("one"),
+            Message::user("second"),
+        ];
+        app.session.marks = vec![
+            crate::store::Mark {
+                at: Some(0),
+                prompt: "first".into(),
+                run: None,
+            },
+            crate::store::Mark {
+                at: Some(2),
+                prompt: "second".into(),
+                run: None,
+            },
+        ];
+        let old = app.session.id.clone();
+        app.fork(1);
+        assert_ne!(app.session.id, old, "a session of its own");
+        assert_eq!(app.session.parent.as_deref(), Some(old.as_str()));
+        assert_eq!(app.conversation.len(), 2);
+        assert_eq!(app.session.marks.len(), 1);
+        assert_eq!(app.input.text(), "second");
+        let kept = Session::load(&app.parts.home, &old).unwrap();
+        assert_eq!(kept.conversation.len(), 3, "the session left is kept whole");
+        let _ = std::fs::remove_dir_all(&app.parts.home);
     }
 
     #[test]

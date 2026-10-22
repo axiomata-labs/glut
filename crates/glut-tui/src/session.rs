@@ -40,6 +40,11 @@ pub enum Report {
         ran: crate::shell::Ran,
         to_model: bool,
     },
+    /// A step's change (`/steps`): its turn, and the diff or why there is none.
+    Diff(u32, Result<String, String>),
+    /// Rewinding the files ended: the commit the folder is back at and the run that keeps what it was just before,
+    /// or why not.
+    Restored(Result<(String, String), String>),
     /// The walk of the folder for `@` ended: its files, and whether there were more.
     Files((Vec<String>, bool)),
     /// `/handoff write` ended: where the handoff is and what it cost, or why there is none; the conversation as it was.

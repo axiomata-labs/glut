@@ -11,6 +11,8 @@ use crate::theme;
 
 /// How many lines of a tool's result an unfolded tool line shows.
 const RESULT_LINES: usize = 40;
+/// How many lines of a step's change (`/steps`) the stream shows.
+const DIFF_LINES: usize = 600;
 
 /// How a tool call stands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -477,6 +479,8 @@ fn render(kind: &Kind, width: u16, thinking: Thinking, frame: usize) -> Vec<Line
                 ToolState::Refused => ("⊘", Style::default().fg(theme::c().fault)),
             };
             // The head is one line: the name and the gate's word cut first to what fits, the target gets the rest.
+            // A step's change (`/steps`) is read whole and in colour; a tool's result is a glance.
+            let diff = name == "diff";
             let name = cut(&clean(name), 32);
             let gate = gate
                 .as_deref()
@@ -500,17 +504,28 @@ fn render(kind: &Kind, width: u16, thinking: Thinking, frame: usize) -> Vec<Line
             lines.push(Line::from(head));
             if *unfolded && !output.is_empty() {
                 let shown: Vec<&str> = output.lines().collect();
-                for row in shown.iter().take(RESULT_LINES) {
+                let most = if diff { DIFF_LINES } else { RESULT_LINES };
+                for row in shown.iter().take(most) {
+                    let style = match row.chars().next() {
+                        Some('+') if diff && !row.starts_with("+++") => {
+                            Style::default().fg(theme::c().fine)
+                        }
+                        Some('-') if diff && !row.starts_with("---") => {
+                            Style::default().fg(theme::c().fault)
+                        }
+                        Some('@') if diff => theme::glow(),
+                        _ => theme::quiet(),
+                    };
                     for part in wrap(row, width.saturating_sub(indent.len() + 4)) {
                         lines.push(Line::from(vec![
                             Span::raw(format!("{indent}  │ ")),
-                            Span::styled(part, theme::quiet()),
+                            Span::styled(part, style),
                         ]));
                     }
                 }
-                if shown.len() > RESULT_LINES {
+                if shown.len() > most {
                     lines.push(Line::from(Span::styled(
-                        format!("{indent}  │ … {} more lines", shown.len() - RESULT_LINES),
+                        format!("{indent}  │ … {} more lines", shown.len() - most),
                         theme::quiet().add_modifier(Modifier::ITALIC),
                     )));
                 }

@@ -25,6 +25,27 @@ pub enum Pick {
     Mention,
     /// A theme by its name (`/theme`).
     Theme(String),
+    /// Rewind (Esc Esc): the owner's message to go back to before, by its mark.
+    RewindTo(usize),
+    /// Fork (T14): a new session from before the owner's message `mark`, this one kept as it is.
+    Fork(usize),
+    /// A snapshot step of a run, for `/steps`: its run and turn.
+    Step {
+        run: String,
+        turn: u32,
+    },
+    /// What to do with a step: show its change, or put the files back to before it.
+    StepDo {
+        run: String,
+        turn: u32,
+        restore: bool,
+    },
+    /// Rewind: how far — the conversation, the files, or both.
+    Rewind {
+        mark: usize,
+        conversation: bool,
+        files: bool,
+    },
 }
 
 /// What a model entry is sorted and filtered by.
