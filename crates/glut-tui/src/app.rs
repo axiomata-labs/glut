@@ -28,10 +28,10 @@ const ASK_SETTLE: Duration = Duration::from_millis(400);
 
 /// What `/help` says.
 const HELP: &str = "Commands: /model [id] · /provider [id] · /effort [level] · /context [tokens] · /compact · \
-                    /editor [command] · /gate · /thinking off|folded|open · /theme [name] · /vim on|off · /scrollback · \
+                    /editor [command] · /gate · /meter · /thinking off|folded|open · /theme [name] · /vim on|off · /scrollback · \
                     /clear · /help · /quit\n\
                     Keys: Enter send · Shift+Enter or Alt+Enter new line · ↑ history · Shift+Tab plan → ask → \
-                    build → auto · Esc stop · Ctrl+O tool results · Ctrl+T thinking · Ctrl+B panel · Ctrl+G gate · \
+                    build → auto · Esc stop · Ctrl+O tool results · Ctrl+T thinking · Ctrl+B panel · Ctrl+G gate · Ctrl+N meter · \
                     Ctrl+X E editor · PgUp/PgDn scroll · Ctrl+F search · drag to copy · F2 mouse to the terminal \
                     and back · F3 scrollback · Ctrl+C twice quit\n\
                     Also: Ctrl+K every key · @ mentions a file · !cmd runs a command and shows Glut \
@@ -43,7 +43,7 @@ const HELP: &str = "Commands: /model [id] · /provider [id] · /effort [level] �
                     or doubled · counts · p P · u Ctrl+R), i a I A o O to Insert; Esc in Normal mode stops Glut";
 
 /// The session's commands with what each does, as the list under a typed `/` shows them.
-pub const COMMANDS: [(&str, &str); 19] = [
+pub const COMMANDS: [(&str, &str); 20] = [
     (
         "model",
         "pick a model of the provider in use, or /model <id>",
@@ -68,6 +68,10 @@ pub const COMMANDS: [(&str, &str); 19] = [
     (
         "gate",
         "the rules in force; take an \"always\" back (Ctrl+G: the gate, live)",
+    ),
+    (
+        "meter",
+        "context, tokens and cost per turn and tool, lean's savings (Ctrl+N)",
     ),
     (
         "resume",
@@ -107,6 +111,8 @@ pub enum Tab {
     Plan,
     /// The gate, live (T15).
     Gate,
+    /// The meter, exact (T16).
+    Meter,
 }
 
 /// What runs in the background besides the screen.
@@ -142,6 +148,8 @@ pub struct App {
     pub tab: Tab,
     /// The gate's judgements of the session, for the panel's Gate tab (T15).
     pub watch: crate::watch::Watch,
+    /// What the session spent, by turn and tool, for the panel's Meter tab (T16).
+    pub meter: crate::meter::Meter,
     /// Ctrl+X was pressed: the next key finishes a chord (Ctrl+X E: the editor).
     chord: bool,
     /// The input, handed to the editor by the main loop (T29), which owns the terminal.
@@ -235,6 +243,7 @@ impl App {
             panel,
             tab: Tab::Plan,
             watch: crate::watch::Watch::default(),
+            meter: crate::meter::Meter::default(),
             chord: false,
             edit_request: None,
             busy: None,
@@ -315,6 +324,7 @@ impl App {
         self.todos.clear();
         self.cost = session.cost;
         self.usage = Usage::default();
+        self.meter = crate::meter::Meter::default();
         self.context_used = 0;
         self.scroll = 0;
         self.session = session;
@@ -488,6 +498,7 @@ impl App {
                     }
                 }
                 self.watch.take(&event);
+                self.meter.take(&event, self.engine.prices);
                 self.transcript.take(&event);
             }
             Report::Ask(request, reply) => {
@@ -833,6 +844,8 @@ impl App {
             KeyCode::Char('x') if ctrl => self.chord = true,
             KeyCode::Char('b') if ctrl => self.show_tab(Tab::Plan),
             KeyCode::Char('g') if ctrl => self.show_tab(Tab::Gate),
+            // Ctrl+M is Enter to a terminal: the meter is on N.
+            KeyCode::Char('n') if ctrl => self.show_tab(Tab::Meter),
             KeyCode::Enter if shift || alt => self.input.newline(),
             KeyCode::Char('j') if ctrl => self.input.newline(),
             KeyCode::Enter => {
@@ -1161,6 +1174,7 @@ impl App {
                 // A new session counts from nothing.
                 self.cost = None;
                 self.usage = Usage::default();
+                self.meter = crate::meter::Meter::default();
                 self.session = Session::new(
                     &self.parts.config.cwd,
                     &self.engine.provider,
@@ -1254,6 +1268,7 @@ impl App {
             "resume" => self.picker = Some(self.session_picker()),
             "panel" => self.show_tab(Tab::Plan),
             "gate" => self.picker = Some(self.gate_picker()),
+            "meter" => self.show_tab(Tab::Meter),
             "scrollback" => self.scrollback_request = true,
             "vim" => match rest {
                 "on" | "" => self.set_vi(true),
@@ -1365,8 +1380,56 @@ impl App {
             return self.toggle_panel();
         }
         self.tab = tab;
+        // What lean spared on every run is read once per opening, not at every frame.
+        if tab == Tab::Meter
+            && let Some(path) = &self.parts.config.savings
+        {
+            self.meter.read_lean_all(path);
+        }
         if self.panel != Some(true) {
             self.toggle_panel();
+        }
+    }
+
+    /// The window and the turn's standing, for the Meter tab and the header.
+    pub fn meter_window(&self) -> crate::meter::Window {
+        let config = &self.parts.config;
+        let compacts_at = self
+            .engine
+            .window
+            .filter(|_| config.compaction.auto)
+            .map(|(window, _)| glut::compact_from(window, config.max_output_tokens));
+        // A budget holds per run, and a turn is one: what the turn under way (or the last) spent counts against it.
+        let budget = &config.budget;
+        let turn = self.meter.turns.last();
+        let spent_tokens = turn.map_or(0, |turn| {
+            turn.usage
+                .input_tokens
+                .saturating_sub(turn.usage.cached_input_tokens)
+                + turn.usage.output_tokens
+        });
+        let budget = match (budget.max_tokens, budget.max_usd) {
+            (Some(max), _) => Some(format!(
+                "{} of {} tokens left this turn",
+                crate::meter::tokens(max.saturating_sub(spent_tokens)),
+                crate::meter::tokens(max)
+            )),
+            // Glut counts money only with the budget's prices.
+            (None, Some(max)) if budget.prices.is_some() => Some(format!(
+                "${:.2} of ${max:.2} left this turn",
+                (max - turn.and_then(|turn| turn.cost).unwrap_or(0.0)).max(0.0)
+            )),
+            (None, Some(max)) => Some(format!("${max:.2}, not counted: no price known")),
+            (None, None) => None,
+        };
+        crate::meter::Window {
+            used: self.context_used,
+            window: self.engine.window,
+            compacts_at,
+            effort: self.engine.endpoint.effort.map(|effort| effort.to_string()),
+            budget,
+            usage: self.usage,
+            cost: self.cost,
         }
     }
 
@@ -2305,6 +2368,12 @@ fn palette() -> Picker {
             "the gate, live: every judgement, the hosts, the refusals",
             "/gate",
             Pick::Keys(vec![press(KeyCode::Char('g'), ctrl)]),
+        ),
+        (
+            "Ctrl+N",
+            "the meter: context, tokens and cost per turn and tool",
+            "/meter",
+            Pick::Keys(vec![press(KeyCode::Char('n'), ctrl)]),
         ),
         (
             "Shift+Tab",

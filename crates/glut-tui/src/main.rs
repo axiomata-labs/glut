@@ -6,6 +6,7 @@ mod glimm;
 mod highlight;
 mod input;
 mod markdown;
+mod meter;
 mod picker;
 mod prefs;
 mod scrollback;

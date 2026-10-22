@@ -480,7 +480,8 @@ const DEFAULT_OUTPUT_RESERVE: u64 = 8_192;
 
 /// The prompt size from which a run with a `window`-token model compacts (K1). Each reserve takes at most a quarter
 /// of the window, so a small one (a local model's 8k) still compacts from half of it — not from nothing at every step.
-fn compact_from(window: u32, max_output_tokens: Option<u32>) -> u64 {
+/// Public for a meter that shows where compaction will come (TUI T16).
+pub fn compact_from(window: u32, max_output_tokens: Option<u32>) -> u64 {
     let window = u64::from(window);
     let quarter = window / 4;
     let reserve = (window * RESERVE_PERCENT / 100)

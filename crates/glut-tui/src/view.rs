@@ -136,23 +136,17 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
     if let Some(effort) = app.engine.endpoint.effort {
         left.push(Span::styled(format!(" · {effort}"), theme::quiet()));
     }
-    left.push(Span::styled(format!("  {}", app.folder), theme::quiet()));
-    let mut meter = format!(
-        "{} in · {} out",
-        tokens(app.usage.input_tokens),
-        tokens(app.usage.output_tokens)
-    );
-    if let Some((window, _)) = app.engine.window {
-        meter.push_str(&format!(
-            " · {}%",
-            app.context_used * 100 / u64::from(window.max(1))
+    // The meter before the folder: on a narrow screen the folder is cut, the numbers stay.
+    let width = usize::from(area.width);
+    let meter = header_meter(app, width.saturating_sub(left_width(&left) + 2));
+    let room = width.saturating_sub(left_width(&left) + meter.width() + 1);
+    if room > 4 {
+        left.push(Span::styled(
+            crate::transcript::cut(&format!("  {}", app.folder), room),
+            theme::quiet(),
         ));
     }
-    if let Some(cost) = app.cost {
-        meter.push_str(&format!(" · ${cost:.4}"));
-    }
-    meter.push(' ');
-    let used: usize = left.iter().map(|span| span.content.width()).sum();
+    let used = left_width(&left);
     let gap = usize::from(area.width).saturating_sub(used + meter.width());
     let mut spans = left;
     spans.push(Span::raw(" ".repeat(gap)));
@@ -202,13 +196,61 @@ fn waiting_lines(app: &App, width: usize) -> Vec<Line<'static>> {
     lines
 }
 
+/// How many cells `spans` take.
+fn left_width(spans: &[Span]) -> usize {
+    spans.iter().map(|span| span.content.width()).sum()
+}
+
+/// The header's meter (T16), as much of it as `room` holds — the context first, then the cost, the tokens out, in
+/// and the cached share: `ctx 34k/200k ▸160k · in 120k (80% cached) · out 8k · $0.0123`.
+fn header_meter(app: &App, room: usize) -> String {
+    let window = app.meter_window();
+    let usage = app.usage;
+    let context = match window.window {
+        Some((size, _)) => {
+            let mut context = format!("ctx {}/{}", tokens(window.used), tokens(u64::from(size)));
+            if let Some(at) = window.compacts_at {
+                context.push_str(&format!(" ▸{}", tokens(at)));
+            }
+            context
+        }
+        None => format!("ctx {}", tokens(window.used)),
+    };
+    let cached = if usage.cached_input_tokens > 0 {
+        format!(
+            " ({}% cached)",
+            usage.cached_input_tokens * 100 / usage.input_tokens.max(1)
+        )
+    } else {
+        String::new()
+    };
+    // From the most to the least wanted; each fits or is left out.
+    let parts = [
+        Some(context),
+        app.cost.map(|cost| format!("${cost:.4}")),
+        Some(format!("out {}", tokens(usage.output_tokens))),
+        Some(format!("in {}{cached}", tokens(usage.input_tokens))),
+    ];
+    let mut kept: Vec<(usize, String)> = Vec::new();
+    let mut used = 1;
+    for (at, part) in parts.into_iter().enumerate() {
+        let Some(part) = part else { continue };
+        let needs = part.width() + if kept.is_empty() { 0 } else { 3 };
+        if used + needs <= room {
+            used += needs;
+            kept.push((at, part));
+        }
+    }
+    // Shown in reading order: context, in, out, cost.
+    let order = [0, 3, 2, 1];
+    kept.sort_by_key(|(at, _)| order.iter().position(|place| place == at));
+    let meter: Vec<String> = kept.into_iter().map(|(_, part)| part).collect();
+    format!("{} ", meter.join(" · "))
+}
+
 /// A token count as people read it: 840, 12.3k, 1.2M.
 fn tokens(count: u64) -> String {
-    match count {
-        0..1_000 => count.to_string(),
-        1_000..1_000_000 => format!("{:.1}k", count as f64 / 1_000.0),
-        _ => format!("{:.1}M", count as f64 / 1_000_000.0),
-    }
+    crate::meter::tokens(count)
 }
 
 fn draw_welcome(frame: &mut Frame, app: &mut App, area: Rect) {
@@ -589,6 +631,8 @@ fn draw_panel(frame: &mut Frame, app: &App, area: Rect) {
             tab("Plan", app.tab == Tab::Plan),
             Span::styled("·", theme::quiet()),
             tab("Gate", app.tab == Tab::Gate),
+            Span::styled("·", theme::quiet()),
+            tab("Meter", app.tab == Tab::Meter),
         ]));
     let width = usize::from(area.width.saturating_sub(4)).max(8);
     // Glimm heads the panel with the session's mood: working, waiting for the owner, pleased or gone out.
@@ -596,6 +640,18 @@ fn draw_panel(frame: &mut Frame, app: &App, area: Rect) {
     for mut row in glimm::lines(glimm::Size::Small, app.mood(), app.frame) {
         row.spans.insert(0, Span::raw(" "));
         lines.push(row);
+    }
+    if app.tab == Tab::Meter {
+        lines.push(Line::default());
+        let room = usize::from(area.height).saturating_sub(lines.len() + 2);
+        lines.extend(app.meter.lines(&app.meter_window(), width + 2, room));
+        lines.push(Line::default());
+        lines.push(Line::from(Span::styled(
+            " Ctrl+N hides · Ctrl+B plan · Ctrl+G gate",
+            theme::quiet(),
+        )));
+        frame.render_widget(Paragraph::new(lines).block(block), area);
+        return;
     }
     if app.tab == Tab::Gate {
         lines.push(Line::default());
@@ -612,7 +668,7 @@ fn draw_panel(frame: &mut Frame, app: &App, area: Rect) {
         lines.extend(app.watch.lines(&guard, width + 2, room));
         lines.push(Line::default());
         lines.push(Line::from(Span::styled(
-            " Ctrl+G hides · Ctrl+B the plan",
+            " Ctrl+G hides · Ctrl+B plan · Ctrl+N meter",
             theme::quiet(),
         )));
         frame.render_widget(Paragraph::new(lines).block(block), area);
@@ -661,7 +717,7 @@ fn draw_panel(frame: &mut Frame, app: &App, area: Rect) {
     }
     lines.push(Line::default());
     lines.push(Line::from(Span::styled(
-        " Ctrl+B hides · Ctrl+G the gate",
+        " Ctrl+B hides · Ctrl+G gate · Ctrl+N meter",
         theme::quiet(),
     )));
     frame.render_widget(Paragraph::new(lines).block(block), area);
@@ -792,7 +848,34 @@ fn draw_picker(frame: &mut Frame, app: &App, area: Rect) {
 
 #[cfg(test)]
 mod tests {
-    use super::{asked_rows, panel_width, tokens};
+    use super::{asked_rows, header_meter, panel_width, tokens};
+
+    #[test]
+    fn the_header_meter_keeps_the_context_first_and_reads_in_order() {
+        let (parts, mut engine) = crate::session::for_tests();
+        engine.window = Some((200_000, "settings"));
+        let (send, _reports) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = crate::app::App::new(std::sync::Arc::new(parts), engine, send);
+        app.context_used = 34_000;
+        app.usage = glut::Usage {
+            input_tokens: 120_000,
+            cached_input_tokens: 96_000,
+            output_tokens: 8_000,
+        };
+        app.cost = Some(0.0123);
+        let full = header_meter(&app, 200);
+        assert!(
+            full.starts_with("ctx 34.0k/200.0k ▸")
+                && full.contains("· in 120.0k (80% cached) · out 8.0k · $0.0123"),
+            "{full:?}"
+        );
+        let narrow = header_meter(&app, 30);
+        assert!(
+            narrow.starts_with("ctx ") && narrow.len() <= 31,
+            "{narrow:?}"
+        );
+        let _ = std::fs::remove_dir_all(&app.parts.home);
+    }
 
     #[test]
     fn a_long_ask_shows_its_head_what_is_left_out_and_its_tail() {
