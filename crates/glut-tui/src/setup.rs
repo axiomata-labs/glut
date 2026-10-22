@@ -59,7 +59,7 @@ pub async fn first_provider(home: &Path) -> Result<bool, String> {
         std::env::var(name).ok()
     })?;
     println!("Asking {} for its models…", known.name);
-    let offered = match models::fetch(&resolved.endpoint).await {
+    let offered = match models::fetch(&resolved.endpoint, resolved.protocol).await {
         Ok(found) => {
             let _ = models::keep(home, known.id, &found);
             let mut usable: Vec<&models::ModelInfo> = found

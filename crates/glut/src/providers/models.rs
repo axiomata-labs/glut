@@ -3,6 +3,7 @@
 //! picker know a model's context window, its prices and whether it reasons without asking every time. The owner's
 //! `prices` and `contextWindow` in `settings.json` still beat what a list says.
 
+use super::catalog::Protocol;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -162,7 +163,7 @@ pub fn keep(home: &Path, id: &str, list: &ModelList) -> Result<(), HarnessError>
 /// # Errors
 ///
 /// A message when the provider cannot be reached, refuses, or answers no list.
-pub async fn fetch(endpoint: &ModelEndpoint) -> Result<ModelList, String> {
+pub async fn fetch(endpoint: &ModelEndpoint, protocol: Protocol) -> Result<ModelList, String> {
     let root = endpoint.base_url.trim_end_matches('/');
     if endpoint.api_key.is_some() && !crate::model::secure_enough(root) {
         return Err("a key is only sent over https, or over http to this machine".into());
@@ -178,12 +179,33 @@ pub async fn fetch(endpoint: &ModelEndpoint) -> Result<ModelList, String> {
     } else {
         format!("{root}/v1")
     };
-    let value = get_json(&client, &format!("{base}/models"), endpoint).await?;
+    if protocol == Protocol::AnthropicMessages {
+        // One page of a thousand is every model Anthropic has, many times over.
+        let value = get_json(
+            &client,
+            &format!("{base}/models?limit=1000"),
+            endpoint,
+            protocol,
+        )
+        .await?;
+        let mut models =
+            crate::anthropic::models_of(&value).ok_or("no model list: no `data` array")?;
+        models.sort_by(|a, b| a.id.cmp(&b.id));
+        return Ok(ModelList {
+            format: FORMAT,
+            fetched_at: Utc::now(),
+            failed_at: None,
+            root: root.to_owned(),
+            models,
+            allowed: None,
+        });
+    }
+    let value = get_json(&client, &format!("{base}/models"), endpoint, protocol).await?;
     let models = parse(&value).ok_or("no model list: no `data` array")?;
     // OpenRouter says which of them this account may use; a provider without such a list allows them all, and a
     // failed ask leaves the list as it is.
     let allowed = if crate::model::is_openrouter(root) && endpoint.api_key.is_some() {
-        get_json(&client, &format!("{base}/models/user"), endpoint)
+        get_json(&client, &format!("{base}/models/user"), endpoint, protocol)
             .await
             .ok()
             .and_then(|value| parse(&value))
@@ -208,9 +230,13 @@ async fn get_json(
     client: &reqwest::Client,
     url: &str,
     endpoint: &ModelEndpoint,
+    protocol: Protocol,
 ) -> Result<Value, String> {
     let mut request = client.get(url);
-    if let Some(key) = &endpoint.api_key {
+    if protocol == Protocol::AnthropicMessages {
+        // Anthropic takes its key as `x-api-key`, with the API's version beside it.
+        request = crate::anthropic::list_request(request, endpoint.api_key.as_deref());
+    } else if let Some(key) = &endpoint.api_key {
         request = request.bearer_auth(key);
     }
     let mut response = request
@@ -251,13 +277,18 @@ async fn get_json(
 /// # Errors
 ///
 /// A message when there is no list at all: none kept and none fetched.
-pub async fn current(home: &Path, id: &str, endpoint: &ModelEndpoint) -> Result<ModelList, String> {
+pub async fn current(
+    home: &Path,
+    id: &str,
+    endpoint: &ModelEndpoint,
+    protocol: Protocol,
+) -> Result<ModelList, String> {
     let root = endpoint.base_url.trim_end_matches('/');
     let kept = cached(home, id, root);
     if let Some(list) = kept.as_ref().filter(|list| list.fresh(Utc::now())) {
         return Ok(list.clone());
     }
-    match fetch(endpoint).await {
+    match fetch(endpoint, protocol).await {
         Ok(list) => {
             // Not kept is not lost: the run has its list, the next one fetches again.
             let _ = keep(home, id, &list);

@@ -8,6 +8,7 @@
 //! in and the instructions come from the caller as plain values, so the harness can later stand on its own. File
 //! access goes through `axiomata-files`' guarded [`axiomata_files::Root`], never through a raw path.
 
+pub mod anthropic;
 pub mod codemode;
 pub mod commands;
 pub mod compact;
@@ -38,7 +39,7 @@ pub mod tools;
 pub use config::{Budget, Compaction, Effort, ModelEndpoint, Prices, RefusalLimits, RunConfig};
 pub use error::HarnessError;
 pub use event::{Event, EventSink, FinishReason, McpStatus, SharedSink, SkillHow};
-pub use model::{ChatModel, Message, OpenAiCompat, Piece, Reply, ToolCall, ToolSpec, Usage};
+pub use model::{ChatModel, Message, Model, OpenAiCompat, Piece, Reply, ToolCall, ToolSpec, Usage};
 pub use permissions::{Access, Gate, Mode, Rule, RuleSet};
 pub use run::{Cancel, RunOutcome, resume, run, run_continuing};
 pub use tools::{Tool, ToolFuture, Toolbox};

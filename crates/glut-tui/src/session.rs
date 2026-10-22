@@ -13,8 +13,8 @@ use glut::permissions::settings::Trust;
 use glut::permissions::{Answer, AnswerFuture, AskRequest, Asker, GateOptions, Mode, build_gate};
 use glut::providers::{self, Providers, models};
 use glut::{
-    Cancel, Effort, Event, EventSink, FinishReason, Message, OpenAiCompat, Prices, RunConfig,
-    RunOutcome, SharedSink, Toolbox, Usage, mcp, setup, skills,
+    Cancel, Effort, Event, EventSink, FinishReason, Message, Model, Prices, RunConfig, RunOutcome,
+    SharedSink, Toolbox, Usage, mcp, setup, skills,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -86,7 +86,7 @@ pub struct Parts {
 pub struct Engine {
     pub provider: String,
     pub endpoint: ModelEndpoint,
-    pub model: Arc<OpenAiCompat>,
+    pub model: Arc<Model>,
     pub prices: Option<Prices>,
     /// The window Glut counts with, and where it comes from (`set in Glut`, `settings`, `the provider's list`).
     pub window: Option<(u32, &'static str)>,
@@ -236,7 +236,14 @@ pub async fn engine(
             std::env::var(name).ok()
         })?
     };
-    let models = match models::current(&parts.home, &resolved.id, &resolved.endpoint).await {
+    let models = match models::current(
+        &parts.home,
+        &resolved.id,
+        &resolved.endpoint,
+        resolved.protocol,
+    )
+    .await
+    {
         Ok(models) => Some(models),
         Err(reason) => {
             notes.push(format!("no model list of {}: {reason}", resolved.id));
@@ -273,7 +280,7 @@ pub async fn engine(
         .or_else(|| listed.as_ref().and_then(|info| info.prices));
     let mut endpoint = resolved.endpoint;
     endpoint.effort = effort.unwrap_or(parts.owner_effort);
-    let model = OpenAiCompat::new(endpoint.clone()).map_err(|err| err.to_string())?;
+    let model = Model::new(endpoint.clone(), resolved.protocol).map_err(|err| err.to_string())?;
     Ok((
         Engine {
             provider: resolved.id,
@@ -719,7 +726,7 @@ pub fn for_tests() -> (Parts, Engine) {
     };
     let engine = Engine {
         provider: "test".into(),
-        model: Arc::new(OpenAiCompat::new(endpoint.clone()).expect("a test endpoint")),
+        model: Arc::new(Model::new(endpoint.clone(), Default::default()).expect("a test endpoint")),
         endpoint,
         prices: None,
         window: Some((32_768, "settings.json")),

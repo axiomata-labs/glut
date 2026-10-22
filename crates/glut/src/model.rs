@@ -13,11 +13,11 @@ use crate::config::{Effort, ModelEndpoint};
 use crate::error::HarnessError;
 
 /// How much of an error answer is kept for the message: enough to read what the API said, not a whole HTML page.
-const ERROR_BODY_CHARS: usize = 500;
+pub(crate) const ERROR_BODY_CHARS: usize = 500;
 
 /// How long one model call may take before it counts as a failed connection. The run's own timeout is the real
 /// limit; this only keeps a hung connection from eating all of it silently.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+pub(crate) const REQUEST_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
 /// The most reasoning one message keeps, in bytes (E4): more is dropped whole — a block cut short is no longer the one
 /// the model signed — so one answer at `max` cannot fill a chat's file or a run's journal.
@@ -25,12 +25,12 @@ const MAX_REASONING_BYTES: usize = 1024 * 1024;
 
 /// The largest answer read from the API. A chat answer is kilobytes; a misconfigured or hostile endpoint streaming
 /// gigabytes must not fill the memory.
-const MAX_ANSWER_BYTES: usize = 16 * 1024 * 1024;
+pub(crate) const MAX_ANSWER_BYTES: usize = 16 * 1024 * 1024;
 
 /// How long a streamed answer may stay silent — no byte, not even a provider's keep-alive comment — before the call
 /// counts as stalled and fails with that reason (glut-round CP5): a hung provider is noticed at once, not at the run's
 /// own limit.
-const STALL_LIMIT: Duration = Duration::from_secs(120);
+pub(crate) const STALL_LIMIT: Duration = Duration::from_secs(120);
 
 /// Hosts a key may be sent to over plain HTTP: the machine itself (a local Ollama). Anywhere else the key would cross
 /// the network in clear text.
@@ -163,7 +163,7 @@ impl Message {
     }
 
     /// Drops the reasoning when it is larger than [`MAX_REASONING_BYTES`].
-    fn bound_reasoning(&mut self) {
+    pub(crate) fn bound_reasoning(&mut self) {
         let text = |text: &Option<String>| text.as_ref().map_or(0, String::len);
         let blocks: usize = self
             .reasoning_details
@@ -347,7 +347,7 @@ pub trait ChatModel: Send + Sync {
 
 /// How long the model list may take: it only sizes the compaction, and a run without it still compacts on the
 /// provider's "too long" (K4).
-const MODEL_LIST_TIMEOUT: Duration = Duration::from_secs(10);
+pub(crate) const MODEL_LIST_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Whether a model API's error says the prompt does not fit the model's context (#111, K4): the providers word it
 /// differently, so the usual phrases are looked for.
@@ -555,6 +555,82 @@ impl ChatModel for OpenAiCompat {
     }
 }
 
+/// A model behind whichever API its provider speaks (PV3): the OpenAI-compatible chat API, or Anthropic's own.
+#[derive(Debug, Clone)]
+pub enum Model {
+    OpenAi(OpenAiCompat),
+    Anthropic(crate::anthropic::AnthropicMessages),
+}
+
+impl Model {
+    /// A client for `endpoint` in `protocol`.
+    ///
+    /// # Errors
+    ///
+    /// As [`OpenAiCompat::new`]: the HTTP client cannot be built, or a key would go over plain HTTP elsewhere.
+    pub fn new(
+        endpoint: ModelEndpoint,
+        protocol: crate::providers::catalog::Protocol,
+    ) -> Result<Self, HarnessError> {
+        use crate::providers::catalog::Protocol;
+        Ok(match protocol {
+            Protocol::ChatCompletions => Model::OpenAi(OpenAiCompat::new(endpoint)?),
+            Protocol::AnthropicMessages => {
+                Model::Anthropic(crate::anthropic::AnthropicMessages::new(endpoint)?)
+            }
+        })
+    }
+}
+
+impl ChatModel for Model {
+    async fn complete(
+        &self,
+        messages: &[Message],
+        tools: &[ToolSpec],
+        max_output_tokens: Option<u32>,
+    ) -> Result<Reply, HarnessError> {
+        match self {
+            Model::OpenAi(model) => model.complete(messages, tools, max_output_tokens).await,
+            Model::Anthropic(model) => model.complete(messages, tools, max_output_tokens).await,
+        }
+    }
+
+    async fn complete_streaming(
+        &self,
+        messages: &[Message],
+        tools: &[ToolSpec],
+        max_output_tokens: Option<u32>,
+        on_text: &mut (dyn FnMut(Piece<'_>) + Send),
+    ) -> Result<Reply, HarnessError> {
+        match self {
+            Model::OpenAi(model) => {
+                model
+                    .complete_streaming(messages, tools, max_output_tokens, on_text)
+                    .await
+            }
+            Model::Anthropic(model) => {
+                model
+                    .complete_streaming(messages, tools, max_output_tokens, on_text)
+                    .await
+            }
+        }
+    }
+
+    fn name(&self) -> &str {
+        match self {
+            Model::OpenAi(model) => model.name(),
+            Model::Anthropic(model) => model.name(),
+        }
+    }
+
+    async fn context_window(&self) -> Option<u32> {
+        match self {
+            Model::OpenAi(model) => model.context_window().await,
+            Model::Anthropic(model) => model.context_window().await,
+        }
+    }
+}
+
 /// Whether a key may go to `base_url`: over https, or over http to the machine itself.
 ///
 /// `pub(crate)` for the MCP client's HTTP transport (HS5, M3): an MCP URL carries headers with credentials, so it
@@ -576,7 +652,7 @@ pub(crate) fn secure_enough(base_url: &str) -> bool {
 }
 
 /// The response's body, read in chunks up to [`MAX_ANSWER_BYTES`].
-async fn read_capped(mut response: reqwest::Response) -> Result<String, HarnessError> {
+pub(crate) async fn read_capped(mut response: reqwest::Response) -> Result<String, HarnessError> {
     if response
         .content_length()
         .is_some_and(|length| length > MAX_ANSWER_BYTES as u64)
@@ -720,7 +796,7 @@ async fn read_stream(
 }
 
 /// How long a stream may send only keep-alive comments, no piece of an answer, before it counts as stalled.
-const PIECE_LIMIT: Duration = Duration::from_secs(300);
+pub(crate) const PIECE_LIMIT: Duration = Duration::from_secs(300);
 
 /// A stream's bytes cut into whole lines — a line ends at `\n`, so neither a line nor a character split between two
 /// pieces of the response is ever cut — and handed to the [`Stream`].

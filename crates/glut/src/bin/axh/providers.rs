@@ -9,14 +9,14 @@ use std::time::Instant;
 use clap::Subcommand;
 use glut::providers::catalog::{CATALOG, CUSTOM, SignIn};
 use glut::providers::{self, Entry, KeyFrom, Providers};
-use glut::{ChatModel, Message, OpenAiCompat};
+use glut::{ChatModel, Message, Model};
 
 /// The longest key `add` reads: far above any provider's, a stop for a file piped in by mistake.
 const MAX_KEY_BYTES: u64 = 8 * 1024;
 /// What `test` gives the model to answer.
 const TEST_PROMPT: &str = "Answer with the single word OK.";
 /// `test`'s output limit: room for a reasoning model's few thoughts before its word.
-const TEST_MAX_TOKENS: u32 = 64;
+const TEST_MAX_TOKENS: u32 = 1024;
 
 #[derive(Subcommand)]
 pub enum ProvidersCommand {
@@ -367,7 +367,7 @@ async fn test(home: &Path, id: Option<&str>, model: Option<&str>) -> Result<(), 
         std::env::var(name).ok()
     })?;
     let name = format!("{} · {}", resolved.id, resolved.endpoint.model);
-    let client = OpenAiCompat::new(resolved.endpoint).map_err(|err| err.to_string())?;
+    let client = Model::new(resolved.endpoint, resolved.protocol).map_err(|err| err.to_string())?;
     let started = Instant::now();
     let reply = client
         .complete(&[Message::user(TEST_PROMPT)], &[], Some(TEST_MAX_TOKENS))

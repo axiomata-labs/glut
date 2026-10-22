@@ -23,8 +23,8 @@ use glut::permissions::{GateOptions, Mode, Nobody, build_gate};
 use glut::setup::{self, Draft, Prepared};
 use glut::skills;
 use glut::{
-    Cancel, Effort, Event, EventSink, FinishReason, ModelEndpoint, OpenAiCompat, RunConfig,
-    SharedSink, Usage, run,
+    Cancel, Effort, Event, EventSink, FinishReason, Model, ModelEndpoint, RunConfig, SharedSink,
+    Usage, run,
 };
 use serde::{Deserialize, Serialize};
 
@@ -268,6 +268,8 @@ fn window_for(
 #[derive(Debug)]
 struct FromProvider {
     id: String,
+    /// The wire protocol the provider speaks: which client the run talks to it with (PV3).
+    protocol: glut::providers::catalog::Protocol,
     list: Option<glut::providers::models::ModelList>,
     /// The windows the owner set for the provider's models (T30).
     windows: std::collections::BTreeMap<String, u32>,
@@ -315,7 +317,13 @@ async fn endpoint(
         "axh: provider {} · model {}",
         resolved.id, resolved.endpoint.model
     );
-    let list = match glut::providers::models::current(&home, &resolved.id, &resolved.endpoint).await
+    let list = match glut::providers::models::current(
+        &home,
+        &resolved.id,
+        &resolved.endpoint,
+        resolved.protocol,
+    )
+    .await
     {
         Ok(list) => {
             if list.get(&resolved.endpoint.model).is_none() {
@@ -340,6 +348,7 @@ async fn endpoint(
                 .map(|entry| entry.windows.clone())
                 .unwrap_or_default(),
             id: resolved.id,
+            protocol: resolved.protocol,
             list,
         }),
     ))
@@ -476,6 +485,10 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
         Ok(found) => found,
         Err(reason) => return fail(reason),
     };
+    // A one-off `--base-url` speaks chat completions; a provider its own protocol.
+    let protocol = provider
+        .as_ref()
+        .map_or_else(Default::default, |from| from.protocol);
     let effort = match effort.as_deref().map(Effort::parse_or_explain).transpose() {
         Ok(effort) => effort,
         Err(reason) => return fail(format!("--effort: {reason}")),
@@ -670,7 +683,7 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
         );
     }
     // The model is built after the command and the skill: either may name its own (C2, K5).
-    let model = match OpenAiCompat::new(endpoint) {
+    let model = match Model::new(endpoint, protocol) {
         Ok(model) => model,
         Err(err) => return fail(err.to_string()),
     };

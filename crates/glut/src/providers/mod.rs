@@ -294,6 +294,11 @@ impl Entry {
             .unwrap_or_default()
     }
 
+    /// The wire protocol of the provider's kind; an endpoint of the owner's own speaks chat completions.
+    pub fn protocol(&self) -> catalog::Protocol {
+        catalog::known(&self.kind).map_or_else(catalog::Protocol::default, |known| known.protocol)
+    }
+
     /// Whether a run needs a key.
     pub fn needs_key(&self) -> bool {
         match catalog::known(&self.kind) {
@@ -370,6 +375,8 @@ pub struct Resolved {
     pub id: String,
     pub endpoint: ModelEndpoint,
     pub key_from: KeyFrom,
+    /// The wire protocol the provider speaks: which client a run talks to it with ([`crate::model::Model`]).
+    pub protocol: catalog::Protocol,
 }
 
 /// The endpoint of provider `id` (or the default one) for `model` (or its default model): the key from the
@@ -432,6 +439,7 @@ pub fn resolve(
             versioned: true,
         },
         key_from,
+        protocol: entry.protocol(),
     })
 }
 

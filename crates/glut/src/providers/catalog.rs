@@ -1,12 +1,14 @@
 //! The providers Glut knows by name (`docs/plans/glut-providers.md`, P1): where their API is, how a run signs in and
 //! where a key may wait in the environment. The owner's own endpoints sit beside them as `openai-compatible`.
 
-/// The wire protocol a provider speaks. PV1 has one; the Anthropic Messages and OpenAI Responses clients follow
-/// (P2, PV3/PV4).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The wire protocol a provider speaks (P2); the OpenAI Responses client follows (PV4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Protocol {
     /// `POST {root}/chat/completions` — OpenRouter, Ollama and most others.
+    #[default]
     ChatCompletions,
+    /// `POST {root}/messages` — Anthropic's own API (PV3, `crate::anthropic`).
+    AnthropicMessages,
 }
 
 /// How a run signs in to a provider (P3).
@@ -37,8 +39,9 @@ pub struct Known {
 /// The kind of an endpoint the owner names by its root, not by the catalog.
 pub const CUSTOM: &str = "openai-compatible";
 
-/// Every provider Glut knows. Anthropic and Gemini go through their OpenAI-compatible endpoints until their own
-/// clients exist (P2); a coding plan has its own root and a key that is not the pay-as-you-go one.
+/// Every provider Glut knows. Anthropic speaks its own Messages API (PV3); Gemini goes through its OpenAI-compatible
+/// endpoint until its own client exists (P2); a coding plan has its own root and a key that is not the pay-as-you-go
+/// one.
 pub const CATALOG: &[Known] = &[
     key(
         "openrouter",
@@ -54,13 +57,16 @@ pub const CATALOG: &[Known] = &[
         "OPENAI_API_KEY",
         "API key (the ChatGPT sign-in comes in PV4)",
     ),
-    key(
-        "anthropic",
-        "Anthropic",
-        "https://api.anthropic.com/v1",
-        "ANTHROPIC_API_KEY",
-        "API key; Claude Pro/Max may not be used here",
-    ),
+    Known {
+        protocol: Protocol::AnthropicMessages,
+        ..key(
+            "anthropic",
+            "Anthropic",
+            "https://api.anthropic.com/v1",
+            "ANTHROPIC_API_KEY",
+            "API key; Claude Pro/Max may not be used here",
+        )
+    },
     key(
         "gemini",
         "Google Gemini",

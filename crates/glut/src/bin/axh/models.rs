@@ -77,11 +77,11 @@ async fn list_of(
         std::env::var(name).ok()
     })?;
     if again {
-        let list = models::fetch(&resolved.endpoint).await?;
+        let list = models::fetch(&resolved.endpoint, resolved.protocol).await?;
         models::keep(home, id, &list).map_err(|err| err.to_string())?;
         return Ok(list);
     }
-    models::current(home, id, &resolved.endpoint).await
+    models::current(home, id, &resolved.endpoint, resolved.protocol).await
 }
 
 async fn list(home: &Path, provider: Option<&str>, again: bool, query: &str) -> Result<(), String> {
