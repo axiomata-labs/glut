@@ -14,6 +14,7 @@ use tokio::sync::{mpsc, oneshot};
 use crate::input::Input;
 use crate::picker::{Facts, Item, Pick, Picker};
 use crate::prefs::{self, Prefs};
+use crate::select::{self, Copied, Point, Selection};
 use crate::session::{self, Engine, Parts, Report};
 use crate::store::Session;
 use crate::transcript::{Thinking, Tone, Transcript};
@@ -29,7 +30,8 @@ const ASK_SETTLE: Duration = Duration::from_millis(400);
 const HELP: &str = "Commands: /model [id] · /provider [id] · /effort [level] · /context [tokens] · /compact · \
                     /editor [command] · /thinking off|folded|open · /clear · /help · /quit\n\
                     Keys: Enter send · Shift+Enter or Alt+Enter new line · ↑ history · Shift+Tab plan → ask → build \
-                    → auto · Esc stop · Ctrl+O tool results · Ctrl+T thinking · Ctrl+B panel · Ctrl+X E editor · PgUp/PgDn scroll · Ctrl+C twice quit";
+                    → auto · Esc stop · Ctrl+O tool results · Ctrl+T thinking · Ctrl+B panel · Ctrl+X E editor · PgUp/PgDn scroll · \
+                    Ctrl+F search · drag to copy · F2 mouse to the terminal and back · Ctrl+C twice quit";
 
 /// The session's commands with what each does, as the list under a typed `/` shows them.
 pub const COMMANDS: [(&str, &str); 14] = [
@@ -115,8 +117,23 @@ pub struct App {
     /// The stream's lines at the last frame and its height, to bound the scroll.
     pub stream_lines: usize,
     pub stream_height: usize,
-    /// Which block each row of the stream showed at the last frame (for a click).
-    pub rows: Vec<(u16, usize)>,
+    /// What each row of the stream showed at the last frame: its screen row, its block (for a click) and its line of
+    /// the stream (for a selection).
+    pub rows: Vec<(u16, usize, usize)>,
+    /// The stream's left column and the width its lines were laid out for, at the last frame.
+    pub stream_x: u16,
+    pub stream_layout: u16,
+    /// The selection being dragged or made (TUI2b), and where the left button went down.
+    pub selection: Option<Selection>,
+    /// With the width the stream had: a press made before a resize anchors nothing.
+    press: Option<(Point, u16)>,
+    /// The search in the stream (Ctrl+F), while it is open.
+    pub search: Option<Search>,
+    /// A short word in the key line (what was copied), and when it was said.
+    pub toast: Option<(String, Instant)>,
+    /// Whether Glut holds the mouse; F2 hands it to the terminal and back, the main loop applies it.
+    pub mouse_held: bool,
+    pub mouse_request: Option<bool>,
     /// Where the stream ended at the last frame, the panel right of it: a click there is not the stream's.
     pub stream_width: u16,
     pub frame: usize,
@@ -162,6 +179,14 @@ impl App {
             stream_lines: 0,
             stream_height: 0,
             rows: Vec::new(),
+            stream_x: 0,
+            stream_layout: 0,
+            selection: None,
+            press: None,
+            search: None,
+            toast: None,
+            mouse_held: true,
+            mouse_request: None,
             stream_width: u16::MAX,
             frame: 0,
             quit_armed: None,
@@ -231,7 +256,28 @@ impl App {
     /// Whether the screen moves on its own: while Glut works, and while Glimm is in view — on the welcome or at the
     /// head of the side panel.
     pub fn animated(&self) -> bool {
-        self.working() || self.welcoming() || self.panel == Some(true)
+        self.working() || self.welcoming() || self.panel == Some(true) || self.toast().is_some()
+    }
+
+    /// The toast while it is fresh.
+    pub fn toast(&self) -> Option<&str> {
+        self.toast
+            .as_ref()
+            .filter(|(_, said)| said.elapsed() < TOAST_FOR)
+            .map(|(text, _)| text.as_str())
+    }
+
+    fn say(&mut self, text: impl Into<String>) {
+        self.toast = Some((text.into(), Instant::now()));
+    }
+
+    /// Says where the mouse went.
+    pub fn mouse_said(&mut self, held: bool) {
+        self.say(if held {
+            "the mouse is Glut's again: drag to copy, click to unfold"
+        } else {
+            "the mouse is the terminal's: its own selection works — F2 takes it back"
+        });
     }
 
     /// What Glimm shows of the session: it waits for the owner's answer, works, or is pleased or gone out after the
@@ -457,16 +503,27 @@ impl App {
         match event {
             TermEvent::Key(key) if key.kind != KeyEventKind::Release => self.on_key(key),
             TermEvent::Paste(text) if self.ask.is_none() && self.picker.is_none() => {
-                self.input.insert_text(&text)
+                match &mut self.search {
+                    // A paste while searching is what to search for.
+                    Some(search) => {
+                        search.query.push_str(&text.replace(['\n', '\r'], " "));
+                        search.fresh = true;
+                    }
+                    None => self.input.insert_text(&text),
+                }
             }
             TermEvent::Mouse(mouse) => match mouse.kind {
                 MouseEventKind::ScrollUp => self.scroll_by(WHEEL_LINES as isize),
                 MouseEventKind::ScrollDown => self.scroll_by(-(WHEEL_LINES as isize)),
-                MouseEventKind::Down(MouseButton::Left) if mouse.column < self.stream_width => {
-                    if let Some((_, block)) = self.rows.iter().find(|(row, _)| *row == mouse.row) {
-                        self.transcript.toggle(*block);
-                    }
+                MouseEventKind::Down(MouseButton::Left) => {
+                    self.selection = None;
+                    self.press = (mouse.column < self.stream_width)
+                        .then(|| self.point_at(mouse.column, mouse.row))
+                        .flatten()
+                        .map(|point| (point, self.stream_layout));
                 }
+                MouseEventKind::Drag(MouseButton::Left) => self.drag(mouse.column, mouse.row),
+                MouseEventKind::Up(MouseButton::Left) => self.release(mouse.row),
                 _ => {}
             },
             _ => {}
@@ -486,6 +543,17 @@ impl App {
         }
         if self.picker.is_some() {
             return self.on_picker_key(key);
+        }
+        if self.search.is_some() {
+            return self.on_search_key(key);
+        }
+        if key.code == KeyCode::F(2) {
+            self.mouse_request = Some(!self.mouse_held);
+            return;
+        }
+        if ctrl && matches!(key.code, KeyCode::Char('f')) {
+            self.search = Some(Search::default());
+            return;
         }
         let suggestions = self.suggestions();
         if !suggestions.is_empty() {
@@ -523,6 +591,8 @@ impl App {
             KeyCode::Char('j') if ctrl => self.input.newline(),
             KeyCode::Enter => self.submit(),
             KeyCode::BackTab => self.cycle_mode(),
+            // A selection goes first: Esc lets it go, the next one stops Glut.
+            KeyCode::Esc if self.selection.is_some() => self.selection = None,
             KeyCode::Esc => {
                 if let Some(cancel) = &self.running {
                     cancel.cancel();
@@ -531,13 +601,18 @@ impl App {
             KeyCode::Char('d') if ctrl && self.input.is_empty() && !self.working() => {
                 self.quit = true
             }
-            KeyCode::Char('o') if ctrl => self.transcript.unfold_all(),
+            // Folding moves the lines a selection was on: it lets go.
+            KeyCode::Char('o') if ctrl => {
+                self.selection = None;
+                self.transcript.unfold_all();
+            }
             // Ctrl+T: every thought open, or all folded again (an "off" choice comes back as folded).
             KeyCode::Char('t') if ctrl => {
                 let next = match self.transcript.thinking {
                     Thinking::Open => Thinking::Folded,
                     Thinking::Folded | Thinking::Off => Thinking::Open,
                 };
+                self.selection = None;
                 self.set_thinking(next);
             }
             KeyCode::Char('w') if ctrl => self.input.delete_word(),
@@ -661,6 +736,8 @@ impl App {
             "help" | "?" => self.transcript.note(HELP, Tone::Quiet),
             "quit" | "exit" | "q" => self.quit = true,
             "clear" => {
+                self.selection = None;
+                self.search = None;
                 self.conversation.clear();
                 self.todos.clear();
                 self.last_turn = None;
@@ -1097,9 +1174,165 @@ impl App {
         self.stream_height.saturating_sub(2).max(1) as isize
     }
 
+    /// The place in the stream under the screen's cell; `None` outside the stream's rows.
+    fn point_at(&self, column: u16, row: u16) -> Option<Point> {
+        let (_, _, line) = self.rows.iter().find(|(at, _, _)| *at == row)?;
+        Some(Point {
+            line: *line,
+            col: usize::from(column.saturating_sub(self.stream_x)),
+        })
+    }
+
+    /// The left button moves held down: the selection follows, and the stream scrolls when the pointer leaves it at
+    /// its top or bottom.
+    fn drag(&mut self, column: u16, row: u16) {
+        let Some((anchor, width)) = self.press else {
+            return;
+        };
+        if width != self.stream_layout {
+            self.press = None;
+            return;
+        }
+        let (Some(first), Some(last)) = (self.rows.first().copied(), self.rows.last().copied())
+        else {
+            return;
+        };
+        let head = if row < first.0 {
+            self.scroll_by(1);
+            Point {
+                line: first.2,
+                col: 0,
+            }
+        } else if row > last.0 {
+            self.scroll_by(-1);
+            Point {
+                line: last.2,
+                col: usize::MAX,
+            }
+        } else {
+            match self.point_at(column, row) {
+                Some(point) => point,
+                None => return,
+            }
+        };
+        self.selection = Some(Selection {
+            anchor,
+            head,
+            width: self.stream_layout,
+        });
+    }
+
+    /// The left button is let go: a drag copies what it selected, a click (no drag) folds or unfolds the block.
+    fn release(&mut self, row: u16) {
+        let Some((press, _)) = self.press.take() else {
+            return;
+        };
+        match self.selection {
+            Some(selection) if !selection.is_empty() => {
+                let text = select::selected_text(&selection, &self.stream_lines_text());
+                if text.is_empty() {
+                    return;
+                }
+                let count = text.chars().count();
+                match select::copy(&text) {
+                    Ok(Copied::Pbcopy) => self.say(format!("copied {count} characters")),
+                    Ok(Copied::Terminal) => {
+                        self.say(format!("copied {count} characters (through the terminal)"))
+                    }
+                    Err(reason) => self.say(reason),
+                }
+            }
+            _ => {
+                self.selection = None;
+                if let Some((_, block, _)) = self
+                    .rows
+                    .iter()
+                    .find(|(at, _, line)| *at == row && *line == press.line)
+                {
+                    self.transcript.toggle(*block);
+                }
+            }
+        }
+    }
+
+    /// Every line of the stream as text, at the width it was last drawn: what a selection copies from.
+    pub fn stream_lines_text(&mut self) -> Vec<String> {
+        let (width, thinking, frame) = (self.stream_layout, self.transcript.thinking, self.frame);
+        self.transcript
+            .blocks
+            .iter_mut()
+            .flat_map(|block| {
+                block
+                    .lines(width, thinking, frame)
+                    .iter()
+                    .map(select::text_of)
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    /// A key while the search is open: typed text searches, Enter or ↑ goes to the match above, Shift+Enter or ↓ to
+    /// the one below, PgUp/PgDn scroll, Esc closes it.
+    fn on_search_key(&mut self, key: KeyEvent) {
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+        match key.code {
+            KeyCode::PageUp => return self.scroll_by(self.page()),
+            KeyCode::PageDown => return self.scroll_by(-self.page()),
+            _ => {}
+        }
+        let Some(search) = &mut self.search else {
+            return;
+        };
+        match key.code {
+            KeyCode::Esc => self.search = None,
+            KeyCode::Enter if shift => search.step(1),
+            KeyCode::Down => search.step(1),
+            KeyCode::Enter | KeyCode::Up => search.step(-1),
+            KeyCode::Backspace => {
+                search.query.pop();
+                search.fresh = true;
+            }
+            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                search.query.push(c);
+                search.fresh = true;
+            }
+            _ => {}
+        }
+    }
+
     fn scroll_by(&mut self, lines: isize) {
         let most = self.stream_lines.saturating_sub(self.stream_height);
         self.scroll = self.scroll.saturating_add_signed(lines).min(most);
+    }
+}
+
+/// How long a toast stays in the key line.
+const TOAST_FOR: Duration = Duration::from_secs(3);
+
+/// The search in the stream (Ctrl+F): what is looked for, where it stands, which match is shown.
+#[derive(Debug, Default)]
+pub struct Search {
+    pub query: String,
+    /// Each match: the stream's line and its columns; made by the frame, which has the stream's lines.
+    pub matches: Vec<(usize, usize, usize)>,
+    /// The match shown, an index into `matches`.
+    pub current: Option<usize>,
+    /// The query changed: the frame finds the matches anew and goes to the last one (the newest).
+    pub fresh: bool,
+    /// The frame scrolls the shown match into view.
+    pub jump: bool,
+}
+
+impl Search {
+    /// One match up (`-1`, older) or down (`1`, newer), going round at the ends.
+    fn step(&mut self, by: isize) {
+        if self.matches.is_empty() {
+            return;
+        }
+        let count = self.matches.len() as isize;
+        let at = self.current.map_or(count - 1, |at| at as isize);
+        self.current = Some((at + by).rem_euclid(count) as usize);
+        self.jump = true;
     }
 }
 
@@ -1205,6 +1438,147 @@ mod tests {
 
     fn key(code: KeyCode, modifiers: KeyModifiers) -> TermEvent {
         TermEvent::Key(KeyEvent::new(code, modifiers))
+    }
+
+    fn mouse(kind: MouseEventKind, column: u16, row: u16) -> TermEvent {
+        TermEvent::Mouse(crossterm::event::MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        })
+    }
+
+    /// One frame on an 80 × 24 screen, as the terminal would draw it.
+    fn drawn(app: &mut App) -> ratatui::Terminal<ratatui::backend::TestBackend> {
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
+        terminal
+            .draw(|frame| crate::view::draw(frame, app))
+            .unwrap();
+        terminal
+    }
+
+    #[test]
+    fn a_drag_selects_the_text_under_it_and_lets_go_on_esc() {
+        let (mut app, _reports) = app();
+        app.transcript
+            .push(crate::transcript::Kind::Owner("hello".into()));
+        app.transcript.note("alpha beta gamma", Tone::Quiet);
+        app.transcript.note("second line", Tone::Quiet);
+        drawn(&mut app);
+        let (row, _, _) = *app.rows.iter().rev().nth(1).unwrap();
+        app.on_terminal(mouse(MouseEventKind::Down(MouseButton::Left), 2, row));
+        app.on_terminal(mouse(MouseEventKind::Drag(MouseButton::Left), 6, row + 1));
+        drawn(&mut app);
+        let selection = app.selection.unwrap();
+        assert_eq!(
+            select::selected_text(&selection, &app.stream_lines_text()),
+            "alpha beta gamma\n· secon"
+        );
+        let buffer = drawn(&mut app).backend().buffer().clone();
+        let reversed = ratatui::style::Modifier::REVERSED;
+        assert!(
+            buffer[(3, row)].modifier.contains(reversed),
+            "the selection shows"
+        );
+        app.on_terminal(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.selection.is_none());
+    }
+
+    #[test]
+    fn search_finds_the_newest_match_first_and_steps_up_and_down() {
+        let (mut app, _reports) = app();
+        for at in 0..3 {
+            app.transcript.note(format!("needle {at}"), Tone::Quiet);
+        }
+        drawn(&mut app);
+        app.on_terminal(key(KeyCode::Char('f'), KeyModifiers::CONTROL));
+        for c in "NEEDLE".chars() {
+            app.on_terminal(key(KeyCode::Char(c), KeyModifiers::SHIFT));
+        }
+        drawn(&mut app);
+        let search = app.search.as_ref().unwrap();
+        assert_eq!(search.matches.len(), 3, "in any case");
+        assert_eq!(search.current, Some(2), "the newest first");
+        app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(
+            app.search.as_ref().unwrap().current,
+            Some(1),
+            "Enter: the one above"
+        );
+        app.on_terminal(key(KeyCode::Down, KeyModifiers::NONE));
+        app.on_terminal(key(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(
+            app.search.as_ref().unwrap().current,
+            Some(0),
+            "round at the end"
+        );
+        app.on_terminal(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.search.is_none());
+        assert!(
+            app.input.is_empty(),
+            "the search typed nothing into the input"
+        );
+    }
+
+    #[test]
+    fn the_search_jumps_to_a_match_far_above_and_shows_it() {
+        let (mut app, _reports) = app();
+        for at in 0..200 {
+            let text = if at == 5 {
+                "the needle".to_owned()
+            } else {
+                format!("line {at}")
+            };
+            app.transcript.note(text, Tone::Quiet);
+        }
+        drawn(&mut app);
+        app.on_terminal(key(KeyCode::Char('f'), KeyModifiers::CONTROL));
+        for c in "needle".chars() {
+            app.on_terminal(key(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        drawn(&mut app);
+        drawn(&mut app);
+        assert!(!app.rows.is_empty(), "the stream is drawn, not blank");
+        assert!(
+            app.rows.iter().any(|(_, _, line)| *line == 5),
+            "the match is on the screen"
+        );
+        app.on_terminal(TermEvent::Paste("x".into()));
+        assert_eq!(
+            app.search.as_ref().unwrap().query,
+            "needlex",
+            "a paste goes to the search"
+        );
+        assert!(app.input.is_empty());
+    }
+
+    #[test]
+    fn a_click_without_a_drag_still_unfolds_a_tool_line() {
+        let (mut app, _reports) = app();
+        app.transcript.take(&glut::Event::ToolCall {
+            turn: 1,
+            id: "c1".into(),
+            name: "read_file".into(),
+            arguments: r#"{"path":"a.rs"}"#.into(),
+        });
+        app.transcript.take(&glut::Event::ToolResult {
+            turn: 1,
+            id: "c1".into(),
+            name: "read_file".into(),
+            ok: true,
+            output: "fn a() {}".into(),
+            truncated: false,
+        });
+        drawn(&mut app);
+        let (row, _, _) = *app.rows.last().unwrap();
+        app.on_terminal(mouse(MouseEventKind::Down(MouseButton::Left), 4, row));
+        app.on_terminal(mouse(MouseEventKind::Up(MouseButton::Left), 4, row));
+        assert!(matches!(
+            app.transcript.blocks.last().unwrap().kind,
+            crate::transcript::Kind::Tool { unfolded: true, .. }
+        ));
     }
 
     fn typed(app: &mut App, text: &str) {

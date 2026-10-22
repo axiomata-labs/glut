@@ -16,6 +16,10 @@ pub const OWNER: Color = Color::Rgb(0x9c, 0xc8, 0xe8);
 pub const FAULT: Color = Color::Rgb(0xe0, 0x6c, 0x6c);
 /// Something went right.
 pub const FINE: Color = Color::Rgb(0x8c, 0xc8, 0x8c);
+/// Dark text on the glow (the search's match shown).
+pub const INK: Color = Color::Rgb(0x1a, 0x1a, 0x1a);
+/// A search's other matches: a dim amber, quieter than the glow.
+pub const MATCH: Color = Color::Rgb(0x5a, 0x44, 0x20);
 
 pub fn quiet() -> Style {
     Style::default().fg(QUIET)

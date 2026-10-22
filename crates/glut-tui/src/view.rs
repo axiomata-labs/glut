@@ -9,7 +9,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::app::App;
 use crate::transcript::wrap;
-use crate::{glimm, session, theme};
+use crate::{glimm, select, session, theme};
 
 /// The most rows the input grows to before it scrolls.
 const INPUT_ROWS: usize = 8;
@@ -187,14 +187,31 @@ fn draw_welcome(frame: &mut Frame, app: &mut App, area: Rect) {
 fn draw_stream(frame: &mut Frame, app: &mut App, area: Rect) {
     let width = area.width.saturating_sub(1).max(8);
     let height = usize::from(area.height);
-    // Only what can be on the screen is laid out: blocks from the end until the screen and the scroll are covered.
-    let wanted = height + app.scroll;
+    // A selection belongs to the width it was made at: laid out anew, its lines are other lines.
+    if app
+        .selection
+        .is_some_and(|selection| selection.width != width)
+    {
+        app.selection = None;
+    }
+    let texts = app.search.is_some();
+    // Only what can be on the screen is laid out: blocks from the end until the screen and the scroll are covered —
+    // all of them while the search is open, which may scroll to any of them.
+    let wanted = if texts {
+        usize::MAX
+    } else {
+        height + app.scroll
+    };
     let mut taken: Vec<(usize, Line<'static>)> = Vec::new();
+    let mut all: Vec<String> = Vec::new();
     let mut total = 0;
     let thinking = app.transcript.thinking;
     for at in (0..app.transcript.blocks.len()).rev() {
         let lines = app.transcript.blocks[at].lines(width, thinking, app.frame);
         total += lines.len();
+        if texts {
+            all.extend(lines.iter().rev().map(select::text_of));
+        }
         if taken.len() < wanted {
             for line in lines.iter().rev() {
                 taken.push((at, line.clone()));
@@ -202,26 +219,45 @@ fn draw_stream(frame: &mut Frame, app: &mut App, area: Rect) {
         }
     }
     taken.reverse();
+    all.reverse();
     app.stream_lines = total;
     app.stream_height = height;
+    app.stream_x = area.x;
+    app.stream_layout = width;
+    if let Some(search) = &mut app.search {
+        search.matches = select::matches(&search.query, &all);
+        if search.fresh {
+            search.fresh = false;
+            search.current = search.matches.len().checked_sub(1);
+            search.jump = true;
+        }
+        search.current = search.current.filter(|at| *at < search.matches.len());
+        // The match shown is scrolled to the middle of the stream.
+        if std::mem::take(&mut search.jump)
+            && let Some((line, _, _)) = search.current.map(|at| search.matches[at])
+        {
+            app.scroll = total.saturating_sub(line + 1 + height / 2);
+        }
+    }
     // A stream that shrank (tool lines folded) cannot stay scrolled further than it is long.
     app.scroll = app.scroll.min(total.saturating_sub(height));
     let end = taken.len().saturating_sub(app.scroll.min(taken.len()));
     let start = end.saturating_sub(height);
     let shown = &taken[start..end];
+    // The stream's line of the first one taken: the taken lines are the stream's last.
+    let first_line = total - taken.len() + start;
+    // Short streams sit at the bottom, next to the input, like a terminal's.
+    let pad = height.saturating_sub(shown.len());
     app.rows = shown
         .iter()
         .enumerate()
-        .map(|(row, (block, _))| (area.y + row as u16, *block))
+        .map(|(row, (block, _))| (area.y + (pad + row) as u16, *block, first_line + row))
         .collect();
-    // Short streams sit at the bottom, next to the input, like a terminal's.
-    let pad = height.saturating_sub(shown.len());
     let mut lines: Vec<Line> = vec![Line::default(); pad];
     lines.extend(shown.iter().map(|(_, line)| line.clone()));
-    for row in &mut app.rows {
-        row.0 += pad as u16;
-    }
-    frame.render_widget(Paragraph::new(lines), Rect { width, ..area });
+    let place = Rect { width, ..area };
+    frame.render_widget(Paragraph::new(lines), place);
+    mark_stream(frame, app, place);
     if app.scroll > 0 {
         let mark = format!(" ↓ {} more ", app.scroll);
         let place = Rect {
@@ -231,6 +267,50 @@ fn draw_stream(frame: &mut Frame, app: &mut App, area: Rect) {
             height: 1,
         };
         frame.render_widget(Paragraph::new(Span::styled(mark, theme::glow())), place);
+    }
+}
+
+/// The selection and the search's matches over the stream drawn: the selection reversed, the matches on a dim
+/// amber, the match shown in the glow.
+fn mark_stream(frame: &mut Frame, app: &App, area: Rect) {
+    let paint = |frame: &mut Frame, row: u16, from: usize, to: usize, style: Style| {
+        let right = area.x + area.width;
+        for col in from..to {
+            let Ok(col) = u16::try_from(col) else { break };
+            let x = area.x.saturating_add(col);
+            if x >= right {
+                break;
+            }
+            if let Some(cell) = frame.buffer_mut().cell_mut(Position { x, y: row }) {
+                cell.set_style(style);
+            }
+        }
+    };
+    for (row, _, line) in &app.rows {
+        if let Some(search) = &app.search {
+            for (at, (found, from, to)) in search.matches.iter().enumerate() {
+                if found == line {
+                    let style = if search.current == Some(at) {
+                        Style::default().bg(theme::GLOW).fg(theme::INK)
+                    } else {
+                        Style::default().bg(theme::MATCH)
+                    };
+                    paint(frame, *row, *from, *to, style);
+                }
+            }
+        }
+        if let Some((from, to)) = app
+            .selection
+            .and_then(|selection| selection.columns(*line, usize::from(area.width)))
+        {
+            paint(
+                frame,
+                *row,
+                from,
+                to,
+                Style::default().add_modifier(Modifier::REVERSED),
+            );
+        }
     }
 }
 
@@ -324,6 +404,29 @@ fn draw_input(frame: &mut Frame, app: &App, area: Rect, rows: &[String], cursor:
         )),
         rule,
     );
+    // The search takes the input's place while it is open; the input waits below it, unchanged.
+    if let Some(search) = &app.search {
+        let found = match (search.current, search.matches.len()) {
+            (_, 0) if search.query.is_empty() => String::new(),
+            (_, 0) => "  no match".to_owned(),
+            (Some(at), count) => format!("  {} of {count}", at + 1),
+            (None, count) => format!("  {count} matches"),
+        };
+        let query = crate::transcript::clean(&search.query);
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled("search ", theme::glow()),
+                Span::raw(query.clone()),
+                Span::styled(found, theme::quiet()),
+            ])),
+            text,
+        );
+        frame.set_cursor_position(Position {
+            x: text.x + 7 + query.width() as u16,
+            y: text.y,
+        });
+        return;
+    }
     let visible = usize::from(text.height);
     let first = cursor.0.saturating_sub(visible.saturating_sub(1));
     let lines: Vec<Line> = rows
@@ -360,7 +463,12 @@ fn draw_keys(frame: &mut Frame, app: &App, area: Rect) {
         .ask
         .as_ref()
         .map_or(0, |open| open.request.scopes.len().min(9));
-    let hints = if app.ask.is_some() && scopes > 0 {
+    // An open question's keys come before any toast.
+    let hints = if let Some(toast) = app.toast().filter(|_| app.ask.is_none()) {
+        toast.to_owned()
+    } else if app.search.is_some() {
+        "Enter or ↑ the match above · Shift+Enter or ↓ the one below · Esc close".to_owned()
+    } else if app.ask.is_some() && scopes > 0 {
         let keys = if scopes == 1 {
             "1".to_owned()
         } else {
@@ -374,7 +482,8 @@ fn draw_keys(frame: &mut Frame, app: &App, area: Rect) {
     } else if app.working() {
         "Glut works · Esc stops · PgUp/PgDn scroll · Ctrl+O tool results".to_owned()
     } else {
-        "Enter send · Shift+Enter new line · Shift+Tab mode · /help · Ctrl+O tool results · Ctrl+C quit".to_owned()
+        "Enter send · Shift+Enter new line · Shift+Tab mode · /help · Ctrl+F search · drag to copy · Ctrl+C quit"
+            .to_owned()
     };
     let line = Line::from(vec![
         Span::styled(format!(" {} ", session::mode_label(mode)), mode_style),

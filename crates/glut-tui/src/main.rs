@@ -8,6 +8,7 @@ mod input;
 mod markdown;
 mod picker;
 mod prefs;
+mod select;
 mod session;
 mod setup;
 mod store;
@@ -195,6 +196,16 @@ async fn run(
             app.stop_turn();
             return Ok(());
         }
+        // F2: the mouse to the terminal (its own selection) and back.
+        if let Some(held) = app.mouse_request.take() {
+            if held {
+                execute!(io::stdout(), EnableMouseCapture)?;
+            } else {
+                execute!(io::stdout(), DisableMouseCapture)?;
+            }
+            app.mouse_held = held;
+            app.mouse_said(held);
+        }
         // Ctrl+X E: the editor gets the terminal, and the input comes back from it (T29).
         if let Some(text) = app.edit_request.take() {
             pause.ask.store(true, Ordering::SeqCst);
@@ -209,6 +220,8 @@ async fn run(
             // The text is the owner's even when the terminal cannot be taken back.
             app.edited(edited);
             entered?;
+            // Taking the terminal back takes the mouse too, whatever F2 had said.
+            app.mouse_held = true;
             execute!(io::stdout(), Clear(ClearType::All))?;
             terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
             continue;
