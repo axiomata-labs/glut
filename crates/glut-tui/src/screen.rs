@@ -43,6 +43,9 @@ pub struct Open {
     pub conversation: Vec<Message>,
     /// A first message, sent as soon as the session is up.
     pub prompt: Option<String>,
+    /// A run of the host's that was cut off: it goes on first, from its journal ([`crate::Turn::Resumed`]), and the
+    /// first message follows unless the run had it already.
+    pub lost_turn: Option<String>,
 }
 
 /// Runs one session on the terminal: built as `launch` says, with `host` taking part; `linked` gets the host's way
@@ -84,8 +87,10 @@ pub async fn run(
     if open.pick {
         app.picker = Some(app.session_picker());
     }
-    if let Some(prompt) = open.prompt {
-        app.send(prompt);
+    match (open.lost_turn, open.prompt) {
+        (Some(run), prompt) => app.resume(run, prompt),
+        (None, Some(prompt)) => app.send(prompt),
+        (None, None) => {}
     }
     let outcome = screen(&mut app, &mut from_session).await;
     host.state(State::Ended);
@@ -139,7 +144,9 @@ async fn screen(
     }
     match outcome {
         Ok(()) => {
-            println!(
+            // Written, not printed: a terminal that is gone (SIGHUP) must not turn the end into a panic.
+            let _ = writeln!(
+                io::stdout(),
                 "Glut: session ended — {} tokens in, {} out{}",
                 app.usage.input_tokens,
                 app.usage.output_tokens,
@@ -150,7 +157,7 @@ async fn screen(
             std::process::ExitCode::SUCCESS
         }
         Err(err) => {
-            eprintln!("glut: {err}");
+            let _ = writeln!(io::stderr(), "glut: {err}");
             std::process::ExitCode::from(1)
         }
     }
@@ -202,7 +209,10 @@ async fn run_loop(
         execute!(io::stdout(), EndSynchronizedUpdate)?;
         drawn?;
         if app.quit {
-            app.stop_turn();
+            // A turn the host can go on with later is left to its journal when the terminal is gone.
+            if !(app.abandoned && app.parts.keep_lost_turns) {
+                app.stop_turn();
+            }
             return Ok(());
         }
         // F2: the mouse to the terminal (its own selection) and back.
@@ -237,8 +247,8 @@ async fn run_loop(
                 tokio::select! {
                     _ = line => {}
                     _ = interrupt.recv() => {}
-                    _ = terminate.recv() => app.quit = true,
-                    _ = hangup.recv() => app.quit = true,
+                    _ = terminate.recv() => app.abandon(),
+                    _ = hangup.recv() => app.abandon(),
                 }
             }
             let entered = enter();
@@ -279,8 +289,8 @@ async fn run_loop(
         }
         tokio::select! {
             // A closed window or a kill ends the session cleanly: the turn stopped, the terminal given back.
-            _ = terminate.recv() => app.quit = true,
-            _ = hangup.recv() => app.quit = true,
+            _ = terminate.recv() => app.abandon(),
+            _ = hangup.recv() => app.abandon(),
             key = keys.recv() => match key {
                 Some(key) => app.on_terminal(key),
                 None => return Ok(()),

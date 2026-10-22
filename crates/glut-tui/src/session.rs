@@ -21,7 +21,7 @@ use glut::{
 };
 use tokio::sync::{mpsc, oneshot};
 
-use crate::host::{EngineChoice, Host, Instructions, Launch, Servers, Signal, State};
+use crate::host::{EngineChoice, Host, Instructions, Launch, Search, Servers, Signal, State, Turn};
 
 /// What the session reports to the screen.
 pub enum Report {
@@ -152,6 +152,10 @@ pub struct Parts {
     pub fixed_engine: bool,
     /// Whether the session is kept under `~/.axh/sessions/` ([`Launch::keep_sessions`]).
     pub keep_sessions: bool,
+    /// [`Launch::mode_locked`], [`Launch::owner_shell`], [`Launch::keep_lost_turns`].
+    pub mode_locked: bool,
+    pub owner_shell: bool,
+    pub keep_lost_turns: bool,
 }
 
 /// The model the session talks to now.
@@ -199,6 +203,7 @@ pub async fn build(
         .map_err(|err| format!("cannot use {}: {err}", launch.cwd.display()))?;
     let mut notes = Vec::new();
 
+    let host_mode = launch.gate.mode.is_some();
     let mut options = launch.gate;
     // The project's rules, skills and servers count where the owner trusted the folder — when the host leaves it to
     // the owner.
@@ -215,8 +220,9 @@ pub async fn build(
     };
     let built = build_gate(&home, &cwd, options, Arc::new(asker)).map_err(|err| err.to_string())?;
     // A session starts in build (the owner's wish): `ask` becomes it — also an `ask` the settings name, which the
-    // gate cannot tell from none; Shift+Tab reaches it. Any other mode the settings pick (plan, auto) stands.
-    if built.gate.mode() == Mode::Default {
+    // gate cannot tell from none; Shift+Tab reaches it. Any other mode the settings pick (plan, auto) stands, and so
+    // does the mode a host set.
+    if !host_mode && built.gate.mode() == Mode::Default {
         built.gate.set_mode(Mode::AcceptEdits);
     }
     notes.extend(built.notes().into_iter().map(str::to_owned));
@@ -280,7 +286,11 @@ pub async fn build(
         servers,
         built.sandbox,
         setup::Extras {
-            search: Some(launch.search.unwrap_or_else(web_search)),
+            search: match launch.search {
+                Search::Owner => Some(web_search()),
+                Search::Given(search) => Some(search),
+                Search::Off => None,
+            },
             direct: Vec::new(),
         },
         &mut sink,
@@ -299,6 +309,9 @@ pub async fn build(
         host,
         fixed_engine: matches!(launch.engine, EngineChoice::Fixed { .. }),
         keep_sessions: launch.keep_sessions,
+        mode_locked: launch.mode_locked,
+        owner_shell: launch.owner_shell,
+        keep_lost_turns: launch.keep_lost_turns,
     };
     let engine = match launch.engine {
         EngineChoice::Providers { provider, model } => {
@@ -317,9 +330,14 @@ pub async fn build(
         } => Engine {
             provider,
             model: Arc::new(Model::new(endpoint.clone(), protocol).map_err(|err| err.to_string())?),
+            // Glut's own prices and window first (feedback "Glut standalone"), then the host's.
+            prices: parts.owner_prices.get(&endpoint.model).copied().or(prices),
+            window: parts
+                .owner_windows
+                .get(&endpoint.model)
+                .map(|tokens| (*tokens, "settings.json"))
+                .or(window),
             endpoint,
-            prices,
-            window,
         },
     };
     Ok((parts, engine))
@@ -487,14 +505,17 @@ pub fn turn(
     parts: Arc<Parts>,
     engine: Engine,
     conversation: Vec<Message>,
-    prompt: String,
+    input: TurnInput,
     cancel: Cancel,
     inbox: glut::Inbox,
     reports: mpsc::UnboundedSender<Report>,
 ) {
     let kept = conversation.clone();
     let host = Arc::clone(&parts.host);
-    let asked = prompt.clone();
+    let asked = match &input {
+        TurnInput::Message(prompt) => prompt.clone(),
+        TurnInput::Resume(_) => String::new(),
+    };
     let run = tokio::spawn(async move {
         let mut sink = parts.sink.clone();
         // What the owner sends while it works joins before its next step (T10).
@@ -504,21 +525,51 @@ pub fn turn(
         };
         parts.host.state(State::Working);
         // The host's word first (its budget, its stop): a refused turn sends nothing and leaves the conversation.
-        match until_cancelled(parts.host.before_turn(&mut config), &cancel).await {
+        let kind = match input {
+            TurnInput::Message(_) => Turn::Message,
+            TurnInput::Resume(_) => Turn::Resumed,
+        };
+        match until_cancelled(parts.host.before_turn(&mut config, kind), &cancel).await {
             Some(Ok(())) => {}
             Some(Err(reason)) => return Ended::Refused(reason),
             None => return Ended::Refused("stopped before the turn began".to_owned()),
         }
-        let (outcome, after) = glut::run_continuing(
-            &config,
-            engine.model.as_ref(),
-            &parts.tools,
-            conversation,
-            &prompt,
-            &mut sink,
-            &cancel,
-        )
-        .await;
+        let (outcome, after) = match input {
+            TurnInput::Message(prompt) => {
+                glut::run_continuing(
+                    &config,
+                    engine.model.as_ref(),
+                    &parts.tools,
+                    conversation,
+                    &prompt,
+                    &mut sink,
+                    &cancel,
+                )
+                .await
+            }
+            TurnInput::Resume(run) => {
+                match glut::resume(
+                    &config,
+                    engine.model.as_ref(),
+                    &parts.tools,
+                    &run,
+                    &mut sink,
+                    &cancel,
+                )
+                .await
+                {
+                    Ok(done) => done,
+                    // A journal that cannot go on is the host's to give up; the session goes on from what it kept.
+                    Err(reason) => {
+                        parts.host.not_resumed(&run, &reason);
+                        sink.emit(Event::Error {
+                            message: format!("the cut-off turn cannot go on: {reason}"),
+                        });
+                        return Ended::Ran(refused(), conversation);
+                    }
+                }
+            }
+        };
         Ended::Ran(outcome, after)
     });
     tokio::spawn(async move {
@@ -539,6 +590,14 @@ pub fn turn(
         host.state(State::Idle);
         let _ = reports.send(done);
     });
+}
+
+/// What a turn starts from.
+pub enum TurnInput {
+    /// The owner's message.
+    Message(String),
+    /// The lost run of this name, from its journal.
+    Resume(String),
 }
 
 /// How a turn's task ended.
@@ -945,6 +1004,9 @@ pub fn for_tests() -> (Parts, Engine) {
         host: Arc::new(crate::host::Standalone),
         fixed_engine: false,
         keep_sessions: true,
+        mode_locked: false,
+        owner_shell: true,
+        keep_lost_turns: false,
     };
     let engine = Engine {
         provider: "test".into(),

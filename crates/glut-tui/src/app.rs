@@ -232,8 +232,12 @@ pub struct App {
     pub frame: usize,
     quit_armed: Option<Instant>,
     pub quit: bool,
+    /// The terminal closed or the process was ended: no owner is left to see the end.
+    pub abandoned: bool,
     /// Where the theme comes from: the owner's `/theme`, or the host's app (TUI8e).
     theme_from: ThemeFrom,
+    /// The host's first message, held while a cut-off turn goes on ([`App::resume`]).
+    after_resume: Option<String>,
     reports: mpsc::UnboundedSender<Report>,
 }
 
@@ -322,7 +326,9 @@ impl App {
             frame: 0,
             quit_armed: None,
             quit: false,
+            abandoned: false,
             theme_from: ThemeFrom::Owner,
+            after_resume: None,
             reports,
         }
     }
@@ -465,6 +471,12 @@ impl App {
             .map_or(Mode::Default, |gate| gate.mode())
     }
 
+    /// The terminal closed or the process was ended: the session ends.
+    pub fn abandon(&mut self) {
+        self.abandoned = true;
+        self.quit = true;
+    }
+
     /// Stops the turn under way, if there is one (the session is ending).
     pub fn stop_turn(&mut self) {
         if let Some(cancel) = &self.running {
@@ -501,7 +513,34 @@ impl App {
             Arc::clone(&self.parts),
             self.engine.clone(),
             std::mem::take(&mut self.conversation),
-            prompt,
+            session::TurnInput::Message(prompt),
+            cancel,
+            inbox,
+            self.reports.clone(),
+        );
+    }
+
+    /// Goes on with the run `run` that was cut off (its journal is the host's); `then` is sent after it — unless the
+    /// run had it in its conversation already.
+    pub fn resume(&mut self, run: String, then: Option<String>) {
+        if self.working() {
+            return;
+        }
+        self.transcript.note(
+            "a turn of this session was cut off — it goes on; Esc stops it",
+            Tone::Quiet,
+        );
+        self.after_resume = then;
+        let cancel = Cancel::new();
+        self.running = Some(cancel.clone());
+        self.busy = Some(Busy::Turn);
+        let inbox = glut::Inbox::default();
+        self.steering = Some(inbox.clone());
+        session::turn(
+            Arc::clone(&self.parts),
+            self.engine.clone(),
+            std::mem::take(&mut self.conversation),
+            session::TurnInput::Resume(run),
             cancel,
             inbox,
             self.reports.clone(),
@@ -660,6 +699,14 @@ impl App {
                         .transcript
                         .note(format!("the turn ended: {}", reason(other)), Tone::Fault),
                 }
+                // The host's first message follows a cut-off turn however it ended — unless that turn had it already: a
+                // session nobody watches must not stand idle with its work unsent.
+                if let Some(first) = self.after_resume.take()
+                    && !told(&self.conversation, &first)
+                {
+                    self.send(first);
+                    return;
+                }
                 // The next queued message follows a turn that answered; after a stop, a failure or a limit it waits
                 // for Enter, or it would run into the same wall.
                 if outcome.reason == FinishReason::Answered && !self.queue.is_empty() {
@@ -671,6 +718,7 @@ impl App {
                 self.busy = None;
                 match result {
                     Ok(compacted) => {
+                        self.spent(compacted.usage);
                         if let Some(prices) = self.engine.prices {
                             *self.cost.get_or_insert(0.0) += prices.cost_usd(&compacted.usage);
                         }
@@ -701,6 +749,7 @@ impl App {
                 self.conversation = conversation;
                 match result {
                     Ok((path, usage)) => {
+                        self.spent(usage);
                         if let Some(prices) = self.engine.prices {
                             *self.cost.get_or_insert(0.0) += prices.cost_usd(&usage);
                         }
@@ -739,8 +788,12 @@ impl App {
                     late.append(&mut self.queue);
                     self.queue = late;
                 }
+                // A cut-off turn that may not go on leaves the host's first message waiting for Enter.
+                if let Some(first) = self.after_resume.take() {
+                    self.queue.insert(0, first);
+                }
                 // The message is the owner's to send again once the reason is gone: back in an empty input.
-                let back = self.input.is_empty();
+                let back = !prompt.is_empty() && self.input.is_empty();
                 if back {
                     self.input.insert_text(&prompt);
                 }
@@ -1239,6 +1292,12 @@ impl App {
 
     /// Runs the owner's own command in the folder, beside the session; its output comes back as a report.
     fn shell(&mut self, command: String, to_model: bool) {
+        if !self.parts.owner_shell {
+            return self.transcript.note(
+                "no !commands in this session: the program that started it keeps them off",
+                Tone::Fault,
+            );
+        }
         self.shells += 1;
         let id = format!("shell-{}", self.shells);
         self.transcript.push(crate::transcript::Kind::Tool {
@@ -1317,6 +1376,12 @@ impl App {
 
     /// Shift+Tab: plan → ask → build → auto → plan, from the next call on.
     fn cycle_mode(&mut self) {
+        if self.parts.mode_locked {
+            return self.transcript.note(
+                "this session's mode is set by the program that started it, for its role",
+                Tone::Fault,
+            );
+        }
         let Some(gate) = self.parts.tools.gate() else {
             return;
         };
@@ -1412,6 +1477,7 @@ impl App {
                 },
             },
             "context" => self.context(rest),
+            "compact" if self.refused_spend() => {}
             "compact" => {
                 self.busy = Some(Busy::Compacting);
                 self.transcript
@@ -1432,6 +1498,7 @@ impl App {
                      take the folder's handoff into this one",
                     Tone::Quiet,
                 ),
+                "write" if self.refused_spend() => {}
                 "write" => {
                     self.busy = Some(Busy::HandingOff);
                     self.transcript.note("writing the handoff…", Tone::Quiet);
@@ -2245,6 +2312,28 @@ impl App {
             Ok(()) => self.say(format!("theme: {name}")),
             Err(reason) => self.transcript.note(reason, Tone::Fault),
         }
+    }
+
+    /// Whether the host refuses a paid call outside a turn, said in the stream.
+    fn refused_spend(&mut self) -> bool {
+        match self.parts.host.may_spend() {
+            Ok(()) => false,
+            Err(reason) => {
+                self.transcript
+                    .note(format!("not now: {reason}"), Tone::Fault);
+                true
+            }
+        }
+    }
+
+    /// Tells the host what a paid call outside a turn used.
+    fn spent(&self, usage: Usage) {
+        self.parts.host.event(&Event::Usage {
+            turn: 0,
+            input_tokens: usage.input_tokens,
+            cached_input_tokens: usage.cached_input_tokens,
+            output_tokens: usage.output_tokens,
+        });
     }
 
     /// What the host says from outside the session.
@@ -3198,6 +3287,13 @@ fn parse_tokens(text: &str) -> Option<u32> {
     }
     let tokens = (number.parse::<f64>().ok()? * factor).round();
     (tokens >= 1.0 && tokens <= f64::from(MAX_WINDOW)).then_some(tokens as u32)
+}
+
+/// Whether `prompt` is one of the owner's messages of `conversation` already.
+fn told(conversation: &[Message], prompt: &str) -> bool {
+    conversation.iter().any(|message| {
+        message.role == glut::model::Role::User && message.content.as_deref() == Some(prompt)
+    })
 }
 
 /// Whether command `name` (with `rest`) waits while Glut works: what changes the model, the conversation or the
@@ -4388,6 +4484,7 @@ mod tests {
         fn before_turn<'a>(
             &'a self,
             _config: &'a mut glut::RunConfig,
+            _turn: crate::host::Turn,
         ) -> crate::host::HostFuture<'a, Result<(), String>> {
             Box::pin(async { Err("the session is at its limit".to_owned()) })
         }
@@ -4509,5 +4606,78 @@ mod tests {
             None,
             "a turn called off is no answer from elsewhere"
         );
+    }
+
+    #[tokio::test]
+    async fn a_cut_off_turn_the_host_refuses_leaves_its_first_message_queued() {
+        let (mut app, mut reports, _host) = hosted();
+        app.resume("turn-1".into(), Some("start the card".into()));
+        assert!(app.working());
+        while let Some(report) = reports.recv().await {
+            let refused = matches!(report, Report::Refused { .. });
+            app.on_report(report);
+            if refused {
+                break;
+            }
+        }
+        assert!(!app.working());
+        assert!(
+            app.input.is_empty(),
+            "no message of the owner's to give back"
+        );
+        assert_eq!(app.queue, ["start the card"]);
+    }
+
+    #[tokio::test]
+    async fn the_first_message_follows_a_resumed_turn_unless_it_had_it() {
+        let (mut app, _reports) = app();
+        app.busy = Some(Busy::Turn);
+        app.after_resume = Some("start the card".into());
+        let outcome = RunOutcome {
+            reason: FinishReason::Cancelled,
+            answer: None,
+            turns: 1,
+            usage: Usage::default(),
+            refusals: 0,
+        };
+        app.on_report(Report::Done(
+            outcome.clone(),
+            vec![Message::user("start the card")],
+        ));
+        assert!(app.queue.is_empty(), "the lost turn had it");
+        app.busy = Some(Busy::Turn);
+        app.after_resume = Some("start the card".into());
+        app.on_report(Report::Done(outcome, vec![Message::user("something else")]));
+        assert!(
+            app.working(),
+            "sent at once, however the cut-off turn ended"
+        );
+        assert!(app.queue.is_empty());
+    }
+
+    #[test]
+    fn a_host_can_lock_the_mode_keep_the_shell_off_and_refuse_paid_calls_outside_a_turn() {
+        let (mut parts, engine) = session::for_tests();
+        /// A host whose session is at its limit.
+        struct Spent;
+        impl crate::host::Host for Spent {
+            fn may_spend(&self) -> Result<(), String> {
+                Err("the session's money is spent".into())
+            }
+        }
+        parts.host = Arc::new(Spent);
+        parts.mode_locked = true;
+        parts.owner_shell = false;
+        let (send, _receive) = mpsc::unbounded_channel();
+        let mut app = App::new(Arc::new(parts), engine, send);
+        app.cycle_mode();
+        typed(&mut app, "!ls");
+        typed(&mut app, "/compact");
+        typed(&mut app, "/handoff write");
+        assert!(!app.working(), "nothing started");
+        let text = text_of(&app);
+        assert!(text.contains("mode is set by the program"), "{text}");
+        assert!(text.contains("no !commands"), "{text}");
+        assert_eq!(text.matches("money is spent").count(), 2, "{text}");
     }
 }

@@ -28,7 +28,7 @@ mod view;
 mod watch;
 
 pub use host::{
-    EngineChoice, Host, HostFuture, HostLink, Instructions, Launch, Servers, Signal, Standalone,
-    State,
+    EngineChoice, Host, HostFuture, HostLink, Instructions, Launch, Search, Servers, Signal,
+    Standalone, State, Turn,
 };
 pub use screen::{Open, run};

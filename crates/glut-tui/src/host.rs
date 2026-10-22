@@ -38,13 +38,22 @@ pub struct Launch {
     pub servers: Servers,
     /// The skills' folders beside the owner's and the project's; `None` takes the run's default.
     pub skill_dirs: Option<Vec<PathBuf>>,
-    /// The web search; `None` takes the providers' keys from the environment, as `axh` does.
-    pub search: Option<WebSearch>,
+    /// The web search.
+    pub search: Search,
     /// The model the session starts with.
     pub engine: EngineChoice,
     /// Whether the session is kept under `~/.axh/sessions/` for `glut -c`/`-r`. A host that keeps its sessions itself
     /// ([`Host::kept`]) says no: they would be found twice.
     pub keep_sessions: bool,
+    /// Whether the mode stays as `gate.mode` set it: no Shift+Tab, no other mode out of plan mode. A host whose
+    /// rights were chosen for the session's role says yes.
+    pub mode_locked: bool,
+    /// Whether the owner's `!cmd` and `!!cmd` run: a host that keeps the app's keys in reach of the folder says no.
+    pub owner_shell: bool,
+    /// Whether a turn under way is left as it is when the terminal closes (SIGHUP) or the process is ended
+    /// (SIGTERM), so its journal stays for the next start to go on from ([`crate::Open::lost_turn`]); otherwise it
+    /// is called off.
+    pub keep_lost_turns: bool,
 }
 
 impl Launch {
@@ -64,9 +73,12 @@ impl Launch {
             instructions: Instructions::Guides,
             servers: Servers::Owner,
             skill_dirs: None,
-            search: None,
+            search: Search::Owner,
             engine: EngineChoice::Providers { provider, model },
             keep_sessions: true,
+            mode_locked: false,
+            owner_shell: true,
+            keep_lost_turns: false,
         }
     }
 }
@@ -77,6 +89,16 @@ pub enum Instructions {
     Guides,
     /// The host's own text, and nothing Glut reads.
     Given(String),
+}
+
+/// The session's web search.
+pub enum Search {
+    /// With the search providers' keys from the environment, as `axh` has it.
+    Owner,
+    /// The host's, with its keys and its daily limit.
+    Given(WebSearch),
+    /// None: the host turned it off.
+    Off,
 }
 
 /// Which MCP servers the session starts.
@@ -112,6 +134,16 @@ pub enum EngineChoice {
     },
 }
 
+/// What a turn is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Turn {
+    /// The owner's message.
+    Message,
+    /// A run that was cut off (the pane closed, the app quit) goes on from its journal: what it used is counted
+    /// already.
+    Resumed,
+}
+
 /// The session's state, as a host shows it elsewhere.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum State {
@@ -138,11 +170,28 @@ pub trait Host: Send + Sync + 'static {
     }
 
     /// Before each turn, on the turn's own copy of the settings: what is left of the host's budget, the turn's
-    /// journal. An `Err` refuses the turn with its reason: nothing reaches the model, the conversation stays as it
-    /// was, and the owner's message goes back into the input. A turn called off while this waits is refused too.
-    fn before_turn<'a>(&'a self, config: &'a mut RunConfig) -> HostFuture<'a, Result<(), String>> {
-        let _ = config;
+    /// journal (a [`Turn::Resumed`] one reads the lost run from its folder). An `Err` refuses the turn with its
+    /// reason: nothing reaches the model, the conversation stays as it was, and the owner's message goes back into
+    /// the input. A turn called off while this waits is refused too.
+    fn before_turn<'a>(
+        &'a self,
+        config: &'a mut RunConfig,
+        turn: Turn,
+    ) -> HostFuture<'a, Result<(), String>> {
+        let _ = (config, turn);
         Box::pin(async { Ok(()) })
+    }
+
+    /// Before a paid call outside a turn (`/compact`, `/handoff write`): an `Err` says why not. What it used reaches
+    /// [`Host::event`] as an [`Event::Usage`] once it is done.
+    fn may_spend(&self) -> Result<(), String> {
+        Ok(())
+    }
+
+    /// A lost run [`Open::lost_turn`](crate::Open::lost_turn) named could not go on, and why: its journal is the
+    /// host's to give up.
+    fn not_resumed(&self, run: &str, reason: &str) {
+        let _ = (run, reason);
     }
 
     /// A question of the gate. `on_screen` is the screen's dialog; the host may wait on it alone (the default) or
