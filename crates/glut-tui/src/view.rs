@@ -15,18 +15,15 @@ use crate::{glimm, session, theme};
 const INPUT_ROWS: usize = 8;
 /// The most rows of its target an ask shows.
 const ASK_ROWS: usize = 12;
-/// The side panel's share of the screen in percent, its narrowest width, and the screen it needs beside the stream.
-const PANEL_PERCENT: u16 = 25;
+/// The side panel takes this part of the screen (a third, the owner's choice), never less than its narrowest width;
+/// and the screen it needs beside the stream.
+const PANEL_SHARE: u16 = 3;
 const PANEL_MIN_WIDTH: u16 = 32;
 pub const PANEL_MIN_SCREEN: u16 = 100;
 
-/// The side panel's width on a screen `width` columns wide: a quarter of it, never narrower than its minimum.
+/// The side panel's width on a screen `width` columns wide: a third of it, never narrower than its minimum.
 fn panel_width(width: u16) -> u16 {
-    // In u32: a quarter of a very wide screen must not overflow on the way.
-    let share = u32::from(width) * u32::from(PANEL_PERCENT) / 100;
-    u16::try_from(share)
-        .unwrap_or(u16::MAX)
-        .max(PANEL_MIN_WIDTH)
+    (width / PANEL_SHARE).max(PANEL_MIN_WIDTH)
 }
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
@@ -540,13 +537,8 @@ mod tests {
             ]
         );
         assert_eq!(asked_rows("ls -la", 40, 6), ["ls -la"]);
-        assert_eq!(panel_width(100), 32, "never narrower than its minimum");
-        assert_eq!(panel_width(200), 50, "a quarter of the screen");
-        assert_eq!(
-            panel_width(u16::MAX),
-            16_383,
-            "no overflow on a very wide screen"
-        );
+        assert_eq!(panel_width(90), 32, "never narrower than its minimum");
+        assert_eq!(panel_width(210), 70, "a third of the screen");
     }
 
     #[test]
