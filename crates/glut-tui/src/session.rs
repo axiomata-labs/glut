@@ -1,22 +1,27 @@
 //! One Glut session in a folder (TUI1): what `axh run` builds once per run — gate, tools, settings — built once and
 //! kept, so every message of the session is a turn that goes on from the conversation before it. The model is the
-//! session's [`Engine`], which `/model`, `/provider` and `/effort` replace between turns.
+//! session's [`Engine`], which `/model`, `/provider` and `/effort` replace between turns. What it is built from is
+//! the host's [`Launch`]; the host takes part in it through [`Host`] (TUI8a).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 use glut::compact::Compacted;
 use glut::config::ModelEndpoint;
 use glut::model::Role;
 use glut::permissions::settings::Trust;
-use glut::permissions::{Answer, AnswerFuture, AskRequest, Asker, GateOptions, Mode, build_gate};
+use glut::permissions::{Answer, AnswerFuture, AskRequest, Asker, Mode, build_gate};
 use glut::providers::{self, Providers, models};
 use glut::{
     Cancel, Effort, Event, EventSink, FinishReason, Message, Model, Prices, RunConfig, RunOutcome,
     SharedSink, Toolbox, Usage, mcp, setup, skills,
 };
 use tokio::sync::{mpsc, oneshot};
+
+use crate::host::{EngineChoice, Host, Instructions, Launch, Servers, Signal, State};
 
 /// What the session reports to the screen.
 pub enum Report {
@@ -51,38 +56,81 @@ pub enum Report {
     Files((Vec<String>, bool)),
     /// `/handoff write` ended: where the handoff is and what it cost, or why there is none; the conversation as it was.
     HandedOff(Result<(PathBuf, Usage), String>, Vec<Message>),
+    /// The host said something from outside the session.
+    Host(Signal),
+    /// The host refused the turn before it ran ([`Host::before_turn`]): why, the owner's message back for the input,
+    /// the conversation as it was.
+    Refused {
+        reason: String,
+        prompt: String,
+        conversation: Vec<Message>,
+    },
 }
 
-/// Sends the run's events to the screen.
-struct ToScreen(mpsc::UnboundedSender<Report>);
+/// Sends the run's events to the screen, each one shown to the host first.
+struct ToScreen {
+    reports: mpsc::UnboundedSender<Report>,
+    host: Arc<dyn Host>,
+}
 
 impl EventSink for ToScreen {
     fn emit(&mut self, event: Event) {
-        let _ = self.0.send(Report::Event(event));
+        self.host.event(&event);
+        let _ = self.reports.send(Report::Event(event));
     }
 }
 
-/// Asks the owner on the screen: the question goes to the app, the answer comes back; a screen that is gone refuses.
-struct OnScreen(mpsc::UnboundedSender<Report>);
+/// Asks the owner on the screen — and wherever else the host asks: the question goes to the app, the answer comes
+/// back; a screen that is gone refuses.
+struct OnScreen {
+    reports: mpsc::UnboundedSender<Report>,
+    host: Arc<dyn Host>,
+    /// How many of the gate's questions are open now.
+    open: AtomicUsize,
+}
 
 impl Asker for OnScreen {
     fn ask<'a>(&'a self, request: &'a AskRequest) -> AnswerFuture<'a> {
         let (reply, answer) = oneshot::channel();
-        let sent = self.0.send(Report::Ask(request.clone(), reply)).is_ok();
-        Box::pin(async move {
+        let sent = self
+            .reports
+            .send(Report::Ask(request.clone(), reply))
+            .is_ok();
+        let on_screen: AnswerFuture<'a> = Box::pin(async move {
             if !sent {
                 return Answer::Deny;
             }
             answer.await.unwrap_or(Answer::Deny)
+        });
+        Box::pin(async move {
+            let _waiting = Waiting::start(&self.host, &self.open);
+            self.host.ask(request, on_screen).await
         })
     }
 }
 
-/// How the session was asked to start.
-pub struct Start {
-    pub cwd: PathBuf,
-    pub provider: Option<String>,
-    pub model: Option<String>,
+/// The host hears `Waiting` while any question is open and `Working` once the last one ended — answered, or dropped
+/// with a turn called off.
+struct Waiting<'a> {
+    host: &'a Arc<dyn Host>,
+    open: &'a AtomicUsize,
+}
+
+impl<'a> Waiting<'a> {
+    fn start(host: &'a Arc<dyn Host>, open: &'a AtomicUsize) -> Self {
+        if open.fetch_add(1, Ordering::SeqCst) == 0 {
+            host.state(State::Waiting);
+        }
+        Waiting { host, open }
+    }
+}
+
+impl Drop for Waiting<'_> {
+    fn drop(&mut self) {
+        if self.open.fetch_sub(1, Ordering::SeqCst) == 1 {
+            self.host.state(State::Working);
+        }
+    }
 }
 
 /// What stays for the whole session: the tools with their gate, the run's settings, what the owner's files say.
@@ -98,6 +146,12 @@ pub struct Parts {
     pub owner_effort: Option<Effort>,
     /// Said once at the start: skills or servers left out.
     pub notes: Vec<String>,
+    /// Who runs the screen, and takes part in the session.
+    pub host: Arc<dyn Host>,
+    /// The host fixed the model: no `/model`, `/provider` or `/effort`.
+    pub fixed_engine: bool,
+    /// Whether the session is kept under `~/.axh/sessions/` ([`Launch::keep_sessions`]).
+    pub keep_sessions: bool,
 }
 
 /// The model the session talks to now.
@@ -119,40 +173,47 @@ impl Engine {
     /// The run's settings for a turn on this engine.
     pub fn config(&self, parts: &Parts) -> RunConfig {
         let mut config = parts.config.clone();
-        config.compaction.context_window = self.window.map(|(tokens, _)| tokens);
+        // The engine's window where it knows one; else what the settings (or the host) set stands.
+        if let Some((tokens, _)) = self.window {
+            config.compaction.context_window = Some(tokens);
+        }
         config
     }
 }
 
-/// Builds the session: the gate with the screen as the one who answers, the tools, and the engine of the provider
-/// and model asked for.
+/// Builds the session as `launch` says: the gate with the screen (and the host) as the one who answers, the tools,
+/// and the engine of the provider and model asked for.
 ///
 /// # Errors
 ///
 /// A message when there is no provider to use, the folder cannot be used, or the settings are broken.
 pub async fn build(
-    start: Start,
+    launch: Launch,
+    host: Arc<dyn Host>,
     reports: mpsc::UnboundedSender<Report>,
 ) -> Result<(Parts, Engine), String> {
     let home = glut::permissions::settings::home_dir().map_err(|err| err.to_string())?;
-    let cwd = start
+    let cwd = launch
         .cwd
         .canonicalize()
-        .map_err(|err| format!("cannot use {}: {err}", start.cwd.display()))?;
+        .map_err(|err| format!("cannot use {}: {err}", launch.cwd.display()))?;
     let mut notes = Vec::new();
 
-    let trusted = Trust::load(&home)
-        .map_err(|err| err.to_string())?
-        .contains(&cwd);
-    let options = GateOptions {
-        mode: None,
-        allow: Vec::new(),
-        ask: Vec::new(),
-        deny: Vec::new(),
-        trusted,
+    let mut options = launch.gate;
+    // The project's rules, skills and servers count where the owner trusted the folder — when the host leaves it to
+    // the owner.
+    if launch.owner_trust {
+        options.trusted = Trust::load(&home)
+            .map_err(|err| err.to_string())?
+            .contains(&cwd);
+    }
+    let trusted = options.trusted;
+    let asker = OnScreen {
+        reports: reports.clone(),
+        host: Arc::clone(&host),
+        open: AtomicUsize::new(0),
     };
-    let built = build_gate(&home, &cwd, options, Arc::new(OnScreen(reports.clone())))
-        .map_err(|err| err.to_string())?;
+    let built = build_gate(&home, &cwd, options, Arc::new(asker)).map_err(|err| err.to_string())?;
     // A session starts in build (the owner's wish): `ask` becomes it — also an `ask` the settings name, which the
     // gate cannot tell from none; Shift+Tab reaches it. Any other mode the settings pick (plan, auto) stands.
     if built.gate.mode() == Mode::Default {
@@ -161,29 +222,38 @@ pub async fn build(
     notes.extend(built.notes().into_iter().map(str::to_owned));
 
     let mut config = RunConfig::new(&cwd);
-    // T24: the owner's and the project's guides, read by Glut itself.
-    let (guides, guide_notes) = glut::guide::read(&home, &cwd);
-    notes.extend(guide_notes);
-    if !guides.is_empty() {
-        notes.push(format!(
-            "read {}",
-            guides
-                .iter()
-                .map(|guide| shown_folder(&guide.path))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
-    }
-    config.instructions = Some(match glut::guide::instructions(&guides, &home) {
-        Some(guides) => format!("{SESSION_NOTE}\n\n{guides}"),
-        None => SESSION_NOTE.to_owned(),
+    config.instructions = Some(match launch.instructions {
+        Instructions::Guides => {
+            // T24: the owner's and the project's guides, read by Glut itself.
+            let (guides, guide_notes) = glut::guide::read(&home, &cwd);
+            notes.extend(guide_notes);
+            if !guides.is_empty() {
+                notes.push(format!(
+                    "read {}",
+                    guides
+                        .iter()
+                        .map(|guide| shown_folder(&guide.path))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+            match glut::guide::instructions(&guides, &home) {
+                Some(guides) => format!("{SESSION_NOTE}\n\n{guides}"),
+                None => SESSION_NOTE.to_owned(),
+            }
+        }
+        Instructions::Given(text) => format!("{SESSION_NOTE}\n\n{text}"),
     });
+    if let Some(dirs) = launch.skill_dirs {
+        config.skill_dirs = dirs;
+    }
     config.compaction.auto = built.compact_auto;
     config.hooks = built.hooks.clone();
     config.sandbox = Some(built.sandbox.clone());
     config.refusals = built.refusals;
     config.snapshots = Some(home.join(".axh").join("snapshots"));
     config.savings = Some(home.join(".axh").join(glut::lean::FILE));
+    host.configure(&mut config, &built);
 
     let (catalog, skill_notes) = skills::Catalog::load(&home, &cwd, trusted, &config.skill_dirs);
     notes.extend(
@@ -192,11 +262,17 @@ pub async fn build(
             .map(|note| format!("skill left out: {note}")),
     );
     let catalog = Arc::new(catalog);
-    // Nobody can be asked about a project's new server before the screen is up: it is left out and said so.
-    let servers = mcp::config::load(&home, &cwd)
-        .and_then(|entries| mcp::approval::permitted(entries, &home, &cwd, false))
-        .map_err(|err| err.to_string())?;
-    let mut sink = SharedSink::new(Box::new(ToScreen(reports)));
+    let servers = match &launch.servers {
+        // Nobody can be asked about a project's new server before the screen is up: it is left out and said so.
+        Servers::Owner => mcp::config::load(&home, &cwd)
+            .and_then(|entries| mcp::approval::permitted(entries, &home, &cwd, false)),
+        Servers::Only(file) => mcp::config::named(file),
+    }
+    .map_err(|err| err.to_string())?;
+    let mut sink = SharedSink::new(Box::new(ToScreen {
+        reports,
+        host: Arc::clone(&host),
+    }));
     let tools = setup::toolbox(
         &cwd,
         &catalog,
@@ -204,7 +280,7 @@ pub async fn build(
         servers,
         built.sandbox,
         setup::Extras {
-            search: Some(web_search()),
+            search: Some(launch.search.unwrap_or_else(web_search)),
             direct: Vec::new(),
         },
         &mut sink,
@@ -220,16 +296,32 @@ pub async fn build(
         owner_prices: built.prices,
         owner_effort: built.effort,
         notes,
+        host,
+        fixed_engine: matches!(launch.engine, EngineChoice::Fixed { .. }),
+        keep_sessions: launch.keep_sessions,
     };
-    let (engine, engine_notes) = engine(
-        &parts,
-        start.provider.as_deref(),
-        start.model.as_deref(),
-        None,
-    )
-    .await?;
-    let mut parts = parts;
-    parts.notes.extend(engine_notes);
+    let engine = match launch.engine {
+        EngineChoice::Providers { provider, model } => {
+            let (engine, engine_notes) =
+                engine(&parts, provider.as_deref(), model.as_deref(), None).await?;
+            let mut parts = parts;
+            parts.notes.extend(engine_notes);
+            return Ok((parts, engine));
+        }
+        EngineChoice::Fixed {
+            provider,
+            endpoint,
+            protocol,
+            prices,
+            window,
+        } => Engine {
+            provider,
+            model: Arc::new(Model::new(endpoint.clone(), protocol).map_err(|err| err.to_string())?),
+            endpoint,
+            prices,
+            window,
+        },
+    };
     Ok((parts, engine))
 }
 
@@ -401,14 +493,23 @@ pub fn turn(
     reports: mpsc::UnboundedSender<Report>,
 ) {
     let kept = conversation.clone();
+    let host = Arc::clone(&parts.host);
+    let asked = prompt.clone();
     let run = tokio::spawn(async move {
         let mut sink = parts.sink.clone();
         // What the owner sends while it works joins before its next step (T10).
-        let config = RunConfig {
+        let mut config = RunConfig {
             inbox: Some(inbox),
             ..engine.config(&parts)
         };
-        glut::run_continuing(
+        parts.host.state(State::Working);
+        // The host's word first (its budget, its stop): a refused turn sends nothing and leaves the conversation.
+        match until_cancelled(parts.host.before_turn(&mut config), &cancel).await {
+            Some(Ok(())) => {}
+            Some(Err(reason)) => return Ended::Refused(reason),
+            None => return Ended::Refused("stopped before the turn began".to_owned()),
+        }
+        let (outcome, after) = glut::run_continuing(
             &config,
             engine.model.as_ref(),
             &parts.tools,
@@ -417,29 +518,66 @@ pub fn turn(
             &mut sink,
             &cancel,
         )
-        .await
+        .await;
+        Ended::Ran(outcome, after)
     });
     tokio::spawn(async move {
         let done = match run.await {
-            Ok((outcome, after)) => Report::Done(outcome, after),
+            Ok(Ended::Ran(outcome, after)) => Report::Done(outcome, after),
+            Ok(Ended::Refused(reason)) => Report::Refused {
+                reason,
+                prompt: asked,
+                conversation: kept,
+            },
             Err(err) => {
                 let _ = reports.send(Report::Event(Event::Error {
                     message: format!("the turn broke off: {err}"),
                 }));
-                Report::Done(
-                    RunOutcome {
-                        reason: FinishReason::Failed,
-                        answer: None,
-                        turns: 0,
-                        usage: Usage::default(),
-                        refusals: 0,
-                    },
-                    kept,
-                )
+                Report::Done(refused(), kept)
             }
         };
+        host.state(State::Idle);
         let _ = reports.send(done);
     });
+}
+
+/// How a turn's task ended.
+enum Ended {
+    Ran(RunOutcome, Vec<Message>),
+    /// The host refused it, or it was called off before it began.
+    Refused(String),
+}
+
+/// How often a host's wait before a turn looks whether the turn was called off.
+const CANCEL_POLL: Duration = Duration::from_millis(100);
+
+/// `work`, unless `cancel` calls it off first (`None`).
+async fn until_cancelled<T>(
+    work: impl std::future::Future<Output = T>,
+    cancel: &Cancel,
+) -> Option<T> {
+    tokio::pin!(work);
+    loop {
+        tokio::select! {
+            done = &mut work => return Some(done),
+            () = tokio::time::sleep(CANCEL_POLL) => {
+                if cancel.is_cancelled() {
+                    return None;
+                }
+            }
+        }
+    }
+}
+
+/// The outcome of a turn that broke off.
+fn refused() -> RunOutcome {
+    RunOutcome {
+        reason: FinishReason::Failed,
+        answer: None,
+        turns: 0,
+        usage: Usage::default(),
+        refusals: 0,
+    }
 }
 
 /// `/compact`: the conversation summarised in the background; the old one comes back with the result, kept when
@@ -804,6 +942,9 @@ pub fn for_tests() -> (Parts, Engine) {
         owner_prices: HashMap::new(),
         owner_effort: None,
         notes: Vec::new(),
+        host: Arc::new(crate::host::Standalone),
+        fixed_engine: false,
+        keep_sessions: true,
     };
     let engine = Engine {
         provider: "test".into(),

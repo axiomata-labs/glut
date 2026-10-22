@@ -11,6 +11,7 @@ use glut::providers::{Providers, models};
 use glut::{Cancel, Effort, Event, FinishReason, Message, Usage};
 use tokio::sync::{mpsc, oneshot};
 
+use crate::host::Signal;
 use crate::input::Input;
 use crate::picker::{Facts, Item, Pick, Picker};
 use crate::prefs::{self, Prefs};
@@ -231,7 +232,21 @@ pub struct App {
     pub frame: usize,
     quit_armed: Option<Instant>,
     pub quit: bool,
+    /// Where the theme comes from: the owner's `/theme`, or the host's app (TUI8e).
+    theme_from: ThemeFrom,
     reports: mpsc::UnboundedSender<Report>,
+}
+
+/// Where the screen's theme comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ThemeFrom {
+    /// The owner's kept choice (`prefs.json`), as the standalone `glut` has it.
+    Owner,
+    /// The host's: its app's theme, followed as it changes.
+    Host,
+    /// The owner's `/theme` in a hosted session: it stands for the session, the host's changes no longer reach it,
+    /// and it is not kept as the owner's own.
+    Pinned,
 }
 
 impl App {
@@ -307,8 +322,26 @@ impl App {
             frame: 0,
             quit_armed: None,
             quit: false,
+            theme_from: ThemeFrom::Owner,
             reports,
         }
+    }
+
+    /// Goes on from `conversation`, which the host kept (a card's pane opened again): shown as an opened session.
+    pub fn go_on_from(&mut self, conversation: Vec<Message>) {
+        let mut session = Session::new(
+            &self.parts.config.cwd,
+            &self.engine.provider,
+            self.engine.model_name(),
+        );
+        session.title = conversation
+            .iter()
+            .find(|message| message.role == glut::model::Role::User)
+            .and_then(|message| message.content.as_deref())
+            .map(crate::store::title_of)
+            .unwrap_or_default();
+        session.conversation = conversation;
+        self.open(session);
     }
 
     /// Keeps the session as it stands now; a failure is said, the session goes on.
@@ -317,6 +350,10 @@ impl App {
         self.session.provider.clone_from(&self.engine.provider);
         self.engine.model_name().clone_into(&mut self.session.model);
         self.session.cost = self.cost;
+        self.parts.host.kept(&self.conversation);
+        if !self.parts.keep_sessions {
+            return;
+        }
         if let Err(reason) = self.session.save(&self.parts.home) {
             self.transcript.note(
                 format!("the session could not be kept: {reason}"),
@@ -680,6 +717,42 @@ impl App {
                         .transcript
                         .note(format!("no handoff: {reason}"), Tone::Fault),
                 }
+            }
+            Report::Host(signal) => self.on_host(signal),
+            Report::Refused {
+                reason,
+                prompt,
+                conversation,
+            } => {
+                if self.session.marks.last().and_then(|mark| mark.at) == Some(conversation.len()) {
+                    self.session.marks.pop();
+                }
+                if conversation.is_empty() && self.session.title == crate::store::title_of(&prompt) {
+                    self.session.title.clear();
+                }
+                self.conversation = conversation;
+                self.running = None;
+                self.busy = None;
+                self.ask = None;
+                if let Some(inbox) = self.steering.take() {
+                    let mut late = inbox.take();
+                    late.append(&mut self.queue);
+                    self.queue = late;
+                }
+                // The message is the owner's to send again once the reason is gone: back in an empty input.
+                let back = self.input.is_empty();
+                if back {
+                    self.input.insert_text(&prompt);
+                }
+                self.transcript.note(
+                    if back {
+                        format!("not sent: {reason} — the message is back in the input")
+                    } else {
+                        format!("not sent: {reason}")
+                    },
+                    Tone::Fault,
+                );
+                self.transcript.settle();
             }
             Report::ChooseModel(provider) => {
                 self.busy = None;
@@ -1439,6 +1512,12 @@ impl App {
         model: Option<String>,
         effort: Option<Option<Effort>>,
     ) {
+        if self.parts.fixed_engine {
+            return self.transcript.note(
+                "this session's model is set by the program that started it — no switch here",
+                Tone::Fault,
+            );
+        }
         self.busy = Some(Busy::Switching);
         let provider = provider.or_else(|| Some(self.engine.provider.clone()));
         session::switch(
@@ -2157,9 +2236,53 @@ impl App {
             );
         }
         self.transcript.touch_all();
+        // In a hosted session the owner's choice stands for this session alone: the host's app has its own.
+        if self.theme_from != ThemeFrom::Owner {
+            self.theme_from = ThemeFrom::Pinned;
+            return self.say(format!("theme: {name} (this session)"));
+        }
         match prefs::set_theme(&self.parts.home, name) {
             Ok(()) => self.say(format!("theme: {name}")),
             Err(reason) => self.transcript.note(reason, Tone::Fault),
+        }
+    }
+
+    /// What the host says from outside the session.
+    fn on_host(&mut self, signal: Signal) {
+        match signal {
+            Signal::Stop(reason) => {
+                if let Some(cancel) = &self.running {
+                    cancel.cancel();
+                    self.transcript
+                        .note(format!("stopped: {reason}"), Tone::Fault);
+                }
+            }
+            Signal::Theme(name) => {
+                if self.theme_from == ThemeFrom::Pinned {
+                    return;
+                }
+                // A name the screen has no palette of leaves the colours as they are.
+                if crate::theme::set(&name) {
+                    self.theme_from = ThemeFrom::Host;
+                    self.transcript.touch_all();
+                }
+            }
+            Signal::Note(text) => self.transcript.note(text, Tone::Quiet),
+        }
+    }
+
+    /// Closes the gate's question when its answer is no longer awaited: the host's app answered it first — or the
+    /// turn was called off while it asked, which its end says itself.
+    pub fn drop_answered_ask(&mut self) {
+        if self.ask.as_ref().is_some_and(|ask| ask.reply.is_closed()) {
+            self.ask = None;
+            if self.plan_view.as_ref().is_some_and(|view| view.asking) {
+                self.plan_view = None;
+            }
+            let called_off = self.running.as_ref().is_none_or(Cancel::is_cancelled);
+            if !called_off {
+                self.say("answered elsewhere");
+            }
         }
     }
 
@@ -4240,5 +4363,151 @@ mod tests {
         for bad in ["inf", "nan", "-1", "1e3", "64 k", "4000m", "1.2.3"] {
             assert_eq!(parse_tokens(bad), None, "{bad}");
         }
+    }
+
+    /// The stream's notes, one after the other.
+    fn text_of(app: &App) -> String {
+        app.transcript
+            .blocks
+            .iter()
+            .filter_map(|block| match &block.kind {
+                crate::transcript::Kind::Note { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// A host that refuses every turn and keeps what the screen hands it.
+    #[derive(Default)]
+    struct Keeping {
+        kept: std::sync::Mutex<Vec<usize>>,
+    }
+
+    impl crate::host::Host for Keeping {
+        fn before_turn<'a>(
+            &'a self,
+            _config: &'a mut glut::RunConfig,
+        ) -> crate::host::HostFuture<'a, Result<(), String>> {
+            Box::pin(async { Err("the session is at its limit".to_owned()) })
+        }
+
+        fn kept(&self, conversation: &[Message]) {
+            self.kept.lock().unwrap().push(conversation.len());
+        }
+    }
+
+    /// A screen whose session a [`Keeping`] host runs, with the model fixed and nothing kept under `~/.axh`.
+    fn hosted() -> (App, mpsc::UnboundedReceiver<Report>, Arc<Keeping>) {
+        let (mut parts, engine) = session::for_tests();
+        let host = Arc::new(Keeping::default());
+        parts.host = host.clone();
+        parts.fixed_engine = true;
+        parts.keep_sessions = false;
+        let (send, receive) = mpsc::unbounded_channel();
+        (App::new(Arc::new(parts), engine, send), receive, host)
+    }
+
+    #[test]
+    fn a_hosted_session_offers_no_switch_of_model_and_keeps_its_conversation_with_the_host() {
+        let (mut app, _reports, host) = hosted();
+        typed(&mut app, "/model other/model");
+        assert!(!app.working(), "no switch started");
+        assert!(
+            text_of(&app).contains("no switch here"),
+            "{}",
+            text_of(&app)
+        );
+        app.go_on_from(vec![Message::user("Fix the parser")]);
+        assert_eq!(app.session.title, "Fix the parser");
+        app.keep();
+        assert_eq!(*host.kept.lock().unwrap(), [1]);
+        assert!(
+            !app.parts.home.join(".axh").join("sessions").exists(),
+            "a hosted session is not kept under ~/.axh"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_hosts_refusal_before_a_turn_sends_nothing_and_says_why() {
+        let (mut app, mut reports, _host) = hosted();
+        app.send("go on".into());
+        while let Some(report) = reports.recv().await {
+            let refused = matches!(report, Report::Refused { .. });
+            app.on_report(report);
+            if refused {
+                break;
+            }
+        }
+        assert!(text_of(&app).contains("at its limit"), "{}", text_of(&app));
+        assert_eq!(
+            app.input.text(),
+            "go on",
+            "the message is back in the input"
+        );
+        assert!(app.session.title.is_empty());
+        assert!(!app.working());
+        assert!(app.conversation.is_empty(), "the message never joined");
+        assert!(app.session.marks.is_empty(), "nothing to rewind to");
+    }
+
+    #[test]
+    fn the_hosts_stop_ends_the_turn_and_its_theme_gives_way_to_the_owners_own_for_the_session() {
+        let (mut app, _reports, _host) = hosted();
+        let cancel = Cancel::new();
+        app.running = Some(cancel.clone());
+        app.on_report(Report::Host(Signal::Stop(
+            "the session's money is spent".into(),
+        )));
+        assert!(cancel.is_cancelled());
+        assert!(text_of(&app).contains("money is spent"));
+        // Glut's own palette, so no other test sees other colours.
+        let own = crate::theme::all().next().unwrap().name;
+        app.on_report(Report::Host(Signal::Theme("no-such-theme".into())));
+        assert_eq!(
+            app.theme_from,
+            ThemeFrom::Owner,
+            "an unknown theme changes nothing"
+        );
+        app.on_report(Report::Host(Signal::Theme(own.into())));
+        assert_eq!(app.theme_from, ThemeFrom::Host);
+        typed(&mut app, &format!("/theme {own}"));
+        assert_eq!(app.theme_from, ThemeFrom::Pinned);
+        assert!(
+            Prefs::load(&app.parts.home).theme.is_none(),
+            "not kept as the owner's own"
+        );
+        app.on_report(Report::Host(Signal::Theme(own.into())));
+        assert_eq!(
+            app.theme_from,
+            ThemeFrom::Pinned,
+            "the host no longer reaches it"
+        );
+    }
+
+    #[test]
+    fn a_question_answered_elsewhere_closes_on_the_screen_and_one_of_a_turn_called_off_says_nothing()
+     {
+        let (mut app, _reports) = app();
+        let cancel = Cancel::new();
+        app.running = Some(cancel.clone());
+        let answer = asked(&mut app);
+        app.drop_answered_ask();
+        assert!(app.ask.is_some(), "still awaited");
+        drop(answer);
+        app.drop_answered_ask();
+        assert!(app.ask.is_none());
+        assert_eq!(app.toast(), Some("answered elsewhere"));
+        app.toast = None;
+        let answer = asked(&mut app);
+        cancel.cancel();
+        drop(answer);
+        app.drop_answered_ask();
+        assert!(app.ask.is_none());
+        assert_eq!(
+            app.toast(),
+            None,
+            "a turn called off is no answer from elsewhere"
+        );
     }
 }
