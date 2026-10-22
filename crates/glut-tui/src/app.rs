@@ -33,7 +33,7 @@ const HELP: &str = "Commands: /model [id] · /provider [id] · /effort [level] �
 
 /// The session's commands with what each does, as the list under a typed `/` shows them.
 pub const COMMANDS: [(&str, &str); 14] = [
-    ("model", "pick the model, or /model <id>"),
+    ("model", "pick a model of the provider in use, or /model <id>"),
     ("provider", "switch the provider, or /provider <id>"),
     ("effort", "how hard the model thinks, or /effort <level>"),
     ("context", "how full the window is; /context 64k sets it"),
@@ -406,7 +406,7 @@ impl App {
                     format!("{provider} has no model yet: pick the one it takes"),
                     Tone::Quiet,
                 );
-                self.picker = Some(self.model_picker(Some(&provider)));
+                self.picker = Some(self.model_picker(&provider));
             }
             Report::Switched(result) => {
                 self.busy = None;
@@ -669,7 +669,11 @@ impl App {
                 self.context_used = 0;
                 self.scroll = 0;
             }
-            "model" if rest.is_empty() => self.picker = Some(self.model_picker(None)),
+            // The models of the provider in use only: another provider is chosen with /provider first.
+            "model" if rest.is_empty() => {
+                let provider = self.engine.provider.clone();
+                self.picker = Some(self.model_picker(&provider));
+            }
             "model" => self.switch(
                 None,
                 Some(rest.to_owned()),
@@ -875,19 +879,19 @@ impl App {
         }
     }
 
-    /// Every model of every provider whose list Glut keeps — or of provider `only` —, the current one selected.
-    fn model_picker(&self, only: Option<&str>) -> Picker {
+    /// The models of provider `only` from the list Glut keeps, the current one selected.
+    fn model_picker(&self, only: &str) -> Picker {
         let mut items = Vec::new();
         let mut missing = Vec::new();
         if let Ok(list) = Providers::load(&self.parts.home) {
             for (id, entry) in &list.providers {
-                if only.is_some_and(|only| only != id) {
+                if id != only {
                     continue;
                 }
                 match models::cached(&self.parts.home, id, entry.root().trim_end_matches('/')) {
                     Some(list) => items.extend(list.models.iter().map(|model| {
                         Item {
-                            label: format!("{id} · {}", crate::transcript::clean(&model.id)),
+                            label: crate::transcript::clean(&model.id).to_string(),
                             detail: model_detail(model),
                             pick: Pick::Model {
                                 provider: id.clone(),
@@ -908,7 +912,7 @@ impl App {
                 }
             }
         }
-        let mut title = "Model".to_owned();
+        let mut title = format!("Model of {}", crate::transcript::clean(only));
         if !missing.is_empty() {
             title.push_str(&format!(
                 " (no list yet: {} — axh models refresh)",
