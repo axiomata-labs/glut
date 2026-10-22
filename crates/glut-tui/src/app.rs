@@ -63,7 +63,7 @@ pub const COMMANDS: [(&str, &str); 19] = [
     ),
     (
         "panel",
-        "show or hide the side panel with the plan (Ctrl+B)",
+        "the side panel on the plan, or hide it (Ctrl+B; Ctrl+G the gate)",
     ),
     (
         "gate",
@@ -831,8 +831,8 @@ impl App {
         }
         match key.code {
             KeyCode::Char('x') if ctrl => self.chord = true,
-            KeyCode::Char('b') if ctrl => self.toggle_panel(),
-            KeyCode::Char('g') if ctrl => self.show_gate(),
+            KeyCode::Char('b') if ctrl => self.show_tab(Tab::Plan),
+            KeyCode::Char('g') if ctrl => self.show_tab(Tab::Gate),
             KeyCode::Enter if shift || alt => self.input.newline(),
             KeyCode::Char('j') if ctrl => self.input.newline(),
             KeyCode::Enter => {
@@ -1252,7 +1252,7 @@ impl App {
             },
             "editor" => self.set_editor(rest),
             "resume" => self.picker = Some(self.session_picker()),
-            "panel" => self.toggle_panel(),
+            "panel" => self.show_tab(Tab::Plan),
             "gate" => self.picker = Some(self.gate_picker()),
             "scrollback" => self.scrollback_request = true,
             "vim" => match rest {
@@ -1359,12 +1359,12 @@ impl App {
         }
     }
 
-    /// Ctrl+G: the panel on its Gate tab; on it already, the panel goes.
-    pub fn show_gate(&mut self) {
-        if self.panel == Some(true) && self.tab == Tab::Gate {
+    /// Ctrl+B the Plan tab, Ctrl+G the Gate tab: the panel opens on it or turns to it; on it already, the panel goes.
+    pub fn show_tab(&mut self, tab: Tab) {
+        if self.panel == Some(true) && self.tab == tab {
             return self.toggle_panel();
         }
-        self.tab = Tab::Gate;
+        self.tab = tab;
         if self.panel != Some(true) {
             self.toggle_panel();
         }
@@ -2296,7 +2296,7 @@ fn palette() -> Picker {
         ),
         (
             "Ctrl+B",
-            "show or hide the side panel",
+            "the side panel on the plan, or hide it",
             "/panel",
             Pick::Keys(vec![press(KeyCode::Char('b'), ctrl)]),
         ),
@@ -3035,6 +3035,15 @@ mod tests {
 
         app.on_terminal(key(KeyCode::Char('g'), KeyModifiers::CONTROL));
         assert_eq!(app.panel, Some(false), "Ctrl+G on the gate hides the panel");
+        app.on_terminal(key(KeyCode::Char('g'), KeyModifiers::CONTROL));
+        app.on_terminal(key(KeyCode::Char('b'), KeyModifiers::CONTROL));
+        assert_eq!(
+            (app.panel, app.tab),
+            (Some(true), Tab::Plan),
+            "Ctrl+B turns an open panel to the plan"
+        );
+        app.on_terminal(key(KeyCode::Char('b'), KeyModifiers::CONTROL));
+        assert_eq!(app.panel, Some(false));
         let _ = std::fs::remove_dir_all(&app.parts.home);
     }
 

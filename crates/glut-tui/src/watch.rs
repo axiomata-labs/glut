@@ -233,34 +233,41 @@ impl Watch {
                 lines.push(more(guard.granted.len() - LISTED));
             }
         }
-        if !self.hosts.is_empty() {
-            lines.push(Line::default());
+        lines.push(Line::default());
+        lines.push(Line::from(Span::styled(
+            fit(" Network".into(), width),
+            theme::glow(),
+        )));
+        if self.hosts.is_empty() {
             lines.push(Line::from(Span::styled(
-                fit(" Network".into(), width),
-                theme::glow(),
+                fit(
+                    "  none yet: each host a command reaches shows here".into(),
+                    width,
+                ),
+                theme::quiet(),
             )));
-            for (name, host) in self.hosts.iter().take(LISTED) {
-                let (mark, style) = if host.refused > 0 && host.reached == 0 {
-                    ("✗", theme::fault())
-                } else {
-                    ("✓", Style::default())
-                };
-                let mut count = format!("{}×", host.reached);
-                if host.refused > 0 {
-                    count = format!("{}× · refused {}×", host.reached, host.refused);
-                }
-                lines.push(Line::from(vec![
-                    Span::styled(format!("  {mark} "), style),
-                    Span::styled(fit(name.clone(), width.saturating_sub(4)), style),
-                ]));
-                lines.push(Line::from(Span::styled(
-                    fit(format!("    {count}"), width),
-                    theme::quiet(),
-                )));
+        }
+        for (name, host) in self.hosts.iter().take(LISTED) {
+            let (mark, style) = if host.refused > 0 && host.reached == 0 {
+                ("✗", theme::fault())
+            } else {
+                ("✓", Style::default())
+            };
+            let mut count = format!("{}×", host.reached);
+            if host.refused > 0 {
+                count = format!("{}× · refused {}×", host.reached, host.refused);
             }
-            if self.hosts.len() > LISTED {
-                lines.push(more(self.hosts.len() - LISTED));
-            }
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {mark} "), style),
+                Span::styled(fit(name.clone(), width.saturating_sub(4)), style),
+            ]));
+            lines.push(Line::from(Span::styled(
+                fit(format!("    {count}"), width),
+                theme::quiet(),
+            )));
+        }
+        if self.hosts.len() > LISTED {
+            lines.push(more(self.hosts.len() - LISTED));
         }
         lines.push(Line::default());
         lines.push(Line::from(Span::styled(
