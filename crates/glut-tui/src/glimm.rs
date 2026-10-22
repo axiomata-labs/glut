@@ -23,7 +23,7 @@ pub enum Mood {
 pub enum Size {
     Large,
     Small,
-    /// Six by four pixels (6 columns by 2 rows), a small flame without eyes in front of a thought while the model
+    /// Four by four pixels (4 columns by 2 rows), a small flame without eyes in front of a thought while the model
     /// thinks.
     Mini,
 }
@@ -96,13 +96,14 @@ const BLINK_EVERY: usize = 42;
 const BLINK_TICKS: usize = 2;
 
 const MINI: Design = Design {
-    rows: &["..yy..", ".oaao.", "oayyao", ".raar."],
+    rows: &[".y..", ".yo.", "oaao", ".ro."],
     // A plain flame in front of a thought: no eyes, the owner's wish — Glimm proper is the large and the small one.
     eyes: &[],
     tip_rows: 1,
-    pace: 6,
-    sparks: &[(0, 0), (0, 5), (1, 0), (1, 5)],
-    bang: (5, &[0], 1),
+    pace: 10,
+    // No sparks: it only flickers, quietly.
+    sparks: &[],
+    bang: (3, &[0], 1),
     twinkle: (0, 0),
     smoke: &[&[(0, 1)], &[(0, 3)]],
 };
@@ -202,10 +203,12 @@ fn pixels(size: Size, mood: Mood, tick: usize) -> (Vec<Vec<char>>, bool) {
             for &(row, col) in design.eyes {
                 set(&mut grid, row, col, 'e');
             }
-            let (row, col) = design.sparks[tick % design.sparks.len()];
-            set_free(&mut grid, row, col, 'y');
-            let (row, col) = design.sparks[(tick + 2) % design.sparks.len()];
-            set_free(&mut grid, row, col, 'a');
+            if !design.sparks.is_empty() {
+                let (row, col) = design.sparks[tick % design.sparks.len()];
+                set_free(&mut grid, row, col, 'y');
+                let (row, col) = design.sparks[(tick + 2) % design.sparks.len()];
+                set_free(&mut grid, row, col, 'a');
+            }
         }
         Mood::Waiting => {
             // Wide eyes, looking up at the owner.
@@ -338,7 +341,7 @@ mod tests {
         }
         assert_eq!(cells(Size::Large), (12, 7));
         assert_eq!(cells(Size::Small), (8, 4));
-        assert_eq!(cells(Size::Mini), (6, 2));
+        assert_eq!(cells(Size::Mini), (4, 2));
     }
 
     #[test]
