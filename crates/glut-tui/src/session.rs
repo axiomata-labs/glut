@@ -317,6 +317,28 @@ async fn without_model(parts: &Parts, id: Option<&str>) -> Option<String> {
     Some(found)
 }
 
+/// Keeps what the owner switched to as what Glut starts with (owner, 2026-10-22: "einstellen, welches Modell das
+/// Standardmodell ist"): the engine's model as its provider's model, and that provider as the default one, in
+/// `providers.json`.
+///
+/// # Errors
+///
+/// A message when the file cannot be read or written.
+pub fn keep_choice(home: &Path, engine: &Engine) -> Result<(), String> {
+    let mut list = Providers::load(home).map_err(|err| err.to_string())?;
+    let Some(entry) = list.providers.get_mut(&engine.provider) else {
+        return Err(format!("no provider {} in providers.json", engine.provider));
+    };
+    let model = Some(engine.model_name().to_owned());
+    let default = Some(engine.provider.clone());
+    if entry.model == model && list.default == default {
+        return Ok(());
+    }
+    entry.model = model;
+    list.default = default;
+    list.save(home).map_err(|err| err.to_string())
+}
+
 /// Keeps `tokens` as the window of the engine's model (`/context <tokens>`, T30), in `providers.json`.
 ///
 /// # Errors
@@ -774,6 +796,37 @@ pub fn for_tests() -> (Parts, Engine) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_switch_is_kept_as_what_the_next_start_takes() {
+        let (parts, engine) = for_tests();
+        let entry = |model: &str| glut::providers::Entry {
+            kind: "openrouter".into(),
+            root: None,
+            model: Some(model.into()),
+            key_env: None,
+            key: None,
+            windows: Default::default(),
+        };
+        let mut list = Providers::default();
+        list.providers.insert("test".into(), entry("old/model"));
+        list.providers.insert("other".into(), entry("x/y"));
+        list.default = Some("other".into());
+        list.save(&parts.home).unwrap();
+        keep_choice(&parts.home, &engine).unwrap();
+        let kept = Providers::load(&parts.home).unwrap();
+        assert_eq!(kept.default.as_deref(), Some("test"));
+        assert_eq!(
+            kept.providers["test"].model.as_deref(),
+            Some(engine.model_name())
+        );
+        assert_eq!(
+            kept.providers["other"].model.as_deref(),
+            Some("x/y"),
+            "another provider keeps its own"
+        );
+        let _ = std::fs::remove_dir_all(&parts.home);
+    }
 
     #[test]
     fn a_handoff_is_written_from_the_conversation_as_text_and_raw_tool_calls_are_no_handoff() {

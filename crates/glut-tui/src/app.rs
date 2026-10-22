@@ -33,7 +33,10 @@ const HELP: &str = "Commands: /model [id] · /provider [id] · /effort [level] �
 
 /// The session's commands with what each does, as the list under a typed `/` shows them.
 pub const COMMANDS: [(&str, &str); 14] = [
-    ("model", "pick a model of the provider in use, or /model <id>"),
+    (
+        "model",
+        "pick a model of the provider in use, or /model <id>",
+    ),
     ("provider", "switch the provider, or /provider <id>"),
     ("effort", "how hard the model thinks, or /effort <level>"),
     ("context", "how full the window is; /context 64k sets it"),
@@ -422,6 +425,13 @@ impl App {
                             );
                         }
                         self.engine = engine;
+                        // The next start begins where the owner switched to.
+                        if let Err(reason) = session::keep_choice(&self.parts.home, &self.engine) {
+                            self.transcript.note(
+                                format!("not kept for the next start: {reason}"),
+                                Tone::Quiet,
+                            );
+                        }
                         // The new model has read nothing of this session yet: the window fills on its next call.
                         self.context_used = 0;
                         for note in notes {
