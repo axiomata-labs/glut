@@ -90,6 +90,9 @@ pub struct App {
     pub session: Session,
     /// The run's task list as `todo_write` last sent it (the Plan tab, T28).
     pub todos: Vec<glut::planning::TodoItem>,
+    /// How the last turn ended, for Glimm's mood: answered, or ended by an error or a limit; `None` before the first
+    /// and after one the owner stopped.
+    pub last_turn: Option<bool>,
     /// Whether the side panel is shown; `None` until the owner or a first plan decides.
     pub panel: Option<bool>,
     /// Ctrl+X was pressed: the next key finishes a chord (Ctrl+X E: the editor).
@@ -142,6 +145,7 @@ impl App {
             conversation: Vec::new(),
             session,
             todos: Vec::new(),
+            last_turn: None,
             panel,
             chord: false,
             edit_request: None,
@@ -211,6 +215,23 @@ impl App {
     /// Whether Glut works on something: a turn, a summary, a switch of model.
     pub fn working(&self) -> bool {
         self.busy.is_some()
+    }
+
+    /// What Glimm shows of the session: it waits for the owner's answer, works, or is pleased or gone out after the
+    /// last turn — at rest before any.
+    pub fn mood(&self) -> crate::glimm::Mood {
+        use crate::glimm::Mood;
+        if self.ask.is_some() {
+            Mood::Waiting
+        } else if self.working() {
+            Mood::Working
+        } else {
+            match self.last_turn {
+                Some(true) => Mood::Done,
+                Some(false) => Mood::Failed,
+                None => Mood::Resting,
+            }
+        }
     }
 
     /// The gate's mode now.
@@ -304,6 +325,11 @@ impl App {
                 // A turn that ended (cancelled, timed out) while asking dropped the question: its card goes too.
                 self.ask = None;
                 self.transcript.settle();
+                self.last_turn = match outcome.reason {
+                    FinishReason::Answered => Some(true),
+                    FinishReason::Cancelled => None,
+                    _ => Some(false),
+                };
                 match outcome.reason {
                     FinishReason::Answered => {}
                     FinishReason::Cancelled => self.transcript.note("stopped", Tone::Quiet),
@@ -605,6 +631,7 @@ impl App {
             "clear" => {
                 self.conversation.clear();
                 self.todos.clear();
+                self.last_turn = None;
                 // A new session counts from nothing.
                 self.cost = None;
                 self.usage = Usage::default();
@@ -1200,6 +1227,37 @@ mod tests {
             "a key in the first moment is typed ahead, not an answer"
         );
         assert!(fresh.try_recv().is_err());
+    }
+
+    #[test]
+    fn glimm_rests_works_waits_and_is_pleased_or_gone_out_after_a_turn() {
+        use crate::glimm::Mood;
+        let (mut app, _reports) = app();
+        assert_eq!(app.mood(), Mood::Resting);
+        let _answer = asked(&mut app);
+        assert_eq!(app.mood(), Mood::Waiting);
+        let ended = |reason| {
+            Report::Done(
+                RunOutcome {
+                    reason,
+                    answer: None,
+                    turns: 1,
+                    usage: Usage::default(),
+                    refusals: 0,
+                },
+                Vec::new(),
+            )
+        };
+        app.on_report(ended(FinishReason::Answered));
+        assert_eq!(app.mood(), Mood::Done);
+        app.on_report(ended(FinishReason::Failed));
+        assert_eq!(app.mood(), Mood::Failed);
+        app.on_report(ended(FinishReason::Cancelled));
+        assert_eq!(
+            app.mood(),
+            Mood::Resting,
+            "a turn the owner stopped is no failure"
+        );
     }
 
     #[test]

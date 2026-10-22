@@ -35,16 +35,22 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         let most = usize::from(area.height / 3).clamp(3, ASK_ROWS);
         asked_rows(
             &open.request.target,
-            usize::from(area.width.saturating_sub(4)),
+            usize::from(area.width.saturating_sub(4 + ask_glimm_width(area.width))),
             most,
         )
     });
-    // The target, then a row per choice: once, each scope, refuse.
+    // The target, then a row per choice: once, each scope, refuse — at least as tall as the waiting Glimm beside it.
     let ask_height = ask_rows
         .as_ref()
         .zip(app.ask.as_ref())
         .map_or(0, |(rows, open)| {
-            (rows.len() + 2 + open.request.scopes.len().min(9)) as u16 + 2
+            let inner = (rows.len() + 2 + open.request.scopes.len().min(9)) as u16;
+            let glimm = if ask_glimm_width(area.width) > 0 {
+                glimm::cells(glimm::Size::Small).1
+            } else {
+                0
+            };
+            inner.max(glimm) + 2
         });
     let [header, stream, ask, input, keys] = Layout::vertical([
         Constraint::Length(1),
@@ -69,8 +75,28 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     } else {
         stream
     };
-    if app.transcript.blocks.is_empty() {
-        draw_welcome(frame, app, stream);
+    // Before the first message there are only notes (the guides read, a provider's word): Glimm welcomes above them.
+    let only_notes = app
+        .transcript
+        .blocks
+        .iter()
+        .all(|block| matches!(block.kind, crate::transcript::Kind::Note { .. }));
+    if only_notes {
+        let width = stream.width.saturating_sub(1).max(8);
+        let thinking = app.transcript.thinking;
+        let notes: usize = app
+            .transcript
+            .blocks
+            .iter_mut()
+            .map(|block| block.lines(width, thinking).len())
+            .sum();
+        let notes = (notes as u16).min(stream.height / 2);
+        let [welcome, below] =
+            Layout::vertical([Constraint::Min(1), Constraint::Length(notes)]).areas(stream);
+        draw_welcome(frame, app, welcome);
+        if notes > 0 {
+            draw_stream(frame, app, below);
+        }
     } else {
         draw_stream(frame, app, stream);
     }
@@ -145,10 +171,7 @@ fn tokens(count: u64) -> String {
 
 fn draw_welcome(frame: &mut Frame, app: &mut App, area: Rect) {
     app.rows.clear();
-    let mut lines: Vec<Line> = Vec::new();
-    for row in glimm::rows(false, app.frame) {
-        lines.push(Line::from(Span::styled(row, theme::glow())));
-    }
+    let mut lines: Vec<Line> = glimm::lines(glimm::Size::Large, glimm::Mood::Resting, app.frame);
     lines.push(Line::default());
     lines.push(Line::from(Span::styled("Glut", theme::strong())));
     lines.push(Line::from(Span::styled(
@@ -254,7 +277,32 @@ fn draw_ask(frame: &mut Frame, app: &App, area: Rect, rows: Vec<String>) {
         ]));
     }
     lines.push(Line::from(vec![key("n".into()), Span::raw("refuse")]));
-    frame.render_widget(Paragraph::new(lines).block(block), area);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let beside = ask_glimm_width(area.width);
+    if beside == 0 {
+        frame.render_widget(Paragraph::new(lines), inner);
+        return;
+    }
+    // Glimm waits beside the question, looking up at the owner.
+    let [glimm_area, text] =
+        Layout::horizontal([Constraint::Length(beside), Constraint::Min(1)]).areas(inner);
+    let glimm_lines = glimm::lines(glimm::Size::Small, glimm::Mood::Waiting, app.frame);
+    frame.render_widget(Paragraph::new(glimm_lines), glimm_area);
+    frame.render_widget(Paragraph::new(lines), text);
+}
+
+/// The narrowest screen the waiting Glimm stands beside a question on; a narrower one keeps every column for the
+/// question.
+const ASK_GLIMM_MIN_SCREEN: u16 = 60;
+
+/// How many columns the waiting Glimm takes in an ask box on a screen `width` wide: itself and a gap, or none.
+fn ask_glimm_width(width: u16) -> u16 {
+    if width >= ASK_GLIMM_MIN_SCREEN {
+        glimm::cells(glimm::Size::Small).0 + 2
+    } else {
+        0
+    }
 }
 
 /// What an ask shows of its target in `most` rows: all of it, or its head, how much is left out, and its tail — the
@@ -352,7 +400,12 @@ fn draw_panel(frame: &mut Frame, app: &App, area: Rect) {
             theme::glow().add_modifier(Modifier::BOLD),
         ));
     let width = usize::from(area.width.saturating_sub(4)).max(8);
-    let mut lines: Vec<Line> = Vec::new();
+    // Glimm heads the panel with the session's mood: working, waiting for the owner, pleased or gone out.
+    let mut lines: Vec<Line> = vec![Line::default()];
+    for mut row in glimm::lines(glimm::Size::Small, app.mood(), app.frame) {
+        row.spans.insert(0, Span::raw(" "));
+        lines.push(row);
+    }
     if app.todos.is_empty() {
         lines.push(Line::default());
         for row in wrap(
