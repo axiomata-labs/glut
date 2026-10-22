@@ -135,6 +135,35 @@ fn guard_resolved(root: &Root, path: &str, dirs: &[&str], files: &[&str]) -> Res
     Ok(())
 }
 
+/// Whether the owner's own write at `path` may go there — the review putting a hunk back (TUI T17), whose text came
+/// from a model's earlier turn: the protected folders and files the run's write tools keep out of, also through a
+/// link; no file with more than one name; and no link on the way at all, since one inside the folder (`docs -> .cargo`)
+/// could lead the old text somewhere else than the review showed. What stands at `path` must be a plain file.
+///
+/// # Errors
+///
+/// Why the write may not go there, for the owner to read.
+pub fn guard_owner_write(root: &Root, path: &str) -> Result<(), String> {
+    guard_resolved(root, path, &PROTECTED_DIRS, &PROTECTED_FILES)?;
+    refuse_hard_links(root, path)?;
+    let mut at = root.path().to_path_buf();
+    let parts: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
+    for (index, part) in parts.iter().enumerate() {
+        at.push(part);
+        let Ok(meta) = std::fs::symlink_metadata(&at) else {
+            break;
+        };
+        let last = index + 1 == parts.len();
+        if meta.file_type().is_symlink() {
+            return Err(format!("{path} goes through a link: put it back by hand"));
+        }
+        if last && !meta.is_file() || !last && !meta.is_dir() {
+            return Err(format!("{path} is no plain file: put it back by hand"));
+        }
+    }
+    Ok(())
+}
+
 /// The six file tools, confined to `cwd`.
 ///
 /// # Errors
@@ -1018,6 +1047,31 @@ mod tests {
         stop.store(true, std::sync::atomic::Ordering::SeqCst);
         let (ok, text) = tools.call_until("list_dir", "{}", &stop).await;
         assert!(!ok && text.contains("stopped"), "{text}");
+    }
+
+    #[test]
+    fn an_owners_write_keeps_out_of_protected_places_links_and_shared_files() {
+        let dir = std::env::temp_dir().join(format!("glut-owner-write-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("docs")).unwrap();
+        std::fs::create_dir_all(dir.join(".cargo")).unwrap();
+        std::fs::write(dir.join("docs/a.md"), "a").unwrap();
+        std::os::unix::fs::symlink(dir.join(".cargo"), dir.join("cfg")).unwrap();
+        std::fs::write(dir.join("one"), "x").unwrap();
+        std::fs::hard_link(dir.join("one"), dir.join("two")).unwrap();
+        let root = Root::dir(&dir, LinkPolicy::Contained).unwrap();
+        assert!(guard_owner_write(&root, "docs/a.md").is_ok());
+        assert!(
+            guard_owner_write(&root, "docs/new.md").is_ok(),
+            "a file that is not there yet"
+        );
+        assert!(guard_owner_write(&root, ".cargo/config.toml").is_err());
+        assert!(
+            guard_owner_write(&root, "cfg/config.toml").is_err(),
+            "through a link"
+        );
+        assert!(guard_owner_write(&root, "one").is_err(), "two names");
+        assert!(guard_owner_write(&root, "docs").is_err(), "no plain file");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]

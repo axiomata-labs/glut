@@ -42,6 +42,8 @@ pub enum Report {
     },
     /// A step's change (`/steps`): its turn, and the diff or why there is none.
     Diff(u32, Result<String, String>),
+    /// The review's change (T17): of which scope, since before which message, and the diff or why there is none.
+    Review(crate::review::Scope, String, Result<String, String>),
     /// Rewinding the files ended: the commit the folder is back at and the run that keeps what it was just before,
     /// or why not.
     Restored(Result<(String, String), String>),

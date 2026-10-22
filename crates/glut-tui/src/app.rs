@@ -28,10 +28,10 @@ const ASK_SETTLE: Duration = Duration::from_millis(400);
 
 /// What `/help` says.
 const HELP: &str = "Commands: /model [id] · /provider [id] · /effort [level] · /context [tokens] · /compact · \
-                    /editor [command] · /gate · /meter · /thinking off|folded|open · /theme [name] · /vim on|off · /scrollback · \
+                    /editor [command] · /gate · /meter · /diff [session] · /thinking off|folded|open · /theme [name] · /vim on|off · /scrollback · \
                     /clear · /help · /quit\n\
                     Keys: Enter send · Shift+Enter or Alt+Enter new line · ↑ history · Shift+Tab plan → ask → \
-                    build → auto · Esc stop · Ctrl+O tool results · Ctrl+T thinking · Ctrl+B panel · Ctrl+G gate · Ctrl+N meter · \
+                    build → auto · Esc stop · Ctrl+O tool results · Ctrl+T thinking · Ctrl+B panel · Ctrl+G gate · Ctrl+N meter · Ctrl+R review · \
                     Ctrl+X E editor · PgUp/PgDn scroll · Ctrl+F search · drag to copy · F2 mouse to the terminal \
                     and back · F3 scrollback · Ctrl+C twice quit\n\
                     Also: Ctrl+K every key · @ mentions a file · !cmd runs a command and shows Glut \
@@ -43,7 +43,7 @@ const HELP: &str = "Commands: /model [id] · /provider [id] · /effort [level] �
                     or doubled · counts · p P · u Ctrl+R), i a I A o O to Insert; Esc in Normal mode stops Glut";
 
 /// The session's commands with what each does, as the list under a typed `/` shows them.
-pub const COMMANDS: [(&str, &str); 20] = [
+pub const COMMANDS: [(&str, &str); 21] = [
     (
         "model",
         "pick a model of the provider in use, or /model <id>",
@@ -72,6 +72,10 @@ pub const COMMANDS: [(&str, &str); 20] = [
     (
         "meter",
         "context, tokens and cost per turn and tool, lean's savings (Ctrl+N)",
+    ),
+    (
+        "diff",
+        "review what the last turn changed, hunk by hunk; /diff session (Ctrl+R)",
     ),
     (
         "resume",
@@ -150,6 +154,8 @@ pub struct App {
     pub watch: crate::watch::Watch,
     /// What the session spent, by turn and tool, for the panel's Meter tab (T16).
     pub meter: crate::meter::Meter,
+    /// The review of what turns changed (T17), kept for the session with its decisions.
+    pub review: crate::review::Review,
     /// Ctrl+X was pressed: the next key finishes a chord (Ctrl+X E: the editor).
     chord: bool,
     /// The input, handed to the editor by the main loop (T29), which owns the terminal.
@@ -244,6 +250,7 @@ impl App {
             tab: Tab::Plan,
             watch: crate::watch::Watch::default(),
             meter: crate::meter::Meter::default(),
+            review: crate::review::Review::default(),
             chord: false,
             edit_request: None,
             busy: None,
@@ -325,6 +332,7 @@ impl App {
         self.cost = session.cost;
         self.usage = Usage::default();
         self.meter = crate::meter::Meter::default();
+        self.review = crate::review::Review::default();
         self.context_used = 0;
         self.scroll = 0;
         self.session = session;
@@ -358,7 +366,8 @@ impl App {
     }
 
     pub fn say(&mut self, text: impl Into<String>) {
-        self.toast = Some((text.into(), Instant::now()));
+        // A toast may name a file the model made: cleaned like everything else drawn.
+        self.toast = Some((crate::transcript::clean(&text.into()), Instant::now()));
     }
 
     /// Says where the mouse went.
@@ -659,6 +668,12 @@ impl App {
                     .transcript
                     .note(format!("no change to show: {reason}"), Tone::Fault),
             },
+            Report::Review(scope, since, change) => match change {
+                Ok(change) => self.review.show(scope, since, &change),
+                Err(reason) => self
+                    .transcript
+                    .note(format!("no change to review: {}", crate::transcript::clean(&reason)), Tone::Fault),
+            },
             Report::Restored(result) => match result {
                 Ok((commit, kept)) => self.transcript.note(
                     format!(
@@ -777,6 +792,10 @@ impl App {
         if self.picker.is_some() {
             return self.on_picker_key(key);
         }
+        if self.review.open {
+            let action = self.review.key(key);
+            return self.review_do(action);
+        }
         if self.search.is_some() {
             return self.on_search_key(key);
         }
@@ -846,6 +865,7 @@ impl App {
             KeyCode::Char('g') if ctrl => self.show_tab(Tab::Gate),
             // Ctrl+M is Enter to a terminal: the meter is on N.
             KeyCode::Char('n') if ctrl => self.show_tab(Tab::Meter),
+            KeyCode::Char('r') if ctrl => self.open_review(crate::review::Scope::Turn),
             KeyCode::Enter if shift || alt => self.input.newline(),
             KeyCode::Char('j') if ctrl => self.input.newline(),
             KeyCode::Enter => {
@@ -1175,6 +1195,7 @@ impl App {
                 self.cost = None;
                 self.usage = Usage::default();
                 self.meter = crate::meter::Meter::default();
+                self.review = crate::review::Review::default();
                 self.session = Session::new(
                     &self.parts.config.cwd,
                     &self.engine.provider,
@@ -1269,6 +1290,10 @@ impl App {
             "panel" => self.show_tab(Tab::Plan),
             "gate" => self.picker = Some(self.gate_picker()),
             "meter" => self.show_tab(Tab::Meter),
+            "diff" | "review" => self.open_review(match rest {
+                "session" => crate::review::Scope::Session,
+                _ => crate::review::Scope::Turn,
+            }),
             "scrollback" => self.scrollback_request = true,
             "vim" => match rest {
                 "on" | "" => self.set_vi(true),
@@ -1844,6 +1869,135 @@ impl App {
         Picker::new(title, items, None)
     }
 
+    /// Opens the review (T17) of what changed since before the latest turn that changed files, or before the
+    /// session's first; the diff comes back as a report.
+    pub fn open_review(&mut self, scope: crate::review::Scope) {
+        let Some(root) = self.parts.config.snapshots.clone() else {
+            return self
+                .transcript
+                .note("no snapshots: nothing to review", Tone::Quiet);
+        };
+        let kept = glut::snapshot::runs(&root, &self.parts.config.cwd);
+        let changed = |mark: &&crate::store::Mark| {
+            mark.run
+                .as_ref()
+                .is_some_and(|run| kept.iter().any(|record| &record.run == run))
+        };
+        let mark = match scope {
+            crate::review::Scope::Turn => self.session.marks.iter().rev().find(changed),
+            crate::review::Scope::Session => self.session.marks.iter().find(changed),
+        };
+        let Some((run, prompt)) =
+            mark.and_then(|mark| Some((mark.run.clone()?, mark.prompt.clone())))
+        else {
+            return self.transcript.note(
+                "nothing to review: no turn of this session changed a file",
+                Tone::Quiet,
+            );
+        };
+        let cwd = self.parts.config.cwd.clone();
+        let reports = self.reports.clone();
+        tokio::task::spawn_blocking(move || {
+            let change = glut::snapshot::diff_to_now(&root, &cwd, &run, None);
+            let _ = reports.send(Report::Review(scope, prompt, change));
+        });
+    }
+
+    /// Does what a key in the review asked for.
+    fn review_do(&mut self, action: crate::review::Action) {
+        use crate::review::Action;
+        match action {
+            Action::None => {}
+            Action::Close => self.review.open = false,
+            Action::Load(scope) => self.open_review(scope),
+            Action::Reject {
+                path,
+                hunk,
+                created,
+                why,
+            } => {
+                if self.working() {
+                    return self.transcript.note(
+                        "a hunk goes back when Glut is done; Esc stops it",
+                        Tone::Quiet,
+                    );
+                }
+                match self.put_back(&path, &hunk, created) {
+                    Ok(()) => {
+                        self.pending
+                            .push(Message::user(crate::review::for_the_model(
+                                true, &path, &hunk, &why,
+                            )));
+                        self.keep();
+                        self.say("put back; Glut reads why with your next message");
+                        let scope = self.review.scope.unwrap_or(crate::review::Scope::Turn);
+                        self.open_review(scope);
+                    }
+                    Err(reason) => self.say(&reason),
+                }
+            }
+            Action::Comment { path, hunk, text } => {
+                self.review.commented(&path, &hunk);
+                self.pending
+                    .push(Message::user(crate::review::for_the_model(
+                        false, &path, &hunk, &text,
+                    )));
+                self.keep();
+                self.say("Glut reads your comment with your next message");
+            }
+        }
+    }
+
+    /// Puts one hunk of `path` back, through the folder's guard: never out of the folder, never through a link, and
+    /// only where the file still reads as the change left it. A file the change made goes once it is empty again.
+    fn put_back(
+        &self,
+        path: &str,
+        hunk: &crate::review::Hunk,
+        created: bool,
+    ) -> Result<(), String> {
+        use axiomata_files::{LinkPolicy, MAX_READ_BYTES, MAX_WRITE_BYTES, Root};
+        let root = Root::dir(&self.parts.config.cwd, LinkPolicy::Contained)
+            .map_err(|err| err.to_string())?;
+        // The old text may be a model's from an earlier turn: never into a protected place, through a link or into
+        // a file with other names.
+        glut::tools::files::guard_owner_write(&root, path)?;
+        let file = match axiomata_files::read_text(&root, path, MAX_READ_BYTES) {
+            Ok(file) => Some(file),
+            Err(axiomata_files::FilesError::NotFound { .. }) => None,
+            Err(err) => return Err(format!("cannot put {path} back: {err}")),
+        };
+        let text = crate::review::put_back(file.as_ref().map(|file| file.content.as_str()), hunk)?;
+        let gone = |err: axiomata_files::FilesError| format!("cannot put {path} back: {err}");
+        match file {
+            Some(file) if created && text.is_empty() => {
+                // Deleted only as it was read: a write in between is not lost.
+                if axiomata_files::current_version(&root, path).map_err(gone)? != Some(file.version)
+                {
+                    return Err("the file changed since: open /diff again".into());
+                }
+                axiomata_files::delete(&root, path).map_err(gone)
+            }
+            Some(file) => {
+                axiomata_files::write_text(&root, path, &text, Some(&file.version), MAX_WRITE_BYTES)
+                    .map(|_| ())
+                    .map_err(gone)
+            }
+            None => {
+                // A file the change deleted comes back only where nothing stands now.
+                if axiomata_files::current_version(&root, path)
+                    .map_err(gone)?
+                    .is_some()
+                {
+                    return Err("the file changed since: open /diff again".into());
+                }
+                axiomata_files::write_text(&root, path, &text, None, MAX_WRITE_BYTES)
+                    .map(|_| ())
+                    .map_err(gone)
+            }
+        }
+    }
+
     /// A step's change shown in the stream, or the files put back to before it.
     fn step_do(&mut self, run: String, turn: u32, restore: bool) {
         let Some(root) = self.parts.config.snapshots.clone() else {
@@ -2374,6 +2528,12 @@ fn palette() -> Picker {
             "the meter: context, tokens and cost per turn and tool",
             "/meter",
             Pick::Keys(vec![press(KeyCode::Char('n'), ctrl)]),
+        ),
+        (
+            "Ctrl+R",
+            "review what the last turn changed: accept, reject or comment each hunk",
+            "/diff",
+            Pick::Keys(vec![press(KeyCode::Char('r'), ctrl)]),
         ),
         (
             "Shift+Tab",
@@ -3113,6 +3273,74 @@ mod tests {
         );
         app.on_terminal(key(KeyCode::Char('b'), KeyModifiers::CONTROL));
         assert_eq!(app.panel, Some(false));
+        let _ = std::fs::remove_dir_all(&app.parts.home);
+    }
+
+    #[tokio::test]
+    async fn a_rejected_hunk_goes_back_on_disk_and_the_model_is_told_why() {
+        let folder = std::env::temp_dir().join(format!("glut-review-{}", std::process::id()));
+        let root = folder.with_extension("snapshots");
+        std::fs::create_dir_all(&folder).unwrap();
+        let folder = folder.canonicalize().unwrap();
+        std::fs::write(folder.join("a.txt"), "one\ntwo\nthree\n").unwrap();
+        glut::snapshot::Snapshots::open(&root, &folder, "run1")
+            .unwrap()
+            .take(1)
+            .unwrap();
+        std::fs::write(folder.join("a.txt"), "one\nTWO\nthree\n").unwrap();
+        std::fs::write(folder.join("made.txt"), "new\n").unwrap();
+
+        let (mut parts, engine) = session::for_tests();
+        parts.config.cwd = folder.clone();
+        parts.config.snapshots = Some(root.clone());
+        let (send, mut reports) = mpsc::unbounded_channel();
+        let mut app = App::new(Arc::new(parts), engine, send);
+        app.session.marks.push(crate::store::Mark {
+            at: Some(0),
+            prompt: "make it loud".into(),
+            run: Some("run1".into()),
+        });
+        app.on_terminal(key(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        let report = reports.recv().await.unwrap();
+        app.on_report(report);
+        assert!(app.review.open);
+        assert_eq!(app.review.files.len(), 2);
+
+        // a.txt: reject its hunk, saying why.
+        app.on_terminal(key(KeyCode::Char('r'), KeyModifiers::NONE));
+        for c in "keep it".chars() {
+            app.on_terminal(key(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(
+            std::fs::read_to_string(folder.join("a.txt")).unwrap(),
+            "one\ntwo\nthree\n"
+        );
+        let told = app
+            .pending
+            .last()
+            .and_then(|message| message.content.clone())
+            .unwrap();
+        assert!(
+            told.contains("a.txt") && told.contains("Why: keep it"),
+            "{told}"
+        );
+        let report = reports.recv().await.unwrap();
+        app.on_report(report);
+        assert_eq!(
+            app.review.files.len(),
+            1,
+            "what was put back is no change any more"
+        );
+
+        // made.txt: a file the change made goes when its only hunk is rejected.
+        app.on_terminal(key(KeyCode::Char('r'), KeyModifiers::NONE));
+        app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(!folder.join("made.txt").exists());
+        app.on_terminal(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!app.review.open);
+        let _ = std::fs::remove_dir_all(&folder);
+        let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&app.parts.home);
     }
 

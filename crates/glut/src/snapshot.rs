@@ -316,6 +316,33 @@ pub const MAX_DIFF_BYTES: usize = 256 * 1024;
 ///
 /// No such run or step, a malformed record, or a git failure.
 pub fn diff(root: &Path, work_tree: &Path, run: &str, step: u32) -> Result<String, String> {
+    changed(root, work_tree, run, Some(step), true)
+}
+
+/// What changed in `work_tree` since before step `step` of `run` — since before the run without one — to the folder
+/// as it is now: the change of a turn and of everything after it (the review, TUI T17). A unified diff as [`diff`]'s.
+///
+/// # Errors
+///
+/// No such run or step, a malformed record, or a git failure.
+pub fn diff_to_now(
+    root: &Path,
+    work_tree: &Path,
+    run: &str,
+    step: Option<u32>,
+) -> Result<String, String> {
+    changed(root, work_tree, run, step, false)
+}
+
+/// The change from before step `step` (the run's first without one) to the next step's snapshot when `to_next` and
+/// there is one, else to the folder now.
+fn changed(
+    root: &Path,
+    work_tree: &Path,
+    run: &str,
+    step: Option<u32>,
+    to_next: bool,
+) -> Result<String, String> {
     let run = checked_run(run)?;
     let work_tree = work_tree
         .canonicalize()
@@ -324,13 +351,17 @@ pub fn diff(root: &Path, work_tree: &Path, run: &str, step: u32) -> Result<Strin
         .into_iter()
         .find(|record| record.run == run)
         .ok_or_else(|| format!("no snapshots of a run {run:?} for {}", work_tree.display()))?;
-    let at = record
-        .steps
-        .iter()
-        .position(|s| s.turn == step)
-        .ok_or_else(|| format!("run {run} has no snapshot before step {step}"))?;
+    let at = match step {
+        Some(step) => record
+            .steps
+            .iter()
+            .position(|s| s.turn == step)
+            .ok_or_else(|| format!("run {run} has no snapshot before step {step}"))?,
+        None if record.steps.is_empty() => return Err(format!("run {run} has no snapshot")),
+        None => 0,
+    };
     let from = checked_commit(&record.steps[at].commit)?.to_owned();
-    let to = match record.steps.get(at + 1) {
+    let to = match record.steps.get(at + 1).filter(|_| to_next) {
         Some(next) => Some(checked_commit(&next.commit)?.to_owned()),
         None => None,
     };
@@ -517,6 +548,9 @@ fn git_command(git_dir: &Path, work_tree: &Path, index: Option<&Path>, args: &[&
             "user.email=axh@localhost",
             "-c",
             "core.autocrlf=false",
+            // A diff names a file as it is, not in C quotes: the review (TUI T17) finds it by that name.
+            "-c",
+            "core.quotePath=false",
         ])
         .args(args);
     if let Some(index) = index {
@@ -608,6 +642,15 @@ mod tests {
         assert!(first.contains("-one") && first.contains("+two"), "{first}");
         let last = diff(&root, &folder, "run1", 2).unwrap();
         assert!(last.contains("-two") && last.contains("+three"), "{last}");
+        let whole = diff_to_now(&root, &folder, "run1", None).unwrap();
+        assert!(
+            whole.contains("-one") && whole.contains("+three") && !whole.contains("two"),
+            "from before the run to now, the steps between left out: {whole}"
+        );
+        std::fs::write(folder.join("ä b.txt"), "x\n").unwrap();
+        let named = diff_to_now(&root, &folder, "run1", Some(2)).unwrap();
+        assert!(named.contains("+++ b/ä b.txt"), "a name as it is: {named}");
+        std::fs::remove_file(folder.join("ä b.txt")).unwrap();
         assert!(
             last.contains("made-since.txt"),
             "a file made since is part of the change: {last}"

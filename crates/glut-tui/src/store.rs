@@ -59,10 +59,22 @@ pub struct Mark {
 impl Session {
     /// A new session in `cwd`.
     pub fn new(cwd: &Path, provider: &str, model: &str) -> Self {
+        /// Sessions made by this process so far: two in one millisecond (a fork right after its parent) still get
+        /// ids of their own.
+        static MADE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let now = Utc::now();
+        let made = MADE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let again = if made == 0 {
+            String::new()
+        } else {
+            format!("-{made}")
+        };
         Session {
-            // To the millisecond: a fork made in the same second as its parent gets an id of its own.
-            id: format!("{}-{}", now.format("%Y%m%d-%H%M%S%3f"), std::process::id()),
+            id: format!(
+                "{}-{}{again}",
+                now.format("%Y%m%d-%H%M%S%3f"),
+                std::process::id()
+            ),
             cwd: cwd.to_path_buf(),
             title: String::new(),
             created: now,

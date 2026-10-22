@@ -107,9 +107,38 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     draw_keys(frame, app, keys);
     if app.picker.is_some() {
         draw_picker(frame, app, stream);
+    } else if app.review.open {
+        draw_review(frame, app, stream);
     } else {
         draw_suggestions(frame, app, stream);
     }
+}
+
+/// The review (T17) over the stream: framed in the glow, it waits for the owner's decisions.
+fn draw_review(frame: &mut Frame, app: &mut App, area: Rect) {
+    if area.width < 20 || area.height < 8 {
+        return;
+    }
+    let (done, all) = app.review.progress();
+    let scope = match app.review.scope {
+        Some(crate::review::Scope::Session) => "this session",
+        _ => "the last turn",
+    };
+    let since = crate::transcript::cut(&crate::transcript::clean(&app.review.since), 40);
+    let title = crate::transcript::cut(
+        &format!(" Review · {scope}, since before «{since}» · {done} of {all} files reviewed "),
+        usize::from(area.width).saturating_sub(4),
+    );
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(theme::glow())
+        .title(Span::styled(title, theme::glow()));
+    let inner = block.inner(area);
+    let lines = app
+        .review
+        .lines(usize::from(inner.width), usize::from(inner.height));
+    frame.render_widget(Clear, area);
+    frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
 fn draw_header(frame: &mut Frame, app: &App, area: Rect) {

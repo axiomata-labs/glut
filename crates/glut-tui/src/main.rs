@@ -9,6 +9,7 @@ mod markdown;
 mod meter;
 mod picker;
 mod prefs;
+mod review;
 mod scrollback;
 mod select;
 mod session;
