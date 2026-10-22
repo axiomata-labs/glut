@@ -23,6 +23,8 @@ pub enum Pick {
     File(String),
     /// `@` with the file picker, from the palette.
     Mention,
+    /// A theme by its name (`/theme`).
+    Theme(String),
 }
 
 /// What a model entry is sorted and filtered by.

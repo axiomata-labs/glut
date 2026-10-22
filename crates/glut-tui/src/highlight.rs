@@ -4,7 +4,7 @@
 
 use std::sync::OnceLock;
 
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter};
 
 use crate::theme;
@@ -87,21 +87,25 @@ pub fn lines(code: &str, language: &str) -> Option<Vec<Vec<Run>>> {
     Some(lines)
 }
 
-/// The colour of a capture: calm tones (the accent's orange stays for what lives), comments quiet and slanted.
+/// The colour of a capture in the theme's code colours, comments slanted.
 fn style_of(name: &str) -> Style {
-    let fg = |r, g, b| Style::default().fg(Color::Rgb(r, g, b));
+    let syntax = theme::c().syntax;
+    let fg = |color| Style::default().fg(color);
     match name {
-        "comment" => theme::quiet().add_modifier(Modifier::ITALIC),
-        "keyword" => fg(0xc6, 0xa0, 0xf6),
-        "string" | "string.special" | "escape" => fg(0xa6, 0xda, 0x95),
+        "comment" => fg(syntax.comment).add_modifier(Modifier::ITALIC),
+        "keyword" => fg(syntax.keyword),
+        "string" | "string.special" | "escape" => fg(syntax.string),
         "function" | "function.method" | "function.builtin" | "function.macro" | "constructor" => {
-            fg(0x8a, 0xad, 0xf4)
+            fg(syntax.function)
         }
-        "type" | "attribute" | "module" => fg(0xee, 0xd4, 0x9f),
-        "number" | "boolean" | "constant" | "constant.builtin" => fg(0xf5, 0xbd, 0xe6),
-        "property" | "label" => fg(0x8b, 0xd5, 0xca),
-        "tag" => fg(0xed, 0x87, 0x96),
-        "operator" | "punctuation" | "embedded" | "variable.builtin" => fg(0x93, 0x9a, 0xb7),
+        "type" | "module" => fg(syntax.kind),
+        "attribute" => fg(syntax.attribute),
+        "number" | "boolean" => fg(syntax.number),
+        "constant" | "constant.builtin" => fg(syntax.constant),
+        "property" | "label" => fg(syntax.property),
+        "tag" => fg(syntax.tag),
+        "operator" | "embedded" => fg(syntax.operator),
+        "punctuation" | "variable.builtin" => fg(syntax.punctuation),
         _ => Style::default(),
     }
 }

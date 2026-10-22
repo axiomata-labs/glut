@@ -351,6 +351,13 @@ impl Transcript {
             .find(|block| matches!(&block.kind, Kind::Tool { id, .. } if id == wanted))
     }
 
+    /// Every block laid out anew at its next frame: its colours changed (`/theme`).
+    pub fn touch_all(&mut self) {
+        for block in &mut self.blocks {
+            block.touch();
+        }
+    }
+
     /// Unfolds every tool line, or — when all are unfolded already — folds them all.
     pub fn unfold_all(&mut self) {
         let open = self.blocks.iter().any(|block| {
@@ -436,7 +443,7 @@ fn render(kind: &Kind, width: u16, thinking: Thinking, frame: usize) -> Vec<Line
     match kind {
         Kind::Owner(text) => {
             lines.push(Line::default());
-            let style = Style::default().fg(theme::OWNER);
+            let style = Style::default().fg(theme::c().owner);
             for (at, row) in wrap(text, width - 2).into_iter().enumerate() {
                 let mark = if at == 0 { "› " } else { "  " };
                 lines.push(Line::from(vec![
@@ -466,8 +473,8 @@ fn render(kind: &Kind, width: u16, thinking: Thinking, frame: usize) -> Vec<Line
             let (mark, mark_style) = match state {
                 ToolState::Running => ("◆", theme::glow()),
                 ToolState::Done => ("◇", theme::quiet()),
-                ToolState::Failed => ("✕", Style::default().fg(theme::FAULT)),
-                ToolState::Refused => ("⊘", Style::default().fg(theme::FAULT)),
+                ToolState::Failed => ("✕", Style::default().fg(theme::c().fault)),
+                ToolState::Refused => ("⊘", Style::default().fg(theme::c().fault)),
             };
             // The head is one line: the name and the gate's word cut first to what fits, the target gets the rest.
             let name = cut(&clean(name), 32);
@@ -559,8 +566,8 @@ fn render(kind: &Kind, width: u16, thinking: Thinking, frame: usize) -> Vec<Line
         Kind::Note { text, tone } => {
             let style = match tone {
                 Tone::Quiet => theme::quiet(),
-                Tone::Fault => Style::default().fg(theme::FAULT),
-                Tone::Fine => Style::default().fg(theme::FINE),
+                Tone::Fault => Style::default().fg(theme::c().fault),
+                Tone::Fine => Style::default().fg(theme::c().fine),
             };
             for row in wrap(text, width - 2) {
                 lines.push(Line::from(vec![

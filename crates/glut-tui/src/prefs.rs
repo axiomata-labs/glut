@@ -38,6 +38,12 @@ pub struct Prefs {
     /// Whether the side panel is shown (T28).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub panel: Option<bool>,
+    /// Whether the input is edited the vi way (TUI3c, `/vim`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vi: Option<bool>,
+    /// The colours: `glut` or an app theme's name (TUI3c, `/theme`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<String>,
     #[serde(flatten)]
     other: serde_json::Map<String, serde_json::Value>,
 }
@@ -127,6 +133,28 @@ pub fn set_editor(home: &Path, command: &str) -> Result<String, String> {
 pub fn set_thinking(home: &Path, thinking: crate::transcript::Thinking) -> Result<(), String> {
     let mut prefs = Prefs::read(home)?;
     prefs.thinking = Some(thinking);
+    prefs.save(home)
+}
+
+/// Keeps whether the vi mode is on.
+///
+/// # Errors
+///
+/// A message when the file cannot be read (it is not written over) or written.
+pub fn set_vi(home: &Path, on: bool) -> Result<(), String> {
+    let mut prefs = Prefs::read(home)?;
+    prefs.vi = Some(on);
+    prefs.save(home)
+}
+
+/// Keeps the theme chosen with `/theme`.
+///
+/// # Errors
+///
+/// A message when the file cannot be read (it is not written over) or written.
+pub fn set_theme(home: &Path, name: &str) -> Result<(), String> {
+    let mut prefs = Prefs::read(home)?;
+    prefs.theme = Some(name.to_owned());
     prefs.save(home)
 }
 

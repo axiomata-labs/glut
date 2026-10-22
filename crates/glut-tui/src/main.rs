@@ -16,6 +16,7 @@ mod shell;
 mod store;
 mod theme;
 mod transcript;
+mod vi;
 mod view;
 
 use std::io::{self, Write as _};
@@ -203,7 +204,22 @@ async fn run(
     // Raw mode sends no SIGINT; at the scrollback's prompt (cooked mode) Ctrl+C would end Glut mid-turn: it goes
     // back instead.
     let mut interrupt = signal(SignalKind::interrupt())?;
+    // The cursor's shape follows the vi mode: a block in Normal mode, the owner's own shape otherwise.
+    let mut block_cursor = false;
     loop {
+        let wanted = app
+            .vi
+            .as_ref()
+            .is_some_and(|vi| vi.mode == vi::Mode::Normal);
+        if wanted != block_cursor {
+            let shape = if wanted {
+                cursor::SetCursorStyle::SteadyBlock
+            } else {
+                cursor::SetCursorStyle::DefaultUserShape
+            };
+            execute!(io::stdout(), shape)?;
+            block_cursor = wanted;
+        }
         // Every frame inside synchronized output (DEC 2026): the terminal shows it whole or not at all — and the end
         // is sent even when the frame failed, or the terminal would hold every later one back.
         execute!(io::stdout(), BeginSynchronizedUpdate)?;
@@ -260,6 +276,8 @@ async fn run(
             entered?;
             execute!(io::stdout(), Clear(ClearType::All))?;
             terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
+            // `leave` gave the terminal its own cursor back: the vi mode's block is sent again.
+            block_cursor = false;
             continue;
         }
         // Ctrl+X E: the editor gets the terminal, and the input comes back from it (T29).
@@ -280,6 +298,8 @@ async fn run(
             app.mouse_held = true;
             execute!(io::stdout(), Clear(ClearType::All))?;
             terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
+            // `leave` gave the terminal its own cursor back: the vi mode's block is sent again.
+            block_cursor = false;
             continue;
         }
         tokio::select! {
@@ -428,6 +448,7 @@ fn leave(enhanced: bool) {
         DisableMouseCapture,
         DisableBracketedPaste,
         LeaveAlternateScreen,
+        cursor::SetCursorStyle::DefaultUserShape,
         cursor::Show
     );
     let _ = terminal::disable_raw_mode();

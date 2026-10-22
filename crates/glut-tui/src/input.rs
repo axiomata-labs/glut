@@ -5,9 +5,14 @@ use unicode_width::UnicodeWidthChar;
 
 /// The most messages the history keeps.
 const HISTORY: usize = 200;
+/// The most changes `u` goes back.
+const UNDO: usize = 200;
 /// A paste of more lines than this, or more characters, stands in the input as one short line (T9).
 const PASTE_LINES: usize = 10;
 const PASTE_CHARS: usize = 2_000;
+
+/// The input as it stood before a change: its lines, its cursor, and the pastes its marks stand for.
+type Snapshot = (Vec<String>, usize, usize, Vec<(String, String)>);
 
 /// A message of the history, or the draft: its text with its marks, and the pastes they stand for.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -19,10 +24,13 @@ struct Entry {
 #[derive(Debug, Default)]
 pub struct Input {
     /// The text, one string per line; never empty.
-    lines: Vec<String>,
+    pub(crate) lines: Vec<String>,
     /// The cursor: line, and character within it.
-    row: usize,
-    col: usize,
+    pub(crate) row: usize,
+    pub(crate) col: usize,
+    /// The vi mode's undo and redo: the text and cursor before each change (`u`, Ctrl+R).
+    undo: Vec<Snapshot>,
+    redo: Vec<Snapshot>,
     /// What was sent, as it stood in the input — its paste marks and what they stand for kept beside it.
     history: Vec<Entry>,
     /// Where in the history Up has gone: `None` while editing a new message.
@@ -65,6 +73,8 @@ impl Input {
         self.browsing = None;
         self.draft = None;
         self.pastes.clear();
+        self.undo.clear();
+        self.redo.clear();
     }
 
     /// The text with every paste mark in it given back as what was pasted — each mark once, found in the text as
@@ -182,6 +192,62 @@ impl Input {
         }
     }
 
+    /// Keeps the text as it is now for `u`; a new change forgets what `Ctrl+R` could bring back.
+    pub(crate) fn snapshot(&mut self) {
+        self.undo
+            .push((self.lines.clone(), self.row, self.col, self.pastes.clone()));
+        if self.undo.len() > UNDO {
+            self.undo.remove(0);
+        }
+        self.redo.clear();
+    }
+
+    /// The text before the last change; `false` when there is none.
+    pub(crate) fn undo(&mut self) -> bool {
+        let Some(before) = self.undo.pop() else {
+            return false;
+        };
+        let now = self.restore_snapshot(before);
+        self.redo.push(now);
+        true
+    }
+
+    /// The change `undo` took back, again; `false` when there is none.
+    pub(crate) fn redo(&mut self) -> bool {
+        let Some(after) = self.redo.pop() else {
+            return false;
+        };
+        let now = self.restore_snapshot(after);
+        self.undo.push(now);
+        true
+    }
+
+    /// Puts `snapshot` in place and gives back what stood before it.
+    fn restore_snapshot(&mut self, (lines, row, col, pastes): Snapshot) -> Snapshot {
+        let now = (
+            std::mem::replace(&mut self.lines, lines),
+            self.row,
+            self.col,
+            std::mem::replace(&mut self.pastes, pastes),
+        );
+        self.row = row.min(self.lines.len() - 1);
+        self.col = col.min(self.len(self.row));
+        now
+    }
+
+    /// The characters of line `row`.
+    pub(crate) fn chars(&self, row: usize) -> Vec<char> {
+        self.lines[row].chars().collect()
+    }
+
+    /// Line `row` set to `chars`, the cursor kept inside it.
+    pub(crate) fn set_line(&mut self, row: usize, chars: &[char]) {
+        self.lines[row] = chars.iter().collect();
+        if row == self.row {
+            self.col = self.col.min(chars.len());
+        }
+    }
+
     /// Whether the cursor stands where a word begins: at a line's start or after a space.
     pub fn at_word_start(&self) -> bool {
         self.col == 0
@@ -201,6 +267,8 @@ impl Input {
     }
 
     pub fn backspace(&mut self) {
+        // A cursor past the line's end (left there by a recalled message) deletes from the end.
+        self.col = self.col.min(self.len(self.row));
         // A paste's mark goes as a whole, and the paste with it: half a mark would send neither.
         let before: String = self.lines[self.row].chars().take(self.col).collect();
         if let Some(at) = self

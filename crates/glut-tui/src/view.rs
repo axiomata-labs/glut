@@ -117,7 +117,7 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
     let spark_style = if working {
         theme::glow()
     } else {
-        Style::default().fg(theme::EMBER)
+        Style::default().fg(theme::c().ember)
     };
     let left = vec![
         Span::styled(
@@ -338,9 +338,9 @@ fn mark_stream(frame: &mut Frame, app: &App, area: Rect) {
             for (at, (found, from, to)) in search.matches.iter().enumerate() {
                 if found == line {
                     let style = if search.current == Some(at) {
-                        Style::default().bg(theme::GLOW).fg(theme::INK)
+                        Style::default().bg(theme::c().glow).fg(theme::c().ink)
                     } else {
-                        Style::default().bg(theme::MATCH)
+                        Style::default().bg(theme::c().found)
                     };
                     paint(frame, *row, *from, *to, style);
                 }
@@ -508,10 +508,17 @@ fn draw_input(frame: &mut Frame, app: &App, area: Rect, rows: &[String], cursor:
 
 fn draw_keys(frame: &mut Frame, app: &App, area: Rect) {
     let mode = app.mode();
+    // The vi mode's state first, where a vi user looks for it.
+    let vi = app.vi.as_ref().map(|vi| match vi.mode {
+        crate::vi::Mode::Normal => {
+            Span::styled(" NORMAL ", theme::glow().add_modifier(Modifier::BOLD))
+        }
+        crate::vi::Mode::Insert => Span::styled(" INSERT ", theme::quiet()),
+    });
     // The mode is where the owner looks before sending: auto glows, it does the most without asking.
     let mode_style = match mode {
         glut::permissions::Mode::Auto => theme::glow().add_modifier(Modifier::BOLD),
-        glut::permissions::Mode::Plan => Style::default().fg(theme::OWNER),
+        glut::permissions::Mode::Plan => Style::default().fg(theme::c().owner),
         _ => theme::quiet(),
     };
     let scopes = app
@@ -550,10 +557,13 @@ fn draw_keys(frame: &mut Frame, app: &App, area: Rect) {
         )
         .to_owned()
     };
-    let line = Line::from(vec![
-        Span::styled(format!(" {} ", session::mode_label(mode)), mode_style),
-        Span::styled(format!(" {hints}"), theme::quiet()),
-    ]);
+    let mut spans: Vec<Span> = vi.into_iter().collect();
+    spans.push(Span::styled(
+        format!(" {} ", session::mode_label(mode)),
+        mode_style,
+    ));
+    spans.push(Span::styled(format!(" {hints}"), theme::quiet()));
+    let line = Line::from(spans);
     frame.render_widget(Paragraph::new(line), area);
 }
 

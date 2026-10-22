@@ -28,7 +28,8 @@ const ASK_SETTLE: Duration = Duration::from_millis(400);
 
 /// What `/help` says.
 const HELP: &str = "Commands: /model [id] · /provider [id] · /effort [level] · /context [tokens] · /compact · \
-                    /editor [command] · /thinking off|folded|open · /scrollback · /clear · /help · /quit\n\
+                    /editor [command] · /thinking off|folded|open · /theme [name] · /vim on|off · /scrollback · \
+                    /clear · /help · /quit\n\
                     Keys: Enter send · Shift+Enter or Alt+Enter new line · ↑ history · Shift+Tab plan → ask → \
                     build → auto · Esc stop · Ctrl+O tool results · Ctrl+T thinking · Ctrl+B panel · \
                     Ctrl+X E editor · PgUp/PgDn scroll · Ctrl+F search · drag to copy · F2 mouse to the terminal \
@@ -36,10 +37,12 @@ const HELP: &str = "Commands: /model [id] · /provider [id] · /effort [level] �
                     Also: Ctrl+K every command and key · @ mentions a file · !cmd runs a command and shows Glut \
                     its output · !!cmd runs it for you alone · a large paste stands as [pasted N lines]\n\
                     While Glut works: Enter steers it (taken in before its next step) · Tab queues for after the \
-                    turn · Alt+↑ takes the last back";
+                    turn · Alt+↑ takes the last back\n\
+                    /vim on: Esc to Normal mode (h j k l w b e 0 ^ $ gg G · x r ~ J D C s S · d c y with a motion \
+                    or doubled · counts · p P · u Ctrl+R), i a I A o O to Insert; Esc in Normal mode stops Glut";
 
 /// The session's commands with what each does, as the list under a typed `/` shows them.
-pub const COMMANDS: [(&str, &str); 15] = [
+pub const COMMANDS: [(&str, &str); 17] = [
     (
         "model",
         "pick a model of the provider in use, or /model <id>",
@@ -62,6 +65,11 @@ pub const COMMANDS: [(&str, &str); 15] = [
         "show or hide the side panel with the plan (Ctrl+B)",
     ),
     ("resume", "open an earlier session of this folder"),
+    (
+        "theme",
+        "Glut's colours, or an Axiomata theme's: /theme <name>",
+    ),
+    ("vim", "edit the input the vi way: /vim on or off"),
     (
         "scrollback",
         "the conversation into the terminal's own scrollback (F3)",
@@ -145,6 +153,8 @@ pub struct App {
     pub mouse_request: Option<bool>,
     /// F3 or `/scrollback`: the main loop prints the stream where the terminal keeps it (TUI2c).
     pub scrollback_request: bool,
+    /// The input's vi mode, when the owner turned it on (`/vim`).
+    pub vi: Option<crate::vi::Vi>,
     /// The turn's inbox: what Enter sends while Glut works, taken before its next step (T10).
     pub steering: Option<glut::Inbox>,
     /// Messages queued with Tab while Glut works, sent one by one as turns end.
@@ -169,7 +179,13 @@ impl App {
     pub fn new(parts: Arc<Parts>, engine: Engine, reports: mpsc::UnboundedSender<Report>) -> Self {
         let folder = session::shown_folder(&parts.config.cwd);
         let session = Session::new(&parts.config.cwd, &engine.provider, engine.model_name());
-        let panel = Prefs::load(&parts.home).panel;
+        let prefs = Prefs::load(&parts.home);
+        let panel = prefs.panel;
+        let vi = prefs.vi.unwrap_or(false);
+        // The theme kept from an earlier session; an unknown name (a theme dropped since) keeps Glut's own.
+        if let Some(name) = &prefs.theme {
+            crate::theme::set(name);
+        }
         let mut transcript = Transcript {
             thinking: Prefs::load(&parts.home).thinking.unwrap_or_default(),
             ..Transcript::default()
@@ -211,6 +227,7 @@ impl App {
             mouse_held: true,
             mouse_request: None,
             scrollback_request: false,
+            vi: vi.then(crate::vi::Vi::default),
             steering: None,
             queue: Vec::new(),
             send_when_free: false,
@@ -659,6 +676,15 @@ impl App {
             self.search = Some(Search::default());
             return;
         }
+        // The vi mode sees a key before the input does: Normal mode's keys are its own, Insert mode types.
+        if let Some(vi) = &mut self.vi
+            && !self.chord
+        {
+            match vi.key(&mut self.input, key) {
+                crate::vi::Outcome::Done => return,
+                crate::vi::Outcome::Pass => {}
+            }
+        }
         if ctrl && matches!(key.code, KeyCode::Char('k')) {
             self.chord = false;
             self.picker = Some(palette());
@@ -703,7 +729,15 @@ impl App {
             KeyCode::Char('b') if ctrl => self.toggle_panel(),
             KeyCode::Enter if shift || alt => self.input.newline(),
             KeyCode::Char('j') if ctrl => self.input.newline(),
-            KeyCode::Enter => self.submit(),
+            KeyCode::Enter => {
+                self.submit();
+                // A message that went starts the next one in Insert mode, as `/vim on` does.
+                if let Some(vi) = &mut self.vi
+                    && self.input.is_empty()
+                {
+                    vi.mode = crate::vi::Mode::Insert;
+                }
+            }
             KeyCode::BackTab => self.cycle_mode(),
             // A selection goes first: Esc lets it go, the next one stops Glut.
             KeyCode::Esc if self.selection.is_some() => self.selection = None,
@@ -1101,6 +1135,13 @@ impl App {
             "resume" => self.picker = Some(self.session_picker()),
             "panel" => self.toggle_panel(),
             "scrollback" => self.scrollback_request = true,
+            "vim" => match rest {
+                "on" | "" => self.set_vi(true),
+                "off" => self.set_vi(false),
+                other => self.transcript.note(format!("/vim {other}: on or off"), Tone::Fault),
+            },
+            "theme" if rest.is_empty() => self.picker = Some(theme_picker()),
+            "theme" => self.set_theme(rest),
             "thinking" => match rest {
                 "off" => self.set_thinking(Thinking::Off),
                 "folded" | "fold" | "" => self.set_thinking(Thinking::Folded),
@@ -1218,6 +1259,36 @@ impl App {
         };
         match prefs::set_thinking(&self.parts.home, thinking) {
             Ok(()) => self.transcript.note(said, Tone::Quiet),
+            Err(reason) => self.transcript.note(reason, Tone::Fault),
+        }
+    }
+
+    /// Turns the vi mode on (in Insert mode, as a message starts) or off, and keeps it.
+    fn set_vi(&mut self, on: bool) {
+        self.vi = on.then(crate::vi::Vi::default);
+        let said = if on {
+            "vim: on — Esc to Normal mode, i a o to Insert; Esc in Normal mode stops Glut"
+        } else {
+            "vim: off"
+        };
+        match prefs::set_vi(&self.parts.home, on) {
+            Ok(()) => self.transcript.note(said, Tone::Quiet),
+            Err(reason) => self.transcript.note(reason, Tone::Fault),
+        }
+    }
+
+    /// Uses and keeps the theme `name`; every block takes its colours at the next frame.
+    fn set_theme(&mut self, name: &str) {
+        if !crate::theme::set(name) {
+            let names: Vec<&str> = crate::theme::all().map(|palette| palette.name).collect();
+            return self.transcript.note(
+                format!("no theme {name} — {}", names.join(", ")),
+                Tone::Fault,
+            );
+        }
+        self.transcript.touch_all();
+        match prefs::set_theme(&self.parts.home, name) {
+            Ok(()) => self.say(format!("theme: {name}")),
             Err(reason) => self.transcript.note(reason, Tone::Fault),
         }
     }
@@ -1386,6 +1457,7 @@ impl App {
                     }
                     Some(Pick::File(path)) => self.input.insert_text(&format!("{path} ")),
                     Some(Pick::Mention) => self.mention(),
+                    Some(Pick::Theme(name)) => self.set_theme(&name),
                     None => {}
                 }
             }
@@ -1713,6 +1785,25 @@ impl Search {
         self.current = Some((at + by).rem_euclid(count) as usize);
         self.jump = true;
     }
+}
+
+/// Glut's own colours and the app's themes, the one in use chosen; a light theme says it wants a light terminal.
+fn theme_picker() -> Picker {
+    let items = crate::theme::all()
+        .map(|palette| {
+            // Glut colours the text, never the terminal's background: a light theme reads on a light terminal.
+            let detail = match palette.name {
+                "glut" => "Glut's own",
+                "catppuccin-latte" | "github-light" | "paper" => {
+                    "Axiomata's theme · for a light terminal"
+                }
+                _ => "Axiomata's theme",
+            };
+            Item::plain(palette.name, detail, Pick::Theme(palette.name.to_owned()))
+        })
+        .collect();
+    let current = Pick::Theme(crate::theme::c().name.to_owned());
+    Picker::new("Theme", items, Some(&current))
 }
 
 /// The effort levels, and "the provider's default".

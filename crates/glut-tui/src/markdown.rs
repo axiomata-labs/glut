@@ -4,7 +4,7 @@
 //! reads as code to its end.
 
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -16,11 +16,6 @@ use crate::transcript::clean;
 const TAB: &str = "    ";
 /// The narrowest a table column is squeezed to before its cells wrap.
 const MIN_COLUMN: usize = 4;
-
-/// Inline code: calm teal, apart from the text around it.
-const CODE: Color = Color::Rgb(0x8b, 0xd5, 0xca);
-/// A link's text.
-const LINK: Color = Color::Rgb(0x8a, 0xad, 0xf4);
 
 /// `text` as lines of at most `width` cells.
 pub fn render(text: &str, width: usize) -> Vec<Line<'static>> {
@@ -136,7 +131,7 @@ impl Renderer {
             style = style.add_modifier(Modifier::UNDERLINED);
         }
         if !self.links.is_empty() {
-            style = style.fg(LINK).add_modifier(Modifier::UNDERLINED);
+            style = style.fg(theme::c().link).add_modifier(Modifier::UNDERLINED);
         }
         style
     }
@@ -160,12 +155,12 @@ impl Renderer {
                 self.push_text(&text, style);
             }
             Event::Code(text) => {
-                let style = self.style().fg(CODE);
+                let style = self.style().fg(theme::c().code);
                 self.push_text(&text, style);
             }
             Event::Html(text) | Event::InlineHtml(text) => self.push_text(&text, theme::quiet()),
             Event::InlineMath(text) | Event::DisplayMath(text) => {
-                let style = self.style().fg(CODE);
+                let style = self.style().fg(theme::c().code);
                 self.push_text(&text, style);
             }
             Event::FootnoteReference(name) => self.push_text(&format!("[{name}]"), theme::quiet()),
@@ -741,7 +736,7 @@ mod tests {
         let bold = &lines[2].spans[1];
         assert_eq!(bold.content, "bold");
         assert!(bold.style.add_modifier.contains(Modifier::BOLD));
-        assert_eq!(lines[2].spans[3].style.fg, Some(CODE));
+        assert_eq!(lines[2].spans[3].style.fg, Some(theme::c().code));
     }
 
     #[test]
