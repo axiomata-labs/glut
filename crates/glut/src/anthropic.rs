@@ -143,7 +143,7 @@ impl AnthropicMessages {
                 "a key is only sent over https, or over http to this machine".into(),
             ));
         }
-        let client = reqwest::Client::builder()
+        let client = crate::model::identified(reqwest::Client::builder(), &endpoint.base_url)
             .timeout(REQUEST_TIMEOUT)
             // An API endpoint has no reason to redirect; following one would send the key somewhere unchecked.
             .redirect(reqwest::redirect::Policy::none())
@@ -222,19 +222,24 @@ impl AnthropicMessages {
                     .collect(),
             );
         }
+        // Betas are Anthropic's own: a gateway that passes the Messages API on (OpenCode's) may refuse them.
+        let own = !crate::model::is_opencode(&self.endpoint.base_url);
         if thinking_of(model) == Thinking::Adaptive {
             body["thinking"] = json!({
                 "type": "adaptive",
                 // The thinking is shown as Glut works: a summary of it, never the raw chain.
                 "display": "summarized",
-                "block_binding": { "prefix_mismatch_behavior": "drop_block" },
             });
-            betas.push(THINKING_BINDING_BETA);
+            if own {
+                body["thinking"]["block_binding"] =
+                    json!({ "prefix_mismatch_behavior": "drop_block" });
+                betas.push(THINKING_BINDING_BETA);
+            }
             if let Some(effort) = self.endpoint.effort {
                 body["output_config"] = json!({ "effort": effort_for(model, effort) });
             }
         }
-        if FALLBACK_MODELS.contains(&model) {
+        if own && FALLBACK_MODELS.contains(&model) {
             body["fallbacks"] = json!("default");
             betas.push(FALLBACK_BETA);
         }
@@ -838,6 +843,7 @@ pub(crate) fn models_of(list: &Value) -> Option<Vec<crate::providers::models::Mo
                         .and_then(Value::as_str)
                         .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
                         .map(|at| at.timestamp()),
+                    api: None,
                 })
             })
             .collect(),
@@ -1020,6 +1026,27 @@ mod tests {
         let results = &turns[4]["content"];
         assert_eq!(results[0]["tool_use_id"], "toolu_1");
         assert_eq!(results[1]["content"], "(no output)");
+    }
+
+    #[test]
+    fn a_gateway_gets_no_betas_of_anthropics_own() {
+        let through = AnthropicMessages::new(endpoint(
+            "https://opencode.ai/inference/anthropic/v1",
+            "claude-opus-5-5",
+        ))
+        .unwrap();
+        let (body, betas) = through.body(&[Message::user("hi")], &[], Some(100));
+        assert!(betas.is_empty(), "{betas:?}");
+        assert!(body.get("fallbacks").is_none());
+        assert_eq!(
+            body["thinking"]["type"], "adaptive",
+            "the thinking itself stays"
+        );
+        assert!(body["thinking"].get("block_binding").is_none());
+        let own = AnthropicMessages::new(endpoint("https://api.anthropic.com", "claude-opus-5-5"))
+            .unwrap();
+        let (_, betas) = own.body(&[Message::user("hi")], &[], Some(100));
+        assert!(betas.contains(&THINKING_BINDING_BETA) && betas.contains(&FALLBACK_BETA));
     }
 
     #[test]

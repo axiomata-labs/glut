@@ -207,8 +207,10 @@ fn add(home: &Path, added: Added) -> Result<(), String> {
     // The same checks a load makes, before anything is asked or stored.
     entry.check()?;
     let store = providers.store(home).map_err(|err| err.to_string())?;
+    // A provider whose account's key another one keeps (OpenCode Zen's for OpenCode Go) may take that one: Enter.
+    let shared = providers::shared_key(&providers, store.as_ref(), &id, &entry)?.is_some();
     let key = if entry.needs_key() && !added.no_key {
-        Some(read_key(&id)?)
+        read_key(&id, shared)?
     } else {
         None
     };
@@ -233,6 +235,10 @@ fn add(home: &Path, added: Added) -> Result<(), String> {
             store.set(&account, &key).map_err(|err| err.to_string())?;
             println!("The key of {id} is in {}.", store.place());
         }
+        // A key of its own, given before, stays: Enter changes nothing stored.
+        None if shared => println!(
+            "{id} takes the key its account's other provider keeps, unless it has its own."
+        ),
         None if !entry.needs_key() => store.delete(&account).map_err(|err| err.to_string())?,
         None => {}
     }
@@ -245,11 +251,18 @@ fn add(home: &Path, added: Added) -> Result<(), String> {
     Ok(())
 }
 
-/// The key, from the terminal without echo, or from stdin when it is no terminal.
-fn read_key(id: &str) -> Result<String, String> {
+/// The key, from the terminal without echo, or from stdin when it is no terminal. `None` when `shared` (another
+/// provider of the account keeps one) and nothing was typed.
+fn read_key(id: &str, shared: bool) -> Result<Option<String>, String> {
     let stdin = std::io::stdin();
     let key = if stdin.is_terminal() {
-        eprint!("Key for {id} (not shown): ");
+        if shared {
+            eprint!(
+                "Key for {id} (not shown; Enter takes the one its account's other provider keeps): "
+            );
+        } else {
+            eprint!("Key for {id} (not shown): ");
+        }
         let _ = std::io::stderr().flush();
         let line = without_echo(|| {
             let mut line = String::new();
@@ -276,6 +289,9 @@ fn read_key(id: &str) -> Result<String, String> {
         ));
     }
     let key = key.trim().to_owned();
+    if key.is_empty() && shared {
+        return Ok(None);
+    }
     if key.is_empty() {
         return Err("no key given (--no-key stores none, for a key from the environment)".into());
     }
@@ -284,7 +300,7 @@ fn read_key(id: &str) -> Result<String, String> {
             "the key holds spaces or control characters; was something else pasted?".into(),
         );
     }
-    Ok(key)
+    Ok(Some(key))
 }
 
 /// Runs `read` with the terminal's echo off, and turns it back on whatever happens: on return, on a panic (the
@@ -367,7 +383,17 @@ async fn test(home: &Path, id: Option<&str>, model: Option<&str>) -> Result<(), 
         std::env::var(name).ok()
     })?;
     let name = format!("{} · {}", resolved.id, resolved.endpoint.model);
-    let client = Model::new(resolved.endpoint, resolved.protocol).map_err(|err| err.to_string())?;
+    // A gateway's model needs its list to be routed; without one its API is guessed from its id.
+    let list = if resolved.protocol == glut::providers::catalog::Protocol::Gateway {
+        providers::models::current(home, &resolved.id, &resolved.endpoint, resolved.protocol)
+            .await
+            .ok()
+    } else {
+        None
+    };
+    let (endpoint, protocol) =
+        providers::route(resolved.endpoint, resolved.protocol, list.as_ref())?;
+    let client = Model::new(endpoint, protocol).map_err(|err| err.to_string())?;
     let started = Instant::now();
     let reply = client
         .complete(&[Message::user(TEST_PROMPT)], &[], Some(TEST_MAX_TOKENS))

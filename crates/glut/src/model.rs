@@ -415,7 +415,7 @@ impl OpenAiCompat {
                 "a key is only sent over https, or over http to this machine".into(),
             ));
         }
-        let client = reqwest::Client::builder()
+        let client = identified(reqwest::Client::builder(), &endpoint.base_url)
             .timeout(REQUEST_TIMEOUT)
             // An API endpoint has no reason to redirect; following one would send the request somewhere unchecked.
             .redirect(reqwest::redirect::Policy::none())
@@ -578,8 +578,61 @@ impl Model {
             Protocol::AnthropicMessages => {
                 Model::Anthropic(crate::anthropic::AnthropicMessages::new(endpoint)?)
             }
+            Protocol::Gateway => {
+                return Err(HarnessError::Protocol(
+                    "a gateway's model is routed first (providers::route)".into(),
+                ));
+            }
         })
     }
+}
+
+/// Glut's name in every model call (`glut/0.1.0`).
+const USER_AGENT: &str = concat!("glut/", env!("CARGO_PKG_VERSION"));
+/// The header OpenCode's gateway asks a client to name its session by.
+const OPENCODE_SESSION: &str = "x-opencode-session";
+
+/// A client builder that names Glut to every provider (the name says nothing of the owner), and — towards OpenCode's
+/// gateway, which asks for it — the session, one id for the whole process so its calls are seen as one session.
+pub(crate) fn identified(
+    builder: reqwest::ClientBuilder,
+    base_url: &str,
+) -> reqwest::ClientBuilder {
+    let builder = builder.user_agent(USER_AGENT);
+    if !is_opencode(base_url) {
+        return builder;
+    }
+    let mut headers = reqwest::header::HeaderMap::new();
+    if let Ok(value) = reqwest::header::HeaderValue::from_str(session_id()) {
+        headers.insert(OPENCODE_SESSION, value);
+    }
+    builder.default_headers(headers)
+}
+
+/// Whether `base_url` is OpenCode's gateway: its host, parsed as a URL and in any case, is `opencode.ai`; a URL
+/// with a user or a password before its host is none (`https://opencode.ai:x@elsewhere`).
+pub(crate) fn is_opencode(base_url: &str) -> bool {
+    reqwest::Url::parse(base_url).is_ok_and(|url| {
+        url.username().is_empty()
+            && url.password().is_none()
+            && url
+                .host_str()
+                .is_some_and(|host| host.eq_ignore_ascii_case("opencode.ai"))
+    })
+}
+
+/// This process's session id: 32 hex digits from the standard library's random hash keys.
+fn session_id() -> &'static str {
+    use std::hash::{BuildHasher as _, Hasher as _};
+    static ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    ID.get_or_init(|| {
+        let half = || {
+            std::collections::hash_map::RandomState::new()
+                .build_hasher()
+                .finish()
+        };
+        format!("{:016x}{:016x}", half(), half())
+    })
 }
 
 impl ChatModel for Model {
@@ -1289,6 +1342,29 @@ mod tests {
     }
     use super::fake::{Answer, FakeApi};
     use super::*;
+
+    #[test]
+    fn only_opencodes_own_host_is_its_gateway() {
+        assert!(is_opencode("https://opencode.ai/inference/go/openai/v1"));
+        assert!(is_opencode("https://OpenCode.AI/inference"));
+        assert!(!is_opencode("https://opencode.ai.example/v1"));
+        assert!(!is_opencode("https://opencode.ai:x@elsewhere.example/v1"));
+        assert!(!is_opencode("https://api.anthropic.com/v1"));
+        assert_eq!(session_id(), session_id(), "one id for the whole process");
+        assert_eq!(session_id().len(), 32);
+    }
+
+    #[test]
+    fn a_gateway_is_routed_before_a_model_is_made() {
+        let endpoint = ModelEndpoint {
+            base_url: "https://opencode.ai/inference".into(),
+            api_key: None,
+            model: "glm-5.3".into(),
+            effort: None,
+            versioned: true,
+        };
+        assert!(Model::new(endpoint, crate::providers::catalog::Protocol::Gateway).is_err());
+    }
 
     fn endpoint(base_url: &str, key: Option<&str>) -> ModelEndpoint {
         ModelEndpoint {

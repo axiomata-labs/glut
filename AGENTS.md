@@ -89,6 +89,10 @@ cargo run --release --bin glut   # the TUI in the current folder, on the default
   so every adaptive-thinking request sends `prefix_mismatch_behavior: "drop_block"` (beta
   `thinking-binding-controls-2026-08-01`). Never send `budget_tokens` or `thinking: disabled` to them, nor
   `temperature`.
+- **A gateway's model is routed before its client is made** (PV3b, OpenCode Zen/Go, `Protocol::Gateway`): one root,
+  each model on the part that speaks its API, told by the model list (models.dev). Every `Model::new` from a resolved
+  provider goes through `providers::route` with the list — `Model::new` refuses `Gateway`. Anthropic's betas and
+  fallbacks are only sent to Anthropic itself, never through the gateway.
 - **What a command *is* decides beside the rules** (TUI1e, `crates/glut/src/permissions/kinds.rs`): a command whose
   every part is a listed reader (`ls`, `grep`, `sed -n 1,9p`, `git status`, …) runs in every mode like `read_file`;
   in `auto` everything sandboxed runs but a `kinds::heavy` one (`rm -rf`, `git push`, `sudo`, …). A new reader needs

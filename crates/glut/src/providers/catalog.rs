@@ -9,6 +9,9 @@ pub enum Protocol {
     ChatCompletions,
     /// `POST {root}/messages` — Anthropic's own API (PV3, `crate::anthropic`).
     AnthropicMessages,
+    /// A gateway whose models speak different APIs below one root (OpenCode Zen and Go): each model's API comes from
+    /// the model list, and [`crate::providers::route`] makes the endpoint and the protocol of one model of it.
+    Gateway,
 }
 
 /// How a run signs in to a provider (P3).
@@ -34,6 +37,11 @@ pub struct Known {
     pub key_env: Option<&'static str>,
     /// One line for `axh providers catalog`.
     pub note: &'static str,
+    /// The provider's id in the models.dev catalog, where a gateway's model list (ids alone) finds what each model
+    /// speaks, its window and its prices.
+    pub described_by: Option<&'static str>,
+    /// Providers of one account whose key is one: a key stored for one of them serves the others at the same host.
+    pub key_group: Option<&'static str>,
 }
 
 /// The kind of an endpoint the owner names by its root, not by the catalog.
@@ -172,6 +180,26 @@ pub const CATALOG: &[Known] = &[
         "OLLAMA_API_KEY",
         "Ollama account key",
     ),
+    gateway(
+        key(
+            "opencode-zen",
+            "OpenCode Zen",
+            "https://opencode.ai/inference",
+            "OPENCODE_API_KEY",
+            "OpenCode's pay-as-you-go models, some free for a while",
+        ),
+        "opencode",
+    ),
+    gateway(
+        key(
+            "opencode-go",
+            "OpenCode Go",
+            "https://opencode.ai/inference/go",
+            "OPENCODE_GO_API_KEY",
+            "OpenCode's plan of open models ($10 a month)",
+        ),
+        "opencode-go",
+    ),
     local(
         "ollama",
         "Ollama (this Mac)",
@@ -201,6 +229,18 @@ const fn key(
         sign_in: SignIn::Key,
         key_env: Some(key_env),
         note,
+        described_by: None,
+        key_group: None,
+    }
+}
+
+/// OpenCode's gateways: one account, one key, every model's API told by models.dev (OpenCode's own catalog).
+const fn gateway(known: Known, described_by: &'static str) -> Known {
+    Known {
+        protocol: Protocol::Gateway,
+        described_by: Some(described_by),
+        key_group: Some("opencode"),
+        ..known
     }
 }
 
@@ -218,6 +258,8 @@ const fn local(
         sign_in: SignIn::None,
         key_env: None,
         note,
+        described_by: None,
+        key_group: None,
     }
 }
 

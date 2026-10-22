@@ -542,7 +542,8 @@ fn draw_picker(frame: &mut Frame, app: &App, area: Rect) {
             (false, false) => Style::default(),
         };
         let detail = if item.dim {
-            format!("  {} · not allowed for this account", item.detail)
+            // Not allowed by the account (OpenRouter's settings), or of an API Glut does not speak yet (a gateway's).
+            format!("  {} · not usable here", item.detail)
         } else {
             format!("  {}", item.detail)
         };

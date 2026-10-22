@@ -400,6 +400,14 @@ impl App {
                         .note(format!("no handoff: {reason}"), Tone::Fault),
                 }
             }
+            Report::ChooseModel(provider) => {
+                self.busy = None;
+                self.transcript.note(
+                    format!("{provider} has no model yet: pick the one it takes"),
+                    Tone::Quiet,
+                );
+                self.picker = Some(self.model_picker(Some(&provider)));
+            }
             Report::Switched(result) => {
                 self.busy = None;
                 match result {
@@ -661,7 +669,7 @@ impl App {
                 self.context_used = 0;
                 self.scroll = 0;
             }
-            "model" if rest.is_empty() => self.picker = Some(self.model_picker()),
+            "model" if rest.is_empty() => self.picker = Some(self.model_picker(None)),
             "model" => self.switch(
                 None,
                 Some(rest.to_owned()),
@@ -867,12 +875,15 @@ impl App {
         }
     }
 
-    /// Every model of every provider whose list Glut keeps, the current one selected.
-    fn model_picker(&self) -> Picker {
+    /// Every model of every provider whose list Glut keeps — or of provider `only` —, the current one selected.
+    fn model_picker(&self, only: Option<&str>) -> Picker {
         let mut items = Vec::new();
         let mut missing = Vec::new();
         if let Ok(list) = Providers::load(&self.parts.home) {
             for (id, entry) in &list.providers {
+                if only.is_some_and(|only| only != id) {
+                    continue;
+                }
                 match models::cached(&self.parts.home, id, entry.root().trim_end_matches('/')) {
                     Some(list) => items.extend(list.models.iter().map(|model| {
                         Item {

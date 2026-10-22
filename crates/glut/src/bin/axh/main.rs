@@ -339,8 +339,11 @@ async fn endpoint(
             None
         }
     };
+    // A gateway's model goes to the part of it that speaks its API.
+    let (routed, protocol) =
+        glut::providers::route(resolved.endpoint, resolved.protocol, list.as_ref())?;
     Ok((
-        resolved.endpoint,
+        routed,
         Some(FromProvider {
             windows: providers_file
                 .providers
@@ -348,7 +351,7 @@ async fn endpoint(
                 .map(|entry| entry.windows.clone())
                 .unwrap_or_default(),
             id: resolved.id,
-            protocol: resolved.protocol,
+            protocol,
             list,
         }),
     ))

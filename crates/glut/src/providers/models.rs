@@ -31,6 +31,67 @@ const MAX_PRICE_PER_M: f64 = 10_000.0;
 /// What a kept list holds: a list of an older format (one kept before the account's allowed models were asked) is
 /// fetched again however young it is.
 pub const FORMAT: u32 = 2;
+/// The models.dev catalog: OpenCode's own description of every provider's models, where a gateway's list (ids
+/// alone) finds each model's API, window and prices.
+const DESCRIPTIONS_URL: &str = "https://models.dev/api.json";
+/// The largest catalog read: about six MB in October 2026, with room to grow.
+const MAX_DESCRIPTIONS_BYTES: usize = 16 * 1024 * 1024;
+/// The longest display name taken from models.dev.
+const MAX_NAME_CHARS: usize = 80;
+/// The largest window taken from models.dev: beyond it a description is a mistake, and Glut would never compact.
+const MAX_DESCRIBED_WINDOW: u32 = 10_000_000;
+
+/// The API a model of a gateway speaks ([`super::catalog::Protocol::Gateway`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Api {
+    /// OpenAI's chat completions.
+    Chat,
+    /// Anthropic's Messages API.
+    Anthropic,
+    /// OpenAI's Responses API: Glut does not speak it yet (PV4).
+    Responses,
+    /// Google's own API.
+    Google,
+    /// Anything else (a model that is no chat model).
+    Other,
+}
+
+impl Api {
+    /// Whether Glut has a client for it.
+    pub fn spoken(self) -> bool {
+        matches!(self, Api::Chat | Api::Anthropic)
+    }
+
+    /// What a gateway model speaks when models.dev does not describe it: OpenCode's endpoint table of 2026-10-22
+    /// (Claude and Alibaba's Qwen 3.x through Anthropic's API, GPT, Grok and Muse through the Responses API, Gemini
+    /// through Google's, the rest chat).
+    pub fn guessed(model: &str) -> Api {
+        let starts = |prefixes: &[&str]| prefixes.iter().any(|prefix| model.starts_with(prefix));
+        if starts(&["claude-", "qwen3."]) {
+            Api::Anthropic
+        } else if starts(&["gpt-", "grok-", "muse-"]) {
+            Api::Responses
+        } else if starts(&["gemini-"]) {
+            Api::Google
+        } else if starts(&["jev-"]) {
+            Api::Other
+        } else {
+            Api::Chat
+        }
+    }
+
+    /// The package models.dev names a model's client by (`provider.npm`); none is the provider's own, chat.
+    fn of_package(package: Option<&str>) -> Api {
+        match package {
+            None | Some("@ai-sdk/openai-compatible") => Api::Chat,
+            Some("@ai-sdk/anthropic") => Api::Anthropic,
+            Some("@ai-sdk/openai") => Api::Responses,
+            Some("@ai-sdk/google") => Api::Google,
+            Some(_) => Api::Other,
+        }
+    }
+}
 
 /// One model as its provider's list describes it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -52,6 +113,9 @@ pub struct ModelInfo {
     /// When the provider added the model (Unix seconds, OpenRouter's `created`): the picker's "newest".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created: Option<i64>,
+    /// The API the model speaks, for a gateway's model; `None` for every other provider's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api: Option<Api>,
 }
 
 impl ModelInfo {
@@ -179,6 +243,14 @@ pub async fn fetch(endpoint: &ModelEndpoint, protocol: Protocol) -> Result<Model
     } else {
         format!("{root}/v1")
     };
+    if protocol == Protocol::Gateway {
+        // A gateway's description is the catalog's, found by its root: a root of the owner's own (a proxy) has none.
+        let described_by = super::catalog::CATALOG
+            .iter()
+            .find(|known| known.root == root)
+            .and_then(|known| known.described_by);
+        return gateway_list(&client, root, endpoint, described_by).await;
+    }
     if protocol == Protocol::AnthropicMessages {
         // One page of a thousand is every model Anthropic has, many times over.
         let value = get_json(
@@ -225,12 +297,179 @@ pub async fn fetch(endpoint: &ModelEndpoint, protocol: Protocol) -> Result<Model
     })
 }
 
+/// A gateway's list: the ids from the gateway (`{root}/v1/models`, with the key), what each speaks and costs from
+/// models.dev. Without the description every model's API is guessed from its id and its window and prices are
+/// unknown; a model Glut cannot speak to stays in the list, not allowed, so the picker shows it greyed.
+async fn gateway_list(
+    client: &reqwest::Client,
+    root: &str,
+    endpoint: &ModelEndpoint,
+    described_by: Option<&str>,
+) -> Result<ModelList, String> {
+    let value = get_json(
+        client,
+        &format!("{root}/v1/models"),
+        endpoint,
+        Protocol::Gateway,
+    )
+    .await?;
+    let mut models = parse(&value).ok_or("no model list: no `data` array")?;
+    let described = match described_by {
+        Some(id) => descriptions(client, id).await.ok(),
+        None => None,
+    };
+    let undescribed = described_by.is_some() && described.is_none();
+    for model in &mut models {
+        let found = described
+            .as_ref()
+            .and_then(|all| all.get(model.id.as_str()))
+            .and_then(|entry| described_model(&model.id, entry));
+        match found {
+            Some(info) => {
+                // The gateway's own `created` is the time of its list, the same for every model: the release
+                // date says which is newest.
+                *model = info;
+            }
+            None => {
+                model.api = Some(Api::guessed(&model.id));
+                // The gateway's `created` is its list's time, the same for every model: no "newest" in it.
+                model.created = None;
+            }
+        }
+    }
+    let allowed = models
+        .iter()
+        .filter(|model| model.api.is_some_and(Api::spoken))
+        .map(|model| model.id.clone())
+        .collect();
+    // A list without its description (models.dev did not answer) has guesses and no prices: it is asked for again
+    // an hour later, not a day.
+    let fetched_at = if undescribed {
+        Utc::now() - (FRESH_FOR - RETRY_AFTER)
+    } else {
+        Utc::now()
+    };
+    Ok(ModelList {
+        format: FORMAT,
+        fetched_at,
+        failed_at: None,
+        root: root.to_owned(),
+        models,
+        allowed: Some(allowed),
+    })
+}
+
+/// The models models.dev describes for its provider `id` (`{"<id>": {"models": {…}}}`), asked without a key.
+async fn descriptions(
+    client: &reqwest::Client,
+    id: &str,
+) -> Result<serde_json::Map<String, Value>, String> {
+    let keyless = ModelEndpoint {
+        base_url: String::new(),
+        api_key: None,
+        model: String::new(),
+        effort: None,
+        versioned: true,
+    };
+    let value = get_capped(
+        client,
+        DESCRIPTIONS_URL,
+        &keyless,
+        Protocol::ChatCompletions,
+        MAX_DESCRIPTIONS_BYTES,
+    )
+    .await?;
+    // Taken out of the catalog, not copied: it is the one part of six MB that is kept.
+    let Value::Object(mut providers) = value else {
+        return Err("models.dev answered no catalog".into());
+    };
+    match providers
+        .remove(id)
+        .and_then(|mut provider| provider.get_mut("models").map(Value::take))
+    {
+        Some(Value::Object(models)) => Ok(models),
+        _ => Err(format!("models.dev describes no provider {id}")),
+    }
+}
+
+/// One model as models.dev describes it: name, window, prices per million tokens, reasoning, release date and the
+/// package of its client (which API it speaks).
+fn described_model(id: &str, entry: &Value) -> Option<ModelInfo> {
+    let entry = entry.as_object()?;
+    let per_m = |key: &str| -> Option<f64> {
+        let price = entry.get("cost")?.get(key)?.as_f64()?;
+        (price.is_finite() && (0.0..=MAX_PRICE_PER_M).contains(&price)).then_some(price)
+    };
+    let prices = match (per_m("input"), per_m("output")) {
+        // Nothing both ways is a price only for a model the gateway calls free: else a description's gap, which
+        // would let a budget count nothing.
+        (Some(input), Some(output)) if input == 0.0 && output == 0.0 && !id.contains("free") => {
+            None
+        }
+        (Some(input_per_m), Some(output_per_m)) => Some(Prices {
+            input_per_m,
+            cached_input_per_m: per_m("cache_read"),
+            output_per_m,
+        }),
+        _ => None,
+    };
+    let created = entry
+        .get("release_date")
+        .and_then(Value::as_str)
+        .and_then(|date| chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").ok())
+        .and_then(|date| date.and_hms_opt(0, 0, 0))
+        .map(|time| time.and_utc().timestamp());
+    let package = entry
+        .get("provider")
+        .and_then(|provider| provider.get("npm"))
+        .and_then(Value::as_str);
+    Some(ModelInfo {
+        id: id.to_owned(),
+        name: entry
+            .get("name")
+            .and_then(Value::as_str)
+            .filter(|name| {
+                *name != id && name.chars().count() <= MAX_NAME_CHARS && !name.chars().any(hidden)
+            })
+            .map(str::to_owned),
+        context_window: entry
+            .get("limit")
+            .and_then(|limit| limit.get("context"))
+            .and_then(Value::as_u64)
+            .and_then(|tokens| u32::try_from(tokens).ok())
+            .filter(|tokens| {
+                (crate::config::MIN_CONTEXT_WINDOW..=MAX_DESCRIBED_WINDOW).contains(tokens)
+            }),
+        prices,
+        reasoning: entry.get("reasoning").and_then(Value::as_bool),
+        created,
+        api: Some(Api::of_package(package)),
+    })
+}
+
+/// A character a terminal acts on or that changes how a name reads (zero-width marks, right-to-left overrides).
+fn hidden(c: char) -> bool {
+    c.is_control()
+        || matches!(c, '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+}
+
 /// `url`'s answer as JSON, asked with the endpoint's key; the size bounded, the error shown without the key.
 async fn get_json(
     client: &reqwest::Client,
     url: &str,
     endpoint: &ModelEndpoint,
     protocol: Protocol,
+) -> Result<Value, String> {
+    get_capped(client, url, endpoint, protocol, MAX_LIST_BYTES).await
+}
+
+/// [`get_json`] with its own bound on the answer's size.
+async fn get_capped(
+    client: &reqwest::Client,
+    url: &str,
+    endpoint: &ModelEndpoint,
+    protocol: Protocol,
+    limit: usize,
 ) -> Result<Value, String> {
     let mut request = client.get(url);
     if protocol == Protocol::AnthropicMessages {
@@ -246,9 +485,9 @@ async fn get_json(
     let status = response.status();
     if response
         .content_length()
-        .is_some_and(|length| length > MAX_LIST_BYTES as u64)
+        .is_some_and(|length| length > limit as u64)
     {
-        return Err(format!("the list is larger than {MAX_LIST_BYTES} bytes"));
+        return Err(format!("the list is larger than {limit} bytes"));
     }
     let mut body = Vec::new();
     while let Some(chunk) = response
@@ -256,8 +495,8 @@ async fn get_json(
         .await
         .map_err(|err| err.without_url().to_string())?
     {
-        if body.len() + chunk.len() > MAX_LIST_BYTES {
-            return Err(format!("the list is larger than {MAX_LIST_BYTES} bytes"));
+        if body.len() + chunk.len() > limit {
+            return Err(format!("the list is larger than {limit} bytes"));
         }
         body.extend_from_slice(&chunk);
     }
@@ -349,6 +588,7 @@ fn model(entry: &Value) -> Option<ModelInfo> {
         prices: entry.get("pricing").and_then(prices),
         reasoning,
         created: entry.get("created").and_then(Value::as_i64),
+        api: None,
     })
 }
 
@@ -376,6 +616,50 @@ fn prices(pricing: &Value) -> Option<Prices> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn models_dev_says_what_a_gateway_model_speaks_and_costs() {
+        let entry = json!({"name": "GLM-5.3", "reasoning": true, "release_date": "2026-09-01",
+            "limit": {"context": 1_000_000, "output": 131_072},
+            "cost": {"input": 0.6, "output": 2.2, "cache_read": 0.11}});
+        let glm = described_model("glm-5.3", &entry).unwrap();
+        assert_eq!(
+            glm.api,
+            Some(Api::Chat),
+            "no package: the provider's own, chat"
+        );
+        assert_eq!(glm.context_window, Some(1_000_000));
+        assert_eq!(glm.reasoning, Some(true));
+        let prices = glm.prices.unwrap();
+        assert!((prices.input_per_m - 0.6).abs() < 1e-9);
+        assert_eq!(prices.cached_input_per_m, Some(0.11));
+        assert_eq!(glm.created, Some(1_788_220_800));
+        let claude =
+            json!({"provider": {"npm": "@ai-sdk/anthropic"}, "cost": {"input": -1, "output": 5}});
+        let claude = described_model("claude-haiku-5-5", &claude).unwrap();
+        assert_eq!(claude.api, Some(Api::Anthropic));
+        assert_eq!(claude.prices, None, "a negative price is none");
+        let spoofed = json!({"name": "GLM\u{202e}5", "limit": {"context": 99_999_999},
+            "cost": {"input": 0, "output": 0}});
+        let spoofed = described_model("glm-5.2", &spoofed).unwrap();
+        assert_eq!(spoofed.name, None, "a right-to-left override is no name");
+        assert_eq!(spoofed.context_window, None, "an absurd window is none");
+        assert_eq!(
+            spoofed.prices, None,
+            "nothing both ways is no price for a model not called free"
+        );
+        let free = json!({"cost": {"input": 0, "output": 0}});
+        assert!(described_model("glm-5.3-flash-free", &free).unwrap().free());
+        let gpt = json!({"provider": {"npm": "@ai-sdk/openai"}});
+        assert_eq!(
+            described_model("gpt-6-luna", &gpt).unwrap().api,
+            Some(Api::Responses)
+        );
+        assert!(!Api::Responses.spoken() && Api::Anthropic.spoken());
+        assert_eq!(Api::guessed("muse-spark-1.3"), Api::Responses);
+        assert_eq!(Api::guessed("kimi-k3"), Api::Chat);
+        assert_eq!(Api::guessed("qwen3.7-max"), Api::Anthropic);
+    }
 
     #[test]
     fn an_openrouter_list_gives_window_prices_and_reasoning() {
@@ -436,6 +720,7 @@ mod tests {
             prices: None,
             reasoning: None,
             created: None,
+            api: None,
         };
         assert!(free.free());
         assert!(!flash.free());
@@ -462,6 +747,7 @@ mod tests {
                 prices: None,
                 reasoning: None,
                 created: Some(1_700_000_000),
+                api: None,
             }],
             allowed: Some(vec!["a/b".into()]),
         };

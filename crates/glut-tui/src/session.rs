@@ -30,6 +30,8 @@ pub enum Report {
     Compacted(Result<Compacted, String>, Vec<Message>),
     /// `/model`, `/provider` or `/effort` built the new engine, with what to say about it — or why not.
     Switched(Result<(Engine, Vec<String>), String>),
+    /// `/provider` named a provider without a model: its list is fetched, the owner picks one of it.
+    ChooseModel(String),
     /// `/handoff write` ended: where the handoff is and what it cost, or why there is none; the conversation as it was.
     HandedOff(Result<(PathBuf, Usage), String>, Vec<Message>),
 }
@@ -278,9 +280,10 @@ pub async fn engine(
         .get(&name)
         .copied()
         .or_else(|| listed.as_ref().and_then(|info| info.prices));
-    let mut endpoint = resolved.endpoint;
+    let (mut endpoint, protocol) =
+        providers::route(resolved.endpoint, resolved.protocol, models.as_ref())?;
     endpoint.effort = effort.unwrap_or(parts.owner_effort);
-    let model = Model::new(endpoint.clone(), resolved.protocol).map_err(|err| err.to_string())?;
+    let model = Model::new(endpoint.clone(), protocol).map_err(|err| err.to_string())?;
     Ok((
         Engine {
             provider: resolved.id,
@@ -291,6 +294,27 @@ pub async fn engine(
         },
         notes,
     ))
+}
+
+/// The id of provider `id` (or the default one) when it has no model, its list fetched for the picker first; `None`
+/// when it has a model, or is unknown — the switch then says why.
+async fn without_model(parts: &Parts, id: Option<&str>) -> Option<String> {
+    let list = Providers::load(&parts.home).ok()?;
+    let (found, entry) = list.pick(id).ok()?;
+    if entry.model.is_some() {
+        return None;
+    }
+    let found = found.to_owned();
+    // `-` only stands in for the model to reach the endpoint: the list is what is asked for.
+    let resolved = {
+        let store = list.store(&parts.home).ok()?;
+        providers::resolve(&list, store.as_ref(), Some(&found), Some("-"), |name| {
+            std::env::var(name).ok()
+        })
+        .ok()?
+    };
+    let _ = models::current(&parts.home, &found, &resolved.endpoint, resolved.protocol).await;
+    Some(found)
 }
 
 /// Keeps `tokens` as the window of the engine's model (`/context <tokens>`, T30), in `providers.json`.
@@ -400,11 +424,24 @@ pub fn switch(
     effort: Option<Option<Effort>>,
     reports: mpsc::UnboundedSender<Report>,
 ) {
-    let built =
-        tokio::spawn(
-            async move { engine(&parts, provider.as_deref(), model.as_deref(), effort).await },
-        );
     tokio::spawn(async move {
+        // A provider without a model gets its list fetched and offered, instead of the run failing on "no model".
+        if model.is_none()
+            && let Some(id) = without_model(&parts, provider.as_deref()).await
+        {
+            let _ = reports.send(Report::ChooseModel(id));
+            return;
+        }
+        let parts_for_build = Arc::clone(&parts);
+        let built = tokio::spawn(async move {
+            engine(
+                &parts_for_build,
+                provider.as_deref(),
+                model.as_deref(),
+                effort,
+            )
+            .await
+        });
         let result = built
             .await
             .unwrap_or_else(|err| Err(format!("the switch broke off: {err}")));

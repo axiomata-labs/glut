@@ -408,10 +408,14 @@ pub fn resolve(
     {
         (Some(key), KeyFrom::Env(name.to_owned()))
     } else {
-        let stored = store
+        let stored = match store
             .get(&account(id, entry))
             .map_err(|err| err.to_string())?
-            .and_then(trimmed);
+            .and_then(trimmed)
+        {
+            Some(key) => Some(key),
+            None => shared_key(providers, store, id, entry)?.and_then(trimmed),
+        };
         match stored {
             Some(key) => (Some(key), KeyFrom::Store),
             None => {
@@ -443,11 +447,83 @@ pub fn resolve(
     })
 }
 
+/// The endpoint and the protocol a run talks to `endpoint.model` with: a gateway's model goes to the part of the
+/// gateway that speaks its API (`{root}/openai/v1`, `{root}/anthropic/v1`), as its list says — or as its id
+/// suggests, without a list. Every other provider's endpoint is its own.
+///
+/// # Errors
+///
+/// A message when the model speaks an API Glut has no client for.
+pub fn route(
+    mut endpoint: ModelEndpoint,
+    protocol: catalog::Protocol,
+    list: Option<&models::ModelList>,
+) -> Result<(ModelEndpoint, catalog::Protocol), String> {
+    if protocol != catalog::Protocol::Gateway {
+        return Ok((endpoint, protocol));
+    }
+    let api = list
+        .and_then(|list| list.get(&endpoint.model))
+        .and_then(|info| info.api)
+        .unwrap_or_else(|| models::Api::guessed(&endpoint.model));
+    let (part, protocol) = match api {
+        models::Api::Chat => ("openai/v1", catalog::Protocol::ChatCompletions),
+        models::Api::Anthropic => ("anthropic/v1", catalog::Protocol::AnthropicMessages),
+        models::Api::Responses => {
+            return Err(format!(
+                "{} speaks OpenAI's Responses API, which Glut does not speak yet: pick another model",
+                endpoint.model
+            ));
+        }
+        models::Api::Google | models::Api::Other => {
+            return Err(format!(
+                "{} speaks an API Glut does not speak: pick another model",
+                endpoint.model
+            ));
+        }
+    };
+    endpoint.base_url = format!("{}/{part}", endpoint.base_url.trim_end_matches('/'));
+    endpoint.versioned = true;
+    Ok((endpoint, protocol))
+}
+
 /// The account a provider's key is stored under: its id and the host of its root (`openrouter@openrouter.ai`). A
 /// key is bound to where it was given for — a root changed in `providers.json` afterwards finds no key, instead of
 /// sending the stored one to the new host (security review of PV1).
 pub fn account(id: &str, entry: &Entry) -> String {
     format!("{id}@{}", host(entry.root()))
+}
+
+/// The key another provider of `entry`'s key group keeps for the same host (OpenCode Zen's for OpenCode Go), so one
+/// account's key is given once. A provider moved to another host takes none.
+///
+/// # Errors
+///
+/// A message when the secret store cannot be read.
+pub fn shared_key(
+    providers: &Providers,
+    store: &dyn SecretStore,
+    id: &str,
+    entry: &Entry,
+) -> Result<Option<String>, String> {
+    let Some(group) = catalog::known(&entry.kind).and_then(|known| known.key_group) else {
+        return Ok(None);
+    };
+    for (other_id, other) in &providers.providers {
+        let same_group =
+            catalog::known(&other.kind).and_then(|known| known.key_group) == Some(group);
+        if other_id != id
+            && same_group
+            && host(other.root()) == host(entry.root())
+            && let Some(key) = store
+                .get(&account(other_id, other))
+                .map_err(|err| err.to_string())?
+                .filter(|key| !key.trim().is_empty())
+        {
+            return Ok(Some(key));
+        }
+    }
+    Ok(None)
 }
 
 /// The host (with its port) of an API root.
@@ -491,6 +567,107 @@ mod tests {
             key: None,
             windows: BTreeMap::new(),
         }
+    }
+
+    fn gateway_endpoint(model: &str) -> ModelEndpoint {
+        ModelEndpoint {
+            base_url: "https://opencode.ai/inference/go".into(),
+            api_key: Some("k".into()),
+            model: model.into(),
+            effort: None,
+            versioned: true,
+        }
+    }
+
+    #[test]
+    fn a_gateway_model_goes_to_the_part_that_speaks_its_api() {
+        use catalog::Protocol;
+        let list = models::ModelList {
+            format: models::FORMAT,
+            fetched_at: chrono::Utc::now(),
+            failed_at: None,
+            root: "https://opencode.ai/inference/go".into(),
+            models: vec![models::ModelInfo {
+                id: "qwen3.8-max".into(),
+                name: None,
+                context_window: None,
+                prices: None,
+                reasoning: None,
+                created: None,
+                api: Some(models::Api::Anthropic),
+            }],
+            allowed: None,
+        };
+        let (routed, protocol) = route(
+            gateway_endpoint("qwen3.8-max"),
+            Protocol::Gateway,
+            Some(&list),
+        )
+        .unwrap();
+        assert_eq!(
+            protocol,
+            Protocol::AnthropicMessages,
+            "the list says, not the id"
+        );
+        assert_eq!(
+            routed.base_url,
+            "https://opencode.ai/inference/go/anthropic/v1"
+        );
+        let (routed, protocol) =
+            route(gateway_endpoint("glm-5.3"), Protocol::Gateway, None).unwrap();
+        assert_eq!(protocol, Protocol::ChatCompletions);
+        assert_eq!(
+            routed.base_url,
+            "https://opencode.ai/inference/go/openai/v1"
+        );
+        let (_, protocol) = route(
+            gateway_endpoint("claude-haiku-5-5"),
+            Protocol::Gateway,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            protocol,
+            Protocol::AnthropicMessages,
+            "without a list, by its id"
+        );
+        let refused = route(gateway_endpoint("gpt-6-luna"), Protocol::Gateway, None).unwrap_err();
+        assert!(refused.contains("Responses API"), "{refused}");
+        assert!(route(gateway_endpoint("gemini-4-argon"), Protocol::Gateway, None).is_err());
+        let own = gateway_endpoint("glm-5.3");
+        let (same, protocol) = route(own.clone(), Protocol::ChatCompletions, None).unwrap();
+        assert_eq!(
+            (same.base_url, protocol),
+            (own.base_url, Protocol::ChatCompletions)
+        );
+    }
+
+    #[test]
+    fn one_accounts_providers_share_a_key_at_the_same_host_only() {
+        let store = Memory::default();
+        let mut zen = entry("opencode-zen");
+        zen.model = Some("glm-5.3-flash-free".into());
+        let go = entry("opencode-go");
+        let list = providers(&[("opencode-zen", zen.clone()), ("opencode-go", go.clone())]);
+        assert!(resolve(&list, &store, Some("opencode-go"), None, |_| None).is_err());
+        store
+            .set(&account("opencode-zen", &zen), "zen-key")
+            .unwrap();
+        let found = resolve(&list, &store, Some("opencode-go"), None, |_| None).unwrap();
+        assert_eq!(found.endpoint.api_key.as_deref(), Some("zen-key"));
+        assert_eq!(found.protocol, catalog::Protocol::Gateway);
+        let mut moved = go;
+        moved.root = Some("https://proxy.example/inference/go".into());
+        let list = providers(&[("opencode-zen", zen), ("opencode-go", moved)]);
+        assert!(
+            resolve(&list, &store, Some("opencode-go"), None, |_| None).is_err(),
+            "a key never goes to another host"
+        );
+        let openrouter = providers(&[("openrouter", entry("openrouter"))]);
+        assert_eq!(
+            shared_key(&openrouter, &store, "openrouter", &entry("openrouter")).unwrap(),
+            None
+        );
     }
 
     fn providers(list: &[(&str, Entry)]) -> Providers {
