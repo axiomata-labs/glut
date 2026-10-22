@@ -429,17 +429,25 @@ fn draw_input(frame: &mut Frame, app: &App, area: Rect, rows: &[String], cursor:
     }
     let visible = usize::from(text.height);
     let first = cursor.0.saturating_sub(visible.saturating_sub(1));
+    // A line that runs as the owner's command says so before Enter: `!` for Glut to see, `‼` for the owner alone.
+    let command = crate::app::owners_command(&app.input.text());
+    let first_mark = match command {
+        Some((true, _)) => Span::styled("‼ ", theme::glow().add_modifier(Modifier::BOLD)),
+        Some((false, _)) => Span::styled("! ", theme::glow().add_modifier(Modifier::BOLD)),
+        None => Span::styled("› ", theme::glow()),
+    };
     let lines: Vec<Line> = rows
         .iter()
         .enumerate()
         .skip(first)
         .take(visible)
         .map(|(at, row)| {
-            let mark = if at == 0 { "› " } else { "  " };
-            Line::from(vec![
-                Span::styled(mark, theme::glow()),
-                Span::raw(row.clone()),
-            ])
+            let mark = if at == 0 {
+                first_mark.clone()
+            } else {
+                Span::raw("  ")
+            };
+            Line::from(vec![mark, Span::raw(row.clone())])
         })
         .collect();
     frame.render_widget(Paragraph::new(lines), text);
@@ -466,6 +474,12 @@ fn draw_keys(frame: &mut Frame, app: &App, area: Rect) {
     // An open question's keys come before any toast.
     let hints = if let Some(toast) = app.toast().filter(|_| app.ask.is_none()) {
         toast.to_owned()
+    } else if let Some((alone, _)) = crate::app::owners_command(&app.input.text()) {
+        if alone {
+            "Enter runs this in your shell, for you alone (!!)".to_owned()
+        } else {
+            "Enter runs this in your shell and shows Glut its output (!)".to_owned()
+        }
     } else if app.search.is_some() {
         "Enter or ↑ the match above · Shift+Enter or ↓ the one below · Esc close".to_owned()
     } else if app.ask.is_some() && scopes > 0 {
@@ -482,8 +496,11 @@ fn draw_keys(frame: &mut Frame, app: &App, area: Rect) {
     } else if app.working() {
         "Glut works · Esc stops · PgUp/PgDn scroll · Ctrl+O tool results".to_owned()
     } else {
-        "Enter send · Shift+Enter new line · Shift+Tab mode · /help · Ctrl+F search · drag to copy · Ctrl+C quit"
-            .to_owned()
+        concat!(
+            "Enter send · Shift+Enter new line · Shift+Tab mode · Ctrl+K everything · @ file · !cmd · ",
+            "Ctrl+F search · Ctrl+C quit"
+        )
+        .to_owned()
     };
     let line = Line::from(vec![
         Span::styled(format!(" {} ", session::mode_label(mode)), mode_style),

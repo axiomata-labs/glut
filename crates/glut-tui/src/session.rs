@@ -32,6 +32,16 @@ pub enum Report {
     Switched(Result<(Engine, Vec<String>), String>),
     /// `/provider` named a provider without a model: its list is fetched, the owner picks one of it.
     ChooseModel(String),
+    /// The owner's `!cmd` (for the model, `to_model`) or `!!cmd` (for the owner alone) ended.
+    Shell {
+        /// The stream's block of it.
+        id: String,
+        command: String,
+        ran: crate::shell::Ran,
+        to_model: bool,
+    },
+    /// The walk of the folder for `@` ended: its files, and whether there were more.
+    Files((Vec<String>, bool)),
     /// `/handoff write` ended: where the handoff is and what it cost, or why there is none; the conversation as it was.
     HandedOff(Result<(PathBuf, Usage), String>, Vec<Message>),
 }

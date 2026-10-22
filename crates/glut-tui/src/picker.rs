@@ -7,11 +7,22 @@ use glut::Effort;
 /// What picking an entry does.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Pick {
-    Model { provider: String, model: String },
+    Model {
+        provider: String,
+        model: String,
+    },
     Provider(String),
     Effort(Option<Effort>),
     Editor(String),
     Session(String),
+    /// A session command by its name (the palette, T12).
+    Run(String),
+    /// The keys an action is bound to, pressed for the owner (the palette).
+    Keys(Vec<crossterm::event::KeyEvent>),
+    /// A file of the folder to mention after `@` (T9).
+    File(String),
+    /// `@` with the file picker, from the palette.
+    Mention,
 }
 
 /// What a model entry is sorted and filtered by.

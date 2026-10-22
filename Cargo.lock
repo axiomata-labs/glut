@@ -827,12 +827,14 @@ dependencies = [
 name = "glut-tui"
 version = "0.1.0"
 dependencies = [
+ "axiomata-files",
  "chrono",
  "clap",
  "crossterm",
  "glut",
  "pulldown-cmark",
  "ratatui",
+ "rustix",
  "serde",
  "serde_json",
  "tokio",

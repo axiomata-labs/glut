@@ -28,11 +28,13 @@ const ASK_SETTLE: Duration = Duration::from_millis(400);
 
 /// What `/help` says.
 const HELP: &str = "Commands: /model [id] · /provider [id] · /effort [level] · /context [tokens] · /compact · \
-                    /editor [command] · /thinking off|folded|open · /clear · /help · /quit\n\
-                    Keys: Enter send · Shift+Enter or Alt+Enter new line · ↑ history · Shift+Tab plan → ask → build \
-                    → auto · Esc stop · Ctrl+O tool results · Ctrl+T thinking · Ctrl+B panel · Ctrl+X E editor · \
-                    PgUp/PgDn scroll · \
-                    Ctrl+F search · drag to copy · F2 mouse to the terminal and back · F3 scrollback · Ctrl+C twice quit";
+                    /editor [command] · /thinking off|folded|open · /scrollback · /clear · /help · /quit\n\
+                    Keys: Enter send · Shift+Enter or Alt+Enter new line · ↑ history · Shift+Tab plan → ask → \
+                    build → auto · Esc stop · Ctrl+O tool results · Ctrl+T thinking · Ctrl+B panel · \
+                    Ctrl+X E editor · PgUp/PgDn scroll · Ctrl+F search · drag to copy · F2 mouse to the terminal \
+                    and back · F3 scrollback · Ctrl+C twice quit\n\
+                    Also: Ctrl+K every command and key · @ mentions a file · !cmd runs a command and shows Glut \
+                    its output · !!cmd runs it for you alone · a large paste stands as [pasted N lines]";
 
 /// The session's commands with what each does, as the list under a typed `/` shows them.
 pub const COMMANDS: [(&str, &str); 15] = [
@@ -141,6 +143,12 @@ pub struct App {
     pub mouse_request: Option<bool>,
     /// F3 or `/scrollback`: the main loop prints the stream where the terminal keeps it (TUI2c).
     pub scrollback_request: bool,
+    /// The owner's `!cmd` outputs waiting for the conversation to be the session's again.
+    pending: Vec<Message>,
+    /// How many `!` commands ran: each one's block has an id of its own, whatever `/clear` did since.
+    shells: usize,
+    /// The folder's files for `@`, and when they were walked; the walk runs beside the screen.
+    files: Option<(Instant, Vec<String>, bool)>,
     /// Where the stream ended at the last frame, the panel right of it: a click there is not the stream's.
     pub stream_width: u16,
     pub frame: usize,
@@ -195,6 +203,9 @@ impl App {
             mouse_held: true,
             mouse_request: None,
             scrollback_request: false,
+            pending: Vec::new(),
+            shells: 0,
+            files: None,
             stream_width: u16::MAX,
             frame: 0,
             quit_armed: None,
@@ -349,6 +360,16 @@ impl App {
 
     /// A step of the run, a question, or the end of something that ran in the background.
     pub fn on_report(&mut self, report: Report) {
+        self.handle(report);
+        // A `!cmd`'s output that came while the conversation was a turn's (or a compaction's) joins it once it is
+        // the session's again.
+        if !self.working() && self.busy.is_none() && !self.pending.is_empty() {
+            self.conversation.append(&mut self.pending);
+            self.keep();
+        }
+    }
+
+    fn handle(&mut self, report: Report) {
         match report {
             Report::Event(event) => {
                 if let Event::Usage {
@@ -465,6 +486,41 @@ impl App {
                 );
                 self.picker = Some(self.model_picker(&provider));
             }
+            Report::Shell {
+                id,
+                command,
+                ran,
+                to_model,
+            } => {
+                self.transcript.take(&glut::Event::ToolResult {
+                    turn: 0,
+                    id,
+                    name: "shell".into(),
+                    ok: ran.ok,
+                    output: ran.output.clone(),
+                    truncated: false,
+                });
+                // The output joins the conversation as the owner's word: the model reads it with the next message
+                // (on_report puts it in once no turn holds the conversation).
+                if to_model {
+                    self.pending
+                        .push(Message::user(crate::shell::for_the_model(&command, &ran)));
+                    self.say("Glut reads this output with your next message");
+                }
+            }
+            Report::Files(found) => {
+                let (files, truncated) = found;
+                self.files = Some((Instant::now(), files, truncated));
+                // A file picker still waiting for the walk gets its files, with what was typed in it kept.
+                if let Some(picker) = &self.picker
+                    && picker.title.starts_with(FILE_PICKER)
+                {
+                    let query = picker.query.clone();
+                    let mut fresh = self.file_picker();
+                    fresh.query = query;
+                    self.picker = Some(fresh);
+                }
+            }
             Report::Switched(result) => {
                 self.busy = None;
                 match result {
@@ -517,7 +573,7 @@ impl App {
                         search.query.push_str(&text.replace(['\n', '\r'], " "));
                         search.fresh = true;
                     }
-                    None => self.input.insert_text(&text),
+                    None => self.input.paste(&text),
                 }
             }
             TermEvent::Mouse(mouse) => match mouse.kind {
@@ -567,6 +623,16 @@ impl App {
             self.search = Some(Search::default());
             return;
         }
+        if ctrl && matches!(key.code, KeyCode::Char('k')) {
+            self.chord = false;
+            self.picker = Some(palette());
+            return;
+        }
+        // `@` at a word's start opens the folder's files to mention; Esc keeps the `@` as typed.
+        if key.code == KeyCode::Char('@') && self.input.at_word_start() {
+            self.chord = false;
+            return self.mention();
+        }
         let suggestions = self.suggestions();
         if !suggestions.is_empty() {
             let chosen = suggestions[self.suggested.min(suggestions.len() - 1)].0;
@@ -592,7 +658,7 @@ impl App {
         }
         if std::mem::take(&mut self.chord) {
             if matches!(key.code, KeyCode::Char('e' | 'E')) {
-                self.edit_request = Some(self.input.text());
+                self.edit_request = Some(self.input.expanded());
             }
             return;
         }
@@ -677,6 +743,13 @@ impl App {
     /// stays in the input, like a message; a first word with a slash in it (`/usr/bin is missing`) is a message.
     fn submit(&mut self) {
         let text = self.input.text();
+        if self.input.broken_pastes() > 0 {
+            self.transcript.note(
+                "a paste lost its mark to an edit and is left out; Ctrl+U clears the line, paste it again",
+                Tone::Fault,
+            );
+            return;
+        }
         if let Some(command) = text.trim().strip_prefix('/') {
             let (name, rest) = command.split_once(' ').unwrap_or((command, ""));
             if !name.is_empty() && !name.contains('/') {
@@ -692,6 +765,21 @@ impl App {
                 return self.command(&command);
             }
         }
+        // `!!cmd` runs for the owner alone, at any time; `!cmd` hands its output to the model, so it waits while a
+        // turn holds the conversation. Only a first `!` right before the command makes one (the input shows it).
+        if let Some((alone, command)) = owners_command(&text) {
+            if !alone && self.working() {
+                self.transcript.note(
+                    "!cmd hands its output to Glut: it waits until Glut is done (!!cmd runs now, for you alone)",
+                    Tone::Quiet,
+                );
+                return;
+            }
+            // The command as sent: a paste in it given back.
+            let expanded = self.input.take();
+            let command = owners_command(&expanded).map_or(command, |(_, command)| command);
+            return self.shell(command, !alone);
+        }
         if self.working() {
             self.transcript.note(
                 "Glut is working — Esc stops it; the message waits in the input",
@@ -701,6 +789,84 @@ impl App {
         }
         let prompt = self.input.take();
         self.send(prompt);
+    }
+
+    /// Runs the owner's own command in the folder, beside the session; its output comes back as a report.
+    fn shell(&mut self, command: String, to_model: bool) {
+        self.shells += 1;
+        let id = format!("shell-{}", self.shells);
+        self.transcript.push(crate::transcript::Kind::Tool {
+            id: id.clone(),
+            name: if to_model { "!" } else { "!!" }.into(),
+            target: command.clone(),
+            state: crate::transcript::ToolState::Running,
+            gate: Some(
+                if to_model {
+                    "yours, for Glut"
+                } else {
+                    "yours alone"
+                }
+                .into(),
+            ),
+            output: String::new(),
+            unfolded: true,
+            depth: 0,
+        });
+        let cwd = self.parts.config.cwd.clone();
+        let reports = self.reports.clone();
+        tokio::spawn(async move {
+            let ran = crate::shell::run(&command, &cwd).await;
+            let _ = reports.send(Report::Shell {
+                id,
+                command,
+                ran,
+                to_model,
+            });
+        });
+    }
+
+    /// `@` and the file picker after it: a space first where the cursor is inside a word.
+    fn mention(&mut self) {
+        if !self.input.at_word_start() {
+            self.input.insert(' ');
+        }
+        self.input.insert('@');
+        // The walk runs beside the screen; a minute-old one is used as it is.
+        let fresh = self
+            .files
+            .as_ref()
+            .is_some_and(|(walked, _, _)| walked.elapsed() < FILES_FRESH);
+        if !fresh {
+            let cwd = self.parts.config.cwd.clone();
+            let reports = self.reports.clone();
+            tokio::task::spawn_blocking(move || {
+                let found = axiomata_files::Root::dir(&cwd, axiomata_files::LinkPolicy::Contained)
+                    .ok()
+                    .and_then(|root| axiomata_files::index_files(&root).ok())
+                    .map_or((Vec::new(), false), |index| (index.files, index.truncated));
+                let _ = reports.send(Report::Files(found));
+            });
+        }
+        self.picker = Some(self.file_picker());
+    }
+
+    /// The folder's files to mention after `@`, as the file tools see them (`.gitignore` kept) — while the walk
+    /// runs, an empty list that says so. A name a terminal would act on, or that hides what it is, is left out.
+    fn file_picker(&self) -> Picker {
+        let Some((_, files, truncated)) = &self.files else {
+            return Picker::new(format!("{FILE_PICKER} (looking …)"), Vec::new(), None);
+        };
+        let items = files
+            .iter()
+            .filter(|path| crate::transcript::clean(path) == **path)
+            .map(|path| Item::plain(path.clone(), "", Pick::File(path.clone())))
+            .collect();
+        let title = if *truncated {
+            format!("{FILE_PICKER} (more than 50,000 files: not all of them)")
+        } else {
+            FILE_PICKER.to_owned()
+        };
+        Picker::new(title, items, None)
     }
 
     /// Shift+Tab: plan → ask → build → auto → plan, from the next call on.
@@ -750,6 +916,7 @@ impl App {
             "clear" => {
                 self.selection = None;
                 self.search = None;
+                self.pending.clear();
                 self.conversation.clear();
                 self.todos.clear();
                 self.last_turn = None;
@@ -1116,6 +1283,24 @@ impl App {
                         Ok(session) => self.open(session),
                         Err(reason) => self.transcript.note(reason, Tone::Fault),
                     },
+                    Some(Pick::Run(name)) if self.working() && waits(&name, "") => {
+                        self.transcript.note(
+                            format!("/{name} waits until Glut is done; Esc stops Glut"),
+                            Tone::Quiet,
+                        )
+                    }
+                    Some(Pick::Run(name)) => self.command(&name),
+                    Some(Pick::Keys(keys)) => {
+                        for key in keys {
+                            self.on_key(key);
+                        }
+                    }
+                    // The path goes after the `@` typed before the picker opened, in quotes when it has a space.
+                    Some(Pick::File(path)) if path.contains(' ') => {
+                        self.input.insert_text(&format!("\"{path}\" "))
+                    }
+                    Some(Pick::File(path)) => self.input.insert_text(&format!("{path} ")),
+                    Some(Pick::Mention) => self.mention(),
                     None => {}
                 }
             }
@@ -1329,6 +1514,90 @@ impl App {
         let most = self.stream_lines.saturating_sub(self.stream_height);
         self.scroll = self.scroll.saturating_add_signed(lines).min(most);
     }
+}
+
+/// The command palette (Ctrl+K, T12): every session command and every action with its key, to find by typing.
+fn palette() -> Picker {
+    let press = |code: KeyCode, modifiers: KeyModifiers| KeyEvent::new(code, modifiers);
+    let ctrl = KeyModifiers::CONTROL;
+    let none = KeyModifiers::NONE;
+    let mut items: Vec<Item> = COMMANDS
+        .iter()
+        .map(|(name, what)| Item::plain(format!("/{name}"), *what, Pick::Run((*name).to_owned())))
+        .collect();
+    let keys = [
+        (
+            "search the stream",
+            "Ctrl+F",
+            vec![press(KeyCode::Char('f'), ctrl)],
+        ),
+        (
+            "unfold or fold every tool result",
+            "Ctrl+O",
+            vec![press(KeyCode::Char('o'), ctrl)],
+        ),
+        (
+            "open or fold every thought",
+            "Ctrl+T",
+            vec![press(KeyCode::Char('t'), ctrl)],
+        ),
+        (
+            "the next mode: plan → ask → build → auto",
+            "Shift+Tab",
+            vec![press(KeyCode::BackTab, KeyModifiers::SHIFT)],
+        ),
+        (
+            "edit the input in your editor",
+            "Ctrl+X E",
+            vec![
+                press(KeyCode::Char('x'), ctrl),
+                press(KeyCode::Char('e'), none),
+            ],
+        ),
+        (
+            "hand the mouse to the terminal and back",
+            "F2",
+            vec![press(KeyCode::F(2), none)],
+        ),
+        (
+            "the conversation into the terminal's scrollback",
+            "F3",
+            vec![press(KeyCode::F(3), none)],
+        ),
+        ("stop Glut", "Esc", vec![press(KeyCode::Esc, none)]),
+    ];
+    items.extend(
+        keys.into_iter()
+            .map(|(what, key, keys)| Item::plain(what, key, Pick::Keys(keys))),
+    );
+    items.push(Item::plain(
+        "mention a file",
+        "@ at a word's start",
+        Pick::Mention,
+    ));
+    Picker::new("Commands and keys", items, None)
+}
+
+/// The file picker's title, by which a finished walk finds it open.
+const FILE_PICKER: &str = "File to mention";
+/// How long a walk of the folder stands for its files.
+const FILES_FRESH: Duration = Duration::from_secs(60);
+
+/// The owner's command in `text` — `!cmd` or `!!cmd` as its whole line, the command right after the marks — and
+/// whether it is for the owner alone; `None` for any other message ("! wow", "!!!", two lines).
+pub fn owners_command(text: &str) -> Option<(bool, String)> {
+    if text.contains('\n') {
+        return None;
+    }
+    let (alone, rest) = match text.strip_prefix("!!") {
+        Some(rest) => (true, rest),
+        None => (false, text.strip_prefix('!')?),
+    };
+    let first = rest.chars().next()?;
+    if first.is_whitespace() || first == '!' {
+        return None;
+    }
+    Some((alone, rest.trim_end().to_owned()))
 }
 
 /// How long a toast stays in the key line.
@@ -1577,6 +1846,115 @@ mod tests {
             "a paste goes to the search"
         );
         assert!(app.input.is_empty());
+    }
+
+    #[test]
+    fn the_palette_finds_an_action_by_its_words_and_does_it() {
+        let (mut app, _reports) = app();
+        app.on_terminal(key(KeyCode::Char('k'), KeyModifiers::CONTROL));
+        assert!(app.picker.is_some());
+        for c in "scrollback".chars() {
+            app.on_terminal(key(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.scrollback_request, "the command ran");
+        app.scrollback_request = false;
+        app.on_terminal(key(KeyCode::Char('k'), KeyModifiers::CONTROL));
+        for c in "search the".chars() {
+            app.on_terminal(key(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(
+            app.search.is_some(),
+            "a key's action is pressed for the owner"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_at_sign_at_a_word_start_opens_the_files_and_esc_keeps_it() {
+        let (mut app, mut reports) = app();
+        app.input.insert_text("look at");
+        app.on_terminal(key(KeyCode::Char('@'), KeyModifiers::NONE));
+        assert!(app.picker.is_none(), "inside a word it is only a character");
+        app.on_terminal(key(KeyCode::Char(' '), KeyModifiers::NONE));
+        app.on_terminal(key(KeyCode::Char('@'), KeyModifiers::NONE));
+        assert!(app.picker.is_some(), "after a space the files open");
+        assert!(
+            app.picker.as_ref().unwrap().title.contains("looking"),
+            "the walk runs beside the screen"
+        );
+        let walked = reports.recv().await.unwrap();
+        app.on_report(walked);
+        assert!(
+            !app.picker.as_ref().unwrap().title.contains("looking"),
+            "the files came"
+        );
+        app.on_terminal(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(app.input.text(), "look at@ @");
+    }
+
+    #[tokio::test]
+    async fn an_owners_command_runs_and_only_a_single_bang_reaches_the_model() {
+        let (mut app, mut reports) = app();
+        typed(&mut app, "!!echo alone");
+        typed(&mut app, "!echo shared");
+        for _ in 0..2 {
+            let report = reports.recv().await.unwrap();
+            app.on_report(report);
+        }
+        assert_eq!(
+            app.conversation.len(),
+            1,
+            "only !cmd joins the conversation"
+        );
+        let told = format!("{:?}", app.conversation[0]);
+        assert!(
+            told.contains("echo shared") && told.contains("shared\\n"),
+            "{told}"
+        );
+        let done = app
+            .transcript
+            .blocks
+            .iter()
+            .filter(|block| {
+                matches!(&block.kind, crate::transcript::Kind::Tool { state, .. }
+                if *state == crate::transcript::ToolState::Done)
+            })
+            .count();
+        assert_eq!(done, 2);
+    }
+
+    #[test]
+    fn only_a_first_bang_right_before_a_command_makes_one() {
+        assert_eq!(owners_command("!ls -la"), Some((false, "ls -la".into())));
+        assert_eq!(
+            owners_command("!!git status"),
+            Some((true, "git status".into()))
+        );
+        for message in ["! wow", "!!!", "!", "!!", "hi !ls", " !ls", "!ls\nmore"] {
+            assert_eq!(owners_command(message), None, "{message:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_commands_output_that_comes_during_a_turn_waits_for_the_conversation() {
+        let (mut app, _reports) = app();
+        app.busy = Some(Busy::Switching);
+        app.on_report(Report::Shell {
+            id: "shell-1".into(),
+            command: "echo x".into(),
+            ran: crate::shell::Ran {
+                ok: true,
+                output: "x".into(),
+            },
+            to_model: true,
+        });
+        assert!(
+            app.conversation.is_empty(),
+            "held while the conversation is not the session's"
+        );
+        app.on_report(Report::Switched(Err("no".into())));
+        assert_eq!(app.conversation.len(), 1, "it joins once it is");
     }
 
     #[test]

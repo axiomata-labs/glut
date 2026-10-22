@@ -5,6 +5,16 @@ use unicode_width::UnicodeWidthChar;
 
 /// The most messages the history keeps.
 const HISTORY: usize = 200;
+/// A paste of more lines than this, or more characters, stands in the input as one short line (T9).
+const PASTE_LINES: usize = 10;
+const PASTE_CHARS: usize = 2_000;
+
+/// A message of the history, or the draft: its text with its marks, and the pastes they stand for.
+#[derive(Debug, Clone, Default, PartialEq)]
+struct Entry {
+    text: String,
+    pastes: Vec<(String, String)>,
+}
 
 #[derive(Debug, Default)]
 pub struct Input {
@@ -13,11 +23,14 @@ pub struct Input {
     /// The cursor: line, and character within it.
     row: usize,
     col: usize,
-    history: Vec<String>,
+    /// What was sent, as it stood in the input — its paste marks and what they stand for kept beside it.
+    history: Vec<Entry>,
     /// Where in the history Up has gone: `None` while editing a new message.
     browsing: Option<usize>,
     /// The new message kept while the history is browsed.
-    draft: Option<String>,
+    draft: Option<Entry>,
+    /// The large pastes standing in the input as `[pasted 240 lines #1]`: each mark and the text it stands for.
+    pastes: Vec<(String, String)>,
 }
 
 impl Input {
@@ -51,13 +64,86 @@ impl Input {
         self.set("");
         self.browsing = None;
         self.draft = None;
+        self.pastes.clear();
     }
 
-    /// Takes the message out to send it, and keeps it in the history.
-    pub fn take(&mut self) -> String {
+    /// The text with every paste mark in it given back as what was pasted — each mark once, found in the text as
+    /// typed, never inside a paste already given back.
+    pub fn expanded(&self) -> String {
         let text = self.text();
-        if !text.trim().is_empty() && self.history.last() != Some(&text) {
-            self.history.push(text.clone());
+        let mut out = String::new();
+        let mut rest = text.as_str();
+        let mut used = vec![false; self.pastes.len()];
+        loop {
+            let next = self
+                .pastes
+                .iter()
+                .enumerate()
+                .filter(|(at, _)| !used[*at])
+                .filter_map(|(at, (mark, _))| rest.find(mark.as_str()).map(|found| (found, at)))
+                .min();
+            let Some((found, at)) = next else {
+                out.push_str(rest);
+                return out;
+            };
+            used[at] = true;
+            let (mark, pasted) = &self.pastes[at];
+            out.push_str(&rest[..found]);
+            out.push_str(pasted);
+            rest = &rest[found + mark.len()..];
+        }
+    }
+
+    /// How many pastes lost their mark to an edit: they would not be sent.
+    pub fn broken_pastes(&self) -> usize {
+        let text = self.text();
+        self.pastes
+            .iter()
+            .filter(|(mark, _)| !text.contains(mark.as_str()))
+            .count()
+    }
+
+    fn entry(&self) -> Entry {
+        Entry {
+            text: self.text(),
+            pastes: self.pastes.clone(),
+        }
+    }
+
+    fn restore(&mut self, entry: &Entry) {
+        self.set(&entry.text);
+        self.pastes.clone_from(&entry.pastes);
+    }
+
+    /// A paste: a large one stands in the input as one mark, the text kept until it is sent; a small one is typed.
+    pub fn paste(&mut self, text: &str) {
+        let text = text.replace("\r\n", "\n").replace('\r', "\n");
+        let lines = text.lines().count();
+        if lines <= PASTE_LINES && text.chars().count() <= PASTE_CHARS {
+            return self.insert_text(&text);
+        }
+        let lines = if lines == 1 {
+            "1 line".to_owned()
+        } else {
+            format!("{lines} lines")
+        };
+        let mark = format!("[pasted {lines} #{}]", self.pastes.len() + 1);
+        for c in mark.chars() {
+            self.insert(c);
+        }
+        let kept: String = text
+            .chars()
+            .filter(|c| !c.is_control() || matches!(c, '\n' | '\t'))
+            .collect();
+        self.pastes.push((mark, kept));
+    }
+
+    /// Takes the message out to send it — the pastes given back in it — and keeps it in the history.
+    pub fn take(&mut self) -> String {
+        let text = self.expanded();
+        let entry = self.entry();
+        if !text.trim().is_empty() && self.history.last() != Some(&entry) {
+            self.history.push(entry);
             if self.history.len() > HISTORY {
                 self.history.remove(0);
             }
@@ -96,6 +182,15 @@ impl Input {
         }
     }
 
+    /// Whether the cursor stands where a word begins: at a line's start or after a space.
+    pub fn at_word_start(&self) -> bool {
+        self.col == 0
+            || self.lines[self.row]
+                .chars()
+                .nth(self.col - 1)
+                .is_some_and(char::is_whitespace)
+    }
+
     pub fn newline(&mut self) {
         self.browsing = None;
         let at = self.byte(self.row, self.col);
@@ -106,6 +201,19 @@ impl Input {
     }
 
     pub fn backspace(&mut self) {
+        // A paste's mark goes as a whole, and the paste with it: half a mark would send neither.
+        let before: String = self.lines[self.row].chars().take(self.col).collect();
+        if let Some(at) = self
+            .pastes
+            .iter()
+            .position(|(mark, _)| before.ends_with(mark.as_str()))
+        {
+            let (mark, _) = self.pastes.remove(at);
+            for _ in 0..mark.chars().count() {
+                self.backspace();
+            }
+            return;
+        }
         if self.col > 0 {
             let at = self.byte(self.row, self.col - 1);
             self.lines[self.row].remove(at);
@@ -215,15 +323,14 @@ impl Input {
         let next = match self.browsing {
             None if self.history.is_empty() => return,
             None => {
-                self.draft = Some(self.text());
+                self.draft = Some(self.entry());
                 self.history.len() - 1
             }
             Some(0) => return,
             Some(at) => at - 1,
         };
-        self.browsing = Some(next);
-        let text = self.history[next].clone();
-        self.set(&text);
+        let entry = self.history[next].clone();
+        self.restore(&entry);
         self.browsing = Some(next);
     }
 
@@ -236,13 +343,13 @@ impl Input {
         }
         match self.browsing {
             Some(at) if at + 1 < self.history.len() => {
-                let text = self.history[at + 1].clone();
-                self.set(&text);
+                let entry = self.history[at + 1].clone();
+                self.restore(&entry);
                 self.browsing = Some(at + 1);
             }
             Some(_) => {
                 let draft = self.draft.take().unwrap_or_default();
-                self.set(&draft);
+                self.restore(&draft);
                 self.browsing = None;
             }
             None => {}
@@ -312,6 +419,54 @@ mod tests {
         let mut pasted = typed("a\r\nb\tc\u{1b}");
         assert_eq!(pasted.take(), "a\nb c");
         assert!(pasted.is_empty());
+    }
+
+    #[test]
+    fn a_large_paste_stands_as_one_mark_and_comes_back_whole_when_sent() {
+        let mut input = typed("look: ");
+        let long: String = (1..=40).map(|n| format!("line {n}\n")).collect();
+        input.paste(&long);
+        input.insert_text(" thanks");
+        assert_eq!(input.text(), "look: [pasted 40 lines #1] thanks");
+        assert_eq!(input.line_count(), 1);
+        let sent = input.take();
+        assert!(sent.starts_with("look: line 1\nline 2"), "{sent:?}");
+        assert!(sent.ends_with("line 40\n thanks"), "{sent:?}");
+        let mut small = Input::new();
+        small.paste("a\nb");
+        assert_eq!(small.text(), "a\nb", "a small paste is typed");
+    }
+
+    #[test]
+    fn a_mark_goes_as_a_whole_and_history_keeps_the_mark_not_the_text() {
+        let long: String = (1..=20).map(|n| format!("{n}\n")).collect();
+        let mut input = Input::new();
+        input.paste(&long);
+        input.paste(&format!("[pasted 20 lines #1]\n{long}"));
+        assert_eq!(input.text(), "[pasted 20 lines #1][pasted 21 lines #2]");
+        let sent = input.expanded();
+        assert!(
+            sent.starts_with("1\n2\n") && sent.contains("20\n[pasted 20 lines #1]\n1\n"),
+            "{sent:?}"
+        );
+        input.backspace();
+        assert_eq!(
+            input.text(),
+            "[pasted 20 lines #1]",
+            "the second mark went whole"
+        );
+        assert_eq!(input.broken_pastes(), 0);
+        input.take();
+        input.up();
+        assert_eq!(
+            input.text(),
+            "[pasted 20 lines #1]",
+            "the history shows the mark"
+        );
+        assert!(
+            input.expanded().starts_with("1\n2\n"),
+            "and still sends the paste"
+        );
     }
 
     #[test]
