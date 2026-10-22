@@ -23,7 +23,7 @@ pub enum Mood {
 pub enum Size {
     Large,
     Small,
-    /// Five by four pixels (5 columns by 2 rows), in front of a thought while the model thinks.
+    /// Six by four pixels (6 columns by 2 rows), in front of a thought while the model thinks.
     Mini,
 }
 
@@ -33,6 +33,8 @@ struct Design {
     eyes: &'static [(usize, usize)],
     /// How many of the top rows lean while the flame flickers.
     tip_rows: usize,
+    /// Screen ticks per step of the flicker: a small Glimm beside text moves slower, so it does not pull the eye.
+    pace: usize,
     /// Where sparks rise while it works, in turn.
     sparks: &'static [(usize, usize)],
     /// The "!" while it waits: its column, the rows of its stroke, and its dot.
@@ -62,6 +64,7 @@ const LARGE: Design = Design {
     ],
     eyes: &[(7, 4), (7, 8)],
     tip_rows: 3,
+    pace: 1,
     sparks: &[(0, 2), (1, 9), (0, 8), (2, 1)],
     bang: (10, &[0, 1, 2], 4),
     twinkle: (1, 2),
@@ -75,6 +78,7 @@ const SMALL: Design = Design {
     ],
     eyes: &[(4, 2), (4, 5)],
     tip_rows: 2,
+    pace: 1,
     sparks: &[(0, 1), (0, 6), (1, 7), (1, 0)],
     bang: (7, &[0, 1], 3),
     twinkle: (0, 1),
@@ -90,11 +94,12 @@ const BLINK_EVERY: usize = 42;
 const BLINK_TICKS: usize = 2;
 
 const MINI: Design = Design {
-    rows: &["..y..", ".oao.", "oayao", ".rar."],
-    eyes: &[(2, 1), (2, 3)],
+    rows: &["..yy..", ".oaao.", "oayyao", ".raar."],
+    eyes: &[(2, 1), (2, 4)],
     tip_rows: 1,
-    sparks: &[(0, 0), (0, 4), (1, 0), (1, 4)],
-    bang: (4, &[0], 1),
+    pace: 3,
+    sparks: &[(0, 0), (0, 5), (1, 0), (1, 5)],
+    bang: (5, &[0], 1),
     twinkle: (0, 0),
     smoke: &[&[(0, 1)], &[(0, 3)]],
 };
@@ -187,6 +192,7 @@ fn pixels(size: Size, mood: Mood, tick: usize) -> (Vec<Vec<char>>, bool) {
             }
         }
         Mood::Working => {
+            let tick = tick / design.pace;
             lean(&mut grid, design.tip_rows, [-1, 0, 1, 0][tick % 4]);
             for &(row, col) in design.eyes {
                 set(&mut grid, row, col, 'e');
@@ -327,7 +333,7 @@ mod tests {
         }
         assert_eq!(cells(Size::Large), (12, 7));
         assert_eq!(cells(Size::Small), (8, 4));
-        assert_eq!(cells(Size::Mini), (5, 2));
+        assert_eq!(cells(Size::Mini), (6, 2));
     }
 
     #[test]
