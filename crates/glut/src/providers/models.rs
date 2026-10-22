@@ -27,6 +27,9 @@ const MAX_LIST_BYTES: usize = 8 * 1024 * 1024;
 const RETRY_AFTER: Duration = Duration::from_secs(60 * 60);
 /// A price per million tokens above this is no price but a provider's mistake (or a lie to a budget).
 const MAX_PRICE_PER_M: f64 = 10_000.0;
+/// What a kept list holds: a list of an older format (one kept before the account's allowed models were asked) is
+/// fetched again however young it is.
+pub const FORMAT: u32 = 2;
 
 /// One model as its provider's list describes it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -64,6 +67,9 @@ impl ModelInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelList {
+    /// [`FORMAT`] when the list was kept; missing in the first format.
+    #[serde(default)]
+    pub format: u32,
     pub fetched_at: DateTime<Utc>,
     /// When a fetch last failed while this list was kept: it stands in for an hour ([`RETRY_AFTER`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -90,15 +96,16 @@ impl ModelList {
             .is_none_or(|allowed| allowed.iter().any(|allowed| allowed == id))
     }
 
-    /// Whether the list may be used without asking the provider: younger than [`FRESH_FOR`], or a fetch failed less
-    /// than [`RETRY_AFTER`] ago. A time in the future (a clock set back) is not fresh.
+    /// Whether the list may be used without asking the provider: of the current [`FORMAT`] and younger than
+    /// [`FRESH_FOR`], or a fetch failed less than [`RETRY_AFTER`] ago. A time in the future (a clock set back) is not
+    /// fresh.
     pub fn fresh(&self, now: DateTime<Utc>) -> bool {
         let younger = |at: DateTime<Utc>, limit: Duration| {
             now.signed_duration_since(at)
                 .to_std()
                 .is_ok_and(|age| age < limit)
         };
-        younger(self.fetched_at, FRESH_FOR)
+        self.format == FORMAT && younger(self.fetched_at, FRESH_FOR)
             || self.failed_at.is_some_and(|at| younger(at, RETRY_AFTER))
     }
 
@@ -187,6 +194,7 @@ pub async fn fetch(endpoint: &ModelEndpoint) -> Result<ModelList, String> {
         None
     };
     Ok(ModelList {
+        format: FORMAT,
         fetched_at: Utc::now(),
         failed_at: None,
         root: root.to_owned(),
@@ -412,6 +420,7 @@ mod tests {
                 .unwrap_or_default()
         ));
         let list = ModelList {
+            format: FORMAT,
             fetched_at: Utc::now() - chrono::Duration::hours(2),
             failed_at: None,
             root: "https://openrouter.ai/api/v1".into(),
@@ -428,6 +437,14 @@ mod tests {
         keep(&home, "openrouter", &list).unwrap();
         let back = cached(&home, "openrouter", "https://openrouter.ai/api/v1").unwrap();
         assert!(back.fresh(Utc::now()));
+        let older = ModelList {
+            format: 0,
+            ..back.clone()
+        };
+        assert!(
+            !older.fresh(Utc::now()),
+            "a list of an older format is fetched again"
+        );
         assert!(!back.fresh(Utc::now() + chrono::Duration::hours(23)));
         assert!(
             !back.fresh(Utc::now() - chrono::Duration::hours(3)),

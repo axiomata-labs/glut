@@ -83,3 +83,9 @@ cargo run --release --bin glut   # the TUI in the current folder, on the default
   keys only, no repeat, nothing in the first 400 ms; a turn that ends drops its open card; an ask shows the head and
   the tail of a long target. Model and tool text goes through `transcript::wrap`/`clean` (control characters as
   spaces, bidi and zero-width characters out) before it reaches the terminal.
+- **What a command *is* decides beside the rules** (TUI1e, `crates/glut/src/permissions/kinds.rs`): a command whose
+  every part is a listed reader (`ls`, `grep`, `sed -n 1,9p`, `git status`, …) runs in every mode like `read_file`;
+  in `auto` everything sandboxed runs but a `kinds::heavy` one (`rm -rf`, `git push`, `sudo`, …). A new reader needs
+  every option that writes or runs something refused (`find -exec`, `rg --pre`, `sort -o`, `git diff --output`).
+  "Always" is the owner's pick of a scope (`Answer::AllowWithin`: exact, `prog sub *`, `prog *`), never a widening
+  Glut chooses; reading parts ride along without a rule, except under an `allowed-tools` narrowing.

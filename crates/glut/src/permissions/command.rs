@@ -138,6 +138,9 @@ pub struct Analysis {
     pub reads: Vec<String>,
     /// A word or redirection names a protected path component, literally or through a glob.
     pub protected: bool,
+    /// Whether a word holds an unquoted glob character the shell expands — into names the words do not show (a file
+    /// called `-i` makes `sed -n 1p *` edit in place).
+    pub globs: bool,
     /// Commands given to a shell with `-c`, read in turn.
     pub nested: Vec<Analysis>,
 }
@@ -192,6 +195,7 @@ fn analyze_at(command: &str, depth: usize) -> Analysis {
     let mut lexer = Lexer::new(command);
     lexer.run();
     let globbed = std::mem::take(&mut lexer.globbed);
+    lexer.analysis.globs = !globbed.is_empty();
     let mut analysis = lexer.analysis;
     for part in &mut analysis.parts {
         let split = part
@@ -298,14 +302,14 @@ fn is_assignment(word: &str) -> bool {
         && !name.starts_with(|c: char| c.is_ascii_digit())
 }
 
-fn is_wrapper(word: &str) -> bool {
+pub(crate) fn is_wrapper(word: &str) -> bool {
     WRAPPERS
         .iter()
         .any(|wrapper| same_command(wrapper, base(word)))
 }
 
 /// The command word without its folder (`/bin/rm` → `rm`).
-fn base(word: &str) -> &str {
+pub(crate) fn base(word: &str) -> &str {
     word.rsplit('/').next().unwrap_or(word)
 }
 
@@ -335,7 +339,7 @@ fn options_with_values(wrapper: &str) -> &'static [&'static str] {
 
 /// `words` without the wrappers in front and with the command word's folder dropped (`sudo -u x /bin/rm -rf a` →
 /// `rm -rf a`).
-fn strip_wrappers(words: &[String]) -> Vec<String> {
+pub(crate) fn strip_wrappers(words: &[String]) -> Vec<String> {
     let mut rest: &[String] = words;
     while let Some(first) = rest.first() {
         if !is_wrapper(first) {
@@ -361,7 +365,7 @@ fn strip_wrappers(words: &[String]) -> Vec<String> {
 }
 
 /// `git` with its global options removed (`git -C . --no-pager push` → `git push`); `None` for anything else.
-fn without_git_globals(words: &[String]) -> Option<Vec<String>> {
+pub(crate) fn without_git_globals(words: &[String]) -> Option<Vec<String>> {
     let (first, rest) = words.split_first()?;
     if !same_command(first, "git") {
         return None;

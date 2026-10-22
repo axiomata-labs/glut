@@ -397,7 +397,7 @@ fn target_of(arguments: &str) -> String {
 }
 
 /// `text` cut to `max` cells, with an ellipsis when it was longer.
-fn cut(text: &str, max: usize) -> String {
+pub(crate) fn cut(text: &str, max: usize) -> String {
     if text.width() <= max {
         return text.to_owned();
     }

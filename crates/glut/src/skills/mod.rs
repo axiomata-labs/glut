@@ -972,6 +972,7 @@ mod tests {
                     command: "git status".into(),
                     folder: String::new(),
                     unsandboxed: false,
+                    sandboxed: false,
                 },
             )
             .await;

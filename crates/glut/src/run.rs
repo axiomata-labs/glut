@@ -1456,6 +1456,7 @@ impl<M: ChatModel> Loop<'_, M> {
                 command: launch.line.clone(),
                 folder: String::new(),
                 unsandboxed: false,
+                sandboxed: false,
             };
             let judged = gate.judge("bash", &access).await;
             for entry in gate.take_log() {
@@ -1517,7 +1518,7 @@ impl<M: ChatModel> Loop<'_, M> {
         // The owner approves a mode as much as a plan: the question names the one the run switches to.
         let question = format!("{question} (then mode {})", self.config.build_mode.name());
         match gate.ask_owner(planning::EXIT_PLAN, &question).await {
-            Answer::Allow | Answer::AllowAlways => {
+            Answer::Allow | Answer::AllowAlways | Answer::AllowWithin(_) => {
                 let mode = self.config.build_mode;
                 gate.set_mode(mode);
                 sink.emit(Event::ModeChanged {

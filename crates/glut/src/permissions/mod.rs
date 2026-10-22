@@ -7,6 +7,7 @@
 //! HS3b is what stops a command that slips past them.
 
 pub mod command;
+pub mod kinds;
 pub mod settings;
 
 use std::fmt;
@@ -34,6 +35,9 @@ pub enum Access {
         folder: String,
         /// The model asked to run it outside the sandbox (HS3b): never allowed by a rule nor by `auto`, always asked.
         unsandboxed: bool,
+        /// It runs inside the sandbox — there is one and the model did not ask to leave it. Only then does what the
+        /// command *is* count ([`kinds`]): a reader free in every mode, `auto` asking only the heavy ones.
+        sandboxed: bool,
     },
     /// A sandboxed command reaching a host through the run's proxy (HS3b): the host name, lowercased.
     Network { host: String },
@@ -412,18 +416,18 @@ fn wildcard(pattern: &str, text: &str) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Mode {
-    /// Reads free; edits and commands asked.
+    /// Reads free — a command that only reads too ([`kinds::reads_only`]) —; edits and other commands asked.
     #[default]
     Default,
-    /// Reads and edits free; commands asked.
+    /// Reads and edits free; commands asked. The screen calls it `build`.
     AcceptEdits,
     /// Reads only: edits refused even where a rule allows them, commands refused unless a rule allows them, nothing
     /// asked.
     Plan,
     /// Whatever no rule allows is refused; nothing is asked.
     DontAsk,
-    /// Whatever no rule denies is allowed (the owner's auto mode) — except a command the rules cannot read, which is
-    /// asked.
+    /// Whatever no rule denies or asks about is allowed (the owner's auto mode) — except a heavy command
+    /// ([`kinds::heavy`]: `rm -rf`, `git push`, `sudo`, …) and one asking to leave the sandbox, which are asked.
     Auto,
 }
 
@@ -443,7 +447,7 @@ impl Mode {
     pub fn parse(text: &str) -> Option<Self> {
         match text.trim() {
             "default" => Some(Mode::Default),
-            "accept_edits" | "acceptEdits" => Some(Mode::AcceptEdits),
+            "accept_edits" | "acceptEdits" | "build" => Some(Mode::AcceptEdits),
             "plan" => Some(Mode::Plan),
             "dont_ask" | "dontAsk" => Some(Mode::DontAsk),
             "auto" => Some(Mode::Auto),
@@ -515,13 +519,25 @@ impl RuleSet {
 
     /// What the rules say about `access` of `tool`.
     fn verdict(&self, tool: &str, access: &Access) -> Said {
+        self.verdict_with(tool, access, true)
+    }
+
+    /// [`Self::verdict`]; `readers_free`: a part of a command that only reads needs no rule of its own — not for an
+    /// `allowed-tools` narrowing, which names every part it lets through.
+    fn verdict_with(&self, tool: &str, access: &Access, readers_free: bool) -> Said {
         match access {
             Access::Bash {
                 command,
                 folder,
                 unsandboxed,
+                sandboxed,
             } => {
-                let said = self.command_verdict(tool, &analyze(command), folder);
+                let said = self.command_verdict(
+                    tool,
+                    &analyze(command),
+                    folder,
+                    readers_free && *sandboxed,
+                );
                 match said {
                     // Outside the sandbox the operating system holds nothing back: only a deny stays a deny, everything
                     // else is the owner's to answer.
@@ -556,7 +572,13 @@ impl RuleSet {
 
     /// A command's verdict (P2): deny and ask rules against every part and what its wrappers run; what it writes held
     /// against the edit rules; allowed by rules only when every bit of it was read and every part is allowed.
-    fn command_verdict(&self, tool: &str, analysis: &Analysis, folder: &str) -> Said {
+    fn command_verdict(
+        &self,
+        tool: &str,
+        analysis: &Analysis,
+        folder: &str,
+        readers_free: bool,
+    ) -> Said {
         let candidates = analysis.deny_candidates();
         let matching = |rules: &[Rule]| {
             rules
@@ -653,8 +675,17 @@ impl RuleSet {
                 .find(|rule| rule.is_command_rule(tool) && rule.matches_words(&part.words))
             {
                 Some(rule) => by.push(rule.text.clone()),
+                // A part that only reads needs no rule of its own (`cargo test | head`), as it needs none alone.
+                None if readers_free
+                    && kinds::reader(&part.words)
+                    && self
+                        .reads_beyond(&part.words, &analysis.reads, folder)
+                        .is_none() => {}
                 None => return Said::Silent,
             }
+        }
+        if by.is_empty() {
+            return Said::Silent;
         }
         for edit in &written_inside {
             match self
@@ -668,6 +699,43 @@ impl RuleSet {
         }
         by.dedup();
         Said::Verdict(Verdict::Allow, format!("rule {}", by.join(", ")))
+    }
+
+    /// Why a reading command's words (its program first) or the files it redirects in are not free to read, if they
+    /// are not: a path out of the working folder (absolute, `~`, `$`, `..`) — `read_file` reaches no further —, or a
+    /// file a rule refuses or asks about; where such a rule exists, a word the rule cannot be matched against
+    /// (`git show HEAD:path`) counts as one. An option's value (`--file=.env`) is a word too.
+    fn reads_beyond(
+        &self,
+        words: &[String],
+        redirected: &[String],
+        folder: &str,
+    ) -> Option<&'static str> {
+        let any_read_rule = self
+            .deny
+            .iter()
+            .chain(&self.ask)
+            .any(|rule| rule.kind == RuleKind::Read);
+        let paths = words.iter().skip(1).chain(redirected).filter_map(|word| {
+            match word.strip_prefix('-') {
+                Some(option) => option.split_once('=').map(|(_, value)| value),
+                None => Some(word.as_str()),
+            }
+        });
+        for word in paths {
+            if word.starts_with(['/', '~', '$'])
+                || normal_path(&format!("{folder}/{word}")).starts_with("..")
+            {
+                return Some(READS_OUTSIDE);
+            }
+            if any_read_rule
+                && (word.contains(':')
+                    || self.read_held_back(&normal_path(&format!("{folder}/{word}"))))
+            {
+                return Some("the command reads a file a rule holds back");
+            }
+        }
+        None
     }
 
     /// Whether reading `path` is refused or asked by a rule — for a search, which leaves such files out of its
@@ -689,14 +757,21 @@ pub struct AskRequest {
     pub tool: String,
     /// What the call would do, on one line: the command, the path.
     pub target: String,
+    /// How far an allowance from then on may reach, narrowest first, as the owner reads it (`git status --short`,
+    /// `git status *`, `git *`): [`Answer::AllowWithin`] picks one. Empty: none can be given (a command the rules
+    /// cannot read), only this once.
+    pub scopes: Vec<String>,
 }
 
 /// The owner's answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Answer {
     Allow,
-    /// Allow this and the same again for the rest of the run.
+    /// Allow this and the same again from then on — for the rest of the run, in Glut's TUI the whole session: the
+    /// narrowest of the request's scopes (for a command exactly this command).
     AllowAlways,
+    /// Allow this and from then on what the request's scope at this index reaches (`git status *`, `git *`).
+    AllowWithin(u8),
     Deny,
 }
 
@@ -727,7 +802,7 @@ impl Asker for Nobody {
 }
 
 /// Asks in the terminal: the question on stderr, the answer a line on stdin — `y`/`j` for once, the whole word
-/// `always`/`immer` for the rest of the run (a single letter next to `y` would be one slip away), anything else no.
+/// `always`/`immer` from then on (a single letter next to `y` would be one slip away), anything else no.
 pub struct Terminal;
 
 /// How much of a command an ask shows; the rest is counted, so a long harmless start cannot push the real action off
@@ -961,6 +1036,7 @@ impl Gate {
         let request = AskRequest {
             tool: tool.to_owned(),
             target: target.to_owned(),
+            scopes: Vec::new(),
         };
         let _one_at_a_time = self.asking.lock().await;
         self.asker.ask(&request).await
@@ -1028,8 +1104,13 @@ impl Gate {
         let mode = format!("mode {}", self.mode_name());
         let (mut verdict, mut reason) = match said {
             Said::Verdict(verdict, why) => (verdict, why),
-            Said::Unsure(why) => (Verdict::Ask, why),
-            Said::Silent => (self.mode().fallback(access), mode.clone()),
+            unsure_or_silent => match self.command_kind(access) {
+                Some(judged) => judged,
+                None => match unsure_or_silent {
+                    Said::Unsure(why) => (Verdict::Ask, why),
+                    _ => (self.mode().fallback(access), mode.clone()),
+                },
+            },
         };
         // Plan mode writes nothing, whatever a rule says (P3) — neither with the file tools nor by a redirection.
         let writes = match access {
@@ -1052,24 +1133,39 @@ impl Gate {
                 false
             }
             Verdict::Ask => {
+                let scopes = scopes(tool, access);
                 let request = AskRequest {
                     tool: tool.to_owned(),
                     target: target.clone(),
+                    scopes: scopes.iter().map(|scope| scope.label.clone()).collect(),
                 };
                 let _one_at_a_time = self.asking.lock().await;
-                match self.asker.ask(&request).await {
+                let answer = self.asker.ask(&request).await;
+                let within = match answer {
+                    Answer::AllowAlways => Some(0),
+                    Answer::AllowWithin(at) => Some(usize::from(at)),
+                    _ => None,
+                };
+                match answer {
                     Answer::Allow => {
                         reason = "allowed when asked".into();
                         true
                     }
-                    Answer::AllowAlways => {
-                        reason = "allowed when asked, for the rest of the run".into();
-                        if let Some(rule) = always_rule(tool, access) {
+                    Answer::AllowAlways | Answer::AllowWithin(_) => {
+                        // An index past the last scope (an answer typed elsewhere) takes the narrowest, never more.
+                        let scope = within.and_then(|at| scopes.get(at)).or(scopes.first());
+                        reason = match scope {
+                            Some(scope) => {
+                                format!("allowed when asked, from now on: {}", scope.label)
+                            }
+                            None => "allowed when asked, this once".into(),
+                        };
+                        if let Some(scope) = scope {
                             self.rules
                                 .lock()
                                 .unwrap_or_else(|poison| poison.into_inner())
                                 .allow
-                                .push(rule);
+                                .extend(scope.rules.iter().cloned());
                         }
                         true
                     }
@@ -1096,11 +1192,74 @@ impl Gate {
         }
     }
 
+    /// What a sandboxed command's kind says where no rule does (TUI1e): one that only reads in the working folder runs
+    /// in every mode, as a `read_file` would — unless a rule holds back a file it names —; in the `auto` mode
+    /// everything runs but a heavy command or one naming a protected path, which are asked. `None`: the rules'
+    /// unsureness or the mode decide — always without a sandbox, and in `dont_ask`.
+    fn command_kind(&self, access: &Access) -> Option<(Verdict, String)> {
+        let Access::Bash {
+            command,
+            folder,
+            sandboxed: true,
+            ..
+        } = access
+        else {
+            return None;
+        };
+        // A headless run that asks nothing keeps to its rules alone.
+        if self.mode() == Mode::DontAsk {
+            return None;
+        }
+        let analysis = analyze(command);
+        if kinds::reads_only(&analysis) {
+            let beyond = {
+                let rules = self
+                    .rules
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner());
+                analysis
+                    .parts
+                    .iter()
+                    .find_map(|part| rules.reads_beyond(&part.words, &analysis.reads, folder))
+            };
+            return Some(match beyond {
+                // Outside the folder auto trusts the sandbox; the other modes ask, as `read_file` cannot go there. A
+                // file a rule holds back is asked in every mode.
+                Some(READS_OUTSIDE) if self.mode() == Mode::Auto => {
+                    (Verdict::Allow, "mode auto".into())
+                }
+                Some(why) => (Verdict::Ask, why.into()),
+                None => (Verdict::Allow, "a command that only reads".into()),
+            });
+        }
+        if self.mode() != Mode::Auto {
+            return None;
+        }
+        // The sandbox lets a write to a protected name below the folder's top through (`sub/.cargo/config.toml`):
+        // code the owner's next build or editor would run. And what the lexer cannot read may hide a heavy command
+        // — its plain words are searched for one.
+        let hidden = analysis
+            .is_opaque()
+            .then(|| kinds::heavy_in_text(command))
+            .flatten();
+        Some(match kinds::heavy(&analysis).or(hidden) {
+            Some(why) => (Verdict::Ask, format!("{why}: asked even in auto mode")),
+            None if analysis.protected => (
+                Verdict::Ask,
+                "the command names a protected path: asked even in auto mode".into(),
+            ),
+            None => (Verdict::Allow, "mode auto".into()),
+        })
+    }
+
     /// The judgements since the last call, oldest first.
     pub fn take_log(&self) -> Vec<Judgement> {
         std::mem::take(&mut *self.log.lock().unwrap_or_else(|poison| poison.into_inner()))
     }
 }
+
+/// Why a reading command is not free in every mode: it reads out of the working folder.
+const READS_OUTSIDE: &str = "the command reads outside the working folder";
 
 /// The rules and mode a caller adds to the settings files: flags (P7) and a role's `permissions` (P1).
 #[derive(Debug, Clone, Default)]
@@ -1217,31 +1376,89 @@ pub fn build_gate(
     })
 }
 
-/// The rule an "always" answer adds: exactly this command, this path, or this tool.
-fn always_rule(tool: &str, access: &Access) -> Option<Rule> {
-    if let Access::Bash { command, .. } = access {
-        // Only one plain command is made a rule: a compound or unreadable one would be asked again anyway, and an exact
-        // rule for one part of it could later allow that part inside another compound.
-        let analysis = analyze(command);
-        let plain = !analysis.is_opaque()
-            && analysis.parts.len() == 1
-            && analysis.parts[0].assignments.is_empty();
-        if !plain {
-            return None;
-        }
-    }
-    let text = match access {
-        // `*` in a command would widen the rule beyond what was asked; such a command is asked again next time.
-        Access::Bash { command, .. } if !command.contains('*') => format!("Bash({command})"),
-        Access::Bash { .. } => return None,
-        Access::Edit { path } => format!("Edit({})", glob_escape(&normal_path(path))),
-        Access::Read { path } => format!("Read({})", glob_escape(&normal_path(path))),
-        Access::Network { host } => format!("Network({host})"),
-        // "always" for an MCP call is the tool's own rule, which names it exactly (M5).
-        Access::Mcp { server, tool } => format!("mcp__{server}__{tool}"),
-        Access::Own | Access::Other => tool.to_owned(),
+/// One reach an allowance from then on may have: the rules it adds, and how the owner reads it.
+#[derive(Debug, Clone)]
+struct Scope {
+    label: String,
+    rules: Vec<Rule>,
+}
+
+/// What the owner may allow from then on for this call, narrowest first. A command offers every reach of
+/// [`kinds::reaches`] — exactly it, its sub-command (`git status *`), its program (`git *`) — for each of its parts
+/// at once (`cargo fmt *, cargo test *`); one the lexer cannot read offers none, it would be asked again anyway. A
+/// path, a host or a tool offers exactly itself.
+fn scopes(tool: &str, access: &Access) -> Vec<Scope> {
+    let one = |text: String| {
+        Rule::parse(&text)
+            .ok()
+            .map(|rule| {
+                vec![Scope {
+                    label: describe(access),
+                    rules: vec![rule],
+                }]
+            })
+            .unwrap_or_default()
     };
-    Rule::parse(&text).ok()
+    match access {
+        Access::Bash { command, .. } => {
+            let analysis = analyze(command);
+            if analysis.is_opaque()
+                || analysis
+                    .parts
+                    .iter()
+                    .any(|part| !part.assignments.is_empty())
+            {
+                return Vec::new();
+            }
+            // A part that only reads runs without a rule beside one that does more: it is left out of what the owner
+            // chooses from. A command that only reads (asked for a file a rule holds back) keeps every part.
+            let doing: Vec<_> = analysis
+                .parts
+                .iter()
+                .filter(|part| !kinds::reader(&part.words))
+                .collect();
+            let parts = if doing.is_empty() {
+                analysis.parts.iter().collect()
+            } else {
+                doing
+            };
+            let per_part: Vec<Vec<kinds::Reach>> = parts.into_iter().map(kinds::reaches).collect();
+            if per_part.is_empty() || per_part.iter().any(Vec::is_empty) {
+                return Vec::new();
+            }
+            let mut out: Vec<Scope> = Vec::new();
+            // Tier by tier, each part at its widest reach no wider than the tier: `cargo fmt, cargo test *`.
+            for tier in 0..=2 {
+                let mut reaches: Vec<&kinds::Reach> = per_part
+                    .iter()
+                    .filter_map(|reaches| reaches.iter().rfind(|reach| reach.tier() <= tier))
+                    .collect();
+                reaches.dedup();
+                let Some(rules) = reaches
+                    .iter()
+                    .map(|reach| Rule::parse(&reach.rule()).ok())
+                    .collect::<Option<Vec<_>>>()
+                else {
+                    return out;
+                };
+                let label = reaches
+                    .iter()
+                    .map(|reach| reach.label())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                if out.last().is_none_or(|last| last.label != label) {
+                    out.push(Scope { label, rules });
+                }
+            }
+            out
+        }
+        Access::Edit { path } => one(format!("Edit({})", glob_escape(&normal_path(path)))),
+        Access::Read { path } => one(format!("Read({})", glob_escape(&normal_path(path)))),
+        Access::Network { host } => one(format!("Network({host})")),
+        // An MCP call's allowance is the tool's own rule, which names it exactly (M5).
+        Access::Mcp { server, tool } => one(format!("mcp__{server}__{tool}")),
+        Access::Own | Access::Other => one(tool.to_owned()),
+    }
 }
 
 /// A path as a glob that matches only itself.
@@ -1275,7 +1492,10 @@ fn restrict_allows(rules: &[Rule], tool: &str, access: &Access) -> bool {
         ask: Vec::new(),
         deny: Vec::new(),
     };
-    matches!(only.verdict(tool, access), Said::Verdict(Verdict::Allow, _))
+    matches!(
+        only.verdict_with(tool, access, false),
+        Said::Verdict(Verdict::Allow, _)
+    )
 }
 
 #[cfg(test)]
@@ -1296,6 +1516,7 @@ mod tests {
             command: command.into(),
             folder: String::new(),
             unsandboxed: false,
+            sandboxed: true,
         }
     }
 
@@ -1483,7 +1704,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_ask_goes_to_the_asker_and_always_holds_for_the_rest_of_the_run() {
+    async fn an_ask_goes_to_the_asker_and_always_holds_from_then_on() {
         let asker = Arc::new(Always(Answer::AllowAlways, Mutex::new(0)));
         let gate = Gate::new(RuleSet::default(), Mode::Default, asker.clone());
         assert!(gate.judge("bash", &bash("make build")).await.is_ok());
@@ -1501,7 +1722,7 @@ mod tests {
         let log = gate.take_log();
         assert_eq!(log.len(), 3);
         assert!(
-            log[0].reason.contains("rest of the run")
+            log[0].reason.contains("from now on")
                 && log[1].reason.contains("rule Bash(make build)")
         );
         assert!(gate.take_log().is_empty());
@@ -1510,7 +1731,7 @@ mod tests {
     #[tokio::test]
     async fn headless_asks_are_refused_and_own_state_is_free() {
         let gate = Gate::new(RuleSet::default(), Mode::Default, Arc::new(Nobody));
-        let refused = gate.judge("bash", &bash("ls")).await.unwrap_err();
+        let refused = gate.judge("bash", &bash("make")).await.unwrap_err();
         assert!(refused.contains("no one to ask"), "{refused}");
         assert!(gate.judge("kill_shell", &Access::Own).await.is_ok());
         let plan = Gate::new(
@@ -1529,18 +1750,23 @@ mod tests {
         );
     }
 
+    /// The first rule an "always" adds.
+    fn always_rule(tool: &str, access: &Access) -> Option<Rule> {
+        scopes(tool, access)
+            .into_iter()
+            .next()?
+            .rules
+            .into_iter()
+            .next()
+    }
+
     #[test]
     fn an_always_rule_matches_exactly_what_was_asked() {
         let rule = always_rule("bash", &bash("make build")).unwrap();
         assert!(rule.matches_words(&analyze("make build").parts[0].words));
         assert!(
-            !rule.matches_words(
-                &analyze("make build && rm x")
-                    .parts
-                    .iter()
-                    .flat_map(|p| p.words.clone())
-                    .collect::<Vec<_>>()
-            )
+            !rule.matches_words(&analyze("make build -j4").parts[0].words),
+            "exactly this command"
         );
         assert!(always_rule("bash", &bash("rm *")).is_none());
         let path = always_rule(
@@ -1813,12 +2039,16 @@ mod tests {
         let auto = Gate::new(RuleSet::default(), Mode::Auto, asker.clone());
         assert!(
             auto.judge("bash", &bash("echo $(whoami)")).await.is_ok(),
+            "auto trusts what the sandbox holds"
+        );
+        assert!(
+            auto.judge("bash", &bash("sudo make")).await.is_ok(),
             "asked, and the asker said yes"
         );
         assert_eq!(
             *asker.1.lock().unwrap(),
             1,
-            "only the unreadable command in auto mode was asked"
+            "only the heavy command in auto mode was asked"
         );
     }
 
@@ -1829,11 +2059,163 @@ mod tests {
     }
 
     #[test]
-    fn always_is_offered_only_for_one_plain_command() {
-        assert!(always_rule("bash", &bash("make build")).is_some());
-        assert!(always_rule("bash", &bash("a && b")).is_none());
-        assert!(always_rule("bash", &bash("FOO=1 make")).is_none());
-        assert!(always_rule("bash", &bash("echo $(x)")).is_none());
+    fn the_scopes_offered_go_from_the_command_to_its_program_for_every_part_at_once() {
+        let labels = |command: &str| {
+            scopes("bash", &bash(command))
+                .into_iter()
+                .map(|scope| scope.label)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            labels("git status --short"),
+            ["git status --short", "git status *", "git *"]
+        );
+        assert_eq!(
+            labels("cargo fmt && cargo test -p x"),
+            [
+                "cargo fmt, cargo test -p x",
+                "cargo fmt *, cargo test *",
+                "cargo *"
+            ]
+        );
+        assert_eq!(labels("make"), ["make"]);
+        assert_eq!(
+            labels("cargo --version | head -1"),
+            ["cargo --version", "cargo *"],
+            "head only reads: no rule for it"
+        );
+        assert!(labels("FOO=1 make").is_empty());
+        assert!(labels("echo $(x)").is_empty());
+        assert!(
+            labels("sudo make").is_empty(),
+            "a wrapper would reach every program after it"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_owner_picks_how_far_an_allowance_reaches() {
+        let asker = Arc::new(Always(Answer::AllowWithin(1), Mutex::new(0)));
+        let gate = Gate::new(RuleSet::default(), Mode::Default, asker.clone());
+        assert!(gate.judge("bash", &bash("git commit -m one")).await.is_ok());
+        assert!(gate.judge("bash", &bash("git commit -m two")).await.is_ok());
+        assert_eq!(*asker.1.lock().unwrap(), 1, "git commit * was allowed");
+        assert!(
+            gate.judge("bash", &bash("git commit -m three | tail -2"))
+                .await
+                .is_ok(),
+            "a reading part needs no rule of its own"
+        );
+        assert_eq!(*asker.1.lock().unwrap(), 1);
+        let asker = Arc::new(Always(Answer::Deny, Mutex::new(0)));
+        let rules = gate.rules();
+        let after = Gate::new(rules, Mode::Default, asker.clone());
+        assert!(
+            after.judge("bash", &bash("git push")).await.is_err(),
+            "but not git *"
+        );
+        let gate = Gate::new(
+            RuleSet::default(),
+            Mode::Default,
+            Arc::new(Always(Answer::AllowWithin(9), Mutex::new(0))),
+        );
+        assert!(gate.judge("bash", &bash("git commit -m one")).await.is_ok());
+        assert!(
+            gate.take_log()[0]
+                .reason
+                .ends_with("from now on: git commit -m one"),
+            "an index past the last scope takes the narrowest"
+        );
+    }
+
+    #[tokio::test]
+    async fn reading_commands_run_in_every_mode_and_auto_asks_only_heavy_ones() {
+        let asker = Arc::new(Always(Answer::Deny, Mutex::new(0)));
+        for mode in [Mode::Plan, Mode::Default, Mode::AcceptEdits, Mode::Auto] {
+            let gate = Gate::new(rules(&[], &[], &["Read(.env)"]), mode, asker.clone());
+            assert!(
+                gate.judge(
+                    "bash",
+                    &bash("grep -rn x src | head -20; ls -la docs 2>/dev/null")
+                )
+                .await
+                .is_ok(),
+                "{mode:?}"
+            );
+            for held in [
+                "cat .env",
+                "grep x < .env",
+                "grep --file=.env x",
+                "git show HEAD:.env",
+            ] {
+                assert!(
+                    gate.judge("bash", &bash(held)).await.is_err(),
+                    "{mode:?}: a rule holds {held} back"
+                );
+            }
+            let outside = gate.judge("bash", &bash("cat ~/.zshenv")).await;
+            assert_eq!(
+                outside.is_ok(),
+                mode == Mode::Auto,
+                "{mode:?}: outside the folder only auto reads freely"
+            );
+        }
+        let dont_ask = Gate::new(RuleSet::default(), Mode::DontAsk, asker.clone());
+        assert!(
+            dont_ask.judge("bash", &bash("ls")).await.is_err(),
+            "dont_ask keeps to its rules alone"
+        );
+        let unfenced = |command: &str| {
+            let mut access = bash(command);
+            if let Access::Bash { sandboxed, .. } = &mut access {
+                *sandboxed = false;
+            }
+            access
+        };
+        let before = *asker.1.lock().unwrap();
+        let auto = Gate::new(RuleSet::default(), Mode::Auto, asker.clone());
+        assert!(
+            auto.judge("bash", &unfenced("echo $(whoami)"))
+                .await
+                .is_err(),
+            "without a sandbox auto asks what the rules cannot read, as before"
+        );
+        assert_eq!(*asker.1.lock().unwrap(), before + 1);
+        let build = Gate::new(RuleSet::default(), Mode::AcceptEdits, asker.clone());
+        assert!(
+            build.judge("bash", &unfenced("ls")).await.is_err(),
+            "without a sandbox a reader is asked"
+        );
+        let asked = *asker.1.lock().unwrap();
+        let auto = Gate::new(RuleSet::default(), Mode::Auto, asker.clone());
+        assert!(
+            auto.judge("bash", &bash("cargo build && echo $HOME > /tmp/x"))
+                .await
+                .is_ok()
+        );
+        assert!(
+            auto.judge("bash", &bash("rm -rf target")).await.is_err(),
+            "asked and refused"
+        );
+        assert!(auto.judge("bash", &bash("git push")).await.is_err());
+        assert!(
+            auto.judge("bash", &bash("cp x sub/.cargo/config.toml"))
+                .await
+                .is_err(),
+            "a protected name is asked even in auto"
+        );
+        assert!(
+            auto.judge("bash", &bash("$(echo x) rm -rf y"))
+                .await
+                .is_err(),
+            "a hidden rm is found"
+        );
+        assert_eq!(
+            *asker.1.lock().unwrap(),
+            asked + 4,
+            "only the heavy and protected ones were asked"
+        );
+        let reason = &auto.take_log()[1].reason;
+        assert!(reason.contains("asked even in auto mode"), "{reason}");
     }
 
     #[test]
@@ -1847,6 +2229,7 @@ mod tests {
             command: "echo x > f.txt".into(),
             folder: "secrets".into(),
             unsandboxed: false,
+            sandboxed: false,
         };
         assert_eq!(said(&set, "bash", inside), Some(Verdict::Deny));
         assert_eq!(
@@ -1933,6 +2316,7 @@ mod tests {
             command: command.into(),
             folder: String::new(),
             unsandboxed: true,
+            sandboxed: false,
         };
         assert_eq!(
             said(&set, "bash", out("npm install")),
@@ -2138,8 +2522,8 @@ mod tests {
         );
 
         // A command rule in `allowed-tools` does not free a command from the mode (C3).
-        let plan = narrowed(Mode::Plan, &["Bash(git status:*)"]);
-        let refused = plan.judge("bash", &git_status).await.unwrap_err();
+        let plan = narrowed(Mode::Plan, &["Bash(cargo test:*)"]);
+        let refused = plan.judge("bash", &bash("cargo test")).await.unwrap_err();
         assert!(refused.contains("mode plan"), "{refused}");
     }
 

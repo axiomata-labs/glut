@@ -15,9 +15,19 @@ use crate::{glimm, session, theme};
 const INPUT_ROWS: usize = 8;
 /// The most rows of its target an ask shows.
 const ASK_ROWS: usize = 12;
-/// The side panel's width, and the screen it needs beside the stream.
-const PANEL_WIDTH: u16 = 38;
+/// The side panel's share of the screen in percent, its narrowest width, and the screen it needs beside the stream.
+const PANEL_PERCENT: u16 = 25;
+const PANEL_MIN_WIDTH: u16 = 32;
 pub const PANEL_MIN_SCREEN: u16 = 100;
+
+/// The side panel's width on a screen `width` columns wide: a quarter of it, never narrower than its minimum.
+fn panel_width(width: u16) -> u16 {
+    // In u32: a quarter of a very wide screen must not overflow on the way.
+    let share = u32::from(width) * u32::from(PANEL_PERCENT) / 100;
+    u16::try_from(share)
+        .unwrap_or(u16::MAX)
+        .max(PANEL_MIN_WIDTH)
+}
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
@@ -32,7 +42,13 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             most,
         )
     });
-    let ask_height = ask_rows.as_ref().map_or(0, |rows| rows.len() as u16 + 3);
+    // The target, then a row per choice: once, each scope, refuse.
+    let ask_height = ask_rows
+        .as_ref()
+        .zip(app.ask.as_ref())
+        .map_or(0, |(rows, open)| {
+            (rows.len() + 2 + open.request.scopes.len().min(9)) as u16 + 2
+        });
     let [header, stream, ask, input, keys] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(1),
@@ -45,9 +61,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // The side panel (T28) takes the right of the stream where the screen is wide enough for both.
     app.stream_width = stream.x + stream.width;
     let stream = if app.panel == Some(true) && stream.width >= PANEL_MIN_SCREEN {
-        let [stream, panel] =
-            Layout::horizontal([Constraint::Min(40), Constraint::Length(PANEL_WIDTH)])
-                .areas(stream);
+        let [stream, panel] = Layout::horizontal([
+            Constraint::Min(40),
+            Constraint::Length(panel_width(stream.width)),
+        ])
+        .areas(stream);
         draw_panel(frame, app, panel);
         app.stream_width = stream.x + stream.width;
         stream
@@ -217,14 +235,28 @@ fn draw_ask(frame: &mut Frame, app: &App, area: Rect, rows: Vec<String>) {
         .into_iter()
         .map(|row| Line::from(Span::raw(row)))
         .collect();
+    let key = |key: String| {
+        Span::styled(
+            format!(" {key}  "),
+            theme::glow().add_modifier(Modifier::BOLD),
+        )
+    };
+    let width = usize::from(area.width.saturating_sub(4));
     lines.push(Line::from(vec![
-        Span::styled("y", theme::glow().add_modifier(Modifier::BOLD)),
-        Span::raw(" allow   "),
-        Span::styled("a", theme::glow().add_modifier(Modifier::BOLD)),
-        Span::raw(" allow for this session   "),
-        Span::styled("n", theme::glow().add_modifier(Modifier::BOLD)),
-        Span::raw(" refuse"),
+        key("y".into()),
+        Span::raw("allow this once"),
     ]));
+    for (at, scope) in open.request.scopes.iter().take(9).enumerate() {
+        let scope =
+            crate::transcript::cut(&crate::transcript::clean(scope), width.saturating_sub(30));
+        lines.push(Line::from(vec![
+            key((at + 1).to_string()),
+            Span::raw("allow "),
+            Span::styled(scope, Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(" for this session", theme::quiet()),
+        ]));
+    }
+    lines.push(Line::from(vec![key("n".into()), Span::raw("refuse")]));
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
@@ -284,14 +316,25 @@ fn draw_keys(frame: &mut Frame, app: &App, area: Rect) {
         glut::permissions::Mode::Plan => Style::default().fg(theme::OWNER),
         _ => theme::quiet(),
     };
-    let hints = if app.ask.is_some() {
-        "y allow · a always · n refuse · Ctrl+C refuse and clear"
+    let scopes = app
+        .ask
+        .as_ref()
+        .map_or(0, |open| open.request.scopes.len().min(9));
+    let hints = if app.ask.is_some() && scopes > 0 {
+        let keys = if scopes == 1 {
+            "1".to_owned()
+        } else {
+            format!("1–{scopes}")
+        };
+        format!("y once · {keys} for this session · n refuse · Ctrl+C refuse and clear")
+    } else if app.ask.is_some() {
+        "y once · n refuse · Ctrl+C refuse and clear".to_owned()
     } else if app.picker.is_some() {
-        "type to filter · ↑↓ choose · Enter take · Esc close"
+        "type to filter · ↑↓ choose · Enter take · Esc close".to_owned()
     } else if app.working() {
-        "Glut works · Esc stops · PgUp/PgDn scroll · Ctrl+O tool results"
+        "Glut works · Esc stops · PgUp/PgDn scroll · Ctrl+O tool results".to_owned()
     } else {
-        "Enter send · Shift+Enter new line · Shift+Tab mode · /help · Ctrl+O tool results · Ctrl+C quit"
+        "Enter send · Shift+Enter new line · Shift+Tab mode · /help · Ctrl+O tool results · Ctrl+C quit".to_owned()
     };
     let line = Line::from(vec![
         Span::styled(format!(" {} ", session::mode_label(mode)), mode_style),
@@ -476,7 +519,7 @@ fn draw_picker(frame: &mut Frame, app: &App, area: Rect) {
 
 #[cfg(test)]
 mod tests {
-    use super::{asked_rows, tokens};
+    use super::{asked_rows, panel_width, tokens};
 
     #[test]
     fn a_long_ask_shows_its_head_what_is_left_out_and_its_tail() {
@@ -497,6 +540,13 @@ mod tests {
             ]
         );
         assert_eq!(asked_rows("ls -la", 40, 6), ["ls -la"]);
+        assert_eq!(panel_width(100), 32, "never narrower than its minimum");
+        assert_eq!(panel_width(200), 50, "a quarter of the screen");
+        assert_eq!(
+            panel_width(u16::MAX),
+            16_383,
+            "no overflow on a very wide screen"
+        );
     }
 
     #[test]

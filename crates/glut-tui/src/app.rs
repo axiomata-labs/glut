@@ -28,7 +28,7 @@ const ASK_SETTLE: Duration = Duration::from_millis(400);
 /// What `/help` says.
 const HELP: &str = "Commands: /model [id] · /provider [id] · /effort [level] · /context [tokens] · /compact · \
                     /editor [command] · /thinking off|folded|open · /clear · /help · /quit\n\
-                    Keys: Enter send · Shift+Enter or Alt+Enter new line · ↑ history · Shift+Tab plan → ask → edits \
+                    Keys: Enter send · Shift+Enter or Alt+Enter new line · ↑ history · Shift+Tab plan → ask → build \
                     → auto · Esc stop · Ctrl+O tool results · Ctrl+T thinking · Ctrl+B panel · Ctrl+X E editor · PgUp/PgDn scroll · Ctrl+C twice quit";
 
 /// The session's commands with what each does, as the list under a typed `/` shows them.
@@ -558,7 +558,7 @@ impl App {
         self.send(prompt);
     }
 
-    /// Shift+Tab: plan → ask → edits → auto → plan, from the next call on.
+    /// Shift+Tab: plan → ask → build → auto → plan, from the next call on.
     fn cycle_mode(&mut self) {
         let Some(gate) = self.parts.tools.gate() else {
             return;
@@ -567,14 +567,20 @@ impl App {
         gate.set_mode(next);
         let mut what = match next {
             Mode::Plan => "plan: Glut reads and plans, it changes nothing".to_owned(),
-            Mode::Default => "ask: Glut asks before it changes a file or runs a command".to_owned(),
-            Mode::AcceptEdits => "edits: Glut edits files freely, it asks before a command".to_owned(),
+            Mode::Default => {
+                "ask: Glut reads freely, it asks before it changes a file or runs a command".to_owned()
+            }
+            Mode::AcceptEdits => {
+                "build: Glut reads and edits freely, it asks before a command that does more than read".to_owned()
+            }
             // Auto leans on the sandbox; where there is none, the owner hears it before Glut does anything.
             Mode::Auto if session::sandboxed(&self.parts) => {
-                "auto: Glut does what no rule forbids, in the sandbox — asked only what no rule can read".to_owned()
+                "auto: Glut does what no rule forbids, in the sandbox — asked only before a heavy command (rm -rf, \
+                 git push, sudo, …)"
+                    .to_owned()
             }
             Mode::Auto => "auto: Glut does what no rule forbids — and commands run WITHOUT a sandbox here; only \
-                           the rules hold them"
+                           the rules and the question before a heavy command hold them"
                 .to_owned(),
             Mode::DontAsk => "don't ask: what no rule allows is refused".to_owned(),
         };
@@ -668,17 +674,15 @@ impl App {
                     );
                 }
                 "read" => match session::read_handoff(&self.parts) {
-                    Ok((message, _)) if self.conversation.contains(&message) => self
-                        .transcript
-                        .note("this session has the handoff already", Tone::Quiet),
-                    Ok((message, text)) => {
+                    Ok((message, text, moved)) => {
                         self.conversation.push(message);
                         self.keep();
-                        let head: Vec<&str> = text.lines().take(12).collect();
                         self.transcript.note(
                             format!(
-                                "handoff read — Glut knows it from the next message on:\n{}",
-                                head.join("\n")
+                                "handoff read — Glut knows it from the next message on; it moved to {} so no later \
+                                 session reads it again:\n{}",
+                                session::shown_folder(&moved),
+                                text.trim()
                             ),
                             Tone::Fine,
                         );
@@ -966,9 +970,10 @@ impl App {
         }
     }
 
-    /// y allows once, a for the rest of the session, n or Esc refuses — plain keys only, pressed once, and not in
-    /// the first moment after the card came up: a key typed (or held) for the input must not answer a question the
-    /// owner has not read yet, nor Ctrl+A ("home") allow for the whole session.
+    /// y allows once; 1, 2, 3 for the rest of the session, as far as the card's scope with that number reaches
+    /// (`git status --short`, `git status *`, `git *`), a the first of them; n or Esc refuses — plain keys only,
+    /// pressed once, and not in the first moment after the card came up: a key typed (or held) for the input must
+    /// not answer a question the owner has not read yet, nor Ctrl+A ("home") allow for the whole session.
     fn on_ask_key(&mut self, key: KeyEvent) {
         let Some(open) = &self.ask else { return };
         if key.kind == KeyEventKind::Repeat
@@ -981,7 +986,14 @@ impl App {
         }
         let answer = match key.code {
             KeyCode::Char('y' | 'j') => Answer::Allow,
-            KeyCode::Char('a') => Answer::AllowAlways,
+            KeyCode::Char('a') if !open.request.scopes.is_empty() => Answer::AllowAlways,
+            KeyCode::Char(digit @ '1'..='9') => {
+                let at = digit as usize - '1' as usize;
+                if at >= open.request.scopes.len() {
+                    return;
+                }
+                Answer::AllowWithin(at as u8)
+            }
             KeyCode::Char('n') | KeyCode::Esc => Answer::Deny,
             _ => return,
         };
@@ -1140,7 +1152,12 @@ mod tests {
         app.on_report(Report::Ask(
             AskRequest {
                 tool: "run_command".into(),
-                target: "ls".into(),
+                target: "git status --short".into(),
+                scopes: vec![
+                    "git status --short".into(),
+                    "git status *".into(),
+                    "git *".into(),
+                ],
             },
             reply,
         ));
@@ -1164,8 +1181,13 @@ mod tests {
             ..KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE)
         }));
         assert!(app.ask.is_some(), "a held key does not answer");
-        app.on_terminal(key(KeyCode::Char('a'), KeyModifiers::NONE));
+        app.on_terminal(key(KeyCode::Char('4'), KeyModifiers::NONE));
+        assert!(app.ask.is_some(), "there is no fourth scope");
+        app.on_terminal(key(KeyCode::Char('2'), KeyModifiers::NONE));
         assert!(app.ask.is_none());
+        assert_eq!(answer.try_recv().unwrap(), Answer::AllowWithin(1));
+        let mut answer = asked(&mut app);
+        app.on_terminal(key(KeyCode::Char('a'), KeyModifiers::NONE));
         assert_eq!(answer.try_recv().unwrap(), Answer::AllowAlways);
 
         let mut fresh = asked(&mut app);
@@ -1330,6 +1352,12 @@ mod tests {
             said.contains("the parser") && said.contains("no instruction of the owner"),
             "{said}"
         );
+        assert!(!path.exists(), "a handoff read is moved away");
+        let moved: Vec<_> = std::fs::read_dir(path.parent().unwrap().join("read"))
+            .unwrap()
+            .flatten()
+            .collect();
+        assert_eq!(moved.len(), 1, "into handoffs/read/");
         typed(&mut app, "/handoff read");
         assert_eq!(app.conversation.len(), 1, "read once, not twice");
         typed(&mut app, "/handoff");

@@ -1254,6 +1254,7 @@ impl Tool for Bash {
             folder,
             // Without a sandbox there is nothing to leave: the rules alone judge, as before HS3b.
             unsandboxed: escape && self.0.policy.is_some(),
+            sandboxed: self.0.policy.is_some() && !escape,
         }
     }
 
@@ -1351,6 +1352,7 @@ impl Tool for BashOutput {
             command: String::new(),
             folder: String::new(),
             unsandboxed: false,
+            sandboxed: false,
         }
     }
 
@@ -1381,6 +1383,7 @@ impl Tool for KillShell {
             command: String::new(),
             folder: String::new(),
             unsandboxed: false,
+            sandboxed: false,
         }
     }
 
