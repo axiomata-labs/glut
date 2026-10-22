@@ -529,8 +529,8 @@ fn render(kind: &Kind, width: u16, thinking: Thinking, frame: usize) -> Vec<Line
                 Span::styled(format!("{state} · ~{} tokens", tokens_short(size)), style),
             ];
             if *streaming {
-                // While the model thinks, a small Glimm flickers in front of it — two rows, with eyes, so it reads
-                // as Glimm and not as a dot; the thought goes back to one row once it is done.
+                // While the model thinks, a small flame flickers in front of it, slowly — two rows, so it reads as a
+                // flame and not as a dot; the thought goes back to one row once it is done.
                 let mut glimm = crate::glimm::lines(
                     crate::glimm::Size::Mini,
                     crate::glimm::Mood::Working,

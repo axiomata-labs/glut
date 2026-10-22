@@ -23,7 +23,8 @@ pub enum Mood {
 pub enum Size {
     Large,
     Small,
-    /// Six by four pixels (6 columns by 2 rows), in front of a thought while the model thinks.
+    /// Six by four pixels (6 columns by 2 rows), a small flame without eyes in front of a thought while the model
+    /// thinks.
     Mini,
 }
 
@@ -33,7 +34,8 @@ struct Design {
     eyes: &'static [(usize, usize)],
     /// How many of the top rows lean while the flame flickers.
     tip_rows: usize,
-    /// Screen ticks per step of the flicker: a small Glimm beside text moves slower, so it does not pull the eye.
+    /// Screen ticks per step of its animation (the flicker, the "!", the twinkle, the smoke): a small Glimm beside text
+    /// moves slower, so it does not pull the eye from what it stands beside (owner: the asking one was "zu hektisch").
     pace: usize,
     /// Where sparks rise while it works, in turn.
     sparks: &'static [(usize, usize)],
@@ -64,7 +66,7 @@ const LARGE: Design = Design {
     ],
     eyes: &[(7, 4), (7, 8)],
     tip_rows: 3,
-    pace: 1,
+    pace: 2,
     sparks: &[(0, 2), (1, 9), (0, 8), (2, 1)],
     bang: (10, &[0, 1, 2], 4),
     twinkle: (1, 2),
@@ -78,7 +80,7 @@ const SMALL: Design = Design {
     ],
     eyes: &[(4, 2), (4, 5)],
     tip_rows: 2,
-    pace: 1,
+    pace: 5,
     sparks: &[(0, 1), (0, 6), (1, 7), (1, 0)],
     bang: (7, &[0, 1], 3),
     twinkle: (0, 1),
@@ -95,9 +97,10 @@ const BLINK_TICKS: usize = 2;
 
 const MINI: Design = Design {
     rows: &["..yy..", ".oaao.", "oayyao", ".raar."],
-    eyes: &[(2, 1), (2, 4)],
+    // A plain flame in front of a thought: no eyes, the owner's wish — Glimm proper is the large and the small one.
+    eyes: &[],
     tip_rows: 1,
-    pace: 3,
+    pace: 6,
     sparks: &[(0, 0), (0, 5), (1, 0), (1, 5)],
     bang: (5, &[0], 1),
     twinkle: (0, 0),
@@ -177,6 +180,8 @@ fn pixels(size: Size, mood: Mood, tick: usize) -> (Vec<Vec<char>>, bool) {
     let height = grid.len();
     let width = grid[0].len();
     let mut ash = false;
+    // The animation's step: the resting breath counts screen ticks itself, everything else moves at the design's pace.
+    let step = tick / design.pace;
     match mood {
         Mood::Resting => {
             // A slow breath: the tip leans one way, rests, leans the other — and now and then Glimm blinks.
@@ -192,7 +197,7 @@ fn pixels(size: Size, mood: Mood, tick: usize) -> (Vec<Vec<char>>, bool) {
             }
         }
         Mood::Working => {
-            let tick = tick / design.pace;
+            let tick = step;
             lean(&mut grid, design.tip_rows, [-1, 0, 1, 0][tick % 4]);
             for &(row, col) in design.eyes {
                 set(&mut grid, row, col, 'e');
@@ -210,7 +215,7 @@ fn pixels(size: Size, mood: Mood, tick: usize) -> (Vec<Vec<char>>, bool) {
             }
             let (col, stroke, dot) = design.bang;
             // The "!" blinks: three steps on, one off.
-            if tick % 4 < 3 {
+            if step % 4 < 3 {
                 for &row in stroke {
                     set_free(&mut grid, row, col, 'y');
                 }
@@ -224,7 +229,7 @@ fn pixels(size: Size, mood: Mood, tick: usize) -> (Vec<Vec<char>>, bool) {
                 set(&mut grid, row - 1, col, 'm');
                 set(&mut grid, row, col + 1, 'm');
             }
-            if tick % 6 < 3 {
+            if step % 6 < 3 {
                 let (row, col) = design.twinkle;
                 set_free(&mut grid, row, col, 'w');
             }
@@ -248,7 +253,7 @@ fn pixels(size: Size, mood: Mood, tick: usize) -> (Vec<Vec<char>>, bool) {
                 set(&mut grid, row, col, 'm');
                 set(&mut grid, row, col + 1, 'm');
             }
-            for &(row, col) in design.smoke[tick % design.smoke.len()] {
+            for &(row, col) in design.smoke[step % design.smoke.len()] {
                 set_free(&mut grid, row, col, 's');
             }
         }
