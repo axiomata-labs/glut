@@ -8,6 +8,7 @@ mod input;
 mod markdown;
 mod picker;
 mod prefs;
+mod scrollback;
 mod select;
 mod session;
 mod setup;
@@ -66,6 +67,9 @@ struct Cli {
     /// A first message, sent as soon as the session is up.
     prompt: Option<String>,
 }
+
+/// How many of the stream's last lines stay in the terminal when the session ends.
+const EXIT_LINES: usize = 5_000;
 
 #[tokio::main]
 async fn main() -> std::process::ExitCode {
@@ -147,6 +151,16 @@ async fn main() -> std::process::ExitCode {
     stop.store(true, Ordering::Relaxed);
     leave(enhanced);
     let _ = std::panic::take_hook();
+    // The session stays where the terminal keeps it, above the shell's next prompt — settled first (a turn stopped
+    // by the quit shows as stopped), its last lines only: a terminal keeps a few thousand anyway. Printed after an
+    // error too: the alternate screen it was on is gone.
+    if !app.welcoming() {
+        app.transcript.settle();
+        let width = terminal::size().map_or(80, |(width, _)| width);
+        let lines = app.stream_at(width);
+        let tail = &lines[lines.len().saturating_sub(EXIT_LINES)..];
+        let _ = scrollback::print(&mut io::stdout(), tail);
+    }
     match outcome {
         Ok(()) => {
             println!(
@@ -185,6 +199,9 @@ async fn run(
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut terminate = signal(SignalKind::terminate())?;
     let mut hangup = signal(SignalKind::hangup())?;
+    // Raw mode sends no SIGINT; at the scrollback's prompt (cooked mode) Ctrl+C would end Glut mid-turn: it goes
+    // back instead.
+    let mut interrupt = signal(SignalKind::interrupt())?;
     loop {
         // Every frame inside synchronized output (DEC 2026): the terminal shows it whole or not at all — and the end
         // is sent even when the frame failed, or the terminal would hold every later one back.
@@ -205,6 +222,44 @@ async fn run(
             }
             app.mouse_held = held;
             app.mouse_said(held);
+        }
+        // F3 or /scrollback: the stream where the terminal keeps it, until the owner comes back with Enter.
+        if std::mem::take(&mut app.scrollback_request) {
+            pause.ask.store(true, Ordering::SeqCst);
+            while !pause.idle.load(Ordering::SeqCst) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            leave(enhanced);
+            let width = terminal::size().map_or(80, |(width, _)| width);
+            let lines = app.stream_at(width);
+            let shown = scrollback::print(&mut io::stdout(), &lines).and_then(|()| {
+                print!(
+                    "\n— Glut: the conversation is in your terminal's scrollback. Enter or Ctrl+C goes back. "
+                );
+                io::stdout().flush()
+            });
+            if shown.is_ok() {
+                // The wait for Enter runs beside the signals: a closed window still ends the session cleanly.
+                let line =
+                    tokio::task::spawn_blocking(|| io::stdin().read_line(&mut String::new()));
+                tokio::select! {
+                    _ = line => {}
+                    _ = interrupt.recv() => {}
+                    _ = terminate.recv() => app.quit = true,
+                    _ = hangup.recv() => app.quit = true,
+                }
+            }
+            let entered = enter();
+            pause.ask.store(false, Ordering::SeqCst);
+            app.mouse_held = true;
+            // A view that could not be printed is said; the session goes on.
+            if let Err(err) = shown {
+                app.say(format!("the scrollback could not be printed: {err}"));
+            }
+            entered?;
+            execute!(io::stdout(), Clear(ClearType::All))?;
+            terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
+            continue;
         }
         // Ctrl+X E: the editor gets the terminal, and the input comes back from it (T29).
         if let Some(text) = app.edit_request.take() {

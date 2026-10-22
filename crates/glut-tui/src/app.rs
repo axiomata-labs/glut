@@ -30,11 +30,12 @@ const ASK_SETTLE: Duration = Duration::from_millis(400);
 const HELP: &str = "Commands: /model [id] · /provider [id] · /effort [level] · /context [tokens] · /compact · \
                     /editor [command] · /thinking off|folded|open · /clear · /help · /quit\n\
                     Keys: Enter send · Shift+Enter or Alt+Enter new line · ↑ history · Shift+Tab plan → ask → build \
-                    → auto · Esc stop · Ctrl+O tool results · Ctrl+T thinking · Ctrl+B panel · Ctrl+X E editor · PgUp/PgDn scroll · \
-                    Ctrl+F search · drag to copy · F2 mouse to the terminal and back · Ctrl+C twice quit";
+                    → auto · Esc stop · Ctrl+O tool results · Ctrl+T thinking · Ctrl+B panel · Ctrl+X E editor · \
+                    PgUp/PgDn scroll · \
+                    Ctrl+F search · drag to copy · F2 mouse to the terminal and back · F3 scrollback · Ctrl+C twice quit";
 
 /// The session's commands with what each does, as the list under a typed `/` shows them.
-pub const COMMANDS: [(&str, &str); 14] = [
+pub const COMMANDS: [(&str, &str); 15] = [
     (
         "model",
         "pick a model of the provider in use, or /model <id>",
@@ -57,6 +58,10 @@ pub const COMMANDS: [(&str, &str); 14] = [
         "show or hide the side panel with the plan (Ctrl+B)",
     ),
     ("resume", "open an earlier session of this folder"),
+    (
+        "scrollback",
+        "the conversation into the terminal's own scrollback (F3)",
+    ),
     ("clear", "start a new session"),
     ("help", "commands and keys"),
     ("quit", "end the session"),
@@ -134,6 +139,8 @@ pub struct App {
     /// Whether Glut holds the mouse; F2 hands it to the terminal and back, the main loop applies it.
     pub mouse_held: bool,
     pub mouse_request: Option<bool>,
+    /// F3 or `/scrollback`: the main loop prints the stream where the terminal keeps it (TUI2c).
+    pub scrollback_request: bool,
     /// Where the stream ended at the last frame, the panel right of it: a click there is not the stream's.
     pub stream_width: u16,
     pub frame: usize,
@@ -187,6 +194,7 @@ impl App {
             toast: None,
             mouse_held: true,
             mouse_request: None,
+            scrollback_request: false,
             stream_width: u16::MAX,
             frame: 0,
             quit_armed: None,
@@ -267,7 +275,7 @@ impl App {
             .map(|(text, _)| text.as_str())
     }
 
-    fn say(&mut self, text: impl Into<String>) {
+    pub fn say(&mut self, text: impl Into<String>) {
         self.toast = Some((text.into(), Instant::now()));
     }
 
@@ -546,6 +554,10 @@ impl App {
         }
         if self.search.is_some() {
             return self.on_search_key(key);
+        }
+        if key.code == KeyCode::F(3) {
+            self.scrollback_request = true;
+            return;
         }
         if key.code == KeyCode::F(2) {
             self.mouse_request = Some(!self.mouse_held);
@@ -836,6 +848,7 @@ impl App {
             "editor" => self.set_editor(rest),
             "resume" => self.picker = Some(self.session_picker()),
             "panel" => self.toggle_panel(),
+            "scrollback" => self.scrollback_request = true,
             "thinking" => match rest {
                 "off" => self.set_thinking(Thinking::Off),
                 "folded" | "fold" | "" => self.set_thinking(Thinking::Folded),
@@ -1253,6 +1266,18 @@ impl App {
                 }
             }
         }
+    }
+
+    /// The whole stream laid out at `width`, as the terminal's scrollback gets it: folded as the screen shows it.
+    pub fn stream_at(&mut self, width: u16) -> Vec<ratatui::text::Line<'static>> {
+        let thinking = self.transcript.thinking;
+        self.transcript
+            .blocks
+            .iter_mut()
+            .fold(Vec::new(), |mut lines, block| {
+                lines.extend_from_slice(block.lines(width, thinking, 0));
+                lines
+            })
     }
 
     /// Every line of the stream as text, at the width it was last drawn: what a selection copies from.
