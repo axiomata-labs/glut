@@ -9,14 +9,17 @@
 //!   in the conversation where the model next looks.
 //! * **`exit_plan`** is offered only in Plan mode: the plan goes to the owner as an ask; yes switches the gate to the
 //!   run's build mode (and the edit tools appear), no keeps Plan. Headless nobody answers, so the run stays in Plan.
+//!   The ask's scopes are the modes the owner may leave into ([`leave_modes`]), the run's build mode first; the whole
+//!   plan stands in the call's event ([`MAX_PLAN_CHARS`] bounds it), so a viewer can show it before the owner decides.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::model::ToolSpec;
+use crate::permissions::Mode;
 
 pub(crate) const TODO: &str = "todo_write";
-pub(crate) const EXIT_PLAN: &str = "exit_plan";
+pub const EXIT_PLAN: &str = "exit_plan";
 
 /// Most items a list may hold; a longer one is a plan to write down, not a list to track.
 const MAX_ITEMS: usize = 50;
@@ -24,6 +27,8 @@ const MAX_ITEMS: usize = 50;
 const MAX_ITEM_CHARS: usize = 300;
 /// What of the plan the owner's question shows, in characters; the whole plan stays in the conversation.
 const PLAN_PREVIEW_CHARS: usize = 600;
+/// Longest plan, in characters: a plan is read by the owner before anything happens, so its event carries all of it.
+pub const MAX_PLAN_CHARS: usize = 16_000;
 
 /// Where an item stands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -145,6 +150,11 @@ pub(crate) fn plan_of(arguments: &str) -> Result<(String, String), String> {
         .map(str::trim)
         .filter(|plan| !plan.is_empty())
         .ok_or("`plan` (the plan to carry out) is required")?;
+    if plan.chars().count() > MAX_PLAN_CHARS {
+        return Err(format!(
+            "the plan is longer than {MAX_PLAN_CHARS} characters: write it shorter, the details go into todo_write"
+        ));
+    }
     let mut preview: String = plan.chars().take(PLAN_PREVIEW_CHARS).collect();
     if plan.chars().count() > PLAN_PREVIEW_CHARS {
         preview.push('…');
@@ -153,6 +163,19 @@ pub(crate) fn plan_of(arguments: &str) -> Result<(String, String), String> {
         plan.to_owned(),
         format!("leave plan mode and carry out: {preview}"),
     ))
+}
+
+/// The modes a run may leave Plan mode into, as the `exit_plan` ask offers them: `build` (the run's build mode)
+/// first, then the others that work without asking for every edit — never Plan itself.
+pub fn leave_modes(build: Mode) -> Vec<Mode> {
+    let mut modes = vec![build];
+    for mode in [Mode::AcceptEdits, Mode::Auto, Mode::Default] {
+        if !modes.contains(&mode) {
+            modes.push(mode);
+        }
+    }
+    modes.retain(|mode| *mode != Mode::Plan);
+    modes
 }
 
 #[cfg(test)]
@@ -192,5 +215,23 @@ mod tests {
                 .ends_with('…')
         );
         assert!(plan_of(r#"{"plan":""}"#).is_err());
+        let too_long = "p".repeat(MAX_PLAN_CHARS + 1);
+        assert!(plan_of(&json!({ "plan": too_long }).to_string()).is_err());
+    }
+
+    #[test]
+    fn a_plan_leaves_into_the_build_mode_first_and_never_into_plan() {
+        assert_eq!(
+            leave_modes(Mode::AcceptEdits),
+            [Mode::AcceptEdits, Mode::Auto, Mode::Default]
+        );
+        assert_eq!(
+            leave_modes(Mode::Auto),
+            [Mode::Auto, Mode::AcceptEdits, Mode::Default]
+        );
+        assert_eq!(
+            leave_modes(Mode::Plan),
+            [Mode::AcceptEdits, Mode::Auto, Mode::Default]
+        );
     }
 }

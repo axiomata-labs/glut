@@ -1,6 +1,7 @@
 //! `glut` — Glut's terminal interface (`docs/plans/glut-tui.md`, TUI1a): one session in a folder, full screen, the
 //! default provider of `~/.axh/providers.json` unless `--provider` names another.
 
+mod agents;
 mod app;
 mod glimm;
 mod highlight;
@@ -8,6 +9,7 @@ mod input;
 mod markdown;
 mod meter;
 mod picker;
+mod plan;
 mod prefs;
 mod review;
 mod scrollback;

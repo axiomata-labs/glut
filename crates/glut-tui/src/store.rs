@@ -11,7 +11,7 @@ use glut::Message;
 use glut::model::Role;
 use serde::{Deserialize, Serialize};
 
-use crate::transcript::{Kind, ToolState, Transcript};
+use crate::transcript::{Kind, Transcript};
 
 /// The folder of the sessions, below `~/.axh`.
 const DIR: &str = "sessions";
@@ -221,14 +221,8 @@ impl Session {
                 Role::System => {}
             }
         }
-        // A call whose answer the conversation does not hold was cut off.
-        for block in &mut transcript.blocks {
-            if let Kind::Tool { state, .. } = &mut block.kind
-                && *state == ToolState::Running
-            {
-                *state = ToolState::Failed;
-            }
-        }
+        // A call whose answer the conversation does not hold was cut off — a subagent's tile too.
+        transcript.settle();
     }
 }
 
@@ -273,6 +267,7 @@ pub fn title_of(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::transcript::ToolState;
 
     #[test]
     fn forks_hang_under_their_session_and_an_orphan_is_a_root() {

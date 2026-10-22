@@ -28,11 +28,12 @@ const ASK_SETTLE: Duration = Duration::from_millis(400);
 
 /// What `/help` says.
 const HELP: &str = "Commands: /model [id] · /provider [id] · /effort [level] · /context [tokens] · /compact · \
-                    /editor [command] · /gate · /meter · /diff [session] · /thinking off|folded|open · /theme [name] · /vim on|off · /scrollback · \
+                    /editor [command] · /gate · /meter · /diff [session] · /agents · /plan · /thinking off|folded|open · /theme [name] · /vim on|off · /scrollback · \
                     /clear · /help · /quit\n\
                     Keys: Enter send · Shift+Enter or Alt+Enter new line · ↑ history · Shift+Tab plan → ask → \
                     build → auto · Esc stop · Ctrl+O tool results · Ctrl+T thinking · Ctrl+B panel · Ctrl+G gate · Ctrl+N meter · Ctrl+R review · \
-                    Ctrl+X E editor · PgUp/PgDn scroll · Ctrl+F search · drag to copy · F2 mouse to the terminal \
+                    Ctrl+X E editor · PgUp/PgDn scroll · Ctrl+F search · drag to copy · a click on a subagent's tile \
+                    opens it · F2 mouse to the terminal \
                     and back · F3 scrollback · Ctrl+C twice quit\n\
                     Also: Ctrl+K every key · @ mentions a file · !cmd runs a command and shows Glut \
                     its output · !!cmd runs it for you alone · a large paste stands as [pasted N lines]\n\
@@ -43,7 +44,7 @@ const HELP: &str = "Commands: /model [id] · /provider [id] · /effort [level] �
                     or doubled · counts · p P · u Ctrl+R), i a I A o O to Insert; Esc in Normal mode stops Glut";
 
 /// The session's commands with what each does, as the list under a typed `/` shows them.
-pub const COMMANDS: [(&str, &str); 21] = [
+pub const COMMANDS: [(&str, &str); 23] = [
     (
         "model",
         "pick a model of the provider in use, or /model <id>",
@@ -76,6 +77,14 @@ pub const COMMANDS: [(&str, &str); 21] = [
     (
         "diff",
         "review what the last turn changed, hunk by hunk; /diff session (Ctrl+R)",
+    ),
+    (
+        "agents",
+        "the session's subagents: open one's own stream (a click on its tile does too)",
+    ),
+    (
+        "plan",
+        "the plan Glut sent from plan mode, whole, with its task list",
     ),
     (
         "resume",
@@ -156,6 +165,15 @@ pub struct App {
     pub meter: crate::meter::Meter,
     /// The review of what turns changed (T17), kept for the session with its decisions.
     pub review: crate::review::Review,
+    /// The subagent whose own stream is open over the session's (T18).
+    pub agent_view: Option<crate::agents::View>,
+    /// The plan `exit_plan` sent last (T19), and its view: the dialog while Glut asks, else only to read.
+    pub plan: Option<crate::plan::Plan>,
+    pub plan_view: Option<crate::plan::Dialog>,
+    /// The plan of an `exit_plan` call whose ask has not come yet (`None` inside: its arguments held none whole).
+    offered_plan: Option<Option<crate::plan::Plan>>,
+    /// How many rows the open view (a subagent's, the plan) had at the last frame, for its page keys.
+    pub overlay_rows: usize,
     /// Ctrl+X was pressed: the next key finishes a chord (Ctrl+X E: the editor).
     chord: bool,
     /// The input, handed to the editor by the main loop (T29), which owns the terminal.
@@ -251,6 +269,11 @@ impl App {
             watch: crate::watch::Watch::default(),
             meter: crate::meter::Meter::default(),
             review: crate::review::Review::default(),
+            agent_view: None,
+            plan: None,
+            plan_view: None,
+            offered_plan: None,
+            overlay_rows: 0,
             chord: false,
             edit_request: None,
             busy: None,
@@ -329,6 +352,7 @@ impl App {
         );
         self.conversation.clone_from(&session.conversation);
         self.todos.clear();
+        self.forget_views();
         self.cost = session.cost;
         self.usage = Usage::default();
         self.meter = crate::meter::Meter::default();
@@ -498,6 +522,15 @@ impl App {
                 {
                     mark.run = Some(run.clone());
                 }
+                // A plan from plan mode (T19) — the session's own: a subagent never leaves plan mode.
+                if let Event::ToolCall {
+                    name, arguments, ..
+                } = &event
+                    && name == glut::planning::EXIT_PLAN
+                {
+                    // Held until its ask comes: a call the harness refuses (too long, from a script) asks nothing.
+                    self.offered_plan = Some(crate::plan::Plan::of_call(arguments));
+                }
                 if let Event::Todo { items, .. } = &event {
                     self.todos.clone_from(items);
                     // The first plan opens the panel, unless the owner closed it once.
@@ -513,6 +546,30 @@ impl App {
             Report::Ask(request, reply) => {
                 // A chord begun before the question came does not take the first key after it.
                 self.chord = false;
+                // The plan's ask opens the plan's dialog (T19) over everything else: what was open goes, so no key
+                // meant for it answers the plan. A plan its event could not carry whole is the ask's line, said so.
+                if request.tool == glut::planning::EXIT_PLAN {
+                    let plan = self.offered_plan.take().flatten().unwrap_or_else(|| crate::plan::Plan {
+                        text: format!(
+                            "{}\n\n*Only the head of the plan reached the screen: its event was cut.*",
+                            request.target
+                        ),
+                        state: crate::plan::State::Waiting,
+                    });
+                    self.plan = Some(plan);
+                    if self.panel.is_none() {
+                        self.panel = Some(true);
+                    }
+                    self.tab = Tab::Plan;
+                    self.plan_view = Some(crate::plan::Dialog::asking());
+                    self.agent_view = None;
+                    self.picker = None;
+                    self.review.open = false;
+                    self.search = None;
+                } else if self.plan_view.as_ref().is_some_and(|view| view.asking) {
+                    // A dialog whose ask is gone answers nothing else.
+                    self.plan_view = None;
+                }
                 self.ask = Some(OpenAsk {
                     request,
                     reply,
@@ -544,6 +601,15 @@ impl App {
                 }
                 // A turn that ended (cancelled, timed out) while asking dropped the question: its card goes too.
                 self.ask = None;
+                if self.plan_view.as_ref().is_some_and(|view| view.asking) {
+                    self.plan_view = None;
+                }
+                self.offered_plan = None;
+                if let Some(plan) = &mut self.plan
+                    && plan.state == crate::plan::State::Waiting
+                {
+                    plan.state = crate::plan::State::Dropped;
+                }
                 self.transcript.settle();
                 self.last_turn = match outcome.reason {
                     FinishReason::Answered => Some(true),
@@ -757,6 +823,34 @@ impl App {
                 }
             }
             TermEvent::Mouse(mouse) => match mouse.kind {
+                // Over a list, the review or the plan the stream below takes no wheel and no click.
+                MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+                    if self.picker.is_some() || self.review.open => {}
+                MouseEventKind::ScrollUp if self.plan_view.is_some() => {
+                    if let Some(view) = &mut self.plan_view {
+                        view.scroll = view.scroll.saturating_sub(WHEEL_LINES);
+                    }
+                }
+                MouseEventKind::ScrollDown if self.plan_view.is_some() => {
+                    if let Some(view) = &mut self.plan_view {
+                        view.scroll = view.scroll.saturating_add(WHEEL_LINES);
+                    }
+                }
+                MouseEventKind::Down(MouseButton::Left) | MouseEventKind::Up(MouseButton::Left)
+                    if self.overlaid() =>
+                {
+                    self.press = None;
+                }
+                MouseEventKind::ScrollUp if self.agent_view.is_some() => {
+                    if let Some(view) = &mut self.agent_view {
+                        view.scroll = view.scroll.saturating_add(WHEEL_LINES);
+                    }
+                }
+                MouseEventKind::ScrollDown if self.agent_view.is_some() => {
+                    if let Some(view) = &mut self.agent_view {
+                        view.scroll = view.scroll.saturating_sub(WHEEL_LINES);
+                    }
+                }
                 MouseEventKind::ScrollUp => self.scroll_by(WHEEL_LINES as isize),
                 MouseEventKind::ScrollDown => self.scroll_by(-(WHEEL_LINES as isize)),
                 MouseEventKind::Down(MouseButton::Left) => {
@@ -786,6 +880,9 @@ impl App {
         if key.code != KeyCode::Esc {
             self.last_esc = None;
         }
+        if self.plan_asks() {
+            return self.on_plan_key(key);
+        }
         if self.ask.is_some() {
             return self.on_ask_key(key);
         }
@@ -795,6 +892,12 @@ impl App {
         if self.review.open {
             let action = self.review.key(key);
             return self.review_do(action);
+        }
+        if self.plan_view.is_some() {
+            return self.on_plan_key(key);
+        }
+        if self.agent_view.is_some() {
+            return self.on_agent_key(key);
         }
         if self.search.is_some() {
             return self.on_search_key(key);
@@ -1190,6 +1293,7 @@ impl App {
                 self.queue.clear();
                 self.conversation.clear();
                 self.todos.clear();
+        self.forget_views();
                 self.last_turn = None;
                 // A new session counts from nothing.
                 self.cost = None;
@@ -1290,6 +1394,14 @@ impl App {
             "panel" => self.show_tab(Tab::Plan),
             "gate" => self.picker = Some(self.gate_picker()),
             "meter" => self.show_tab(Tab::Meter),
+            "agents" => self.agents_picker(),
+            "plan" => match &self.plan {
+                Some(_) => self.plan_view = Some(crate::plan::Dialog::reading()),
+                None => self.transcript.note(
+                    "no plan yet: in plan mode (Shift+Tab) Glut sends its plan for you to approve",
+                    Tone::Quiet,
+                ),
+            },
             "diff" | "review" => self.open_review(match rest {
                 "session" => crate::review::Scope::Session,
                 _ => crate::review::Scope::Turn,
@@ -1769,6 +1881,7 @@ impl App {
         self.search = None;
         self.queue.clear();
         self.todos.clear();
+        self.forget_views();
         self.last_turn = None;
         self.context_used = 0;
         self.scroll = 0;
@@ -2254,6 +2367,9 @@ impl App {
                     Some(Pick::Mention) => self.mention(),
                     Some(Pick::Theme(name)) => self.set_theme(&name),
                     Some(Pick::TakeBack(rules)) => self.take_back_always(&rules),
+                    Some(Pick::Agent(path)) => {
+                        self.agent_view = Some(crate::agents::View::new(path));
+                    }
                     Some(Pick::Shown) => {}
                     Some(Pick::RewindTo(mark)) => self.picker = Some(self.rewind_how(mark)),
                     Some(Pick::Fork(mark)) => self.fork(mark),
@@ -2271,6 +2387,174 @@ impl App {
                 picker.type_char(c)
             }
             _ => {}
+        }
+    }
+
+    /// Whether something stands over the stream: a list, the review, the plan, a subagent's view.
+    fn overlaid(&self) -> bool {
+        self.picker.is_some()
+            || self.review.open
+            || self.plan_view.is_some()
+            || self.agent_view.is_some()
+    }
+
+    /// The views over the stream that name its blocks or the session's plan go with the stream they belong to.
+    fn forget_views(&mut self) {
+        self.agent_view = None;
+        self.plan = None;
+        self.plan_view = None;
+        self.offered_plan = None;
+    }
+
+    /// `/agents`: the session's subagents, each under the one that started it; Enter opens one's stream.
+    fn agents_picker(&mut self) {
+        let found = self.transcript.agents();
+        if found.is_empty() {
+            return self.transcript.note(
+                "no subagent yet: Glut starts one with its task tool for a piece of work of its own",
+                Tone::Quiet,
+            );
+        }
+        let items = found
+            .into_iter()
+            .map(|(path, depth, task, state)| {
+                let state = match state {
+                    crate::transcript::ToolState::Running => "running",
+                    crate::transcript::ToolState::Done => "done",
+                    crate::transcript::ToolState::Failed => "stopped",
+                    crate::transcript::ToolState::Refused => "refused",
+                };
+                Item::plain(
+                    format!(
+                        "{}⬡ {}",
+                        "  ".repeat(depth),
+                        crate::transcript::cut(&crate::transcript::clean(&task), 60)
+                    ),
+                    state,
+                    Pick::Agent(path),
+                )
+            })
+            .collect();
+        self.picker = Some(Picker::new("Subagents — Enter opens one", items, None));
+    }
+
+    /// A key in a subagent's view: scroll, open one of its own subagents, or go back one level.
+    fn on_agent_key(&mut self, key: KeyEvent) {
+        let Some(mut view) = self.agent_view.take() else {
+            return;
+        };
+        let nested = self
+            .transcript
+            .agent(&view.path)
+            .map(|agent| agent.stream.agent_blocks())
+            .unwrap_or_default();
+        match view.key(key, self.overlay_rows, nested.len().min(9)) {
+            crate::agents::Step::None => self.agent_view = Some(view),
+            crate::agents::Step::Back => {
+                view.path.pop();
+                if !view.path.is_empty() {
+                    self.agent_view = Some(crate::agents::View::new(view.path));
+                }
+            }
+            crate::agents::Step::Open(number) => {
+                let mut path = view.path.clone();
+                path.push(nested[number - 1]);
+                self.agent_view = Some(crate::agents::View::new(path));
+            }
+        }
+    }
+
+    /// Whether the question open is the plan's, with its dialog on the screen.
+    pub fn plan_asks(&self) -> bool {
+        self.ask
+            .as_ref()
+            .is_some_and(|open| open.request.tool == glut::planning::EXIT_PLAN)
+            && self.plan_view.as_ref().is_some_and(|view| view.asking)
+    }
+
+    /// The modes the plan's ask offers, as the owner reads them (build, auto, ask).
+    pub fn plan_modes(&self) -> Vec<String> {
+        self.ask
+            .as_ref()
+            .filter(|open| open.request.tool == glut::planning::EXIT_PLAN)
+            .map(|open| {
+                open.request
+                    .scopes
+                    .iter()
+                    .map(|scope| {
+                        Mode::parse(scope).map_or_else(
+                            || crate::transcript::clean(scope),
+                            |mode| session::mode_label(mode).to_owned(),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// A key in the plan's view: while Glut asks it approves (into a mode) or sends the plan back, with a note that
+    /// reaches Glut before its next step; else it only scrolls and closes. Keys of the first moment after the ask came
+    /// up answer nothing, as on every ask.
+    fn on_plan_key(&mut self, key: KeyEvent) {
+        let modes = self.plan_modes();
+        // As on every ask: no held key, no Ctrl or Alt, nothing in the first moment answers.
+        if self.plan_asks()
+            && (key.kind == KeyEventKind::Repeat
+                || key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                || self
+                    .ask
+                    .as_ref()
+                    .is_some_and(|open| open.opened.elapsed() < ASK_SETTLE))
+        {
+            return;
+        }
+        let Some(view) = &mut self.plan_view else {
+            return;
+        };
+        let page = self.overlay_rows.saturating_sub(4);
+        let choice = view.key(key, modes.len(), page);
+        use crate::plan::{Choice, State};
+        match choice {
+            Choice::None => {}
+            Choice::Close => self.plan_view = None,
+            Choice::Approve(at) => {
+                let Some(open) = self.ask.take() else { return };
+                let answer = if at == 0 {
+                    Answer::Allow
+                } else {
+                    Answer::AllowWithin(at as u8)
+                };
+                let _ = open.reply.send(answer);
+                self.plan_view = None;
+                let mode = modes.get(at).cloned().unwrap_or_else(|| "build".into());
+                if mode == "auto" && !session::sandboxed(&self.parts) {
+                    self.transcript.note(
+                        "auto without a sandbox: commands run WITHOUT one here; only the rules and the question \
+                         before a heavy command hold them",
+                        Tone::Fault,
+                    );
+                }
+                if let Some(plan) = &mut self.plan {
+                    plan.state = State::Approved(mode);
+                }
+            }
+            Choice::SendBack(note) => {
+                let Some(open) = self.ask.take() else { return };
+                let _ = open.reply.send(Answer::Deny);
+                self.plan_view = None;
+                if let Some(note) = &note {
+                    // The note joins the conversation as the owner's word right after the plan's answer.
+                    match &self.steering {
+                        Some(inbox) => inbox.send(format!("About your plan: {note}")),
+                        None => self.queue.push(format!("About your plan: {note}")),
+                    }
+                }
+                if let Some(plan) = &mut self.plan {
+                    plan.state = State::SentBack(note);
+                }
+            }
         }
     }
 
@@ -2310,6 +2594,13 @@ impl App {
     fn interrupt(&mut self) {
         if let Some(open) = self.ask.take() {
             let _ = open.reply.send(Answer::Deny);
+        }
+        // The plan's dialog answered no with it: it goes, and the plan stands as sent back.
+        if self.plan_view.as_ref().is_some_and(|view| view.asking) {
+            self.plan_view = None;
+            if let Some(plan) = &mut self.plan {
+                plan.state = crate::plan::State::SentBack(None);
+            }
         }
         if self.picker.take().is_some() {
             return;
@@ -2405,12 +2696,20 @@ impl App {
             }
             _ => {
                 self.selection = None;
-                if let Some((_, block, _)) = self
+                if let Some(&(_, block, _)) = self
                     .rows
                     .iter()
                     .find(|(at, _, line)| *at == row && *line == press.line)
                 {
-                    self.transcript.toggle(*block);
+                    // A subagent's tile opens its own stream; any other block folds or unfolds.
+                    if matches!(
+                        self.transcript.blocks.get(block).map(|b| &b.kind),
+                        Some(crate::transcript::Kind::Agent(_))
+                    ) {
+                        self.agent_view = Some(crate::agents::View::new(vec![block]));
+                    } else {
+                        self.transcript.toggle(block);
+                    }
                 }
             }
         }
@@ -3402,6 +3701,243 @@ mod tests {
             app.transcript.blocks.last().unwrap().kind,
             crate::transcript::Kind::Tool { unfolded: true, .. }
         ));
+    }
+
+    /// A subagent's run as the harness reports it: the parent's `task` call, the subagent's steps wrapped once — and,
+    /// when `nested`, a subagent of its own inside — then the parent's result.
+    fn subagent_events(nested: bool) -> Vec<glut::Event> {
+        use glut::Event;
+        let sub = |event: Event| Event::Sub {
+            depth: 1,
+            event: Box::new(event),
+        };
+        let mut events = vec![Event::ToolCall {
+            turn: 1,
+            id: "t1".into(),
+            name: "task".into(),
+            arguments: r#"{"description":"find the callers","prompt":"look"}"#.into(),
+        }];
+        events.push(sub(Event::ToolCall {
+            turn: 1,
+            id: "s1".into(),
+            name: "read_file".into(),
+            arguments: r#"{"path":"run.rs"}"#.into(),
+        }));
+        events.push(sub(Event::Usage {
+            turn: 1,
+            input_tokens: 1200,
+            cached_input_tokens: 0,
+            output_tokens: 300,
+        }));
+        if nested {
+            events.push(sub(Event::ToolCall {
+                turn: 2,
+                id: "t2".into(),
+                name: "task".into(),
+                arguments: r#"{"description":"deeper","prompt":"look deeper"}"#.into(),
+            }));
+            events.push(sub(Event::Sub {
+                depth: 2,
+                event: Box::new(Event::AssistantText {
+                    turn: 1,
+                    text: "found it deep".into(),
+                }),
+            }));
+            events.push(sub(Event::ToolResult {
+                turn: 2,
+                id: "t2".into(),
+                name: "task".into(),
+                ok: true,
+                output: "found it deep".into(),
+                truncated: false,
+            }));
+        }
+        events.push(sub(Event::AssistantText {
+            turn: 3,
+            text: "two callers".into(),
+        }));
+        events.push(Event::ToolResult {
+            turn: 1,
+            id: "t1".into(),
+            name: "task".into(),
+            ok: true,
+            output: "two callers".into(),
+            truncated: false,
+        });
+        events
+    }
+
+    #[test]
+    fn a_click_on_a_subagents_tile_opens_its_stream_and_a_number_its_own_subagent() {
+        let (mut app, _reports) = app();
+        for event in subagent_events(true) {
+            app.on_report(Report::Event(event));
+        }
+        assert_eq!(
+            app.transcript.blocks.len(),
+            1,
+            "the subagent's steps are its own, not the stream's"
+        );
+        drawn(&mut app);
+        let (row, _, _) = *app.rows.last().unwrap();
+        app.on_terminal(mouse(MouseEventKind::Down(MouseButton::Left), 4, row));
+        app.on_terminal(mouse(MouseEventKind::Up(MouseButton::Left), 4, row));
+        assert_eq!(app.agent_view.as_ref().unwrap().path, [0]);
+        let screen = format!("{:?}", drawn(&mut app).backend().buffer());
+        assert!(screen.contains("Subagent · find the callers · done"));
+        assert!(screen.contains("read_file"));
+        app.on_terminal(key(KeyCode::Char('1'), KeyModifiers::NONE));
+        assert_eq!(app.agent_view.as_ref().unwrap().path.len(), 2);
+        let screen = format!("{:?}", drawn(&mut app).backend().buffer());
+        assert!(screen.contains("found it deep"));
+        app.on_terminal(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(app.agent_view.as_ref().unwrap().path, [0]);
+        app.on_terminal(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.agent_view.is_none());
+        // `/agents` lists both, the nested one under its parent.
+        typed(&mut app, "/agents");
+        let shown: Vec<String> = app
+            .picker
+            .as_ref()
+            .unwrap()
+            .shown()
+            .iter()
+            .map(|item| item.label.clone())
+            .collect();
+        assert_eq!(shown, ["⬡ find the callers", "  ⬡ deeper"]);
+    }
+
+    /// The plan's ask as the harness sends it, after the call that carried the whole plan.
+    fn plan_asked(app: &mut App) -> oneshot::Receiver<Answer> {
+        app.on_report(Report::Event(glut::Event::ToolCall {
+            turn: 1,
+            id: "p1".into(),
+            name: glut::planning::EXIT_PLAN.into(),
+            arguments: r#"{"plan":"1. change a.rs\n2. test it"}"#.into(),
+        }));
+        let (reply, answer) = oneshot::channel();
+        app.on_report(Report::Ask(
+            AskRequest {
+                tool: glut::planning::EXIT_PLAN.into(),
+                target: "leave plan mode and carry out: 1. change a.rs …".into(),
+                scopes: vec!["accept_edits".into(), "auto".into(), "default".into()],
+            },
+            reply,
+        ));
+        if let Some(open) = &mut app.ask {
+            open.opened = Instant::now() - ASK_SETTLE * 2;
+        }
+        answer
+    }
+
+    #[test]
+    fn the_plans_dialog_shows_the_whole_plan_and_approves_into_the_mode_picked() {
+        let (mut app, _reports) = app();
+        let mut answer = plan_asked(&mut app);
+        assert!(app.plan_view.as_ref().is_some_and(|view| view.asking));
+        assert_eq!(app.plan_modes(), ["build", "auto", "ask"]);
+        let screen = format!("{:?}", drawn(&mut app).backend().buffer());
+        assert!(
+            screen.contains("2. test it"),
+            "the whole plan, not the ask's line"
+        );
+        assert!(!screen.contains("Glut asks"), "no card below the dialog");
+        app.on_terminal(key(KeyCode::Char('2'), KeyModifiers::NONE));
+        assert_eq!(answer.try_recv().unwrap(), Answer::AllowWithin(1));
+        assert!(app.ask.is_none() && app.plan_view.is_none());
+        assert_eq!(
+            app.plan.as_ref().unwrap().state,
+            crate::plan::State::Approved("auto".into())
+        );
+        // `/plan` reads it again; it answers nothing.
+        typed(&mut app, "/plan");
+        assert!(app.plan_view.as_ref().is_some_and(|view| !view.asking));
+        app.on_terminal(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.plan_view.is_none());
+    }
+
+    #[test]
+    fn ctrl_c_on_the_plan_refuses_it_and_the_next_question_is_a_card_again() {
+        let (mut app, _reports) = app();
+        let mut answer = plan_asked(&mut app);
+        app.on_terminal(key(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert_eq!(answer.try_recv().unwrap(), Answer::Deny);
+        assert!(app.plan_view.is_none());
+        assert_eq!(
+            app.plan.as_ref().unwrap().state,
+            crate::plan::State::SentBack(None)
+        );
+        // The next ordinary question is answered on its own card, never through a plan dialog.
+        let mut next = asked(&mut app);
+        assert!(!app.plan_asks());
+        app.on_terminal(key(KeyCode::Char('n'), KeyModifiers::NONE));
+        assert_eq!(next.try_recv().unwrap(), Answer::Deny);
+    }
+
+    #[test]
+    fn the_plans_ask_closes_what_was_open_and_takes_no_ctrl_or_alt_key() {
+        let (mut app, _reports) = app();
+        app.picker = Some(palette());
+        app.review.open = true;
+        let mut answer = plan_asked(&mut app);
+        assert!(
+            app.picker.is_none() && !app.review.open,
+            "no key meant for them answers the plan"
+        );
+        app.on_terminal(key(KeyCode::Char('y'), KeyModifiers::CONTROL));
+        app.on_terminal(key(KeyCode::Char('2'), KeyModifiers::ALT));
+        assert!(answer.try_recv().is_err());
+        assert!(app.plan_asks());
+    }
+
+    #[test]
+    fn a_plan_its_event_could_not_carry_whole_is_the_asks_line_said_so() {
+        let (mut app, _reports) = app();
+        app.on_report(Report::Event(glut::Event::ToolCall {
+            turn: 1,
+            id: "p1".into(),
+            name: glut::planning::EXIT_PLAN.into(),
+            arguments: r#"{"plan":"cut of"#.into(),
+        }));
+        assert!(app.plan.is_none(), "no plan before its ask");
+        let (reply, _answer) = oneshot::channel();
+        app.on_report(Report::Ask(
+            AskRequest {
+                tool: glut::planning::EXIT_PLAN.into(),
+                target: "leave plan mode and carry out: cut of".into(),
+                scopes: vec!["accept_edits".into()],
+            },
+            reply,
+        ));
+        let plan = app.plan.as_ref().unwrap();
+        assert!(
+            plan.text
+                .starts_with("leave plan mode and carry out: cut of")
+        );
+        assert!(plan.text.contains("Only the head of the plan"));
+    }
+
+    #[test]
+    fn a_plan_sent_back_takes_the_owners_note_to_glut_before_its_next_step() {
+        let (mut app, _reports) = app();
+        let inbox = glut::Inbox::default();
+        app.steering = Some(inbox.clone());
+        let mut answer = plan_asked(&mut app);
+        app.on_terminal(key(KeyCode::Char('n'), KeyModifiers::NONE));
+        assert!(
+            app.ask.is_some(),
+            "n opens the note, it answers nothing yet"
+        );
+        for c in "add a test first".chars() {
+            app.on_terminal(key(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(answer.try_recv().unwrap(), Answer::Deny);
+        assert_eq!(inbox.waiting(), ["About your plan: add a test first"]);
+        assert_eq!(
+            app.plan.as_ref().unwrap().state,
+            crate::plan::State::SentBack(Some("add a test first".into()))
+        );
     }
 
     fn typed(app: &mut App, text: &str) {

@@ -214,13 +214,20 @@ impl Event {
     }
 
     /// A tool call for an event: its arguments cut to [`EVENT_RESULT_CHARS`] (a whole file's content in a
-    /// `write_file` call is for the tool, not for the event).
+    /// `write_file` call is for the tool, not for the event) — but an `exit_plan` call's whole, so the owner can read
+    /// the plan before deciding (its plan is bounded by [`crate::planning::MAX_PLAN_CHARS`]; JSON escapes may double
+    /// it).
     pub fn tool_call(turn: u32, id: &str, name: &str, arguments: &str) -> Self {
+        let most = if name == crate::planning::EXIT_PLAN {
+            2 * crate::planning::MAX_PLAN_CHARS + 64
+        } else {
+            EVENT_RESULT_CHARS
+        };
         Event::ToolCall {
             turn,
             id: id.to_owned(),
             name: name.to_owned(),
-            arguments: arguments.chars().take(EVENT_RESULT_CHARS).collect(),
+            arguments: arguments.chars().take(most).collect(),
         }
     }
 

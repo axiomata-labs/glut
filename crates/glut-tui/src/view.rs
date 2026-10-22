@@ -31,7 +31,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let input_width = usize::from(area.width.saturating_sub(2));
     let (rows, cursor) = app.input.layout(input_width);
     let input_height = rows.len().clamp(1, INPUT_ROWS) as u16 + 1;
-    let ask_rows = app.ask.as_ref().map(|open| {
+    // The plan's ask is its dialog over the stream (T19), not a card below it.
+    let plan_asking = app.plan_asks();
+    let ask_rows = app.ask.as_ref().filter(|_| !plan_asking).map(|open| {
         let most = usize::from(area.height / 3).clamp(3, ASK_ROWS);
         asked_rows(
             &open.request.target,
@@ -42,7 +44,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // The target, then a row per choice: once, each scope, refuse — at least as tall as the waiting Glimm beside it.
     let ask_height = ask_rows
         .as_ref()
-        .zip(app.ask.as_ref())
+        .zip(app.ask.as_ref().filter(|_| !plan_asking))
         .map_or(0, |(rows, open)| {
             let inner = (rows.len() + 2 + open.request.scopes.len().min(9)) as u16;
             let glimm = if ask_glimm_width(area.width) > 0 {
@@ -109,6 +111,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         draw_picker(frame, app, stream);
     } else if app.review.open {
         draw_review(frame, app, stream);
+    } else if app.plan_view.is_some() {
+        draw_plan(frame, app, stream);
+    } else if app.agent_view.is_some() {
+        draw_agent(frame, app, stream);
     } else {
         draw_suggestions(frame, app, stream);
     }
@@ -137,6 +143,87 @@ fn draw_review(frame: &mut Frame, app: &mut App, area: Rect) {
     let lines = app
         .review
         .lines(usize::from(inner.width), usize::from(inner.height));
+    frame.render_widget(Clear, area);
+    frame.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+/// The plan (T19) over the stream: while Glut asks, framed in the glow with the choices below it; else only to read.
+fn draw_plan(frame: &mut Frame, app: &mut App, area: Rect) {
+    // Drawn on any screen: while it asks, it is the only place the question shows.
+    if area.width < 4 || area.height < 3 {
+        return;
+    }
+    let asking = app.plan_view.as_ref().is_some_and(|view| view.asking);
+    let style = if asking {
+        theme::glow()
+    } else {
+        theme::quiet()
+    };
+    let title = if asking {
+        " Glut's plan — approve it, or send it back "
+    } else {
+        " Glut's plan "
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(style)
+        .title(Span::styled(title, style));
+    let inner = block.inner(area);
+    app.overlay_rows = usize::from(inner.height);
+    let modes = app.plan_modes();
+    let auto_unsandboxed = !session::sandboxed(&app.parts);
+    let (Some(plan), Some(view)) = (&app.plan, &mut app.plan_view) else {
+        return;
+    };
+    let lines = crate::plan::lines(
+        plan,
+        &app.todos,
+        view,
+        &modes,
+        auto_unsandboxed,
+        usize::from(inner.width),
+        usize::from(inner.height),
+    );
+    frame.render_widget(Clear, area);
+    frame.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+/// A subagent's own stream (T18) over the session's: the frame glows while it works.
+fn draw_agent(frame: &mut Frame, app: &mut App, area: Rect) {
+    if area.width < 20 || area.height < 6 {
+        return;
+    }
+    let thinking = app.transcript.thinking;
+    let tick = app.frame;
+    let Some(mut view) = app.agent_view.take() else {
+        return;
+    };
+    let depth = view.path.len();
+    let Some(agent) = app.transcript.agent(&view.path) else {
+        // Its stream is gone (a rewind, a new session): nothing to show.
+        return;
+    };
+    let style = if agent.state == crate::transcript::ToolState::Running {
+        theme::glow()
+    } else {
+        theme::quiet()
+    };
+    let title = crate::agents::title(agent, depth, usize::from(area.width).saturating_sub(4));
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(style)
+        .title(Span::styled(title, style));
+    let inner = block.inner(area);
+    let lines = crate::agents::lines(
+        agent,
+        &mut view,
+        inner.width.saturating_sub(1).max(8),
+        usize::from(inner.height),
+        thinking,
+        tick,
+    );
+    app.overlay_rows = usize::from(inner.height);
+    app.agent_view = Some(view);
     frame.render_widget(Clear, area);
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
@@ -607,6 +694,8 @@ fn draw_keys(frame: &mut Frame, app: &App, area: Rect) {
         }
     } else if app.search.is_some() {
         "Enter or ↑ the match above · Shift+Enter or ↓ the one below · Esc close".to_owned()
+    } else if app.plan_asks() {
+        "Glut waits for your word on its plan · Ctrl+C refuse and clear".to_owned()
     } else if app.ask.is_some() && scopes > 0 {
         let keys = if scopes == 1 {
             "1".to_owned()
@@ -616,6 +705,10 @@ fn draw_keys(frame: &mut Frame, app: &App, area: Rect) {
         format!("y once · {keys} for this session · n refuse · Ctrl+C refuse and clear")
     } else if app.ask.is_some() {
         "y once · n refuse · Ctrl+C refuse and clear".to_owned()
+    } else if app.plan_view.is_some() {
+        "↑↓ PgUp PgDn scroll · Esc closes".to_owned()
+    } else if app.agent_view.is_some() {
+        "a subagent's own stream · ↑↓ scroll · a number opens its subagent · Esc back".to_owned()
     } else if app.picker.is_some() {
         "type to filter · ↑↓ choose · Enter take · Esc close".to_owned()
     } else if app.working() {
@@ -703,13 +796,22 @@ fn draw_panel(frame: &mut Frame, app: &App, area: Rect) {
         frame.render_widget(Paragraph::new(lines).block(block), area);
         return;
     }
-    if app.todos.is_empty() {
+    if let Some(plan) = &app.plan {
         lines.push(Line::default());
-        for row in wrap(
-            "No plan yet. For work of several steps Glut writes its task list here, and ticks it off as it goes.",
-            width,
-        ) {
-            lines.push(Line::from(Span::styled(format!(" {row}"), theme::quiet())));
+        // The plan takes at most half of what is left; the task list and the hint keep the rest.
+        let most = usize::from(area.height).saturating_sub(lines.len() + 4) / 2;
+        lines.extend(crate::plan::head(plan, width + 2, most.max(2)));
+    }
+    if app.todos.is_empty() {
+        // With a plan above, no hint for a list that may never come.
+        if app.plan.is_none() {
+            lines.push(Line::default());
+            for row in wrap(
+                "No plan yet. For work of several steps Glut writes its task list here, and ticks it off as it goes.",
+                width,
+            ) {
+                lines.push(Line::from(Span::styled(format!(" {row}"), theme::quiet())));
+            }
         }
     } else {
         let done = app
@@ -717,32 +819,13 @@ fn draw_panel(frame: &mut Frame, app: &App, area: Rect) {
             .iter()
             .filter(|item| item.status == TodoStatus::Done)
             .count();
+        lines.push(Line::default());
         lines.push(Line::from(Span::styled(
             format!(" {done} of {} done", app.todos.len()),
             theme::quiet(),
         )));
         lines.push(Line::default());
-        for item in &app.todos {
-            let (mark, style) = match item.status {
-                TodoStatus::Done => ("✓", theme::quiet()),
-                TodoStatus::InProgress => ("◆", theme::glow()),
-                TodoStatus::Pending => ("○", Style::default()),
-            };
-            for (at, row) in wrap(&item.text, width.saturating_sub(2))
-                .into_iter()
-                .enumerate()
-            {
-                let lead = if at == 0 {
-                    format!(" {mark} ")
-                } else {
-                    "   ".to_owned()
-                };
-                lines.push(Line::from(vec![
-                    Span::styled(lead, style),
-                    Span::styled(row, style),
-                ]));
-            }
-        }
+        lines.extend(crate::plan::todo_lines(&app.todos, width + 1));
     }
     lines.push(Line::default());
     lines.push(Line::from(Span::styled(

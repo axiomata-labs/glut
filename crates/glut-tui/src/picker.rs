@@ -44,6 +44,8 @@ pub enum Pick {
     TakeBack(Vec<String>),
     /// An entry only to be read (a rule of the settings in `/gate`): picking it closes the list.
     Shown,
+    /// `/agents`: a subagent's view, by its path through the streams.
+    Agent(Vec<usize>),
     /// Rewind: how far — the conversation, the files, or both.
     Rewind {
         mark: usize,

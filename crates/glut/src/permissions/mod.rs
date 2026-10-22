@@ -1086,13 +1086,19 @@ impl Gate {
     /// Asks the owner about something that is no single call (Glut 2: leaving Plan mode with a plan): one question at
     /// a time like every ask, refused without asking when nobody is there.
     pub async fn ask_owner(&self, tool: &str, target: &str) -> Answer {
+        self.ask_owner_within(tool, target, Vec::new()).await
+    }
+
+    /// [`Self::ask_owner`] with choices beyond yes and no: [`Answer::AllowWithin`] picks one of `scopes` (`exit_plan`
+    /// offers the modes to leave Plan into).
+    pub async fn ask_owner_within(&self, tool: &str, target: &str, scopes: Vec<String>) -> Answer {
         if !self.asker.present() {
             return Answer::Deny;
         }
         let request = AskRequest {
             tool: tool.to_owned(),
             target: target.to_owned(),
-            scopes: Vec::new(),
+            scopes,
         };
         let _one_at_a_time = self.asking.lock().await;
         self.asker.ask(&request).await

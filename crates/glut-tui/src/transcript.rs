@@ -1,6 +1,9 @@
 //! The stream (T2, T6): the session as blocks — the owner's messages, Glut's answers as they stream, one line per tool
 //! call that unfolds, notes. Each block is wrapped to the screen's width once and kept until it changes, so a long
 //! session costs only the blocks that are on the screen.
+//!
+//! A subagent (`task`, T18) is a tile in its parent's stream — its task, its live line, its calls and tokens — and
+//! keeps a stream of its own that the owner opens as a view; a subagent's subagents are tiles in that stream.
 
 use glut::Event;
 use ratatui::style::{Modifier, Style};
@@ -8,6 +11,9 @@ use ratatui::text::{Line, Span};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::theme;
+
+/// The tool that starts a subagent.
+const TASK: &str = "task";
 
 /// How many lines of a tool's result an unfolded tool line shows.
 const RESULT_LINES: usize = 40;
@@ -48,6 +54,8 @@ pub enum Kind {
         text: String,
         tone: Tone,
     },
+    /// A subagent (T18): a tile here, its own stream inside.
+    Agent(Box<Agent>),
     /// The model's thinking (T8), shown as the owner chose: hidden, a folded line, or open.
     Thinking {
         text: String,
@@ -55,6 +63,78 @@ pub enum Kind {
         /// Opened (or, in the open mode, folded) by hand.
         flipped: bool,
     },
+}
+
+/// A subagent the parent started with `task`: what the tile shows and the stream its view shows.
+#[derive(Debug, Clone)]
+pub struct Agent {
+    /// The parent's `task` call.
+    pub id: String,
+    /// What it does, as the parent's model labelled it.
+    pub task: String,
+    pub state: ToolState,
+    /// The gate's word on the `task` call when it was not a plain allow.
+    pub gate: Option<String>,
+    /// What it answered, or why it stopped.
+    pub answer: String,
+    /// Its own stream, its subagents as tiles in it.
+    pub stream: Transcript,
+    /// Its own tool calls, its subagents' not counted.
+    pub calls: u32,
+    /// Tokens of every model call in it, its subagents' included.
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    /// The last thing it did, for the tile.
+    pub live: String,
+}
+
+impl Agent {
+    /// Takes in one event the subagent reported (unwrapped once: its own events at depth 0, its subagents' still
+    /// wrapped).
+    fn take(&mut self, event: &Event) {
+        if let Event::Usage {
+            input_tokens,
+            output_tokens,
+            ..
+        } = innermost(event)
+        {
+            self.input_tokens += input_tokens;
+            self.output_tokens += output_tokens;
+        }
+        match event {
+            Event::ToolCall {
+                name, arguments, ..
+            } => {
+                self.calls += 1;
+                self.live = format!("{name} {}", target_of(arguments));
+            }
+            Event::TextDelta { .. } => "writing…".clone_into(&mut self.live),
+            Event::ReasoningDelta { .. } => "thinking…".clone_into(&mut self.live),
+            Event::AssistantText { text, .. } => {
+                if let Some(line) = text.lines().find(|line| !line.trim().is_empty()) {
+                    self.live = line.trim().to_owned();
+                }
+            }
+            Event::Sub { event, .. } => {
+                if let Event::ToolCall {
+                    name, arguments, ..
+                } = innermost(event)
+                {
+                    self.live = format!("↳ {name} {}", target_of(arguments));
+                }
+            }
+            _ => {}
+        }
+        self.stream.take(event);
+    }
+}
+
+/// The event inside every wrapping of nested runs.
+fn innermost(event: &Event) -> &Event {
+    match event {
+        Event::Sub { event, .. } => innermost(event),
+        other => other,
+    }
 }
 
 /// How much of the model's thinking the stream shows (T8; `/thinking`, Ctrl+T).
@@ -124,7 +204,7 @@ impl Block {
 }
 
 /// The whole stream.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Transcript {
     pub blocks: Vec<Block>,
     /// How the model's thinking is shown.
@@ -171,6 +251,24 @@ impl Transcript {
                 // A streamed answer (or thinking) that stopped for a tool call is complete: the call comes after it.
                 self.close_answer();
                 self.close_thinking();
+                if name == TASK && depth == 0 {
+                    self.push(Kind::Agent(Box::new(Agent {
+                        id: id.clone(),
+                        task: target_of(arguments),
+                        state: ToolState::Running,
+                        gate: None,
+                        answer: String::new(),
+                        stream: Transcript {
+                            thinking: self.thinking,
+                            ..Transcript::default()
+                        },
+                        calls: 0,
+                        input_tokens: 0,
+                        output_tokens: 0,
+                        live: "starting…".into(),
+                    })));
+                    return;
+                }
                 self.push(Kind::Tool {
                     id: id.clone(),
                     name: name.clone(),
@@ -189,7 +287,7 @@ impl Transcript {
                 ..
             } => {
                 if let Some(block) = self.tool(id) {
-                    if let Kind::Tool { gate, state, .. } = &mut block.kind {
+                    if let Some((state, gate)) = judged(&mut block.kind) {
                         if !allowed {
                             *state = ToolState::Refused;
                             *gate = Some(reason.clone());
@@ -202,12 +300,21 @@ impl Transcript {
             }
             Event::ToolResult { id, ok, output, .. } => {
                 if let Some(block) = self.tool(id) {
-                    if let Kind::Tool {
-                        state,
-                        output: kept,
-                        ..
-                    } = &mut block.kind
-                    {
+                    let kept = match &mut block.kind {
+                        Kind::Tool {
+                            state,
+                            output: kept,
+                            ..
+                        } => Some((state, kept)),
+                        Kind::Agent(agent) => {
+                            // What still ran inside it ended with it.
+                            agent.stream.settle();
+                            agent.live.clear();
+                            Some((&mut agent.state, &mut agent.answer))
+                        }
+                        _ => None,
+                    };
+                    if let Some((state, kept)) = kept {
                         if *state != ToolState::Refused {
                             *state = if *ok {
                                 ToolState::Done
@@ -234,12 +341,77 @@ impl Transcript {
             ),
             Event::Error { message } if depth == 0 => self.note(message.clone(), Tone::Fault),
             Event::ModeChanged { mode, .. } => self.note(format!("now in {mode} mode"), Tone::Fine),
+            // A subagent's step goes to its tile; one with no tile to go to (none runs) stands indented here.
             Event::Sub {
                 depth: inner,
                 event,
-            } => self.take_at(event, *inner),
+            } if depth > 0 || !self.hand_to_agent(event) => self.take_at(event, *inner),
             _ => {}
         }
+    }
+
+    /// A subagent's event to the subagent that runs now: the last tile still running (they run one at a time).
+    fn hand_to_agent(&mut self, event: &Event) -> bool {
+        let Some(block) = self.blocks.iter_mut().rev().find(
+            |block| matches!(&block.kind, Kind::Agent(agent) if agent.state == ToolState::Running),
+        ) else {
+            return false;
+        };
+        if let Kind::Agent(agent) = &mut block.kind {
+            agent.take(event);
+        }
+        block.touch();
+        true
+    }
+
+    /// The subagent at `path` — the block's index in this stream, then in its stream, and so on.
+    pub fn agent(&mut self, path: &[usize]) -> Option<&mut Agent> {
+        let (first, rest) = path.split_first()?;
+        let Kind::Agent(agent) = &mut self.blocks.get_mut(*first)?.kind else {
+            return None;
+        };
+        if rest.is_empty() {
+            Some(agent)
+        } else {
+            agent.stream.agent(rest)
+        }
+    }
+
+    /// Every subagent of the stream, each under its parent: its path, how deep it is, its task and state.
+    pub fn agents(&self) -> Vec<(Vec<usize>, usize, String, ToolState)> {
+        let mut found = Vec::new();
+        self.gather(&mut Vec::new(), &mut found);
+        found
+    }
+
+    fn gather(
+        &self,
+        path: &mut Vec<usize>,
+        found: &mut Vec<(Vec<usize>, usize, String, ToolState)>,
+    ) {
+        for (at, block) in self.blocks.iter().enumerate() {
+            if let Kind::Agent(agent) = &block.kind {
+                path.push(at);
+                found.push((
+                    path.clone(),
+                    path.len() - 1,
+                    agent.task.clone(),
+                    agent.state,
+                ));
+                agent.stream.gather(path, found);
+                path.pop();
+            }
+        }
+    }
+
+    /// The indexes of the blocks that are subagents, in order.
+    pub fn agent_blocks(&self) -> Vec<usize> {
+        self.blocks
+            .iter()
+            .enumerate()
+            .filter(|(_, block)| matches!(block.kind, Kind::Agent(_)))
+            .map(|(at, _)| at)
+            .collect()
     }
 
     /// A piece of the model's thinking as it streams.
@@ -337,11 +509,18 @@ impl Transcript {
         self.close_answer();
         self.close_thinking();
         for block in &mut self.blocks {
-            if let Kind::Tool { state, .. } = &mut block.kind
-                && *state == ToolState::Running
-            {
-                *state = ToolState::Failed;
-                block.touch();
+            match &mut block.kind {
+                Kind::Tool { state, .. } if *state == ToolState::Running => {
+                    *state = ToolState::Failed;
+                    block.touch();
+                }
+                Kind::Agent(agent) if agent.state == ToolState::Running => {
+                    agent.state = ToolState::Failed;
+                    agent.stream.settle();
+                    agent.live.clear();
+                    block.touch();
+                }
+                _ => {}
             }
         }
     }
@@ -350,12 +529,19 @@ impl Transcript {
         self.blocks
             .iter_mut()
             .rev()
-            .find(|block| matches!(&block.kind, Kind::Tool { id, .. } if id == wanted))
+            .find(|block| match &block.kind {
+                Kind::Tool { id, .. } => id == wanted,
+                Kind::Agent(agent) => agent.id == wanted,
+                _ => false,
+            })
     }
 
     /// Every block laid out anew at its next frame: its colours changed (`/theme`).
     pub fn touch_all(&mut self) {
         for block in &mut self.blocks {
+            if let Kind::Agent(agent) = &mut block.kind {
+                agent.stream.touch_all();
+            }
             block.touch();
         }
     }
@@ -389,6 +575,15 @@ impl Transcript {
             }
             block.touch();
         }
+    }
+}
+
+/// The state and the gate's word of a tool line or a tile.
+fn judged(kind: &mut Kind) -> Option<(&mut ToolState, &mut Option<String>)> {
+    match kind {
+        Kind::Tool { state, gate, .. } => Some((state, gate)),
+        Kind::Agent(agent) => Some((&mut agent.state, &mut agent.gate)),
+        _ => None,
     }
 }
 
@@ -578,6 +773,7 @@ fn render(kind: &Kind, width: u16, thinking: Thinking, frame: usize) -> Vec<Line
                 }
             }
         }
+        Kind::Agent(agent) => tile(agent, width, &mut lines),
         Kind::Note { text, tone } => {
             let style = match tone {
                 Tone::Quiet => theme::quiet(),
@@ -593,6 +789,91 @@ fn render(kind: &Kind, width: u16, thinking: Thinking, frame: usize) -> Vec<Line
         }
     }
     lines
+}
+
+/// A subagent as a tile of three rows: its task and state on the frame, what it does (or answered) inside, its calls
+/// and tokens below. The frame glows while it works, as everything that lives does.
+fn tile(agent: &Agent, width: usize, lines: &mut Vec<Line<'static>>) {
+    let (state, style) = match agent.state {
+        ToolState::Running => ("running", theme::glow()),
+        ToolState::Done => ("done", theme::quiet()),
+        ToolState::Failed => ("stopped", Style::default().fg(theme::c().fault)),
+        ToolState::Refused => ("refused", Style::default().fg(theme::c().fault)),
+    };
+    // Inside the side rows' "│ " and " │".
+    let inner = width.saturating_sub(4).max(4);
+    let state = match &agent.gate {
+        Some(gate) if agent.state == ToolState::Refused => format!("{state}: {}", clean(gate)),
+        _ => state.to_owned(),
+    };
+    // Too narrow for a frame: one line.
+    if width < 24 {
+        lines.push(Line::default());
+        lines.push(Line::from(Span::styled(
+            cut(&format!("⬡ {} · {state}", clean(&agent.task)), width),
+            style,
+        )));
+        return;
+    }
+    let state = cut(&state, inner / 2);
+    // The top row: "╭─ ⬡ ", the task, " ─… ", the state, " ─╮" — ten cells of frame and at least one of line.
+    let task = cut(
+        &clean(&agent.task),
+        width.saturating_sub(state.width() + 11).max(1),
+    );
+    let fill = width.saturating_sub(task.width() + state.width() + 10);
+    lines.push(Line::default());
+    lines.push(Line::from(vec![
+        Span::styled("╭─ ", style),
+        Span::styled("⬡ ", style),
+        Span::styled(task, theme::strong()),
+        Span::styled(format!(" {} ", "─".repeat(fill)), style),
+        Span::styled(state, style),
+        Span::styled(" ─╮", style),
+    ]));
+    let live = if agent.live.is_empty() {
+        agent
+            .answer
+            .lines()
+            .find(|line| !line.trim().is_empty())
+            .unwrap_or("")
+            .trim()
+            .to_owned()
+    } else {
+        agent.live.clone()
+    };
+    let live = cut(&clean(&live).replace('\n', " "), inner);
+    let pad = inner.saturating_sub(live.width());
+    lines.push(Line::from(vec![
+        Span::styled("│ ", style),
+        Span::styled(live, theme::quiet()),
+        Span::raw(" ".repeat(pad)),
+        Span::styled(" │", style),
+    ]));
+    let calls = if agent.calls == 1 { "call" } else { "calls" };
+    let stats = cut(
+        &format!(
+            "{} {calls} · {} in · {} out",
+            agent.calls,
+            tokens_short(agent.input_tokens as usize),
+            tokens_short(agent.output_tokens as usize)
+        ),
+        inner,
+    );
+    let hint = if inner >= stats.width() + 16 {
+        "click opens"
+    } else {
+        ""
+    };
+    // The bottom row: "╰─ ", the counts, " ─… ", the hint, " ─╯".
+    let fill = width.saturating_sub(stats.width() + hint.width() + 8);
+    lines.push(Line::from(vec![
+        Span::styled("╰─ ", style),
+        Span::styled(stats, theme::quiet()),
+        Span::styled(format!(" {} ", "─".repeat(fill)), style),
+        Span::styled(hint, theme::quiet()),
+        Span::styled(" ─╯", style),
+    ]));
 }
 
 /// A count as people read it: 840, 1.2k.
@@ -697,6 +978,85 @@ fn parts(line: &str) -> Vec<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_subagent_is_a_tile_with_its_steps_in_its_own_stream() {
+        let mut stream = Transcript::default();
+        stream.take(&Event::ToolCall {
+            turn: 1,
+            id: "t1".into(),
+            name: "task".into(),
+            arguments: r#"{"description":"count the tests","prompt":"p"}"#.into(),
+        });
+        let sub = |event: Event| Event::Sub {
+            depth: 1,
+            event: Box::new(event),
+        };
+        stream.take(&sub(Event::ToolCall {
+            turn: 1,
+            id: "s1".into(),
+            name: "grep".into(),
+            arguments: r#"{"pattern":"fn test"}"#.into(),
+        }));
+        stream.take(&sub(Event::Sub {
+            depth: 2,
+            event: Box::new(Event::Usage {
+                turn: 1,
+                input_tokens: 2000,
+                cached_input_tokens: 0,
+                output_tokens: 100,
+            }),
+        }));
+        assert_eq!(stream.blocks.len(), 1);
+        let Kind::Agent(agent) = &stream.blocks[0].kind else {
+            panic!("a tile")
+        };
+        assert_eq!(
+            (agent.calls, agent.input_tokens),
+            (1, 2000),
+            "a nested one's tokens count too"
+        );
+        assert_eq!(agent.live, "grep fn test");
+        assert_eq!(agent.stream.blocks.len(), 1);
+        let tile: Vec<String> = stream.blocks[0]
+            .lines(50, Thinking::Folded, 0)
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert_eq!(tile.len(), 4);
+        assert!(tile[1].starts_with("╭─ ⬡ count the tests") && tile[1].ends_with("running ─╮"));
+        assert!(tile[2].contains("grep fn test"));
+        assert!(tile[3].contains("1 call · 2.0k in · 100 out"));
+        assert!(tile.iter().all(|row| row.width() <= 50), "{tile:#?}");
+        // The turn ends with it still running: it stopped, and so did what ran inside it.
+        stream.settle();
+        let Kind::Agent(agent) = &stream.blocks[0].kind else {
+            panic!("a tile")
+        };
+        assert_eq!(agent.state, ToolState::Failed);
+        assert!(matches!(
+            agent.stream.blocks[0].kind,
+            Kind::Tool {
+                state: ToolState::Failed,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn a_subagent_event_with_no_tile_running_stands_indented_as_before() {
+        let mut stream = Transcript::default();
+        stream.take(&Event::Sub {
+            depth: 1,
+            event: Box::new(Event::ToolCall {
+                turn: 1,
+                id: "s1".into(),
+                name: "grep".into(),
+                arguments: "{}".into(),
+            }),
+        });
+        assert!(matches!(stream.blocks[0].kind, Kind::Tool { depth: 1, .. }));
+    }
 
     #[test]
     fn wrapping_breaks_at_spaces_counts_cells_and_never_passes_the_width() {

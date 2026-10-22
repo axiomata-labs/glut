@@ -1534,8 +1534,9 @@ impl<M: ChatModel> Loop<'_, M> {
         Some(policy.profile())
     }
 
-    /// The `exit_plan` arm (Glut 2, D): the plan goes to the owner; yes switches the gate to the run's build mode and
-    /// offers the tools that mode allows from the next turn on, no keeps Plan. Headless the ask is refused.
+    /// The `exit_plan` arm (Glut 2, D): the plan goes to the owner; yes switches the gate to the run's build mode — or
+    /// to the mode the owner picked among the ask's scopes ([`planning::leave_modes`], TUI T19) — and offers the tools
+    /// that mode allows from the next turn on, no keeps Plan. Headless the ask is refused.
     async fn exit_plan(
         &mut self,
         gate: Arc<Gate>,
@@ -1548,9 +1549,19 @@ impl<M: ChatModel> Loop<'_, M> {
         };
         // The owner approves a mode as much as a plan: the question names the one the run switches to.
         let question = format!("{question} (then mode {})", self.config.build_mode.name());
-        match gate.ask_owner(planning::EXIT_PLAN, &question).await {
+        let modes = planning::leave_modes(self.config.build_mode);
+        let scopes = modes.iter().map(|mode| mode.name().to_owned()).collect();
+        let answer = gate
+            .ask_owner_within(planning::EXIT_PLAN, &question, scopes)
+            .await;
+        let chosen = match answer {
+            Answer::AllowWithin(at) => modes.get(usize::from(at)).copied(),
+            Answer::Allow | Answer::AllowAlways => modes.first().copied(),
+            Answer::Deny => None,
+        };
+        match answer {
             Answer::Allow | Answer::AllowAlways | Answer::AllowWithin(_) => {
-                let mode = self.config.build_mode;
+                let mode = chosen.unwrap_or(self.config.build_mode);
                 gate.set_mode(mode);
                 sink.emit(Event::ModeChanged {
                     turn: self.turns,
@@ -3293,6 +3304,34 @@ mod tests {
         assert!(
             tools_sent[1].iter().any(|t| t == "write")
                 && !tools_sent[1].iter().any(|t| t == "exit_plan")
+        );
+    }
+
+    /// Picks the second mode the `exit_plan` ask offers, and keeps what it was offered.
+    struct SecondMode(std::sync::Mutex<Vec<String>>);
+
+    impl crate::permissions::Asker for SecondMode {
+        fn ask<'a>(
+            &'a self,
+            request: &'a crate::permissions::AskRequest,
+        ) -> crate::permissions::AnswerFuture<'a> {
+            self.0.lock().unwrap().clone_from(&request.scopes);
+            Box::pin(async { crate::permissions::Answer::AllowWithin(1) })
+        }
+    }
+
+    #[tokio::test]
+    async fn the_owner_may_approve_a_plan_into_another_mode() {
+        let asker = Arc::new(SecondMode(std::sync::Mutex::new(Vec::new())));
+        let (_, events) = plan_run(Arc::clone(&asker) as Arc<dyn crate::permissions::Asker>).await;
+        assert_eq!(
+            *asker.0.lock().unwrap(),
+            ["accept_edits", "auto", "default"]
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, Event::ModeChanged { mode, .. } if mode == "auto"))
         );
     }
 
