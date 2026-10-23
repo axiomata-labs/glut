@@ -3,7 +3,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::model::Usage;
 
@@ -12,7 +12,7 @@ use crate::model::Usage;
 pub const EVENT_RESULT_CHARS: usize = 2_000;
 
 /// Why a run ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FinishReason {
     /// The model answered without asking for a tool.
@@ -33,7 +33,7 @@ pub enum FinishReason {
 }
 
 /// Whether an MCP server of the run came up (HS5, M3).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum McpStatus {
     /// Handshake and tool list done: its tools are offered to the model.
@@ -43,7 +43,7 @@ pub enum McpStatus {
 }
 
 /// Whether a skill became a run or was loaded while one went on (HS6, K5/K1.2).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SkillHow {
     /// The run started with the skill: its body is the run's instructions (K1.1).
@@ -53,7 +53,7 @@ pub enum SkillHow {
 }
 
 /// One step of a run.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum Event {
     Started {

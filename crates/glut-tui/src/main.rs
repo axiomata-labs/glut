@@ -3,12 +3,19 @@
 
 use std::path::PathBuf;
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use glut_tui::{Launch, Open, Servers};
 
 #[derive(Parser)]
-#[command(name = "glut", version, about = "Glut, in the terminal")]
+#[command(
+    name = "glut",
+    version,
+    about = "Glut, in the terminal",
+    args_conflicts_with_subcommands = true
+)]
 struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
     /// The folder the session works in.
     #[arg(long, default_value = ".")]
     cwd: PathBuf,
@@ -35,10 +42,41 @@ struct Cli {
     prompt: Option<String>,
 }
 
+#[derive(Subcommand)]
+enum Command {
+    /// Follow another session read-only from its event log: the folder's newest session, a session's id, or a log
+    /// file (a Studio card's glut-events.jsonl).
+    Watch {
+        /// A session's id or a log file; the newest session of the folder when left out.
+        what: Option<String>,
+    },
+}
+
 #[tokio::main]
 async fn main() -> std::process::ExitCode {
     let cli = Cli::parse();
+    if let Some(Command::Watch { what }) = &cli.command {
+        return watch(&cli.cwd, what.as_deref()).await;
+    }
     glut_tui::standalone(launch(&cli), open(cli)).await
+}
+
+/// `glut watch`: the log `what` names, followed until the owner quits.
+async fn watch(cwd: &std::path::Path, what: Option<&str>) -> std::process::ExitCode {
+    let found = glut::permissions::settings::home_dir()
+        .map_err(|err| err.to_string())
+        .and_then(|home| {
+            // Sessions are kept by their folder's full path, as a session started here names it.
+            let cwd = std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
+            glut_tui::watched_log(&home, &cwd, what).map(|log| (home, log))
+        });
+    match found {
+        Ok((home, log)) => glut_tui::watch(home, log).await,
+        Err(reason) => {
+            eprintln!("glut: {reason}");
+            std::process::ExitCode::from(1)
+        }
+    }
 }
 
 /// The session `cli` asks for: the owner's own, with the servers of `--mcp-config` beside theirs or, strict, alone.
@@ -95,6 +133,15 @@ mod tests {
         assert!(
             Cli::try_parse_from(["glut", "--strict-mcp-config"]).is_err(),
             "strict names no file"
+        );
+        assert!(matches!(
+            Cli::parse_from(["glut", "watch", "s1"]).command,
+            Some(Command::Watch { what: Some(id) }) if id == "s1"
+        ));
+        assert!(
+            Cli::parse_from(["glut", "fix the parser"])
+                .command
+                .is_none()
         );
     }
 }

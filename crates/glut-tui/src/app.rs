@@ -498,6 +498,9 @@ impl App {
             self.session.title = crate::store::title_of(&prompt);
         }
         self.scroll = 0;
+        // Whatever session the screen shows now is the one this turn's steps belong to.
+        self.parts.log.follow(&self.session.id);
+        self.parts.log.owner(&prompt);
         let cancel = Cancel::new();
         self.running = Some(cancel.clone());
         self.busy = Some(Busy::Turn);
@@ -531,6 +534,7 @@ impl App {
             Tone::Quiet,
         );
         self.after_resume = then;
+        self.parts.log.follow(&self.session.id);
         let cancel = Cancel::new();
         self.running = Some(cancel.clone());
         self.busy = Some(Busy::Turn);
@@ -2326,14 +2330,17 @@ impl App {
         }
     }
 
-    /// Tells the host what a paid call outside a turn used.
+    /// Tells the host and the log what a paid call outside a turn used.
     fn spent(&self, usage: Usage) {
-        self.parts.host.event(&Event::Usage {
+        let used = Event::Usage {
             turn: 0,
             input_tokens: usage.input_tokens,
             cached_input_tokens: usage.cached_input_tokens,
             output_tokens: usage.output_tokens,
-        });
+        };
+        self.parts.log.follow(&self.session.id);
+        self.parts.log.event(&used);
+        self.parts.host.event(&used);
     }
 
     /// What the host says from outside the session.

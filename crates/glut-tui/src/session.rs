@@ -71,10 +71,13 @@ pub enum Report {
 struct ToScreen {
     reports: mpsc::UnboundedSender<Report>,
     host: Arc<dyn Host>,
+    log: Arc<crate::log::EventLog>,
 }
 
 impl EventSink for ToScreen {
     fn emit(&mut self, event: Event) {
+        // Here, not on the screen: written in the run's order, also while the screen is busy drawing.
+        self.log.event(&event);
         self.host.event(&event);
         let _ = self.reports.send(Report::Event(event));
     }
@@ -156,6 +159,8 @@ pub struct Parts {
     pub mode_locked: bool,
     pub owner_shell: bool,
     pub keep_lost_turns: bool,
+    /// The session's event log ([`Launch::log`]): the sink writes the steps, the screen the owner's messages.
+    pub log: Arc<crate::log::EventLog>,
 }
 
 /// The model the session talks to now.
@@ -278,9 +283,20 @@ pub async fn build(
             .and_then(|owner| Ok(beside(owner, mcp::config::named(file)?))),
     }
     .map_err(|err| err.to_string())?;
+    let log = Arc::new(crate::log::EventLog::new(
+        match &launch.log {
+            // A session nobody keeps leaves no log behind it in `~/.axh/sessions` either.
+            crate::host::Log::Sessions if !launch.keep_sessions => crate::log::Target::Off,
+            crate::host::Log::Sessions => crate::log::Target::Sessions(home.clone()),
+            crate::host::Log::At(path) => crate::log::Target::At(path.clone()),
+            crate::host::Log::Off => crate::log::Target::Off,
+        },
+        cwd.clone(),
+    ));
     let mut sink = SharedSink::new(Box::new(ToScreen {
         reports,
         host: Arc::clone(&host),
+        log: Arc::clone(&log),
     }));
     let tools = setup::toolbox(
         &cwd,
@@ -315,6 +331,7 @@ pub async fn build(
         mode_locked: launch.mode_locked,
         owner_shell: launch.owner_shell,
         keep_lost_turns: launch.keep_lost_turns,
+        log,
     };
     let engine = match launch.engine {
         EngineChoice::Providers { provider, model } => {
@@ -1025,6 +1042,10 @@ pub fn for_tests() -> (Parts, Engine) {
         mode_locked: false,
         owner_shell: true,
         keep_lost_turns: false,
+        log: Arc::new(crate::log::EventLog::new(
+            crate::log::Target::Off,
+            PathBuf::new(),
+        )),
     };
     let engine = Engine {
         provider: "test".into(),

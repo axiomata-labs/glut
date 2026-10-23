@@ -4,10 +4,12 @@
 
 mod agents;
 mod app;
+mod follow;
 mod glimm;
 mod highlight;
 pub mod host;
 mod input;
+pub mod log;
 mod markdown;
 mod meter;
 mod picker;
@@ -27,8 +29,9 @@ mod vi;
 mod view;
 mod watch;
 
+pub use follow::{resolve as watched_log, watch};
 pub use host::{
-    EngineChoice, Host, HostFuture, HostLink, Instructions, Launch, Search, Servers, Signal,
+    EngineChoice, Host, HostFuture, HostLink, Instructions, Launch, Log, Search, Servers, Signal,
     Standalone, State, Turn,
 };
 pub use screen::{Open, run, standalone};

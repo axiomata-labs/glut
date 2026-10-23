@@ -333,12 +333,12 @@ async fn run_loop(
 /// The terminal's keys, pastes and clicks, read on a thread of their own and handed to the loop.
 /// The reader thread's pause for the editor: the loop asks, the reader answers once it no longer reads.
 #[derive(Default)]
-struct Pause {
+pub(crate) struct Pause {
     ask: AtomicBool,
     idle: AtomicBool,
 }
 
-fn terminal_events(
+pub(crate) fn terminal_events(
     stop: Arc<AtomicBool>,
     pause: Arc<Pause>,
 ) -> mpsc::UnboundedReceiver<event::Event> {
@@ -423,7 +423,7 @@ fn edit_in_editor(home: &std::path::Path, text: &str) -> Result<String, String> 
 
 /// Takes the terminal: raw mode, the alternate screen, pastes as one, the mouse, and — where the terminal has it —
 /// the kitty keyboard protocol, so Shift+Enter is not Enter. Returns whether the protocol was pushed.
-fn enter() -> io::Result<bool> {
+pub(crate) fn enter() -> io::Result<bool> {
     terminal::enable_raw_mode()?;
     let mut out = io::stdout();
     execute!(
@@ -443,7 +443,7 @@ fn enter() -> io::Result<bool> {
 }
 
 /// Gives the terminal back as it was.
-fn leave(enhanced: bool) {
+pub(crate) fn leave(enhanced: bool) {
     let mut out = io::stdout();
     if enhanced {
         let _ = execute!(out, PopKeyboardEnhancementFlags);

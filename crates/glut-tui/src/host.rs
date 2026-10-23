@@ -54,6 +54,9 @@ pub struct Launch {
     /// (SIGTERM), so its journal stays for the next start to go on from ([`crate::Open::lost_turn`]); otherwise it
     /// is called off.
     pub keep_lost_turns: bool,
+    /// Where the session's event log goes (TUI8d), which `glut watch` follows. [`Log::Sessions`] writes none when
+    /// `keep_sessions` is false: a log beside a session that is never kept would stay behind alone.
+    pub log: Log,
 }
 
 impl Launch {
@@ -79,6 +82,7 @@ impl Launch {
             mode_locked: false,
             owner_shell: true,
             keep_lost_turns: false,
+            log: Log::Sessions,
         }
     }
 }
@@ -135,6 +139,17 @@ pub enum EngineChoice {
         /// The model's window and where it comes from.
         window: Option<(u32, &'static str)>,
     },
+}
+
+/// Where the session's event log goes: its steps and the owner's messages, one JSON line each ([`crate::log`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Log {
+    /// Beside the session in `~/.axh/sessions` (`<id>.events.jsonl`).
+    Sessions,
+    /// The host's file — Axiomata's card writes its channel's `glut-events.jsonl`.
+    At(PathBuf),
+    /// None.
+    Off,
 }
 
 /// What a turn is.
