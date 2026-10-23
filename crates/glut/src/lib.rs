@@ -25,6 +25,7 @@ pub mod mcp;
 pub mod model;
 pub mod permissions;
 pub mod planning;
+pub mod project;
 pub mod prompt;
 pub mod providers;
 mod refusals;

@@ -46,6 +46,9 @@ pub enum Access {
     Mcp { server: String, tool: String },
     /// Only the run's own state (`bash_output`, `kill_shell`): always allowed.
     Own,
+    /// A change of the project's memory (TUI T35): what it would keep or remove, and where, as the owner reads it. It
+    /// outlives the run and is read into every later session — so it is asked even in `auto`, never done in plan mode.
+    Memory { change: String },
     /// A tool the rules know only by its name.
     Other,
 }
@@ -230,7 +233,7 @@ impl Rule {
                 tool: called,
             } => self.kind == RuleKind::Mcp && mcp_matches(&self.tool, server, called),
             Access::Own => true,
-            Access::Other => named,
+            Access::Other | Access::Memory { .. } => named,
         }
     }
 
@@ -475,6 +478,7 @@ impl Mode {
     fn fallback(self, access: &Access) -> Verdict {
         use Verdict::{Allow, Ask, Deny};
         match (self, access) {
+            (Mode::Auto, Access::Memory { .. }) => Ask,
             (Mode::Auto, _) => Allow,
             (_, Access::Read { .. }) => Allow,
             (Mode::AcceptEdits, Access::Edit { .. }) => Allow,
@@ -1195,7 +1199,7 @@ impl Gate {
         };
         // Plan mode writes nothing, whatever a rule says (P3) — neither with the file tools nor by a redirection.
         let writes = match access {
-            Access::Edit { .. } => true,
+            Access::Edit { .. } | Access::Memory { .. } => true,
             Access::Bash { command, .. } => !analyze(command).writes.is_empty(),
             _ => false,
         };
@@ -1561,7 +1565,7 @@ fn scopes(tool: &str, access: &Access) -> Vec<Scope> {
         Access::Network { host } => one(format!("Network({host})")),
         // An MCP call's allowance is the tool's own rule, which names it exactly (M5).
         Access::Mcp { server, tool } => one(format!("mcp__{server}__{tool}")),
-        Access::Own | Access::Other => one(tool.to_owned()),
+        Access::Own | Access::Other | Access::Memory { .. } => one(tool.to_owned()),
     }
 }
 
@@ -1583,6 +1587,7 @@ fn describe(access: &Access) -> String {
         Access::Network { host } => host.clone(),
         // For an ask and the events: server and tool, the way the rule names them (M5).
         Access::Mcp { server, tool } => format!("{server}/{tool}"),
+        Access::Memory { change } => change.clone(),
         Access::Own | Access::Other => String::new(),
     }
 }
@@ -1815,6 +1820,32 @@ mod tests {
             self.0.lock().unwrap().push(request.from.clone());
             Box::pin(async { Answer::Allow })
         }
+    }
+
+    #[tokio::test]
+    async fn a_memory_change_is_asked_even_in_auto_shows_what_it_does_and_plan_refuses_it_whatever_a_rule_says()
+     {
+        let change = Access::Memory {
+            change: "keep x (3 bytes) in /m".into(),
+        };
+        let asker = Arc::new(Always(Answer::Allow, Mutex::new(0)));
+        let auto = Gate::new(RuleSet::default(), Mode::Auto, asker.clone());
+        assert!(auto.judge("memory", &change).await.is_ok());
+        assert_eq!(*asker.1.lock().unwrap(), 1, "asked in auto");
+        assert_eq!(auto.take_log()[0].target, "keep x (3 bytes) in /m");
+        let allowed = RuleSet {
+            allow: vec![Rule::parse("memory").unwrap()],
+            ..RuleSet::default()
+        };
+        let plan = Gate::new(allowed, Mode::Plan, asker.clone());
+        assert!(
+            plan.judge("memory", &change).await.is_err(),
+            "plan mode writes nothing"
+        );
+        assert!(
+            plan.judge("memory", &Access::Own).await.is_ok(),
+            "reading stays free"
+        );
     }
 
     #[tokio::test]

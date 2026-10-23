@@ -44,6 +44,9 @@ pub struct Prefs {
     /// The colours: `glut` or an app theme's name (TUI3c, `/theme`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
+    /// The folders whose owner said no to moving `CLAUDE.md` into `AGENTS.md` (T35, `/init`): not asked again.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keep_claude: Vec<String>,
     #[serde(flatten)]
     other: serde_json::Map<String, serde_json::Value>,
 }
@@ -155,6 +158,21 @@ pub fn set_vi(home: &Path, on: bool) -> Result<(), String> {
 pub fn set_theme(home: &Path, name: &str) -> Result<(), String> {
     let mut prefs = Prefs::read(home)?;
     prefs.theme = Some(name.to_owned());
+    prefs.save(home)
+}
+
+/// Keeps whether `folder` keeps its `CLAUDE.md` as its guide (T35): `true` adds it to the folders not asked again,
+/// `false` (`/init --migrate`) takes it out.
+///
+/// # Errors
+///
+/// A message when the file cannot be read (it is not written over) or written.
+pub fn set_keep_claude(home: &Path, folder: &str, keep: bool) -> Result<(), String> {
+    let mut prefs = Prefs::read(home)?;
+    prefs.keep_claude.retain(|kept| kept != folder);
+    if keep {
+        prefs.keep_claude.push(folder.to_owned());
+    }
     prefs.save(home)
 }
 

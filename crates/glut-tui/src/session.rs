@@ -161,6 +161,10 @@ pub struct Parts {
     pub keep_lost_turns: bool,
     /// The session's event log ([`Launch::log`]): the sink writes the steps, the screen the owner's messages.
     pub log: Arc<crate::log::EventLog>,
+    /// How many characters the guides the session read hold: what they cost each turn (`/context`).
+    pub guide_chars: usize,
+    /// The project's guides the session read, the general first (`/init` checks the nearest).
+    pub guide_paths: Vec<PathBuf>,
 }
 
 /// The model the session talks to now.
@@ -233,10 +237,31 @@ pub async fn build(
     notes.extend(built.notes().into_iter().map(str::to_owned));
 
     let mut config = RunConfig::new(&cwd);
+    let mut memory = None;
+    let mut guide_chars = 0;
+    let mut guide_paths = Vec::new();
     config.instructions = Some(match launch.instructions {
         Instructions::Guides => {
             // T24: the owner's and the project's guides, read by Glut itself.
             let (guides, guide_notes) = glut::guide::read(&home, &cwd);
+            guide_chars = guides.iter().map(|guide| guide.text.chars().count()).sum();
+            let owners = home.join(".glut").join("AGENTS.md");
+            guide_paths = guides
+                .iter()
+                .map(|guide| guide.path.clone())
+                .filter(|path| *path != owners)
+                .collect();
+            // T35: the conventions and the map of what the folder holds, before the guides.
+            let found = glut::project::look(
+                &home,
+                &cwd,
+                &guides
+                    .iter()
+                    .map(|guide| guide.path.clone())
+                    .collect::<Vec<_>>(),
+            );
+            let map = found.prompt();
+            memory = Some(found.memory);
             notes.extend(guide_notes);
             if !guides.is_empty() {
                 notes.push(format!(
@@ -249,8 +274,8 @@ pub async fn build(
                 ));
             }
             match glut::guide::instructions(&guides, &home) {
-                Some(guides) => format!("{SESSION_NOTE}\n\n{guides}"),
-                None => SESSION_NOTE.to_owned(),
+                Some(guides) => format!("{SESSION_NOTE}\n\n{map}\n\n{guides}"),
+                None => format!("{SESSION_NOTE}\n\n{map}"),
             }
         }
         Instructions::Given(text) => format!("{SESSION_NOTE}\n\n{text}"),
@@ -312,6 +337,7 @@ pub async fn build(
                 Search::Off => None,
             },
             direct: Vec::new(),
+            memory,
         },
         &mut sink,
     )
@@ -333,6 +359,8 @@ pub async fn build(
         owner_shell: launch.owner_shell,
         keep_lost_turns: launch.keep_lost_turns,
         log,
+        guide_chars,
+        guide_paths,
     };
     let engine = match launch.engine {
         EngineChoice::Providers { provider, model } => {
@@ -1047,6 +1075,8 @@ pub fn for_tests() -> (Parts, Engine) {
             crate::log::Target::Off,
             PathBuf::new(),
         )),
+        guide_chars: 0,
+        guide_paths: Vec::new(),
     };
     let engine = Engine {
         provider: "test".into(),

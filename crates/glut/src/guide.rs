@@ -83,8 +83,8 @@ pub fn instructions(guides: &[Guide], home: &Path) -> Option<String> {
         } else {
             "the project's"
         };
-        // A closing tag inside a guide would end its frame early: it is written so it cannot.
-        let body = guide.text.trim().replace("</guide>", "</ guide>");
+        // A closing tag inside a guide would end its frame early: it is written so it cannot, whatever its case.
+        let body = crate::project::defuse(guide.text.trim(), "guide");
         text.push_str(&format!(
             "\n\n<guide whose=\"{whose}\" path=\"{}\">\n{body}\n</guide>",
             guide.path.display()

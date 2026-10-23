@@ -36,7 +36,11 @@ pub async fn toolbox(
     extras: Extras,
     sink: &mut SharedSink,
 ) -> Result<Toolbox, HarnessError> {
-    let Extras { search, direct } = extras;
+    let Extras {
+        search,
+        direct,
+        memory,
+    } = extras;
     let mut tools = Toolbox::new();
     tools.extend(file_tools(cwd, SkillRoots::new(&catalog.folders()))?);
     // The web is part of the core (docs/plans/glut-round.md): no MCP server to set up for a page.
@@ -48,6 +52,10 @@ pub async fn toolbox(
     if !catalog.is_empty() {
         tools
             .extend([Box::new(SkillTool::new(Arc::clone(catalog), sink.clone())) as Box<dyn Tool>]);
+    }
+    // T35: the project's memory, outside the folder the file tools reach — offered where the caller names one.
+    if let Some(dir) = memory {
+        tools.extend([Box::new(crate::tools::memory::Memory::new(dir)) as Box<dyn Tool>]);
     }
     tools.set_gate(Arc::new(gate));
     tools.extend(mcp::start(servers, sink).await);
@@ -63,11 +71,13 @@ pub async fn toolbox(
 }
 
 /// What a caller adds to the toolbox beside the core: the web search with its providers and budget (glut-round
-/// CP3; none, no search offered), and its own programs a declared command may start outside the sandbox (W8).
+/// CP3; none, no search offered), its own programs a declared command may start outside the sandbox (W8), and the
+/// project's memory folder for the `memory` tool (TUI T35; none, no tool).
 #[derive(Default)]
 pub struct Extras {
     pub search: Option<WebSearch>,
     pub direct: Vec<DirectProgram>,
+    pub memory: Option<std::path::PathBuf>,
 }
 
 /// A run as it stands before a slash command and a skill have had their say about it.
@@ -427,6 +437,7 @@ mod tests {
             Extras {
                 search: Some(search),
                 direct: Vec::new(),
+                memory: None,
             },
             &mut sink,
         )

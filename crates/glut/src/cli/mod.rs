@@ -187,6 +187,11 @@ pub struct RunArgs {
     #[arg(long)]
     #[serde(default)]
     mcp_config: Option<PathBuf>,
+    /// Work as Glut's terminal session does in a project (TUI T35): its guides, the map of where plans, to-dos and
+    /// the memory are kept, and the `memory` tool. Off: the run knows only what its flags say.
+    #[arg(long)]
+    #[serde(default)]
+    project: bool,
     /// The prompt — extra text beside `--skill`, or a slash command (`/review src/`), read from
     /// `~/.glut/commands/` and, in a trusted folder, the project's `.glut/commands/` (HS4). Without `--skill` a
     /// prompt is required; with one it defaults to "Run the skill.".
@@ -465,6 +470,7 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
         skill,
         skill_dir,
         mcp_config,
+        project,
         prompt,
     } = args;
 
@@ -558,6 +564,30 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
         Ok(trust) => trust.contains(&cwd),
         Err(err) => return fail(err.to_string()),
     };
+    // T35: the project's guides and map before the caller's instructions, the memory's folder for its tool.
+    let memory = project.then(|| {
+        let (guides, notes) = crate::guide::read(&home, &cwd);
+        for note in notes {
+            eprintln!("glut: {note}");
+        }
+        let found = crate::project::look(
+            &home,
+            &cwd,
+            &guides
+                .iter()
+                .map(|guide| guide.path.clone())
+                .collect::<Vec<_>>(),
+        );
+        let mut text = found.prompt();
+        if let Some(guides) = crate::guide::instructions(&guides, &home) {
+            text = format!("{text}\n\n{guides}");
+        }
+        if let Some(own) = config.instructions.take() {
+            text = format!("{text}\n\n{own}");
+        }
+        config.instructions = Some(text);
+        found.memory
+    });
     // Skills (HS6, K1/K2): the owner's `~/.glut/skills`, the folders of `--skill-dir` and — in a folder the owner
     // trusted once, the same trust the project's allow rules need — the project's `.glut/skills`. A skill that
     // cannot be used is a note on stderr, never an error (K3).
@@ -703,6 +733,7 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
         setup::Extras {
             search: Some(env_search()),
             direct: Vec::new(),
+            memory,
         },
         &mut sink,
     )

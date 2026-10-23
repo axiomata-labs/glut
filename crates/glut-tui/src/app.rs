@@ -27,10 +27,35 @@ const WHEEL_LINES: usize = 3;
 /// How long a question is on the screen before a key answers it.
 const ASK_SETTLE: Duration = Duration::from_millis(400);
 
+/// `/init` in a folder without a guide (T35).
+const INIT_NEW: &str = "/init: write a short AGENTS.md for this folder, the guide every coding agent reads here. Look \
+    first — the build and test commands, how the code is laid out, what is easy to get wrong — reading only what you \
+    need. Keep it under 4 KB: commands, a few lines of layout, the traps; nothing a reader finds in a minute, nothing \
+    Glut's own conventions already say. Show the draft and ask before you write the file.";
+
+/// `/init` moving the guide `claude` (a `CLAUDE.md`) into an `AGENTS.md` beside it (T35).
+fn init_migrate(claude: &str) -> String {
+    format!(
+        "/init: move {claude} into an AGENTS.md beside it, so every harness reads one guide. Write AGENTS.md with its \
+         text — shortened where it repeats itself or says what the code shows, under 4 KB if it can be —, then leave \
+         {claude} as the single line `@AGENTS.md`, which Claude Code follows. Show both before you write them."
+    )
+}
+
+/// `/init` checking the guide `name` there is (T35).
+fn init_check(name: &str) -> String {
+    format!(
+        "/init: check the guide {name}, which every turn carries. Is it still true (commands, layout, \
+         traps)? Is anything in it that a reader finds in a minute, or that belongs in docs/ with a pointer left \
+         behind? Propose a shorter version — under 4 KB if it can be, nothing important lost — and say what you would \
+         drop or move. Show it and ask before you change the file."
+    )
+}
+
 /// What `/help` says.
 const HELP: &str = "Commands: /model [id] · /provider [id] · /effort [level] · /context [tokens] · /compact · \
                     /editor [command] · /gate · /meter · /diff [session] · /agents · /plan · /thinking off|folded|open · /theme [name] · /vim on|off · /scrollback · \
-                    /clear · /help · /quit\n\
+                    /init · /clear · /help · /quit\n\
                     Keys: Enter send · Shift+Enter or Alt+Enter new line · ↑ history · Shift+Tab plan → ask → \
                     build → auto · Esc stop · Ctrl+O tool results · Ctrl+T thinking · Ctrl+B panel · Ctrl+G gate · Ctrl+N meter · Ctrl+A agents · Ctrl+R review · \
                     Ctrl+X E editor · PgUp/PgDn scroll · Ctrl+F search · drag to copy · a click on a subagent's tile \
@@ -45,7 +70,7 @@ const HELP: &str = "Commands: /model [id] · /provider [id] · /effort [level] �
                     or doubled · counts · p P · u Ctrl+R), i a I A o O to Insert; Esc in Normal mode stops Glut";
 
 /// The session's commands with what each does, as the list under a typed `/` shows them.
-pub const COMMANDS: [(&str, &str); 23] = [
+pub const COMMANDS: [(&str, &str); 24] = [
     (
         "model",
         "pick a model of the provider in use, or /model <id>",
@@ -103,6 +128,10 @@ pub const COMMANDS: [(&str, &str); 23] = [
     (
         "scrollback",
         "the conversation into the terminal's own scrollback (F3)",
+    ),
+    (
+        "init",
+        "a short AGENTS.md for this folder, or check the guide it has (/init --migrate asks about CLAUDE.md again)",
     ),
     ("clear", "start a new session"),
     ("help", "commands and keys"),
@@ -173,6 +202,8 @@ pub struct App {
     /// The Agents tab's chosen subagent, by its path, while its list has the keys (T34, Ctrl+A) — a path, not a row,
     /// so the choice stays on its subagent as the list reorders; `None`: the input has them.
     pub agents_list: Option<Vec<usize>>,
+    /// The `CLAUDE.md` `/init` asks about while its question is open (T35), as the stream names it.
+    init_claude: Option<String>,
     /// The plan `exit_plan` sent last (T19), and its view: the dialog while Glut asks, else only to read.
     pub plan: Option<crate::plan::Plan>,
     pub plan_view: Option<crate::plan::Dialog>,
@@ -297,6 +328,7 @@ impl App {
             review: crate::review::Review::default(),
             agent_view: None,
             agents_list: None,
+            init_claude: None,
             plan: None,
             plan_view: None,
             offered_plan: None,
@@ -1510,6 +1542,7 @@ impl App {
             "editor" if rest.is_empty() => {
                 self.picker = Some(editor_picker(Prefs::load(&self.parts.home).editor()))
             }
+            "init" => self.init(rest),
             "handoff" => match rest {
                 // A paid call: written only when asked by name.
                 "" => self.transcript.note(
@@ -1637,6 +1670,16 @@ impl App {
                 ),
             };
             self.transcript.note(text, Tone::Quiet);
+            // T35: the guides ride along on every turn — what they cost, so a growing one is seen.
+            if self.parts.guide_chars > 0 {
+                self.transcript.note(
+                    format!(
+                        "the guides take about {} tokens of it on every turn (/init checks and shortens them)",
+                        self.parts.guide_chars / 4
+                    ),
+                    Tone::Quiet,
+                );
+            }
             return;
         }
         let Some(tokens) = parse_tokens(rest) else {
@@ -1659,6 +1702,88 @@ impl App {
             }
             Err(reason) => self.transcript.note(reason, Tone::Fault),
         }
+    }
+
+    /// `/init` (T35): a short guide for the folder. With only a `CLAUDE.md` the owner is asked once whether it moves
+    /// into `AGENTS.md` — a no is kept, and the guide checked is then `CLAUDE.md` itself; `--migrate` asks again.
+    fn init(&mut self, rest: &str) {
+        let migrate = rest.trim() == "--migrate";
+        if !rest.trim().is_empty() && !migrate {
+            return self.transcript.note(
+                "/init, or /init --migrate to be asked about CLAUDE.md again",
+                Tone::Fault,
+            );
+        }
+        // The nearest guide the session read decides: an `AGENTS.md` is checked, a `CLAUDE.md` (read only where its
+        // folder has no `AGENTS.md`) is the question — none, and a new one is written in the working folder.
+        let nearest = self.parts.guide_paths.last().cloned();
+        let named =
+            |path: &std::path::Path, name: &str| path.file_name().is_some_and(|file| file == name);
+        let shown = |path: &std::path::Path| {
+            path.strip_prefix(&self.parts.config.cwd).map_or_else(
+                |_| path.display().to_string(),
+                |rel| rel.display().to_string(),
+            )
+        };
+        let claude = nearest.as_ref().filter(|path| named(path, "CLAUDE.md"));
+        let folder = claude
+            .and_then(|path| path.parent())
+            .unwrap_or(&self.parts.config.cwd)
+            .display()
+            .to_string();
+        if migrate && let Err(reason) = prefs::set_keep_claude(&self.parts.home, &folder, false) {
+            self.transcript.note(reason, Tone::Fault);
+        }
+        let kept = Prefs::load(&self.parts.home).keep_claude.contains(&folder);
+        if let Some(claude) = claude
+            && !kept
+        {
+            self.init_claude = Some(shown(claude));
+            self.picker = Some(Picker::new(
+                "This folder's guide is CLAUDE.md: move it into AGENTS.md?",
+                vec![
+                    Item::plain(
+                        "yes, into AGENTS.md",
+                        "CLAUDE.md then only imports it (@AGENTS.md): one guide for every harness",
+                        Pick::Init(true),
+                    ),
+                    Item::plain(
+                        "no, keep CLAUDE.md",
+                        "it stays the guide, checked and kept short; not asked again here",
+                        Pick::Init(false),
+                    ),
+                ],
+                None,
+            ));
+            return;
+        }
+        let prompt = match nearest {
+            Some(path) => init_check(&shown(&path)),
+            None => INIT_NEW.to_owned(),
+        };
+        self.send(prompt);
+    }
+
+    /// The owner's answer to `/init`'s question about `CLAUDE.md`.
+    fn init_with(&mut self, migrate: bool) {
+        let Some(claude) = self.init_claude.take() else {
+            return;
+        };
+        if migrate {
+            return self.send(init_migrate(&claude));
+        }
+        let folder = self
+            .parts
+            .config
+            .cwd
+            .join(&claude)
+            .parent()
+            .map(|folder| folder.display().to_string())
+            .unwrap_or_default();
+        if let Err(reason) = prefs::set_keep_claude(&self.parts.home, &folder, true) {
+            self.transcript.note(reason, Tone::Fault);
+        }
+        self.send(init_check(&claude));
     }
 
     /// Shows or hides the side panel, and keeps the choice.
@@ -2607,6 +2732,7 @@ impl App {
                     Some(Pick::Shown) => {}
                     Some(Pick::RewindTo(mark)) => self.picker = Some(self.rewind_how(mark)),
                     Some(Pick::Fork(mark)) => self.fork(mark),
+                    Some(Pick::Init(migrate)) => self.init_with(migrate),
                     Some(Pick::Step { run, turn }) => self.picker = Some(step_do(run, turn)),
                     Some(Pick::StepDo { run, turn, restore }) => self.step_do(run, turn, restore),
                     Some(Pick::Rewind {
@@ -3451,7 +3577,7 @@ fn told(conversation: &[Message], prompt: &str) -> bool {
 fn waits(name: &str, rest: &str) -> bool {
     matches!(
         name,
-        "model" | "provider" | "effort" | "compact" | "clear" | "handoff" | "resume"
+        "model" | "provider" | "effort" | "compact" | "clear" | "handoff" | "resume" | "init"
     ) || (name == "context" && !rest.is_empty())
 }
 
@@ -4831,6 +4957,76 @@ mod tests {
             !app.parts.home.join(".glut").join("sessions").exists(),
             "a hosted session is not kept under ~/.glut"
         );
+    }
+
+    /// An app working in `cwd` that read `guides`, keeping its prefs in `home`.
+    fn app_in(cwd: &std::path::Path, guides: &[&str], home: &std::path::Path) -> App {
+        let (mut parts, engine) = session::for_tests();
+        parts.config.cwd = cwd.to_path_buf();
+        parts.guide_paths = guides.iter().map(|name| cwd.join(name)).collect();
+        parts.home = home.to_path_buf();
+        let (send, _receive) = mpsc::unbounded_channel();
+        App::new(Arc::new(parts), engine, send)
+    }
+
+    /// The owner's last message in the stream; the turn it started is called off.
+    fn sent(app: &App) -> String {
+        if let Some(cancel) = &app.running {
+            cancel.cancel();
+        }
+        app.transcript
+            .blocks
+            .iter()
+            .rev()
+            .find_map(|block| match &block.kind {
+                crate::transcript::Kind::Owner(text) => Some(text.clone()),
+                _ => None,
+            })
+            .unwrap_or_default()
+    }
+
+    #[tokio::test]
+    async fn init_writes_checks_or_asks_once_about_the_guide_the_session_read() {
+        let base = std::env::temp_dir().join(format!("glut-init-{}", std::process::id()));
+        let (dir, home) = (base.join("repo"), base.join("home"));
+        std::fs::create_dir_all(&dir).unwrap();
+        // No guide: a new one.
+        let mut app = app_in(&dir, &[], &home);
+        app.init("");
+        assert!(sent(&app).contains("write a short AGENTS.md"));
+        // An AGENTS.md: checked.
+        let mut app = app_in(&dir, &["AGENTS.md"], &home);
+        app.init("");
+        assert!(sent(&app).contains("check the guide AGENTS.md"));
+        // A bad argument sends nothing.
+        let mut app = app_in(&dir, &[], &home);
+        app.init("--wat");
+        assert!(sent(&app).is_empty());
+        // A CLAUDE.md: asked; yes moves it.
+        let mut app = app_in(&dir, &["CLAUDE.md"], &home);
+        app.init("");
+        assert!(app.picker.is_some(), "asked about CLAUDE.md");
+        app.picker = None;
+        app.init_with(true);
+        assert!(sent(&app).contains("move CLAUDE.md into an AGENTS.md"));
+        // No keeps it, checks it, and is not asked again — until --migrate.
+        let mut app = app_in(&dir, &["CLAUDE.md"], &home);
+        app.init("");
+        app.picker = None;
+        app.init_with(false);
+        assert!(sent(&app).contains("check the guide CLAUDE.md"));
+        let mut app = app_in(&dir, &["CLAUDE.md"], &home);
+        app.init("");
+        assert!(app.picker.is_none(), "not asked again");
+        assert!(sent(&app).contains("check the guide CLAUDE.md"));
+        let mut app = app_in(&dir, &["CLAUDE.md"], &home);
+        app.init("--migrate");
+        assert!(app.picker.is_some(), "asked again");
+        assert!(
+            Prefs::load(&home).keep_claude.is_empty(),
+            "the no is taken back"
+        );
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[tokio::test]
