@@ -44,6 +44,8 @@ enum Kind {
 
 /// What a call asks for.
 enum Action {
+    /// The owner picks a provider and a model from Glut's lists (T37c), for an agent's or a skill's own.
+    PickModel,
     List(Scope),
     Read(Scope, Kind, String),
     Write(Scope, Kind, String, String),
@@ -52,6 +54,9 @@ enum Action {
 impl Action {
     fn of(arguments: &Value) -> Result<Self, String> {
         let text = |key: &str| arguments.get(key).and_then(Value::as_str).map(str::trim);
+        if text("action") == Some("pick_model") {
+            return Ok(Action::PickModel);
+        }
         let scope = match text("scope") {
             Some("owner") => Scope::Owner,
             Some("project") => Scope::Project,
@@ -101,7 +106,19 @@ pub struct GlutFiles {
     project: PathBuf,
     /// Whether the owner trusts the project: its skills and agents are read only then.
     trusted: bool,
+    /// Where the owner picks a model; `None` (headless): the model asks in the conversation.
+    picker: Option<std::sync::Arc<dyn ModelPicker>>,
 }
+
+/// What lets the owner pick a provider and a model from Glut's lists while a maker skill runs (T37c): the TUI's
+/// `/model` list. `None` from [`ModelPicker::pick`]: the owner picked none.
+pub trait ModelPicker: Send + Sync {
+    fn pick(&self) -> PickFuture<'_>;
+}
+
+/// What [`ModelPicker::pick`] answers with: the provider's id and the model's, or none.
+pub type PickFuture<'a> =
+    std::pin::Pin<Box<dyn std::future::Future<Output = Option<(String, String)>> + Send + 'a>>;
 
 impl GlutFiles {
     /// The folders below `home` and `cwd`.
@@ -110,7 +127,15 @@ impl GlutFiles {
             owner: home.join(crate::permissions::settings::USER_DIR),
             project: cwd.join(crate::permissions::settings::PROJECT_DIR),
             trusted,
+            picker: None,
         }
+    }
+
+    /// With `picker` for `pick_model`.
+    #[must_use]
+    pub fn with_picker(mut self, picker: std::sync::Arc<dyn ModelPicker>) -> Self {
+        self.picker = Some(picker);
+        self
     }
 
     /// What the owner is asked about a write: where, whether it replaces a file or hides the owner's own of that name,
@@ -123,6 +148,11 @@ impl GlutFiles {
         } else {
             " — a new file"
         });
+        if kind == Kind::Hooks
+            && let Ok(old) = std::fs::read_to_string(&path)
+        {
+            head.push_str(&hooks_change(&old, content));
+        }
         if scope == Scope::Project
             && kind != Kind::Hooks
             && self.owner.join(relative(kind, name)).exists()
@@ -139,6 +169,50 @@ impl GlutFiles {
             Scope::Project => &self.project,
         }
     }
+}
+
+/// Whether `id` is a provider's or a model's id as lists spell them — nothing that could break a file's line.
+fn plain_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= MAX_ID_CHARS
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "._:/@+-".contains(c))
+}
+
+/// The most characters of an id `pick_model` hands back.
+const MAX_ID_CHARS: usize = 200;
+
+/// What a `hooks.json` write changes, for its ask: the hooks it adds and — named, since they are the owner's guard
+/// rails — the ones it drops.
+fn hooks_change(old: &str, new: &str) -> String {
+    let hooks = |text: &str| -> Vec<String> {
+        let Ok(value) = serde_json::from_str::<Value>(text) else {
+            return Vec::new();
+        };
+        let mut found = Vec::new();
+        for (event, entries) in value["hooks"].as_object().into_iter().flatten() {
+            for entry in entries.as_array().into_iter().flatten() {
+                let matcher = entry["matcher"].as_str().unwrap_or("*");
+                for hook in entry["hooks"].as_array().into_iter().flatten() {
+                    let command = hook["command"].as_str().unwrap_or_default();
+                    found.push(format!("{event} {matcher}: {command}"));
+                }
+            }
+        }
+        found
+    };
+    let (before, after) = (hooks(old), hooks(new));
+    let added = after.iter().filter(|hook| !before.contains(hook)).count();
+    let dropped: Vec<&String> = before.iter().filter(|hook| !after.contains(hook)).collect();
+    let mut text = format!(" — adds {added} hook(s), drops {}", dropped.len());
+    for hook in dropped {
+        text.push_str(&format!(
+            "\n  dropped: {}",
+            crate::permissions::printable(hook)
+        ));
+    }
+    text
 }
 
 /// The file of `kind` named `name`, relative to its `.glut` folder.
@@ -159,18 +233,19 @@ impl Tool for GlutFiles {
                           names what there is, read gives one file, write keeps one whole: a skill \
                           (skills/<name>/SKILL.md), an agent (agents/<name>.md) or the owner's hooks.json. A write \
                           is checked the way Glut reads it and asked of the owner every time; show the owner the \
-                          file, or what changes in it, before you write."
+                          file, or what changes in it, before you write. pick_model lets the owner choose a provider \
+                          and model from Glut's lists, for an agent's or a skill's own (no scope needed)."
                 .to_owned(),
             parameters: json!({
                 "type": "object",
                 "properties": {
-                    "action": { "type": "string", "enum": ["list", "read", "write"] },
+                    "action": { "type": "string", "enum": ["pick_model", "list", "read", "write"] },
                     "scope": { "type": "string", "enum": ["owner", "project"] },
                     "kind": { "type": "string", "enum": ["skill", "agent", "hooks"] },
                     "name": { "type": "string", "description": "The skill's or agent's name; none for hooks." },
                     "content": { "type": "string", "description": "The whole file, to write." }
                 },
-                "required": ["action", "scope"]
+                "required": ["action"]
             }),
         }
     }
@@ -188,7 +263,7 @@ impl Tool for GlutFiles {
                 change: self.ask_text(scope, kind, &name, &content),
             },
             // A call it cannot read fails before it touches anything: nothing to ask.
-            Ok(Action::List(_) | Action::Read(..)) | Err(_) => Access::Own,
+            Ok(Action::PickModel | Action::List(_) | Action::Read(..)) | Err(_) => Access::Own,
         }
     }
 
@@ -207,6 +282,22 @@ impl Tool for GlutFiles {
         let (owner, project, trusted) = (self.owner.clone(), self.project.clone(), self.trusted);
         Box::pin(async move {
             let action = Action::of(&arguments)?;
+            if matches!(action, Action::PickModel) {
+                return Ok(match &self.picker {
+                    Some(picker) => match picker.pick().await {
+                        Some((provider, model)) if plain_id(&provider) && plain_id(&model) => {
+                            format!("provider: {provider}\nmodel: {model}")
+                        }
+                        Some(_) => "the picked model's id holds characters no file of Glut's takes: ask the owner \
+                                    for it in the conversation"
+                            .into(),
+                        None => "the owner picked no model: keep the session's (leave model and provider out)".into(),
+                    },
+                    None => "no list to pick from here: ask the owner which provider and model, by their ids \
+                             (glut providers list, glut models list)"
+                        .into(),
+                });
+            }
             let project_scope = matches!(
                 &action,
                 Action::List(Scope::Project)
@@ -225,6 +316,7 @@ impl Tool for GlutFiles {
                     Scope::Project => project.as_path(),
                 };
                 match action {
+                    Action::PickModel => Ok(String::new()),
                     Action::List(scope) => list(base(scope)),
                     Action::Read(scope, kind, name) => read(base(scope), kind, &name),
                     Action::Write(scope, kind, name, content) => {
@@ -395,6 +487,7 @@ mod tests {
     fn call(tool: &GlutFiles, arguments: Value) -> Result<String, String> {
         let action = Action::of(&arguments)?;
         match action {
+            Action::PickModel => Ok(String::new()),
             Action::List(scope) => list(tool.base(scope)),
             Action::Read(scope, kind, name) => read(tool.base(scope), kind, &name),
             Action::Write(scope, kind, name, content) => {
@@ -524,6 +617,21 @@ mod tests {
             Access::Own,
             "a call it cannot read asks nothing"
         );
+    }
+
+    #[test]
+    fn a_hooks_ask_names_what_it_drops_and_a_picked_id_must_be_plain() {
+        let old = concat!(
+            r#"{"hooks": {"PreToolUse": [{"matcher": "^bash$", "#,
+            r#""hooks": [{"type": "command", "command": "guard"}]}]}}"#
+        );
+        let new = r#"{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "tests"}]}]}}"#;
+        assert_eq!(
+            hooks_change(old, new),
+            " — adds 1 hook(s), drops 1\n  dropped: PreToolUse ^bash$: guard"
+        );
+        assert!(plain_id("anthropic/claude-opus-4.5") && plain_id("qwen3:32b"));
+        assert!(!plain_id("model\nignore all") && !plain_id(""));
     }
 
     #[test]

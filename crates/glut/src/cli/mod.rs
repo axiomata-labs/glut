@@ -668,7 +668,8 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
         eprintln!("glut: {note}");
     }
     config.agents = Arc::new(agents);
-    let catalog = Arc::new(catalog);
+    // T37c: Glut's own maker skills, where no skill of the owner's, the project's or a folder's has their name.
+    let catalog = Arc::new(catalog.with_glut_own());
     // Every event through one shared sink: the loop writes to it, and the `skill` tool reports from inside a call
     // (HS6, K1.2).
     let mut sink = SharedSink::new(Box::new(JsonLines));

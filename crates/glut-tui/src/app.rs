@@ -55,7 +55,7 @@ fn init_check(name: &str) -> String {
 /// What `/help` says.
 const HELP: &str = "Commands: /model [id] · /provider [id] · /effort [level] · /context [tokens] · /compact · \
                     /editor [command] · /gate · /meter · /diff [session] · /agents · /plan · /thinking off|folded|open · /theme [name] · /vim on|off · /scrollback · \
-                    /memory · /todo [text|open|clean] · /init · /clear · /help · /quit\n\
+                    /memory · /todo [text|open|clean] · /skill [name] · /init · /clear · /help · /quit\n\
                     Keys: Enter send · Shift+Enter or Alt+Enter new line · ↑ history · Shift+Tab plan → ask → \
                     build → auto · Esc stop · Ctrl+O tool results · Ctrl+T thinking · Ctrl+B panel · Ctrl+G gate · Ctrl+N meter · Ctrl+A agents · Ctrl+Y to-dos · Ctrl+R review · \
                     Ctrl+X E editor · PgUp/PgDn scroll · Ctrl+F search · drag to copy · a click on a subagent's tile \
@@ -70,7 +70,7 @@ const HELP: &str = "Commands: /model [id] · /provider [id] · /effort [level] �
                     or doubled · counts · p P · u Ctrl+R), i a I A o O to Insert; Esc in Normal mode stops Glut";
 
 /// The session's commands with what each does, as the list under a typed `/` shows them.
-pub const COMMANDS: [(&str, &str); 26] = [
+pub const COMMANDS: [(&str, &str); 27] = [
     (
         "model",
         "pick a model of the provider in use, or /model <id>",
@@ -132,6 +132,10 @@ pub const COMMANDS: [(&str, &str); 26] = [
     (
         "memory",
         "what the project's memory keeps: Enter shows a fact; /memory open edits its index",
+    ),
+    (
+        "skill",
+        "start a skill: /skill <name> [what for] — /skill alone lists them (make-agent, make-skill, make-hook, …)",
     ),
     (
         "todo",
@@ -196,6 +200,10 @@ pub struct App {
     pub todos: Vec<glut::planning::TodoItem>,
     /// The project's `TODO.md`, the To-dos tab's (T41).
     pub project_todos: crate::todos::Todos,
+    /// `glut_file`'s `pick_model` waiting for the owner's pick (T37c).
+    model_pick: Option<oneshot::Sender<Option<(String, String)>>>,
+    /// When its list came up: keys before [`ASK_SETTLE`] has passed do not pick from it.
+    model_pick_opened: Instant,
     /// The guides `/init` checked, with the size each had then (T42).
     guide_checked: std::collections::BTreeMap<String, u64>,
     /// The guide the turn `/init` started checks or writes: its size is kept when the turn is answered (T42).
@@ -359,6 +367,8 @@ impl App {
             session,
             todos: Vec::new(),
             project_todos: crate::todos::Todos::default(),
+            model_pick: None,
+            model_pick_opened: Instant::now(),
             guide_checked,
             init_guide: None,
             last_turn: None,
@@ -652,6 +662,7 @@ impl App {
     }
 
     fn handle(&mut self, report: Report) {
+        self.settle_model_pick();
         match report {
             Report::Event(event) => {
                 if let Event::Usage {
@@ -735,6 +746,14 @@ impl App {
                 } else if self.plan_view.as_ref().is_some_and(|view| view.asking) {
                     // A dialog whose ask is gone answers nothing else.
                     self.plan_view = None;
+                }
+                // T37b/c: what `glut_file` would write stands whole in the stream (PgUp reads it); the card shows its
+                // head and tail.
+                if request.tool == glut::tools::glut_files::NAME && request.target.lines().count() > 1 {
+                    self.transcript.note(
+                        format!("Glut's own file, whole, as it would be written:\n{}", request.target),
+                        Tone::Heed,
+                    );
                 }
                 self.ask = Some(OpenAsk {
                     request,
@@ -902,13 +921,28 @@ impl App {
                 );
                 self.transcript.settle();
             }
+            // T37c: `glut_file` asks for a model of an agent's or a skill's own — every provider's list.
+            Report::PickModel(reply) => {
+                // A second ask answers the first with none: one list on the screen at a time.
+                if let Some(earlier) = self.model_pick.replace(reply) {
+                    let _ = earlier.send(None);
+                }
+                let mut picker = self.models_picker(None, true);
+                picker.title = format!(
+                    "Glut asks: the model of an agent or a skill of its own · Enter picks it, Esc none · {}",
+                    picker.title
+                );
+                picker.asks_model = true;
+                self.picker = Some(picker);
+                self.model_pick_opened = Instant::now();
+            }
             Report::ChooseModel(provider) => {
                 self.busy = None;
                 self.transcript.note(
                     format!("{provider} has no model yet: pick the one it takes"),
                     Tone::Quiet,
                 );
-                self.picker = Some(self.model_picker(&provider));
+                self.picker = Some(self.models_picker(Some(&provider), false));
             }
             Report::Shell {
                 id,
@@ -1032,7 +1066,10 @@ impl App {
     /// A key, a paste, a click or the wheel.
     pub fn on_terminal(&mut self, event: TermEvent) {
         match event {
-            TermEvent::Key(key) if key.kind != KeyEventKind::Release => self.on_key(key),
+            TermEvent::Key(key) if key.kind != KeyEventKind::Release => {
+                self.on_key(key);
+                self.settle_model_pick();
+            }
             TermEvent::Paste(text) if self.ask.is_none() && self.picker.is_none() => {
                 match &mut self.search {
                     // A paste while searching is what to search for.
@@ -1559,7 +1596,7 @@ impl App {
             // The models of the provider in use only: another provider is chosen with /provider first.
             "model" if rest.is_empty() => {
                 let provider = self.engine.provider.clone();
-                self.picker = Some(self.model_picker(&provider));
+                self.picker = Some(self.models_picker(Some(&provider), false));
             }
             "model" => self.switch(
                 None,
@@ -1600,6 +1637,7 @@ impl App {
             "init" => self.init(rest),
             "memory" => self.memory(rest),
             "todo" => self.todo(rest),
+            "skill" => self.skill(rest),
             "handoff" => match rest {
                 // A paid call: written only when asked by name.
                 "" => self.transcript.note(
@@ -1915,6 +1953,71 @@ impl App {
                     .note(format!("added to {name}: {item}"), Tone::Quiet),
                 Err(failure) => self.transcript.note(failure.message(&name), Tone::Fault),
             },
+        }
+    }
+
+    /// `/skill` (T37c): alone the skills to pick from; with a name the skill runs — the model loads it with the `skill`
+    /// tool, so a maker skill brings `glut_file` for the rest of the conversation — on what follows the name.
+    fn skill(&mut self, rest: &str) {
+        let (name, text) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+        if name.is_empty() {
+            if self.parts.skills.is_empty() {
+                return self.transcript.note("no skills here", Tone::Quiet);
+            }
+            let items = self
+                .parts
+                .skills
+                .iter()
+                .map(|(name, about)| {
+                    Item::plain(
+                        name.clone(),
+                        crate::transcript::clean(about),
+                        Pick::Skill(name.clone()),
+                    )
+                })
+                .collect();
+            self.picker = Some(Picker::new(
+                "Skills · Enter takes one into the input",
+                items,
+                None,
+            ));
+            return;
+        }
+        if !self.parts.skills.iter().any(|(known, _)| known == name) {
+            let known: Vec<&str> = self
+                .parts
+                .skills
+                .iter()
+                .map(|(known, _)| known.as_str())
+                .collect();
+            return self.transcript.note(
+                format!(
+                    "no skill {name}: {}",
+                    if known.is_empty() {
+                        "there are none".to_owned()
+                    } else {
+                        known.join(", ")
+                    }
+                ),
+                Tone::Fault,
+            );
+        }
+        let text = text.trim();
+        let mut prompt =
+            format!("Run the skill {name}: load it with the `skill` tool first, then follow it.");
+        if !text.is_empty() {
+            prompt.push_str("\n\n");
+            prompt.push_str(text);
+        }
+        self.send(prompt);
+    }
+
+    /// A `pick_model` whose list is no longer on the screen (another list, a dialog, a stop took its place) is
+    /// answered with none, so the tool never waits for a pick nobody can make.
+    fn settle_model_pick(&mut self) {
+        let shown = self.picker.as_ref().is_some_and(|picker| picker.asks_model);
+        if !shown && let Some(reply) = self.model_pick.take() {
+            let _ = reply.send(None);
         }
     }
 
@@ -2844,23 +2947,35 @@ impl App {
         }
     }
 
-    /// The models of provider `only` from the list Glut keeps, the current one selected.
-    fn model_picker(&self, only: &str) -> Picker {
+    /// The models of provider `only` (every provider's, each named, for `None`) from the lists Glut keeps, the current
+    /// one selected.
+    fn models_picker(&self, only: Option<&str>, own: bool) -> Picker {
         let mut items = Vec::new();
         let mut missing = Vec::new();
         if let Ok(list) = Providers::load(&self.parts.home) {
             for (id, entry) in &list.providers {
-                if id != only {
+                if only.is_some_and(|only| id != only) {
                     continue;
                 }
                 match models::cached(&self.parts.home, id, entry.root().trim_end_matches('/')) {
                     Some(list) => items.extend(list.models.iter().map(|model| {
+                        let label = crate::transcript::clean(&model.id).to_string();
                         Item {
-                            label: crate::transcript::clean(&model.id).to_string(),
+                            label: match only {
+                                Some(_) => label,
+                                None => format!("{} · {label}", crate::transcript::clean(id)),
+                            },
                             detail: model_detail(model),
-                            pick: Pick::Model {
-                                provider: id.clone(),
-                                model: model.id.clone(),
+                            pick: if own {
+                                Pick::OwnModel {
+                                    provider: id.clone(),
+                                    model: model.id.clone(),
+                                }
+                            } else {
+                                Pick::Model {
+                                    provider: id.clone(),
+                                    model: model.id.clone(),
+                                }
                             },
                             dim: !list.allows(&model.id),
                             facts: Facts {
@@ -2877,7 +2992,10 @@ impl App {
                 }
             }
         }
-        let mut title = format!("Model of {}", crate::transcript::clean(only));
+        let mut title = match only {
+            Some(only) => format!("Model of {}", crate::transcript::clean(only)),
+            None => "Model".to_owned(),
+        };
         if !missing.is_empty() {
             title.push_str(&format!(
                 " (no list yet: {} — glut models refresh)",
@@ -2984,12 +3102,25 @@ impl App {
     }
 
     fn on_picker_key(&mut self, key: KeyEvent) {
+        // A list Glut opened by itself takes no key typed before it showed (T37c), as an ask does.
+        let own = self.picker.as_ref().is_some_and(|picker| picker.asks_model);
+        if own
+            && (self.model_pick_opened.elapsed() < ASK_SETTLE || key.kind == KeyEventKind::Repeat)
+        {
+            return;
+        }
         let Some(picker) = &mut self.picker else {
             return;
         };
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
-            KeyCode::Esc => self.picker = None,
+            KeyCode::Esc => {
+                self.picker = None;
+                // `pick_model` waits for an answer: none picked is one.
+                if let Some(reply) = self.model_pick.take() {
+                    let _ = reply.send(None);
+                }
+            }
             KeyCode::Char('s') if ctrl => picker.next_sort(),
             KeyCode::Char('f') if ctrl => picker.toggle_free(),
             KeyCode::Up => picker.up(),
@@ -2999,6 +3130,11 @@ impl App {
                 let chosen = picker.chosen();
                 self.picker = None;
                 match chosen {
+                    Some(Pick::OwnModel { provider, model }) => {
+                        if let Some(reply) = self.model_pick.take() {
+                            let _ = reply.send(Some((provider, model)));
+                        }
+                    }
                     Some(Pick::Model { provider, model }) => self.switch(
                         Some(provider),
                         Some(model),
@@ -3048,6 +3184,7 @@ impl App {
                     Some(Pick::Init(migrate)) => self.init_with(migrate),
                     Some(Pick::MemoryFact(name)) => self.show_fact(&name),
                     Some(Pick::TodoClean) => self.todo_clean(),
+                    Some(Pick::Skill(name)) => self.input.insert_text(&format!("/skill {name} ")),
                     Some(Pick::Step { run, turn }) => self.picker = Some(step_do(run, turn)),
                     Some(Pick::StepDo { run, turn, restore }) => self.step_do(run, turn, restore),
                     Some(Pick::Rewind {
@@ -3898,7 +4035,15 @@ fn told(conversation: &[Message], prompt: &str) -> bool {
 fn waits(name: &str, rest: &str) -> bool {
     matches!(
         name,
-        "model" | "provider" | "effort" | "compact" | "clear" | "handoff" | "resume" | "init"
+        "model"
+            | "provider"
+            | "effort"
+            | "compact"
+            | "clear"
+            | "handoff"
+            | "resume"
+            | "init"
+            | "skill"
     ) || (name == "context" && !rest.is_empty())
 }
 
@@ -4604,6 +4749,49 @@ mod tests {
             });
         }
         events
+    }
+
+    #[test]
+    fn skill_alone_lists_the_skills_and_an_unknown_one_is_said() {
+        let (mut parts, engine) = session::for_tests();
+        parts.skills = vec![("make-agent".into(), "Makes a subagent.".into())];
+        let (send, _reports) = mpsc::unbounded_channel();
+        let mut app = App::new(Arc::new(parts), engine, send);
+        typed(&mut app, "/skill");
+        assert!(app.picker.is_some());
+        app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.input.text(), "/skill make-agent ");
+        app.input.clear();
+        typed(&mut app, "/skill nothing");
+        let said = app.transcript.blocks.iter().any(|block| {
+            matches!(&block.kind, crate::transcript::Kind::Note { text, .. } if text == "no skill nothing: make-agent")
+        });
+        assert!(said);
+    }
+
+    #[test]
+    fn pick_model_is_answered_by_the_owners_pick_or_by_none() {
+        let (mut app, _reports) = app();
+        let (reply, mut answer) = oneshot::channel();
+        app.on_report(Report::PickModel(reply));
+        assert!(
+            app.picker
+                .as_ref()
+                .is_some_and(|picker| picker.title.starts_with("Glut asks: the model"))
+        );
+        // A key typed before the list showed picks nothing.
+        app.on_terminal(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.picker.is_some());
+        app.model_pick_opened = Instant::now() - ASK_SETTLE;
+        app.on_terminal(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(answer.try_recv().unwrap(), None);
+        assert!(app.picker.is_none() && app.model_pick.is_none());
+        // Another list in its place answers it with none: the tool never waits on a list gone.
+        let (reply, mut answer) = oneshot::channel();
+        app.on_report(Report::PickModel(reply));
+        app.picker = Some(palette());
+        app.on_terminal(key(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(answer.try_recv().unwrap(), None);
     }
 
     #[test]

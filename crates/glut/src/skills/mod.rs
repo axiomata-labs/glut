@@ -28,6 +28,13 @@ use crate::permissions::{Gate, Rule};
 
 /// The folder of skills inside `~/.glut/` and a project's `.glut/` (K2).
 const SKILLS_DIR: &str = "skills";
+/// Glut's own skills (TUI T37c): built into the program, so they say what this Glut can — a skill of the same name of
+/// the owner's, a project's or a host's hides one.
+const GLUT_OWN: [(&str, &str); 3] = [
+    ("make-agent", include_str!("builtin/make-agent.md")),
+    ("make-hook", include_str!("builtin/make-hook.md")),
+    ("make-skill", include_str!("builtin/make-skill.md")),
+];
 /// What a skill run is prompted with when the caller adds no text of its own (K1.1).
 pub const DEFAULT_PROMPT: &str = "Run the skill.";
 /// The file a skill folder is named by (K1); everything else in it is a reference or a script (K4).
@@ -291,6 +298,21 @@ impl Catalog {
         (catalog, notes)
     }
 
+    /// With Glut's own skills where no skill of the catalog has their name (TUI T37c). A host whose runs cannot make
+    /// Glut's files (no `glut_file`) leaves them out.
+    #[must_use]
+    pub fn with_glut_own(mut self) -> Self {
+        for (name, text) in GLUT_OWN {
+            if self.get(name).is_none()
+                && let Ok(skill) = Skill::parse(name, PathBuf::new(), text)
+            {
+                self.skills.push(skill);
+            }
+        }
+        self.skills.sort_by(|a, b| a.name.cmp(&b.name));
+        self
+    }
+
     pub fn get(&self, name: &str) -> Option<&Skill> {
         self.skills.iter().find(|skill| skill.name == name)
     }
@@ -312,8 +334,10 @@ impl Catalog {
     /// The skill folders, by name: the read-only `skill:<name>/` roots the file tools get beside the working
     /// folder (K4).
     pub fn folders(&self) -> Vec<(String, PathBuf)> {
+        // Glut's own have no folder: nothing beside their text to read.
         self.skills
             .iter()
+            .filter(|skill| !skill.dir.as_os_str().is_empty())
             .map(|skill| (skill.name.clone(), skill.dir.clone()))
             .collect()
     }
@@ -662,6 +686,28 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+
+    #[test]
+    fn glut_brings_its_own_makers_and_a_skill_of_the_same_name_hides_one() {
+        let own = Catalog::default().with_glut_own();
+        assert_eq!(own.names(), ["make-agent", "make-hook", "make-skill"]);
+        assert!(
+            own.folders().is_empty(),
+            "they have no folder to read beside their text"
+        );
+        assert!(own.get("make-hook").unwrap().body.contains("exit 2 blocks"));
+        let mine = Skill::parse(
+            "make-agent",
+            PathBuf::from("/s/make-agent"),
+            "---\nname: make-agent\ndescription: Mine.\n---\nMy way.",
+        )
+        .unwrap();
+        let mut catalog = Catalog::default();
+        catalog.put(mine);
+        let catalog = catalog.with_glut_own();
+        assert_eq!(catalog.get("make-agent").unwrap().description, "Mine.");
+        assert_eq!(catalog.list().len(), 3);
+    }
     use crate::permissions::{Access, Mode, Nobody, RuleSet};
     use crate::prompt::system_prompt;
 

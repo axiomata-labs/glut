@@ -37,6 +37,8 @@ pub enum Report {
     Switched(Result<(Engine, Vec<String>), String>),
     /// `/provider` named a provider without a model: its list is fetched, the owner picks one of it.
     ChooseModel(String),
+    /// `glut_file`'s `pick_model` (T37c): the owner picks a provider and a model from Glut's lists; `None`: none.
+    PickModel(oneshot::Sender<Option<(String, String)>>),
     /// The owner's `!cmd` (for the model, `to_model`) or `!!cmd` (for the owner alone) ended.
     Shell {
         /// The stream's block of it.
@@ -167,6 +169,8 @@ pub struct Parts {
     pub guide_paths: Vec<PathBuf>,
     /// From how many bytes one of them is pointed out as too large (T42, the owner's `guide.warnAt`).
     pub guide_warn_bytes: u64,
+    /// The skills `/skill` starts (T37c), by name with their description.
+    pub skills: Vec<(String, String)>,
     /// The project's memory folder (T35), for `/memory`; a host's session has none.
     pub memory: Option<PathBuf>,
 }
@@ -307,7 +311,13 @@ pub async fn build(
             .into_iter()
             .map(|note| format!("skill left out: {note}")),
     );
-    let catalog = Arc::new(catalog);
+    // T37c: Glut's own maker skills, where no skill of the owner's, the project's or the host's has their name.
+    let catalog = Arc::new(catalog.with_glut_own());
+    let skills: Vec<(String, String)> = catalog
+        .list()
+        .iter()
+        .map(|skill| (skill.name.clone(), skill.description.clone()))
+        .collect();
     let servers = match &launch.servers {
         // Nobody can be asked about a project's new server before the screen is up: it is left out and said so.
         Servers::Owner => mcp::config::load(&home, &cwd)
@@ -328,6 +338,9 @@ pub async fn build(
         },
         cwd.clone(),
     ));
+    let picker = Arc::new(ScreenPicker {
+        reports: reports.clone(),
+    });
     let mut sink = SharedSink::new(Box::new(ToScreen {
         reports,
         host: Arc::clone(&host),
@@ -347,9 +360,9 @@ pub async fn build(
             },
             direct: Vec::new(),
             memory: memory.clone(),
-            glut_files: Some(glut::tools::glut_files::GlutFiles::new(
-                &home, &cwd, trusted,
-            )),
+            glut_files: Some(
+                glut::tools::glut_files::GlutFiles::new(&home, &cwd, trusted).with_picker(picker),
+            ),
         },
         &mut sink,
     )
@@ -374,6 +387,7 @@ pub async fn build(
         guide_chars,
         guide_paths,
         guide_warn_bytes,
+        skills,
         memory,
     };
     let engine = match launch.engine {
@@ -484,6 +498,21 @@ pub async fn engine(
         },
         notes,
     ))
+}
+
+/// Where `glut_file`'s `pick_model` asks (T37c): the screen shows the models of every provider, the owner picks one.
+struct ScreenPicker {
+    reports: mpsc::UnboundedSender<Report>,
+}
+
+impl glut::tools::glut_files::ModelPicker for ScreenPicker {
+    fn pick(&self) -> glut::tools::glut_files::PickFuture<'_> {
+        Box::pin(async move {
+            let (reply, answer) = oneshot::channel();
+            self.reports.send(Report::PickModel(reply)).ok()?;
+            answer.await.ok().flatten()
+        })
+    }
 }
 
 /// What builds a named agent's own model in a session (T37a): the session's provider and model where the agent names
@@ -1132,6 +1161,7 @@ pub fn for_tests() -> (Parts, Engine) {
         guide_chars: 0,
         guide_paths: Vec::new(),
         guide_warn_bytes: u64::from(glut::config::DEFAULT_GUIDE_WARN_KB) * 1024,
+        skills: Vec::new(),
         memory: None,
     };
     let engine = Engine {

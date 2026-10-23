@@ -48,6 +48,14 @@ pub enum Pick {
     MemoryFact(String),
     /// `/todo clean` (T41): the owner's yes to dropping the done items.
     TodoClean,
+    /// `/skill` (T37c): a skill to start, by its name.
+    Skill(String),
+    /// `glut_file`'s `pick_model` (T37c): the model the owner picks for an agent's or a skill's own — never a switch
+    /// of the session's, and no other list's pick ever answers it.
+    OwnModel {
+        provider: String,
+        model: String,
+    },
     /// `/init` (T35): whether `CLAUDE.md` moves into `AGENTS.md` (`true`) or stays the guide (`false`).
     Init(bool),
     /// `/agents`: a subagent's view, by its path through the streams.
@@ -132,6 +140,8 @@ pub struct Picker {
     /// `Some` for a picker that sorts (the models).
     pub sort: Option<Sort>,
     pub free_only: bool,
+    /// The list `glut_file`'s `pick_model` opened (T37c): its own, even with no entry to show.
+    pub asks_model: bool,
 }
 
 impl Picker {
@@ -144,6 +154,7 @@ impl Picker {
             selected: 0,
             sort: None,
             free_only: false,
+            asks_model: false,
         };
         picker.select(current);
         picker
