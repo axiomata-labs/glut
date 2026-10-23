@@ -211,6 +211,9 @@ struct Sandbox {
     proxy: Option<Proxy>,
     /// The Seatbelt profile, with the proxy's port as the one way to the network.
     profile: String,
+    /// The same profile with no way to the network: for a named agent whose `tools` name none (T37a) — the proxy
+    /// judges on a task of its own, where the agent's narrowing is not seen.
+    offline: String,
 }
 
 /// What the shell tools of one run share — also the hooks of a run (HS7, D5): they get what a command gets.
@@ -386,9 +389,12 @@ impl Session {
                 // Without a proxy a command still runs, it just reaches no network: the profile then opens no port.
                 let proxy = Proxy::start(gate).await.ok();
                 let mut policy = policy.clone();
+                policy.proxy_port = None;
+                let offline = policy.profile();
                 policy.proxy_port = proxy.as_ref().map(Proxy::port);
                 Sandbox {
                     profile: policy.profile(),
+                    offline,
                     proxy,
                 }
             })
@@ -414,11 +420,17 @@ impl Session {
         let mut process = match sandbox {
             // The profile goes in as an argument: nothing on disk for a command to change between two calls.
             Some(sandbox) => {
-                if let Some(proxy) = &sandbox.proxy {
+                let online = crate::permissions::agent_reaches_network();
+                if online && let Some(proxy) = &sandbox.proxy {
                     proxy_env = proxy.environment();
                 }
+                let profile = if online {
+                    &sandbox.profile
+                } else {
+                    &sandbox.offline
+                };
                 let mut process = Command::new(crate::sandbox::SANDBOX_EXEC);
-                process.arg("-p").arg(&sandbox.profile).arg(&self.shell);
+                process.arg("-p").arg(profile).arg(&self.shell);
                 process
             }
             None => Command::new(&self.shell),

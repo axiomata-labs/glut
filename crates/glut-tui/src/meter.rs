@@ -46,6 +46,8 @@ pub struct Meter {
     pub lean: (usize, usize, usize),
     /// What Glut lean spared on every run so far (`glut gain`): calls and characters spared, read when the tab opens.
     pub lean_all: Option<(usize, usize)>,
+    /// The prices of each subagent on a model of its own (T37a), by its `task` call: its `Started` says them.
+    sub_prices: HashMap<String, Prices>,
 }
 
 /// What the Meter tab says beside the sums: the window and how the turn under way stands.
@@ -78,7 +80,20 @@ impl Meter {
                     ..Turn::default()
                 });
             }
-            Event::Sub { depth, event, .. } => self.take_at(event, prices, *depth),
+            Event::Sub { depth, task, event } => {
+                // Each start says it anew: a provider that numbers its calls the same in every reply reuses a task id.
+                if let (Some(task), Event::Started { prices, .. }) = (task, &**event) {
+                    match prices {
+                        Some(own) => self.sub_prices.insert(task.clone(), *own),
+                        None => self.sub_prices.remove(task),
+                    };
+                }
+                let prices = task
+                    .as_ref()
+                    .and_then(|task| self.sub_prices.get(task).copied())
+                    .or(prices);
+                self.take_at(event, prices, *depth);
+            }
             Event::Usage {
                 input_tokens,
                 cached_input_tokens,
@@ -329,6 +344,7 @@ mod tests {
             model: "m".into(),
             cwd: ".".into(),
             tools: Vec::new(),
+            prices: None,
         }
     }
 
@@ -339,6 +355,39 @@ mod tests {
             cached_input_tokens: cached,
             output_tokens: output,
         }
+    }
+
+    #[test]
+    fn a_subagent_on_a_model_of_its_own_is_priced_by_its_own() {
+        let mine = Prices {
+            input_per_m: 1.0,
+            output_per_m: 1.0,
+            cached_input_per_m: None,
+        };
+        let own = Prices {
+            input_per_m: 10.0,
+            ..mine
+        };
+        let sub = |event: Event| Event::Sub {
+            depth: 1,
+            task: Some("c1".into()),
+            event: Box::new(event),
+        };
+        let mut meter = Meter::default();
+        meter.take(&started(), Some(mine));
+        meter.take(
+            &sub(Event::Started {
+                model: "big".into(),
+                cwd: ".".into(),
+                tools: Vec::new(),
+                prices: Some(own),
+            }),
+            Some(mine),
+        );
+        meter.take(&sub(usage(1_000_000, 0, 0)), Some(mine));
+        meter.take(&usage(1_000_000, 0, 0), Some(mine));
+        let cost = meter.turns[0].cost.unwrap();
+        assert!((cost - 11.0).abs() < 1e-9, "{cost}");
     }
 
     #[test]

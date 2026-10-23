@@ -49,6 +49,9 @@ pub enum Access {
     /// A change of the project's memory (TUI T35): what it would keep or remove, and where, as the owner reads it. It
     /// outlives the run and is read into every later session — so it is asked even in `auto`, never done in plan mode.
     Memory { change: String },
+    /// A `task` call that names an agent (TUI T37a): which, and on what it runs where its file says, as the owner
+    /// reads it in an ask. Judged as [`Self::Other`] is — the rules know `task` by its name.
+    Agent { what: String },
     /// A tool the rules know only by its name.
     Other,
 }
@@ -233,7 +236,7 @@ impl Rule {
                 tool: called,
             } => self.kind == RuleKind::Mcp && mcp_matches(&self.tool, server, called),
             Access::Own => true,
-            Access::Other | Access::Memory { .. } => named,
+            Access::Other | Access::Memory { .. } | Access::Agent { .. } => named,
         }
     }
 
@@ -760,17 +763,52 @@ tokio::task_local! {
     /// Task-local, so it follows the subagent's future through every await, also when the parent polls several at
     /// once in one task; a judgement made on a task of its own (the sandbox's proxy) counts as the run's.
     static SUBAGENT: (String, String);
+    /// What a named agent may call (TUI T37a): its `tools`, narrowing the gate for its own calls only, on top of
+    /// every narrowing of the run — task-local for the same reason as [`SUBAGENT`].
+    static AGENT_NARROWING: Option<Arc<Narrowing>>;
 }
 
 /// Runs `future` as the subagent of the `task` call `id`, labelled `label`: its judgements are its own
 /// ([`Gate::take_log`]) and its asks name it ([`AskRequest::from`]).
 pub async fn as_subagent<F: Future>(id: String, label: String, future: F) -> F::Output {
-    SUBAGENT.scope((id, label), future).await
+    as_agent(id, label, None, future).await
+}
+
+/// [`as_subagent`] for a named agent (TUI T37a): `tools` — `(by, rules)`, its name for a refusal and its rules —
+/// narrow what its calls may do; an empty list allows no call at all (an agent's `tools: []`), `None` narrows
+/// nothing.
+pub async fn as_agent<F: Future>(
+    id: String,
+    label: String,
+    tools: Option<(String, Vec<Rule>)>,
+    future: F,
+) -> F::Output {
+    let narrowing = tools.map(|(by, rules)| Arc::new(Narrowing { by, rules }));
+    SUBAGENT
+        .scope((id, label), AGENT_NARROWING.scope(narrowing, future))
+        .await
 }
 
 /// The subagent the current future runs as, if any.
 fn subagent() -> Option<(String, String)> {
     SUBAGENT.try_with(Clone::clone).ok()
+}
+
+/// Whether a sandboxed command of the current future may have the network (T37a): always, but for a named agent whose
+/// `tools` name no `Network` rule — its commands then run with no way out, since the proxy that judges connections
+/// does so on a task of its own and cannot see the agent's narrowing.
+pub fn agent_reaches_network() -> bool {
+    agent_narrowing().is_none_or(|narrowing| {
+        narrowing
+            .rules
+            .iter()
+            .any(|rule| rule.kind == RuleKind::Network)
+    })
+}
+
+/// The narrowing of the named agent the current future runs as, if any.
+fn agent_narrowing() -> Option<Arc<Narrowing>> {
+    AGENT_NARROWING.try_with(Clone::clone).ok().flatten()
 }
 
 /// A question to the owner.
@@ -1057,19 +1095,26 @@ impl Gate {
             .deny
             .iter()
             .any(|rule| rule.pattern.is_none() && rule.could_name(tool, sample));
+        let agent = agent_narrowing();
         !denied
-            && self.narrowings.iter().all(|narrowing| {
-                narrowing
-                    .rules
-                    .iter()
-                    .any(|rule| rule.could_name(tool, sample))
-            })
+            && self
+                .narrowings
+                .iter()
+                .chain(agent.as_deref())
+                .all(|narrowing| {
+                    narrowing
+                        .rules
+                        .iter()
+                        .any(|rule| rule.could_name(tool, sample))
+                })
     }
 
     /// Whether every narrowing of the run names this one command by a pattern of its own (`Bash(axiomata-cli board
     /// add:*)`, not a bare `Bash`): the declaration the shell asks before it starts one of its direct programs
     /// outside the sandbox ([`crate::tools::shell::DirectProgram`]). A run nothing narrowed declares no command.
     pub fn declares_command(&self, words: &[String]) -> bool {
+        // An agent's `tools` never declare one (T37a): a project's agent file is no source of a command run outside
+        // the sandbox; `judge` still applies its narrowing to the call.
         !self.narrowings.is_empty()
             && self.narrowings.iter().all(|narrowing| {
                 narrowing.rules.iter().any(|rule| {
@@ -1161,9 +1206,11 @@ impl Gate {
         // C3: an `allowed-tools` list only narrows. What one of them does not name is refused here, before any
         // rule or mode is even asked; what all of them name goes on to the normal judgement below, where such a
         // rule never allows anything by itself.
+        let agent = agent_narrowing();
         if let Some(narrowing) = self
             .narrowings
             .iter()
+            .chain(agent.as_deref())
             .find(|narrowing| !restrict_allows(&narrowing.rules, tool, access))
         {
             let rules = narrowing
@@ -1568,7 +1615,9 @@ fn scopes(tool: &str, access: &Access) -> Vec<Scope> {
         Access::Network { host } => one(format!("Network({host})")),
         // An MCP call's allowance is the tool's own rule, which names it exactly (M5).
         Access::Mcp { server, tool } => one(format!("mcp__{server}__{tool}")),
-        Access::Own | Access::Other | Access::Memory { .. } => one(tool.to_owned()),
+        Access::Own | Access::Other | Access::Memory { .. } | Access::Agent { .. } => {
+            one(tool.to_owned())
+        }
     }
 }
 
@@ -1590,7 +1639,7 @@ fn describe(access: &Access) -> String {
         Access::Network { host } => host.clone(),
         // For an ask and the events: server and tool, the way the rule names them (M5).
         Access::Mcp { server, tool } => format!("{server}/{tool}"),
-        Access::Memory { change } => change.clone(),
+        Access::Memory { change } | Access::Agent { what: change } => change.clone(),
         Access::Own | Access::Other => String::new(),
     }
 }
@@ -2780,6 +2829,75 @@ mod tests {
         let mut open = Gate::new(RuleSet::default(), Mode::Default, Arc::new(Nobody));
         open.narrow("the skill quiet", Vec::new());
         assert!(open.narrowed_by().is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_agents_tools_narrow_its_own_calls_only() {
+        let parse = |list: &[&str]| list.iter().map(|text| Rule::parse(text).unwrap()).collect();
+        let gate = Gate::new(
+            rules(&["Bash(git status:*)"], &[], &[]),
+            Mode::Default,
+            Arc::new(Nobody),
+        );
+        let read = Access::Read {
+            path: "src/lib.rs".into(),
+        };
+        let (read_ok, refused, offered_bash) = as_agent(
+            "c1".into(),
+            "look".into(),
+            Some(("the agent reader".into(), parse(&["Read"]))),
+            async {
+                (
+                    gate.judge("read_file", &read).await.is_ok(),
+                    gate.judge("bash", &bash("git status")).await.unwrap_err(),
+                    gate.offers("bash", &bash("git status")),
+                )
+            },
+        )
+        .await;
+        assert!(read_ok);
+        assert!(
+            refused.contains("the agent reader allows only: Read"),
+            "{refused}"
+        );
+        assert!(
+            !offered_bash,
+            "a tool its agent never names is not offered to it"
+        );
+        // Its commands reach no network unless its tools name some; the run's always may.
+        let offline = as_agent(
+            "c3".into(),
+            "x".into(),
+            Some(("a".into(), parse(&["Bash"]))),
+            async { agent_reaches_network() },
+        )
+        .await;
+        let online = as_agent(
+            "c4".into(),
+            "x".into(),
+            Some(("a".into(), parse(&["Bash", "Network(docs.rs)"]))),
+            async { agent_reaches_network() },
+        )
+        .await;
+        assert!(!offline && online && agent_reaches_network());
+        // An empty list allows nothing at all.
+        let nothing = as_agent(
+            "c5".into(),
+            "x".into(),
+            Some(("the agent mute".into(), Vec::new())),
+            async { gate.judge("read_file", &read).await },
+        )
+        .await;
+        assert!(nothing.is_err());
+        // The run itself, and a subagent without an agent, keep the rules as they are.
+        assert!(gate.judge("bash", &bash("git status")).await.is_ok());
+        let plain = as_subagent(
+            "c2".into(),
+            "plain".into(),
+            gate.judge("bash", &bash("git status")),
+        )
+        .await;
+        assert!(plain.is_ok());
     }
 
     /// An MCP call as the model makes it (M5): the server's own names.

@@ -301,14 +301,17 @@ async fn endpoint(
     }
     let home = crate::permissions::settings::home_dir().map_err(|err| err.to_string())?;
     let providers_file = crate::providers::Providers::load(&home).map_err(|err| err.to_string())?;
-    let store = providers_file.store(&home).map_err(|err| err.to_string())?;
-    let resolved = crate::providers::resolve(
-        &providers_file,
-        store.as_ref(),
-        provider,
-        model.as_deref(),
-        |name| std::env::var(name).ok(),
-    )?;
+    // The store is let go before the model list is fetched: it is no thing to hold across a wait.
+    let resolved = {
+        let store = providers_file.store(&home).map_err(|err| err.to_string())?;
+        crate::providers::resolve(
+            &providers_file,
+            store.as_ref(),
+            provider,
+            model.as_deref(),
+            |name| std::env::var(name).ok(),
+        )?
+    };
     eprintln!(
         "glut: provider {} · model {}",
         resolved.id, resolved.endpoint.model
@@ -351,6 +354,70 @@ async fn endpoint(
             list,
         }),
     ))
+}
+
+/// What builds a named agent's own model in `glut run` (T37a).
+struct CliModels {
+    /// The run's own `--base-url` endpoint and protocol, when it has no provider.
+    one_off: Option<(ModelEndpoint, crate::providers::catalog::Protocol)>,
+    provider: Option<String>,
+    /// The run's model, for an agent that names only an effort.
+    model: String,
+    /// The owner's prices by model id.
+    prices: std::collections::HashMap<String, crate::config::Prices>,
+    /// The owner's effort, for an agent that names none.
+    effort: Option<crate::Effort>,
+}
+
+impl crate::agents::ModelSource for CliModels {
+    fn model<'a>(
+        &'a self,
+        provider: Option<&'a str>,
+        model: Option<&'a str>,
+        effort: Option<crate::Effort>,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<crate::agents::Picked, String>> + Send + 'a>,
+    > {
+        Box::pin(async move {
+            let model = match (provider, model) {
+                (None, None) => Some(self.model.as_str()),
+                (_, model) => model,
+            };
+            let (mut endpoint, protocol, listed, window) = match (provider, &self.one_off) {
+                (None, Some((endpoint, protocol))) => {
+                    let mut endpoint = endpoint.clone();
+                    if let Some(model) = model {
+                        model.clone_into(&mut endpoint.model);
+                    }
+                    (endpoint, *protocol, None, None)
+                }
+                _ => {
+                    let id = provider.or(self.provider.as_deref());
+                    let (endpoint, from) = endpoint(id, None, model.map(str::to_owned)).await?;
+                    let from = from.ok_or("no provider to build the agent's model with")?;
+                    let info = from
+                        .list
+                        .as_ref()
+                        .and_then(|list| list.get(&endpoint.model));
+                    let listed = info.and_then(|info| info.prices);
+                    let window = from
+                        .windows
+                        .get(&endpoint.model)
+                        .copied()
+                        .or_else(|| info.and_then(|info| info.context_window));
+                    (endpoint, from.protocol, listed, window)
+                }
+            };
+            endpoint.effort = effort.or(self.effort);
+            let prices = self.prices.get(&endpoint.model).copied().or(listed);
+            let model = Model::new(endpoint, protocol).map_err(|err| err.to_string())?;
+            Ok(crate::agents::Picked {
+                model: Arc::new(model),
+                prices,
+                window,
+            })
+        })
+    }
 }
 
 /// Whether `url` names a user or a password before its host (`https://user:pw@host`).
@@ -595,6 +662,12 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
     for note in notes {
         eprintln!("glut: skill left out: {note}");
     }
+    // T37a: the named subagents, the owner's and — in a trusted folder — the project's.
+    let (agents, notes) = crate::agents::Catalog::load(&home, &cwd, trusted);
+    for note in notes {
+        eprintln!("glut: {note}");
+    }
+    config.agents = Arc::new(agents);
     let catalog = Arc::new(catalog);
     // Every event through one shared sink: the loop writes to it, and the `skill` tool reports from inside a call
     // (HS6, K1.2).
@@ -700,6 +773,7 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
             .get(&endpoint.model)
             .copied()
             .or_else(|| listed(&endpoint.model).and_then(|info| info.prices)),
+        paid_usd: 0.0,
     };
     if max_usd.is_some() && config.budget.prices.is_none() {
         eprintln!(
@@ -707,6 +781,15 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
             endpoint.model
         );
     }
+    // A named agent's own model (T37a): built as the run's is — a provider of `providers.json`, or the run's one-off
+    // endpoint with another model id.
+    config.models = Some(crate::agents::Models(Arc::new(CliModels {
+        one_off: provider.is_none().then(|| (endpoint.clone(), protocol)),
+        provider: provider.as_ref().map(|from| from.id.clone()),
+        model: endpoint.model.clone(),
+        prices: built.prices.clone(),
+        effort: built.effort,
+    })));
     // The model is built after the command and the skill: either may name its own (C2, K5).
     let model = match Model::new(endpoint, protocol) {
         Ok(model) => model,

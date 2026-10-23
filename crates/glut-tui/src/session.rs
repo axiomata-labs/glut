@@ -297,6 +297,10 @@ pub async fn build(
     config.savings = Some(home.join(".glut").join(glut::lean::FILE));
     host.configure(&mut config, &built);
 
+    // T37a: the named subagents, the owner's and — in a trusted folder — the project's.
+    let (agents, agent_notes) = glut::agents::Catalog::load(&home, &cwd, trusted);
+    notes.extend(agent_notes);
+    config.agents = Arc::new(agents);
     let (catalog, skill_notes) = skills::Catalog::load(&home, &cwd, trusted, &config.skill_dirs);
     notes.extend(
         skill_notes
@@ -479,6 +483,40 @@ pub async fn engine(
     ))
 }
 
+/// What builds a named agent's own model in a session (T37a): the session's provider and model where the agent names
+/// none, the owner's effort where it names no effort.
+struct SessionModels {
+    parts: Arc<Parts>,
+    provider: String,
+    model: String,
+}
+
+impl glut::agents::ModelSource for SessionModels {
+    fn model<'a>(
+        &'a self,
+        provider: Option<&'a str>,
+        model: Option<&'a str>,
+        effort: Option<Effort>,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<glut::agents::Picked, String>> + Send + 'a>,
+    > {
+        Box::pin(async move {
+            // A provider of its own without a model takes that provider's own model; none named, the session's.
+            let model = match (provider, model) {
+                (None, None) => Some(self.model.as_str()),
+                (_, model) => model,
+            };
+            let provider = provider.unwrap_or(&self.provider);
+            let (engine, _) = engine(&self.parts, Some(provider), model, effort.map(Some)).await?;
+            Ok(glut::agents::Picked {
+                model: engine.model,
+                prices: engine.prices,
+                window: engine.window.map(|(tokens, _)| tokens),
+            })
+        })
+    }
+}
+
 /// The id of provider `id` (or the default one) when it has no model, its list fetched for the picker first; `None`
 /// when it has a model, or is unknown — the switch then says why.
 async fn without_model(parts: &Parts, id: Option<&str>) -> Option<String> {
@@ -579,6 +617,12 @@ pub fn turn(
             inbox: Some(inbox),
             ..engine.config(&parts)
         };
+        // A named agent's own model is built like the session's (T37a): the providers, their keys, the model list.
+        config.models = Some(glut::agents::Models(Arc::new(SessionModels {
+            parts: Arc::clone(&parts),
+            provider: engine.provider.clone(),
+            model: engine.model_name().to_owned(),
+        })));
         parts.host.state(State::Working);
         // The host's word first (its budget, its stop): a refused turn sends nothing and leaves the conversation.
         let kind = match input {

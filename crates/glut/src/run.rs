@@ -11,7 +11,7 @@ use tokio::time::Instant;
 
 use crate::codemode;
 use crate::compact::{self, COMPACTION_FAILED, KEEP_RECENT_TOKENS};
-use crate::config::{MIN_CONTEXT_WINDOW, RunConfig};
+use crate::config::{Budget, MIN_CONTEXT_WINDOW, RunConfig};
 use crate::error::HarnessError;
 use crate::event::{EVENT_RESULT_CHARS, Event, EventSink, FinishReason};
 use crate::hooks::{self, HookEvent, HookOutcome};
@@ -294,6 +294,7 @@ async fn run_inner<M: ChatModel>(
         model: model.name().to_owned(),
         cwd: config.cwd.display().to_string(),
         tools: offer.specs.iter().map(|spec| spec.name.clone()).collect(),
+        prices: config.budget.prices,
     });
     // Set when the run stops, so a tool still at work (a search over a large tree) stops too and none starts after.
     let stop = StopFlag::default();
@@ -350,6 +351,7 @@ async fn run_inner<M: ChatModel>(
         compacted_size: None,
         sibling,
         read_at: HashMap::new(),
+        paid_usd: 0.0,
     };
     let mut resumed_calls = Vec::new();
     match opening {
@@ -444,7 +446,17 @@ fn opening_messages(
     let system = if depth == 0 {
         system_prompt(&config.cwd, &today, model, config.instructions.as_deref())
     } else {
-        subagent_prompt(&config.cwd, &today)
+        // A named agent's own text follows the subagent's frame (T37a); a plain subagent has none (D5).
+        let frame = subagent_prompt(&config.cwd, &today);
+        match config
+            .instructions
+            .as_deref()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+        {
+            Some(agent) => format!("{frame}\n\n{agent}"),
+            None => frame,
+        }
     };
     let mut messages = vec![Message::system(system)];
     let mut earlier = earlier.into_iter().peekable();
@@ -528,6 +540,8 @@ struct Loop<'a, M: ChatModel> {
     sibling: Option<Sibling<'a>>,
     /// The batch's version of each path at this run's last read or write of it, for a write after another's.
     read_at: HashMap<PathBuf, u64>,
+    /// What its subagents on models of their own cost beyond their tokens at this run's prices (T37a).
+    paid_usd: f64,
 }
 
 /// What a run knows of its model's context window (#111, K2).
@@ -616,7 +630,7 @@ impl Offer {
             specs.push(codemode::spec(&direct, &behind));
         }
         if depth == 0 && config.subagents {
-            specs.push(crate::task::spec());
+            specs.push(crate::task::spec(&config.agents));
         }
         // Offered from the first turn on, so the tool list — and with it the prompt's cached head — stays put.
         specs.push(results::spec());
@@ -637,6 +651,9 @@ impl Offer {
 /// How often a script may be found waiting with no call open before it counts as stuck: it waits on a promise nothing
 /// can settle (there are no timers). A few polls, not one, so a call answered a moment ago gets to land first.
 const STUCK_POLLS: u32 = 8;
+
+/// How long building a named agent's own model may take (T37a): its provider's model list is fetched for it.
+const MODEL_BUILD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Commands that only read, by their first word — what needs no snapshot before it runs (`date` in every step of a
 /// skill must not record the folder each time). Anything else, a redirection, a nested shell or what the lexer cannot
@@ -707,11 +724,16 @@ impl<M: ChatModel> Loop<'_, M> {
             }
             // Before the next model call, never between a reply and its results: every call of the last reply is
             // answered.
-            let spent = self
-                .sibling
-                .as_ref()
-                .map_or(self.usage, |sibling| sibling.group.spent());
-            if let Some(why) = self.config.budget.spent(&spent) {
+            // Beside others, what all of them spent, their money at each one's own prices (T37a).
+            let budget = Budget {
+                paid_usd: self.config.budget.paid_usd + self.paid_usd,
+                ..self.config.budget
+            };
+            let over = match &self.sibling {
+                Some(sibling) => budget.spent_costing(&sibling.group.spent(), sibling.group.paid()),
+                None => budget.spent(&self.usage),
+            };
+            if let Some(why) = over {
                 sink.emit(Event::Error { message: why });
                 return FinishReason::Budget;
             }
@@ -810,7 +832,7 @@ impl<M: ChatModel> Loop<'_, M> {
         })?;
         self.usage += reply.usage;
         if let Some(sibling) = &self.sibling {
-            sibling.group.spend(reply.usage);
+            sibling.group.spend(reply.usage, self.config.budget.prices);
         }
         sink.emit(Event::Usage {
             turn,
@@ -963,7 +985,9 @@ impl<M: ChatModel> Loop<'_, M> {
         };
         self.usage += compacted.usage;
         if let Some(sibling) = &self.sibling {
-            sibling.group.spend(compacted.usage);
+            sibling
+                .group
+                .spend(compacted.usage, self.config.budget.prices);
         }
         sink.emit(Event::Usage {
             turn: self.turns,
@@ -2008,18 +2032,24 @@ impl<M: ChatModel> Loop<'_, M> {
             ));
         }
         let parsed = serde_json::from_str::<Value>(&call.function.arguments);
-        let (prompt, label) = match &parsed {
-            Ok(arguments @ Value::Object(_)) => match crate::task::prompt_of(arguments) {
-                Ok(prompt) => (
-                    prompt,
-                    arguments
-                        .get("description")
-                        .and_then(Value::as_str)
-                        .unwrap_or("subagent")
-                        .to_owned(),
-                ),
-                Err(reason) => return Err((false, format!("error: {reason}"), Vec::new())),
-            },
+        let (prompt, label, agent) = match &parsed {
+            Ok(arguments @ Value::Object(_)) => {
+                match crate::task::prompt_of(arguments).and_then(|prompt| {
+                    let agent = crate::task::agent_of(arguments, &config.agents)?.cloned();
+                    Ok((prompt, agent))
+                }) {
+                    Ok((prompt, agent)) => (
+                        prompt,
+                        arguments
+                            .get("description")
+                            .and_then(Value::as_str)
+                            .unwrap_or("subagent")
+                            .to_owned(),
+                        agent,
+                    ),
+                    Err(reason) => return Err((false, format!("error: {reason}"), Vec::new())),
+                }
+            }
             Ok(_) => {
                 return Err((
                     false,
@@ -2038,7 +2068,14 @@ impl<M: ChatModel> Loop<'_, M> {
         let mut refused = Vec::new();
         // B1: `task` is judged like any other call of a name the rules know.
         if let Some(gate) = self.tools.gate() {
-            let judged = gate.judge(crate::task::NAME, &Access::Other).await;
+            // A named agent is named in the ask, with the provider and model its file picks (T37a).
+            let access = match &agent {
+                Some(agent) => Access::Agent {
+                    what: crate::permissions::printable(&agent.ask_line()),
+                },
+                None => Access::Other,
+            };
+            let judged = gate.judge(crate::task::NAME, &access).await;
             for entry in gate.take_log() {
                 sink.emit(Event::permission(self.turns, &call.id, &entry));
                 if !entry.allowed {
@@ -2053,14 +2090,68 @@ impl<M: ChatModel> Loop<'_, M> {
                 return Err((false, format!("error: {why}"), refused));
             }
         }
+        // T37a: an agent with a model of its own gets it built now; one that cannot be built is the call's answer and
+        // starts nothing — never a run on another model than the file names.
+        let picked = match &agent {
+            Some(agent) if agent.own_model() => {
+                let Some(models) = &config.models else {
+                    return Err((
+                        false,
+                        format!(
+                            "error: agent {}: this host cannot run a model of an agent's own",
+                            agent.name
+                        ),
+                        refused,
+                    ));
+                };
+                // Bounded like the run itself: a provider that does not answer neither holds the run past its time
+                // nor past the owner's stop.
+                let building = models.0.model(
+                    agent.provider.as_deref(),
+                    agent.model.as_deref(),
+                    agent.effort,
+                );
+                let left = self
+                    .deadline
+                    .saturating_duration_since(Instant::now())
+                    .min(MODEL_BUILD_TIMEOUT);
+                let built = tokio::select! {
+                    built = tokio::time::timeout(left, building) => built
+                        .unwrap_or_else(|_| Err("its model did not answer in time".to_owned())),
+                    () = self.cancel.cancelled() => Err("stopped".to_owned()),
+                };
+                match built {
+                    Ok(picked) => Some(picked),
+                    Err(why) => {
+                        return Err((
+                            false,
+                            format!("error: agent {}: {why}", agent.name),
+                            refused,
+                        ));
+                    }
+                }
+            }
+            _ => None,
+        };
         let mut sub = config.clone();
         // D5: the caller's instructions are the parent's contract; the subagent gets its own prompt and
-        // whatever the parent's model put into `prompt`.
-        sub.instructions = None;
+        // whatever the parent's model put into `prompt` — a named agent its file's text (T37a).
+        sub.instructions = agent.as_ref().map(|agent| agent.prompt.clone());
         sub.max_turns = config.subagent_max_turns;
         // Its usage counts from nothing: it may spend only what the run has left (glut-cards C6) — with the subagents
-        // beside it, which count against the same rest (T40, `Group`).
-        sub.budget = config.budget.less(&self.usage);
+        // beside it, which count against the same rest (T40, `Group`). On a model of its own, at that model's prices.
+        sub.budget = Budget {
+            paid_usd: config.budget.paid_usd + self.paid_usd,
+            ..config.budget
+        }
+        .less(&self.usage);
+        if let Some(picked) = &picked {
+            // Unpriced, it counts at the run's prices: a cap in money never goes blind for a model it does not know.
+            sub.budget.prices = picked.prices.or(config.budget.prices);
+            // Its own model's window and output limit, not the parent's: a smaller model compacts in time.
+            sub.compaction.context_window = picked.window;
+            sub.max_output_tokens = None;
+        }
         self.subagents_started += 1;
         Ok(Subagent {
             id: call.id.clone(),
@@ -2068,6 +2159,8 @@ impl<M: ChatModel> Loop<'_, M> {
             prompt,
             config: sub,
             refused,
+            agent,
+            model: picked.map(|picked| picked.model),
         })
     }
 
@@ -2107,8 +2200,16 @@ impl<M: ChatModel> Loop<'_, M> {
         while let Ok(event) = arriving.try_recv() {
             sink.emit(event);
         }
-        for outcome in &outcomes {
+        for (task, outcome) in tasks.iter().zip(&outcomes) {
             self.usage += outcome.usage;
+            // A subagent on a model of its own costs at its prices: the difference to this run's goes beside the
+            // tokens (T37a).
+            if task.model.is_some()
+                && let (Some(own), Some(mine)) =
+                    (task.config.budget.prices, self.config.budget.prices)
+            {
+                self.paid_usd += own.cost_usd(&outcome.usage) - mine.cost_usd(&outcome.usage);
+            }
         }
         outcomes
     }
@@ -2142,6 +2243,10 @@ struct Subagent {
     prompt: String,
     config: RunConfig,
     refused: Vec<Refusal>,
+    /// The named agent it runs as (T37a), if any.
+    agent: Option<crate::agents::Agent>,
+    /// The model of its own an agent named; `None`: the parent's.
+    model: Option<Arc<crate::model::Model>>,
 }
 
 /// What the subagents of one parent share from it: its model, tools and cancel, the time it has, where they nest.
@@ -2183,20 +2288,38 @@ impl<M: ChatModel> Place<'_, M> {
         };
         let cancel = self.cancel.subagent(&task.id);
         let run = async {
-            let nested = run_inner(
-                &config,
-                self.model,
-                self.tools,
-                Opening::Fresh {
-                    earlier: Vec::new(),
-                    prompt: &task.prompt,
-                },
-                &mut sink,
-                &cancel,
-                self.depth,
-                Some(sibling),
-            );
-            let (outcome, _) = Box::pin(nested).await;
+            let opening = Opening::Fresh {
+                earlier: Vec::new(),
+                prompt: &task.prompt,
+            };
+            let (outcome, _) = match &task.model {
+                Some(model) => {
+                    Box::pin(run_inner(
+                        &config,
+                        model.as_ref(),
+                        self.tools,
+                        opening,
+                        &mut sink,
+                        &cancel,
+                        self.depth,
+                        Some(sibling),
+                    ))
+                    .await
+                }
+                None => {
+                    Box::pin(run_inner(
+                        &config,
+                        self.model,
+                        self.tools,
+                        opening,
+                        &mut sink,
+                        &cancel,
+                        self.depth,
+                        Some(sibling),
+                    ))
+                    .await
+                }
+            };
             // What the subagent judged but did not get to report (it was cancelled mid-call) still belongs to its
             // stream (D2.4).
             if let Some(gate) = self.tools.gate() {
@@ -2206,8 +2329,13 @@ impl<M: ChatModel> Place<'_, M> {
             }
             outcome
         };
+        // A named agent's `tools` narrow its own calls only (T37a).
+        let tools = task
+            .agent
+            .as_ref()
+            .and_then(|agent| Some((format!("the agent {}", agent.name), agent.tools.clone()?)));
         let outcome =
-            crate::permissions::as_subagent(task.id.clone(), task.label.clone(), run).await;
+            crate::permissions::as_agent(task.id.clone(), task.label.clone(), tools, run).await;
         self.cancel.forget(&task.id);
         outcome
     }
@@ -2241,20 +2369,48 @@ async fn join_all<F: std::future::Future + Unpin>(mut futures: Vec<F>) -> Vec<F:
 #[derive(Default)]
 struct Group {
     usage: std::sync::Mutex<Usage>,
+    /// Their money, each one's tokens at its own prices (T37a).
+    paid: std::sync::Mutex<f64>,
+    unpriced: std::sync::atomic::AtomicBool,
     paths: std::sync::Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>,
     written: std::sync::Mutex<HashMap<PathBuf, (u64, String)>>,
     writes: std::sync::atomic::AtomicU64,
 }
 
 impl Group {
-    /// Adds what one of them spent; returns what all of them have spent.
-    fn spend(&self, usage: Usage) -> Usage {
+    /// Adds what one of them spent, and its cost at its own `prices` when it has them (T37a); returns what all of
+    /// them have spent.
+    fn spend(&self, usage: Usage, prices: Option<crate::config::Prices>) -> Usage {
+        match prices {
+            Some(prices) => {
+                *self
+                    .paid
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner()) += prices.cost_usd(&usage);
+            }
+            None => self
+                .unpriced
+                .store(true, std::sync::atomic::Ordering::Relaxed),
+        }
         let mut total = self
             .usage
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
         *total += usage;
         *total
+    }
+
+    /// What all of them cost, each at its own prices; `None` once one of them spent without prices.
+    fn paid(&self) -> Option<f64> {
+        if self.unpriced.load(std::sync::atomic::Ordering::Relaxed) {
+            return None;
+        }
+        Some(
+            *self
+                .paid
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner()),
+        )
     }
 
     fn spent(&self) -> Usage {
@@ -5017,19 +5173,25 @@ mod tests {
         );
         assert_eq!(
             group
-                .spend(Usage {
-                    input_tokens: 5,
-                    ..Usage::default()
-                })
+                .spend(
+                    Usage {
+                        input_tokens: 5,
+                        ..Usage::default()
+                    },
+                    None
+                )
                 .input_tokens,
             5
         );
         assert_eq!(
             group
-                .spend(Usage {
-                    input_tokens: 2,
-                    ..Usage::default()
-                })
+                .spend(
+                    Usage {
+                        input_tokens: 2,
+                        ..Usage::default()
+                    },
+                    None
+                )
                 .input_tokens,
             7
         );
@@ -5169,6 +5331,81 @@ mod tests {
             events.first(),
             Some(Event::Started { tools, .. }) if tools.contains(&"task".to_owned())
         ));
+    }
+
+    #[tokio::test]
+    async fn a_named_agent_runs_with_its_own_prompt_and_an_unknown_or_unbuildable_one_starts_nothing()
+     {
+        let agent = |raw: &str| {
+            crate::agents::Agent::parse(
+                raw.split('\n').nth(1).unwrap().trim_start_matches("name: "),
+                raw,
+            )
+            .unwrap()
+        };
+        let mut config = RunConfig::new("/w");
+        config.agents = Arc::new(crate::agents::Catalog::of(vec![
+            agent(
+                "---\nname: finder\ndescription: Finds things.\n---\nYou find things, nothing else.",
+            ),
+            agent("---\nname: big\ndescription: Thinks hard.\nmodel: other/model\n---\nThink."),
+        ]));
+        let model = Script::new(vec![
+            Ok(task_call(
+                "c1",
+                json!({"description": "find", "prompt": "Find it.", "agent": "finder"}),
+            )),
+            Ok(text("found")),
+            Ok(task_call(
+                "c2",
+                json!({"description": "x", "prompt": "Go.", "agent": "nobody"}),
+            )),
+            Ok(task_call(
+                "c3",
+                json!({"description": "x", "prompt": "Go.", "agent": "big"}),
+            )),
+            Ok(text("done")),
+        ]);
+        let mut events = Vec::new();
+        let outcome = run(
+            &config,
+            &model,
+            &toolbox(),
+            "go",
+            &mut events,
+            &Cancel::new(),
+        )
+        .await;
+        assert_eq!(outcome.answer.as_deref(), Some("done"));
+        let seen = model.seen.lock().unwrap();
+        let sub_system = seen[1][0].content.as_deref().unwrap();
+        assert!(
+            sub_system.contains("You find things, nothing else."),
+            "{sub_system}"
+        );
+        let answer = |at: usize| {
+            seen[at]
+                .iter()
+                .rev()
+                .find(|m| m.role == Role::Tool)
+                .and_then(|m| m.content.clone())
+                .unwrap_or_default()
+        };
+        assert!(
+            answer(3).contains("no agent \"nobody\": the agents are big, finder"),
+            "{}",
+            answer(3)
+        );
+        assert!(
+            answer(4).contains("agent big: this host cannot run a model"),
+            "{}",
+            answer(4)
+        );
+        assert_eq!(
+            events.iter().filter(|e| matches!(e, Event::Sub { event, .. } if matches!(&**event, Event::Started { .. }))).count(),
+            1,
+            "only the agent that could run started"
+        );
     }
 
     #[tokio::test]

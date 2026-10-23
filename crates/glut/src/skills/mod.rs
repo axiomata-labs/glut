@@ -404,7 +404,7 @@ impl Catalog {
 }
 
 /// Whether `name` is a skill name (K3): the name of its folder, lower case letters, digits and dashes.
-fn is_skill_name(name: &str) -> bool {
+pub(crate) fn is_skill_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 64
         && name
@@ -431,7 +431,7 @@ struct Frontmatter {
 /// `allowed_tools` as skill files write it (K3): one string of rules or a YAML list of them. `Rule` is not
 /// `Deserialize` — the harness's own lexer decides what a rule is (HS3a), whatever the YAML says.
 #[derive(Default)]
-struct RuleList(Vec<Rule>);
+pub(crate) struct RuleList(pub(crate) Vec<Rule>);
 
 impl<'de> Deserialize<'de> for RuleList {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -550,7 +550,7 @@ fn frontmatter_end(raw: &str) -> usize {
 /// # Errors
 ///
 /// The reason the frontmatter must not be parsed; the skill is skipped with it as a note.
-fn check_frontmatter_shape(raw: &str) -> Result<(), String> {
+pub(crate) fn check_frontmatter_shape(raw: &str) -> Result<(), String> {
     if !raw.starts_with("---") {
         // No frontmatter block: the parser never sees YAML.
         return Ok(());

@@ -222,6 +222,9 @@ pub struct Budget {
     pub max_usd: Option<f64>,
     /// What the run's model costs.
     pub prices: Option<Prices>,
+    /// Money spent that the usage at [`Self::prices`] does not show: subagents on models of their own (TUI T37a),
+    /// counted at their prices — the difference to what the same tokens cost at the run's.
+    pub paid_usd: f64,
 }
 
 impl Budget {
@@ -234,16 +237,29 @@ impl Budget {
             .saturating_add(usage.output_tokens);
         Budget {
             max_tokens: self.max_tokens.map(|max| max.saturating_sub(tokens)),
-            max_usd: match (self.max_usd, self.prices) {
-                (Some(max), Some(prices)) => Some((max - prices.cost_usd(usage)).max(0.0)),
+            max_usd: match (self.max_usd, self.cost_usd(usage)) {
+                (Some(max), Some(cost)) => Some((max - cost).max(0.0)),
                 (max, _) => max,
             },
             prices: self.prices,
+            paid_usd: 0.0,
         }
+    }
+
+    /// What `usage` cost at the run's prices, with what was paid beside them; `None` without prices.
+    pub fn cost_usd(&self, usage: &crate::model::Usage) -> Option<f64> {
+        self.prices
+            .map(|prices| prices.cost_usd(usage) + self.paid_usd)
     }
 
     /// Why `usage` is past the budget, `None` while it is not.
     pub fn spent(&self, usage: &crate::model::Usage) -> Option<String> {
+        self.spent_costing(usage, self.cost_usd(usage))
+    }
+
+    /// Why `usage`, which cost `cost` (`None`: not known), is past the budget — for subagents side by side, whose
+    /// money is added up at each one's own prices (TUI T37a).
+    pub fn spent_costing(&self, usage: &crate::model::Usage, cost: Option<f64>) -> Option<String> {
         let tokens = usage
             .input_tokens
             .saturating_sub(usage.cached_input_tokens)
@@ -255,13 +271,12 @@ impl Budget {
                 "the run's budget of {max} tokens is spent ({tokens} used)"
             ));
         }
-        if let (Some(max), Some(prices)) = (self.max_usd, self.prices) {
-            let cost = prices.cost_usd(usage);
-            if cost >= max {
-                return Some(format!(
-                    "the run's budget of ${max:.2} is spent (${cost:.2} used)"
-                ));
-            }
+        if let (Some(max), Some(cost)) = (self.max_usd, cost)
+            && cost >= max
+        {
+            return Some(format!(
+                "the run's budget of ${max:.2} is spent (${cost:.2} used)"
+            ));
         }
         None
     }
@@ -319,6 +334,10 @@ pub struct RunConfig {
     pub max_subagents: u32,
     /// How many `task` calls of one reply run at once (TUI T40); 1 runs them one after another.
     pub parallel_subagents: u32,
+    /// The named subagents a `task` call may name (TUI T37a): the owner's and the project's `agents/` folders.
+    pub agents: std::sync::Arc<crate::agents::Catalog>,
+    /// What builds the model of an agent that names its own; `None`: such an agent's calls fail.
+    pub models: Option<crate::agents::Models>,
     /// Whether the run offers `codemode` and keeps its MCP tools behind it (Glut 2, A + E, G3/G8): the model then sees
     /// the core tools and `codemode`, and reaches the MCP tools from a script. On by default.
     pub codemode: bool,
@@ -413,6 +432,8 @@ impl RunConfig {
             subagent_timeout: DEFAULT_SUBAGENT_TIMEOUT,
             max_subagents: DEFAULT_MAX_SUBAGENTS,
             parallel_subagents: DEFAULT_PARALLEL_SUBAGENTS,
+            agents: std::sync::Arc::default(),
+            models: None,
             codemode: true,
             mcp_behind_code: true,
             todos: true,

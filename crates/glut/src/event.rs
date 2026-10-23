@@ -60,6 +60,10 @@ pub enum Event {
         model: String,
         cwd: String,
         tools: Vec<String>,
+        /// What the run's model costs, where the caller knows it: a subagent on a model of its own (TUI T37a) is
+        /// priced by its own.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        prices: Option<crate::config::Prices>,
     },
     /// A slash command became the run's prompt (HS4): its name, where the command came from and how many characters
     /// the prompt it became holds. For a built-in, which is answered without a model, `prompt_chars` is `0` — its

@@ -86,6 +86,10 @@ pub struct Agent {
     pub output_tokens: u64,
     /// The last thing it did, for the tile.
     pub live: String,
+    /// The model a named agent runs on (T37a), as its stream's start says; `None` for a plain subagent.
+    pub model: Option<String>,
+    /// Whether its `task` call named an agent.
+    named: bool,
 }
 
 impl Agent {
@@ -102,6 +106,7 @@ impl Agent {
             self.output_tokens += output_tokens;
         }
         match event {
+            Event::Started { model, .. } if self.named => self.model = Some(model.clone()),
             Event::ToolCall {
                 name, arguments, ..
             } => {
@@ -254,9 +259,18 @@ impl Transcript {
                 self.close_answer();
                 self.close_thinking();
                 if name == TASK && depth == 0 {
+                    // A named agent heads its tile by its name (T37a).
+                    let agent = serde_json::from_str::<serde_json::Value>(arguments)
+                        .ok()
+                        .and_then(|value| value.get("agent")?.as_str().map(str::to_owned))
+                        .filter(|agent| !agent.trim().is_empty());
+                    let task = match &agent {
+                        Some(agent) => format!("{agent}: {}", target_of(arguments)),
+                        None => target_of(arguments),
+                    };
                     self.push(Kind::Agent(Box::new(Agent {
                         id: id.clone(),
-                        task: target_of(arguments),
+                        task,
                         state: ToolState::Running,
                         gate: None,
                         answer: String::new(),
@@ -268,6 +282,8 @@ impl Transcript {
                         input_tokens: 0,
                         output_tokens: 0,
                         live: "starting…".into(),
+                        model: None,
+                        named: agent.is_some(),
                     })));
                     return;
                 }
@@ -867,9 +883,14 @@ fn tile(agent: &Agent, width: usize, lines: &mut Vec<Line<'static>>) {
         Span::styled(" │", style),
     ]));
     let calls = if agent.calls == 1 { "call" } else { "calls" };
+    let model = agent
+        .model
+        .as_deref()
+        .map(|model| format!(" · {}", clean(model)))
+        .unwrap_or_default();
     let stats = cut(
         &format!(
-            "{} {calls} · {} in · {} out",
+            "{} {calls} · {} in · {} out{model}",
             agent.calls,
             tokens_short(agent.input_tokens as usize),
             tokens_short(agent.output_tokens as usize)

@@ -205,8 +205,13 @@ pub fn overview_lines(
                 task_style,
             ),
         ])];
+        let model = agent
+            .model
+            .as_deref()
+            .map(|model| format!(" · {}", crate::transcript::clean(model)))
+            .unwrap_or_default();
         let spent = format!(
-            "{} calls · {} tokens",
+            "{} calls · {} tokens{model}",
             agent.calls,
             crate::meter::tokens(agent.input_tokens + agent.output_tokens)
         );

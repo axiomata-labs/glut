@@ -376,6 +376,7 @@ mod tests {
                 model: "m".into(),
                 cwd: ".".into(),
                 tools: Vec::new(),
+                prices: None,
             }),
         });
         assert_eq!(watch.refused, 4);
@@ -383,6 +384,7 @@ mod tests {
             model: "m".into(),
             cwd: ".".into(),
             tools: Vec::new(),
+            prices: None,
         });
         assert_eq!((watch.refused, watch.most_repeated()), (0, 0));
         assert_eq!(watch.seen.len(), 5, "the judgements stay for the session");
