@@ -165,6 +165,8 @@ pub struct Parts {
     pub guide_chars: usize,
     /// The project's guides the session read, the general first (`/init` checks the nearest).
     pub guide_paths: Vec<PathBuf>,
+    /// From how many bytes one of them is pointed out as too large (T42, the owner's `guide.warnAt`).
+    pub guide_warn_bytes: u64,
     /// The project's memory folder (T35), for `/memory`; a host's session has none.
     pub memory: Option<PathBuf>,
 }
@@ -290,6 +292,7 @@ pub async fn build(
     config.sandbox = Some(built.sandbox.clone());
     config.refusals = built.refusals;
     config.parallel_subagents = built.parallel_subagents;
+    let guide_warn_bytes = built.guide_warn_bytes;
     config.snapshots = Some(home.join(".glut").join("snapshots"));
     config.savings = Some(home.join(".glut").join(glut::lean::FILE));
     host.configure(&mut config, &built);
@@ -363,6 +366,7 @@ pub async fn build(
         log,
         guide_chars,
         guide_paths,
+        guide_warn_bytes,
         memory,
     };
     let engine = match launch.engine {
@@ -1080,6 +1084,7 @@ pub fn for_tests() -> (Parts, Engine) {
         )),
         guide_chars: 0,
         guide_paths: Vec::new(),
+        guide_warn_bytes: u64::from(glut::config::DEFAULT_GUIDE_WARN_KB) * 1024,
         memory: None,
     };
     let engine = Engine {

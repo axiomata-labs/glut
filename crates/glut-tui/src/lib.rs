@@ -6,6 +6,7 @@ mod agents;
 mod app;
 mod follow;
 mod glimm;
+mod guides;
 mod highlight;
 pub mod host;
 mod input;

@@ -196,6 +196,10 @@ pub struct App {
     pub todos: Vec<glut::planning::TodoItem>,
     /// The project's `TODO.md`, the To-dos tab's (T41).
     pub project_todos: crate::todos::Todos,
+    /// The guides `/init` checked, with the size each had then (T42).
+    guide_checked: std::collections::BTreeMap<String, u64>,
+    /// The guide the turn `/init` started checks or writes: its size is kept when the turn is answered (T42).
+    init_guide: Option<std::path::PathBuf>,
     /// How the last turn ended, for Glimm's mood: answered, or ended by an error or a limit; `None` before the first
     /// and after one the owner stopped.
     pub last_turn: Option<bool>,
@@ -323,6 +327,26 @@ impl App {
         for note in &parts.notes {
             transcript.note(note.clone(), Tone::Quiet);
         }
+        // T42: a guide grown too large is said once at the start, in orange; the Meter tab keeps saying it.
+        // A guide shortened below the limit since `/init` checked it counts afresh: its kept size goes.
+        let mut guide_checked = prefs.guide_checked.clone();
+        let shrunk =
+            crate::guides::shrunk(&parts.guide_paths, parts.guide_warn_bytes, &guide_checked);
+        if !shrunk.is_empty() {
+            guide_checked.retain(|path, _| !shrunk.contains(path));
+            if let Err(reason) = prefs::forget_guides_checked(&parts.home, &shrunk) {
+                transcript.note(reason, Tone::Fault);
+            }
+        }
+        let nearest = parts.guide_paths.last().map(std::path::PathBuf::as_path);
+        for large in
+            crate::guides::too_large(&parts.guide_paths, parts.guide_warn_bytes, &guide_checked)
+        {
+            transcript.note(
+                crate::guides::note(&large, &parts.config.cwd, nearest),
+                Tone::Heed,
+            );
+        }
         App {
             parts,
             engine,
@@ -335,6 +359,8 @@ impl App {
             session,
             todos: Vec::new(),
             project_todos: crate::todos::Todos::default(),
+            guide_checked,
+            init_guide: None,
             last_turn: None,
             panel,
             tab: Tab::Plan,
@@ -718,6 +744,11 @@ impl App {
                 self.scroll = 0;
             }
             Report::Done(outcome, conversation) => {
+                if let Some(path) = self.init_guide.take()
+                    && outcome.reason == FinishReason::Answered
+                {
+                    self.keep_guide_checked(&path);
+                }
                 // A turn that broke off before its message joined the conversation leaves no place to rewind to.
                 if self
                     .session
@@ -1783,11 +1814,11 @@ impl App {
             ));
             return;
         }
-        let prompt = match nearest {
-            Some(path) => init_check(&shown(&path)),
-            None => INIT_NEW.to_owned(),
+        let (prompt, guide) = match nearest {
+            Some(path) => (init_check(&shown(&path)), path),
+            None => (INIT_NEW.to_owned(), self.parts.config.cwd.join("AGENTS.md")),
         };
-        self.send(prompt);
+        self.send_init(prompt, guide);
     }
 
     /// `/memory` (T35): the facts the project's memory keeps, each with its description — read here, no model asked;
@@ -2009,8 +2040,10 @@ impl App {
         let Some(claude) = self.init_claude.take() else {
             return;
         };
+        let claude_path = self.parts.config.cwd.join(&claude);
         if migrate {
-            return self.send(init_migrate(&claude));
+            let agents = claude_path.with_file_name("AGENTS.md");
+            return self.send_init(init_migrate(&claude), agents);
         }
         let folder = self
             .parts
@@ -2023,7 +2056,47 @@ impl App {
         if let Err(reason) = prefs::set_keep_claude(&self.parts.home, &folder, true) {
             self.transcript.note(reason, Tone::Fault);
         }
-        self.send(init_check(&claude));
+        self.send_init(init_check(&claude), claude_path);
+    }
+
+    /// An `/init` turn, with the guide whose size is kept once it is answered (T42).
+    fn send_init(&mut self, prompt: String, guide: std::path::PathBuf) {
+        if self.working() {
+            return;
+        }
+        self.init_guide = Some(guide);
+        self.send(prompt);
+    }
+
+    /// The size a guide has after the `/init` turn: until it grows beyond it, it is not pointed out again (T42).
+    fn keep_guide_checked(&mut self, path: &std::path::Path) {
+        let Some(bytes) = crate::guides::size(path) else {
+            return;
+        };
+        let key = path.display().to_string();
+        self.guide_checked.insert(key.clone(), bytes);
+        if let Err(reason) = prefs::set_guide_checked(&self.parts.home, &key, bytes) {
+            self.transcript.note(reason, Tone::Fault);
+        }
+    }
+
+    /// What the Meter tab says of the guides grown too large, as they are now (T42).
+    pub fn guide_warnings(&self) -> Vec<String> {
+        crate::guides::too_large(
+            &self.parts.guide_paths,
+            self.parts.guide_warn_bytes,
+            &self.guide_checked,
+        )
+        .iter()
+        .map(|large| {
+            let nearest = self
+                .parts
+                .guide_paths
+                .last()
+                .map(std::path::PathBuf::as_path);
+            crate::guides::note(large, &self.parts.config.cwd, nearest)
+        })
+        .collect()
     }
 
     /// Shows or hides the side panel, and keeps the choice.
@@ -4531,6 +4604,47 @@ mod tests {
             });
         }
         events
+    }
+
+    #[test]
+    fn a_guide_too_large_is_said_in_orange_at_the_start_and_quiet_once_init_checked_it() {
+        let dir = std::env::temp_dir().join(format!("glut-tui-app-guide-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let guide = dir.join("AGENTS.md");
+        std::fs::write(&guide, "x".repeat(9 * 1024)).unwrap();
+        let (mut parts, engine) = session::for_tests();
+        parts.config.cwd = dir.clone();
+        parts.guide_paths = vec![guide.clone()];
+        let (send, _reports) = mpsc::unbounded_channel();
+        let mut app = App::new(Arc::new(parts), engine, send);
+        let heeded = |app: &App| {
+            app.transcript.blocks.iter().any(|block| {
+                matches!(&block.kind, crate::transcript::Kind::Note { text, tone: Tone::Heed }
+                    if text.starts_with("AGENTS.md has 9 KB"))
+            })
+        };
+        assert!(heeded(&app));
+        assert_eq!(app.guide_warnings().len(), 1);
+        // The /init turn answered: its guide's size is kept, and the warning goes.
+        app.init_guide = Some(guide.clone());
+        app.on_report(Report::Done(
+            RunOutcome {
+                reason: FinishReason::Answered,
+                answer: None,
+                turns: 1,
+                usage: Usage::default(),
+                refusals: 0,
+            },
+            Vec::new(),
+        ));
+        assert!(app.guide_warnings().is_empty());
+        assert_eq!(
+            Prefs::load(&app.parts.home)
+                .guide_checked
+                .get(&guide.display().to_string()),
+            Some(&(9 * 1024))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

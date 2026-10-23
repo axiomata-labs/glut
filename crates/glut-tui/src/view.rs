@@ -793,6 +793,13 @@ fn draw_panel(frame: &mut Frame, app: &App, area: Rect) {
     }
     if app.tab == Tab::Meter {
         lines.push(Line::default());
+        // T42: a guide grown too large heads the meter, in orange, as long as it is.
+        for warning in app.guide_warnings() {
+            for row in wrap(&warning, width) {
+                lines.push(Line::from(Span::styled(format!(" {row}"), theme::glow())));
+            }
+            lines.push(Line::default());
+        }
         let room = usize::from(area.height).saturating_sub(lines.len() + 2);
         lines.extend(app.meter.lines(&app.meter_window(), width + 2, room));
         lines.push(Line::default());

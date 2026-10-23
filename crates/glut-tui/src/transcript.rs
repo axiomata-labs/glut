@@ -156,6 +156,8 @@ pub enum Tone {
     Quiet,
     Fault,
     Fine,
+    /// Worth a look, no fault: in Glut's orange (T42, a guide grown too large).
+    Heed,
 }
 
 /// A block and its wrapped lines for the width they were made for.
@@ -792,6 +794,7 @@ fn render(kind: &Kind, width: u16, thinking: Thinking, frame: usize) -> Vec<Line
                 Tone::Quiet => theme::quiet(),
                 Tone::Fault => Style::default().fg(theme::c().fault),
                 Tone::Fine => Style::default().fg(theme::c().fine),
+                Tone::Heed => theme::glow(),
             };
             for row in wrap(text, width - 2) {
                 lines.push(Line::from(vec![

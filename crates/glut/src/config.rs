@@ -40,6 +40,13 @@ pub const DEFAULT_PARALLEL_SUBAGENTS: u32 = 3;
 /// The most `subagents.parallel` may say: as many as one run may start in all.
 pub const MAX_PARALLEL_SUBAGENTS: u32 = DEFAULT_MAX_SUBAGENTS;
 
+/// The size in KB from which a project's guide is pointed out as too large (TUI T42): twice the 4 KB `/init` aims at,
+/// so a guide just over its aim is not nagged about.
+pub const DEFAULT_GUIDE_WARN_KB: u32 = 8;
+
+/// The most `guide.warnAt` may say: a guide larger than 64 KB is not read at all (`guide.rs`).
+pub const MAX_GUIDE_WARN_KB: u32 = 64;
+
 /// A model behind an OpenAI-compatible chat API (`POST {base_url}/v1/chat/completions`, or
 /// `{base_url}/chat/completions` when [`Self::versioned`]): OpenRouter, Ollama and most others speak it.
 #[derive(Clone)]

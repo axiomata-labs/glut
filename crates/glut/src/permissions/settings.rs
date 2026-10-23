@@ -98,6 +98,18 @@ struct File {
     /// How many subagents of one reply run at once (TUI T40): `{"parallel": 3}`. The owner's only.
     #[serde(default)]
     subagents: Option<SubagentsSection>,
+    /// From which size a project's guide is pointed out as too large (TUI T42): `{"warnAt": 8}` in KB. The owner's
+    /// only.
+    #[serde(default)]
+    guide: Option<GuideSection>,
+}
+
+/// The `guide` section (TUI T42).
+#[derive(Debug, Default, Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GuideSection {
+    #[serde(default, rename = "warnAt")]
+    pub warn_at: Option<u32>,
 }
 
 /// The `subagents` section (TUI T40).
@@ -237,6 +249,8 @@ pub struct Settings {
     pub prices: HashMap<String, Prices>,
     /// The `subagents` section as written; only the owner's is read.
     pub subagents: Option<SubagentsSection>,
+    /// The `guide` section as written; only the owner's is read.
+    pub guide: Option<GuideSection>,
 }
 
 /// Reads one settings file; a missing file says nothing.
@@ -304,6 +318,7 @@ pub fn read(path: &Path) -> Result<Settings, HarnessError> {
         context_window: file.context_window,
         prices: file.prices,
         subagents: file.subagents,
+        guide: file.guide,
     })
 }
 
@@ -332,6 +347,9 @@ pub struct Loaded {
     pub prices: HashMap<String, Prices>,
     /// How many subagents of one reply run at once (T40): the owner's `subagents.parallel`, else the default.
     pub parallel_subagents: u32,
+    /// From how many bytes a project's guide is pointed out as too large (T42): the owner's `guide.warnAt` in KB,
+    /// else the default.
+    pub guide_warn_bytes: u64,
 }
 
 impl Loaded {
@@ -434,6 +452,19 @@ pub fn load(home: &Path, project: &Path, trusted: bool) -> Result<Loaded, Harnes
             });
         }
     };
+    let guide_warn_kb = match user.guide.and_then(|section| section.warn_at) {
+        None => crate::config::DEFAULT_GUIDE_WARN_KB,
+        Some(kb @ 1..=crate::config::MAX_GUIDE_WARN_KB) => kb,
+        Some(kb) => {
+            return Err(HarnessError::Settings {
+                path: owners.display().to_string(),
+                reason: format!(
+                    "guide.warnAt is {kb}, from 1 to {} (KB)",
+                    crate::config::MAX_GUIDE_WARN_KB
+                ),
+            });
+        }
+    };
     let ceiling = user.mode.unwrap_or_default().looseness();
     let owner = &user.sandbox;
     let mut sandbox = SandboxSettings {
@@ -466,6 +497,7 @@ pub fn load(home: &Path, project: &Path, trusted: bool) -> Result<Loaded, Harnes
         context_windows: user.context_window,
         prices: user.prices,
         parallel_subagents,
+        guide_warn_bytes: u64::from(guide_warn_kb) * 1024,
     };
     for file in project_files(project) {
         let settings = read(&file)?;
@@ -774,6 +806,37 @@ mod tests {
             load(&home, &project, false),
             Err(HarnessError::Settings { .. })
         ));
+    }
+
+    #[test]
+    fn the_owner_sets_when_a_guide_is_too_large_a_project_does_not() {
+        let (home, project) = (temp("guide-home"), temp("guide-project"));
+        assert_eq!(
+            load(&home, &project, true).unwrap().guide_warn_bytes,
+            u64::from(crate::config::DEFAULT_GUIDE_WARN_KB) * 1024
+        );
+        write(
+            &home.join(".glut/settings.json"),
+            r#"{"guide": {"warnAt": 12}}"#,
+        );
+        write(
+            &project.join(".glut/settings.json"),
+            r#"{"guide": {"warnAt": 64}}"#,
+        );
+        assert_eq!(
+            load(&home, &project, true).unwrap().guide_warn_bytes,
+            12 * 1024
+        );
+        for odd in [0, crate::config::MAX_GUIDE_WARN_KB + 1] {
+            write(
+                &home.join(".glut/settings.json"),
+                &format!(r#"{{"guide": {{"warnAt": {odd}}}}}"#),
+            );
+            assert!(matches!(
+                load(&home, &project, true),
+                Err(HarnessError::Settings { .. })
+            ));
+        }
     }
 
     #[test]

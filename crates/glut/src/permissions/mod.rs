@@ -1402,6 +1402,8 @@ pub struct BuiltGate {
     pub prices: std::collections::HashMap<String, crate::config::Prices>,
     /// How many subagents of one reply run at once (TUI T40), from `~/.glut/settings.json`.
     pub parallel_subagents: u32,
+    /// From how many bytes a project's guide is pointed out as too large (TUI T42), from `~/.glut/settings.json`.
+    pub guide_warn_bytes: u64,
 }
 
 impl BuiltGate {
@@ -1481,6 +1483,7 @@ pub fn build_gate(
         context_windows: loaded.context_windows,
         prices: loaded.prices,
         parallel_subagents: loaded.parallel_subagents,
+        guide_warn_bytes: loaded.guide_warn_bytes,
     })
 }
 
@@ -2078,6 +2081,7 @@ mod tests {
             context_windows: std::collections::HashMap::new(),
             prices: std::collections::HashMap::new(),
             parallel_subagents: crate::config::DEFAULT_PARALLEL_SUBAGENTS,
+            guide_warn_bytes: u64::from(crate::config::DEFAULT_GUIDE_WARN_KB) * 1024,
         };
         let off = built(true, true, false).notes();
         assert_eq!(off.len(), 3, "{off:?}");

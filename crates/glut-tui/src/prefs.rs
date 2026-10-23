@@ -47,6 +47,10 @@ pub struct Prefs {
     /// The folders whose owner said no to moving `CLAUDE.md` into `AGENTS.md` (T35, `/init`): not asked again.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub keep_claude: Vec<String>,
+    /// The guides `/init` checked (T42), by path, with the size each had at the end of that turn: a guide too large
+    /// is pointed out again only once it grew beyond it.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub guide_checked: std::collections::BTreeMap<String, u64>,
     #[serde(flatten)]
     other: serde_json::Map<String, serde_json::Value>,
 }
@@ -173,6 +177,28 @@ pub fn set_keep_claude(home: &Path, folder: &str, keep: bool) -> Result<(), Stri
     if keep {
         prefs.keep_claude.push(folder.to_owned());
     }
+    prefs.save(home)
+}
+
+/// Keeps the size the guide at `path` had when `/init` checked it (T42).
+///
+/// # Errors
+///
+/// A message when the file cannot be read (it is not written over) or written.
+pub fn set_guide_checked(home: &Path, path: &str, bytes: u64) -> Result<(), String> {
+    let mut prefs = Prefs::read(home)?;
+    prefs.guide_checked.insert(path.to_owned(), bytes);
+    prefs.save(home)
+}
+
+/// Forgets the sizes kept for `paths` (T42): shortened below the limit, they count afresh.
+///
+/// # Errors
+///
+/// A message when the file cannot be read (it is not written over) or written.
+pub fn forget_guides_checked(home: &Path, paths: &[String]) -> Result<(), String> {
+    let mut prefs = Prefs::read(home)?;
+    prefs.guide_checked.retain(|path, _| !paths.contains(path));
     prefs.save(home)
 }
 
