@@ -44,6 +44,8 @@ pub enum Pick {
     TakeBack(Vec<String>),
     /// An entry only to be read (a rule of the settings in `/gate`): picking it closes the list.
     Shown,
+    /// `/memory` (T35): a fact to show, by its name.
+    MemoryFact(String),
     /// `/init` (T35): whether `CLAUDE.md` moves into `AGENTS.md` (`true`) or stays the guide (`false`).
     Init(bool),
     /// `/agents`: a subagent's view, by its path through the streams.

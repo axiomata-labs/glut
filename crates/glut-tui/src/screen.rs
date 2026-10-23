@@ -285,6 +285,24 @@ async fn run_loop(
             block_cursor = false;
             continue;
         }
+        // `/memory open`: the editor gets the terminal for a file of the owner's, and gives it back (T35).
+        if let Some(file) = app.open_request.take() {
+            pause.ask.store(true, Ordering::SeqCst);
+            while !pause.idle.load(Ordering::SeqCst) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            leave(enhanced);
+            let opened = open_in_editor(&app.parts.home, &file);
+            let entered = enter();
+            pause.ask.store(false, Ordering::SeqCst);
+            app.opened(opened);
+            entered?;
+            app.mouse_held = true;
+            execute!(io::stdout(), Clear(ClearType::All))?;
+            terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
+            block_cursor = false;
+            continue;
+        }
         // Ctrl+X E: the editor gets the terminal, and the input comes back from it (T29).
         if let Some(text) = app.edit_request.take() {
             pause.ask.store(true, Ordering::SeqCst);
@@ -371,6 +389,22 @@ pub(crate) fn terminal_events(
 
 /// The input written in the owner's editor: into a file only the owner can read, the editor on it, the file read
 /// back and removed. Without an editor set (and no `$VISUAL`/`$EDITOR`) it says how to set one.
+/// `file` in the owner's editor, until it ends.
+fn open_in_editor(home: &std::path::Path, file: &std::path::Path) -> Result<(), String> {
+    let template = prefs::Prefs::load(home)
+        .editor()
+        .ok_or("no editor yet — /editor picks one")?;
+    let (program, args) = prefs::editor_command(&template, file, 1)
+        .ok_or("the editor's command is empty — /editor picks one")?;
+    match std::process::Command::new(&program).args(&args).status() {
+        Ok(status) if status.success() => Ok(()),
+        Ok(status) => Err(format!("{program} ended with {status}")),
+        Err(err) => Err(format!(
+            "cannot start {program}: {err} — /editor picks another"
+        )),
+    }
+}
+
 fn edit_in_editor(home: &std::path::Path, text: &str) -> Result<String, String> {
     use std::io::Write as _;
     use std::os::unix::fs::OpenOptionsExt as _;

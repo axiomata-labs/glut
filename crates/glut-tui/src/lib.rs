@@ -11,6 +11,7 @@ pub mod host;
 mod input;
 pub mod log;
 mod markdown;
+mod memory;
 mod meter;
 mod picker;
 mod plan;

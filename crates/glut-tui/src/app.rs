@@ -55,7 +55,7 @@ fn init_check(name: &str) -> String {
 /// What `/help` says.
 const HELP: &str = "Commands: /model [id] · /provider [id] · /effort [level] · /context [tokens] · /compact · \
                     /editor [command] · /gate · /meter · /diff [session] · /agents · /plan · /thinking off|folded|open · /theme [name] · /vim on|off · /scrollback · \
-                    /init · /clear · /help · /quit\n\
+                    /memory · /init · /clear · /help · /quit\n\
                     Keys: Enter send · Shift+Enter or Alt+Enter new line · ↑ history · Shift+Tab plan → ask → \
                     build → auto · Esc stop · Ctrl+O tool results · Ctrl+T thinking · Ctrl+B panel · Ctrl+G gate · Ctrl+N meter · Ctrl+A agents · Ctrl+R review · \
                     Ctrl+X E editor · PgUp/PgDn scroll · Ctrl+F search · drag to copy · a click on a subagent's tile \
@@ -70,7 +70,7 @@ const HELP: &str = "Commands: /model [id] · /provider [id] · /effort [level] �
                     or doubled · counts · p P · u Ctrl+R), i a I A o O to Insert; Esc in Normal mode stops Glut";
 
 /// The session's commands with what each does, as the list under a typed `/` shows them.
-pub const COMMANDS: [(&str, &str); 24] = [
+pub const COMMANDS: [(&str, &str); 25] = [
     (
         "model",
         "pick a model of the provider in use, or /model <id>",
@@ -128,6 +128,10 @@ pub const COMMANDS: [(&str, &str); 24] = [
     (
         "scrollback",
         "the conversation into the terminal's own scrollback (F3)",
+    ),
+    (
+        "memory",
+        "what the project's memory keeps: Enter shows a fact; /memory open edits its index",
     ),
     (
         "init",
@@ -215,6 +219,8 @@ pub struct App {
     chord: bool,
     /// The input, handed to the editor by the main loop (T29), which owns the terminal.
     pub edit_request: Option<String>,
+    /// A file to open in the owner's editor, by the main loop, which owns the terminal (`/memory open`).
+    pub open_request: Option<std::path::PathBuf>,
     busy: Option<Busy>,
     /// The turn under way: its cancel.
     running: Option<Cancel>,
@@ -335,6 +341,7 @@ impl App {
             overlay_rows: 0,
             chord: false,
             edit_request: None,
+            open_request: None,
             busy: None,
             running: None,
             ask: None,
@@ -1543,6 +1550,7 @@ impl App {
                 self.picker = Some(editor_picker(Prefs::load(&self.parts.home).editor()))
             }
             "init" => self.init(rest),
+            "memory" => self.memory(rest),
             "handoff" => match rest {
                 // A paid call: written only when asked by name.
                 "" => self.transcript.note(
@@ -1762,6 +1770,72 @@ impl App {
             None => INIT_NEW.to_owned(),
         };
         self.send(prompt);
+    }
+
+    /// `/memory` (T35): the facts the project's memory keeps, each with its description — read here, no model asked;
+    /// `/memory open` hands the index to the owner's editor.
+    fn memory(&mut self, rest: &str) {
+        let Some(dir) = self.parts.memory.clone() else {
+            return self
+                .transcript
+                .note("this session has no memory of its own", Tone::Quiet);
+        };
+        match rest.trim() {
+            "open" => {
+                let index = dir.join(glut::tools::memory::INDEX_FILE);
+                if index.is_file() {
+                    self.open_request = Some(index);
+                } else {
+                    self.transcript.note(
+                        format!("nothing kept yet in {}", dir.display()),
+                        Tone::Quiet,
+                    );
+                }
+            }
+            "" => {
+                let facts = crate::memory::facts(&dir);
+                if facts.is_empty() {
+                    return self.transcript.note(
+                        format!("nothing kept yet in {}", dir.display()),
+                        Tone::Quiet,
+                    );
+                }
+                let items = facts
+                    .into_iter()
+                    .map(|(name, about)| Item::plain(name.clone(), about, Pick::MemoryFact(name)))
+                    .collect();
+                self.picker = Some(Picker::new(
+                    format!("Memory — {} · Enter shows one", dir.display()),
+                    items,
+                    None,
+                ));
+            }
+            _ => self
+                .transcript
+                .note("/memory, or /memory open to edit its index", Tone::Fault),
+        }
+    }
+
+    /// One fact of the memory, whole, in the stream.
+    fn show_fact(&mut self, name: &str) {
+        let Some(dir) = &self.parts.memory else {
+            return;
+        };
+        match crate::memory::read(&dir.join(format!("{name}.md"))) {
+            Some(text) => self
+                .transcript
+                .note(format!("{name}:\n{text}"), Tone::Quiet),
+            None => self
+                .transcript
+                .note(format!("{name} cannot be read"), Tone::Fault),
+        }
+    }
+
+    /// What the editor said of a file it had open (`/memory open`).
+    pub fn opened(&mut self, result: Result<(), String>) {
+        if let Err(reason) = result {
+            self.transcript.note(reason, Tone::Fault);
+        }
     }
 
     /// The owner's answer to `/init`'s question about `CLAUDE.md`.
@@ -2733,6 +2807,7 @@ impl App {
                     Some(Pick::RewindTo(mark)) => self.picker = Some(self.rewind_how(mark)),
                     Some(Pick::Fork(mark)) => self.fork(mark),
                     Some(Pick::Init(migrate)) => self.init_with(migrate),
+                    Some(Pick::MemoryFact(name)) => self.show_fact(&name),
                     Some(Pick::Step { run, turn }) => self.picker = Some(step_do(run, turn)),
                     Some(Pick::StepDo { run, turn, restore }) => self.step_do(run, turn, restore),
                     Some(Pick::Rewind {

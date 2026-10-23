@@ -165,6 +165,8 @@ pub struct Parts {
     pub guide_chars: usize,
     /// The project's guides the session read, the general first (`/init` checks the nearest).
     pub guide_paths: Vec<PathBuf>,
+    /// The project's memory folder (T35), for `/memory`; a host's session has none.
+    pub memory: Option<PathBuf>,
 }
 
 /// The model the session talks to now.
@@ -337,7 +339,7 @@ pub async fn build(
                 Search::Off => None,
             },
             direct: Vec::new(),
-            memory,
+            memory: memory.clone(),
         },
         &mut sink,
     )
@@ -361,6 +363,7 @@ pub async fn build(
         log,
         guide_chars,
         guide_paths,
+        memory,
     };
     let engine = match launch.engine {
         EngineChoice::Providers { provider, model } => {
@@ -1077,6 +1080,7 @@ pub fn for_tests() -> (Parts, Engine) {
         )),
         guide_chars: 0,
         guide_paths: Vec::new(),
+        memory: None,
     };
     let engine = Engine {
         provider: "test".into(),
