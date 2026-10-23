@@ -63,7 +63,7 @@ const HOME_SECRETS: [&str; 38] = [
     ".kube",
     "Library/Keychains",
     ".axiomata",
-    ".axh",
+    ".glut",
     ".local/share/opencode",
     ".config/opencode",
     ".claude",
@@ -81,7 +81,7 @@ const HOME_SECRETS: [&str; 38] = [
 /// Names in the working folder no command writes (the same configuration the file tools protect; the git folder is
 /// handled on its own: commits may write it).
 const PROTECTED_IN_ROOT: [&str; 11] = [
-    ".axh",
+    ".glut",
     ".axiomata",
     ".claude",
     ".opencode",
@@ -362,7 +362,7 @@ mod tests {
     /// A fresh folder for a test, resolved (Seatbelt sees `/private/var/…`, not `/var/…`).
     fn temp(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "axh-sandbox-{name}-{}-{}",
+            "glut-sandbox-{name}-{}-{}",
             std::process::id(),
             chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
         ));
@@ -424,13 +424,13 @@ mod tests {
         let (home, root) = (temp("home"), temp("root"));
         // Outside every writable place: the temp folders are writable, the workspace's `target/` is not.
         let outside =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/axh-sandbox-outside");
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/glut-sandbox-outside");
         std::fs::create_dir_all(&outside).unwrap();
         let outside = outside.canonicalize().unwrap();
         std::fs::create_dir_all(home.join(".ssh")).unwrap();
         std::fs::write(home.join(".ssh/id"), "key").unwrap();
         std::fs::write(outside.join("note"), "n").unwrap();
-        std::fs::create_dir_all(root.join(".axh")).unwrap();
+        std::fs::create_dir_all(root.join(".glut")).unwrap();
         std::fs::write(root.join(".env"), "SECRET=1").unwrap();
         let policy = Policy::new(&root, &home, &[], &[]);
 
@@ -442,8 +442,8 @@ mod tests {
                 "a write outside",
             ),
             (
-                "echo x > .axh/settings.json".to_owned(),
-                "a write into .axh",
+                "echo x > .glut/settings.json".to_owned(),
+                "a write into .glut",
             ),
             (format!("cat {}/.ssh/id", home.display()), "reading a key"),
             ("cat .env".to_owned(), "reading .env"),
@@ -455,7 +455,7 @@ mod tests {
         assert_eq!(out, "n", "reading elsewhere stays allowed");
         let out = sandboxed(
             &policy,
-            "echo tmp > \"$TMPDIR/axh-sandbox-probe\" && echo tmp-ok",
+            "echo tmp > \"$TMPDIR/glut-sandbox-probe\" && echo tmp-ok",
         );
         assert!(out.contains("tmp-ok"), "{out}");
     }

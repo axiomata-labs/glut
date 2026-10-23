@@ -1,5 +1,5 @@
-//! What every caller puts together the same way before a run — `axh`, `axiomata-cli harness run` and the core's
-//! `axh` backend: the toolbox in its one order, and the prompt a slash command (HS4) or a skill (HS6) makes of the
+//! What every caller puts together the same way before a run — `glut`, `axiomata-cli harness run` and the core's
+//! `glut` backend: the toolbox in its one order, and the prompt a slash command (HS4) or a skill (HS6) makes of the
 //! caller's. Kept here so the callers cannot drift apart in what a run is offered or how it is narrowed.
 
 use std::path::Path;
@@ -207,26 +207,26 @@ mod tests {
     impl Fixture {
         fn new(tag: &str) -> Self {
             let base = std::env::temp_dir().join(format!(
-                "axh-setup-{tag}-{}-{}",
+                "glut-setup-{tag}-{}-{}",
                 std::process::id(),
                 chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
             ));
             let (home, project) = (base.join("home"), base.join("project"));
-            std::fs::create_dir_all(home.join(".axh/commands")).unwrap();
-            std::fs::create_dir_all(home.join(".axh/skills/reviewer")).unwrap();
+            std::fs::create_dir_all(home.join(".glut/commands")).unwrap();
+            std::fs::create_dir_all(home.join(".glut/skills/reviewer")).unwrap();
             std::fs::create_dir_all(&project).unwrap();
             let write = |rel: &str, text: &str| std::fs::write(home.join(rel), text).unwrap();
             write(
-                ".axh/commands/fix.md",
+                ".glut/commands/fix.md",
                 "---\nallowed-tools: Bash(git:*)\nmodel: command/model\neffort: high\n---\nFix $ARGUMENTS\n",
             );
-            write(".axh/commands/plain.md", "Look at $ARGUMENTS\n");
+            write(".glut/commands/plain.md", "Look at $ARGUMENTS\n");
             write(
-                ".axh/commands/empty.md",
+                ".glut/commands/empty.md",
                 "---\ndescription: nothing to say\n---\n",
             );
             write(
-                ".axh/skills/reviewer/SKILL.md",
+                ".glut/skills/reviewer/SKILL.md",
                 "---\nname: reviewer\ndescription: d\nallowed_tools: Read Bash(git:*)\nmodel: skill/model\n\
                  effort: low\n---\nReview.\n",
             );
@@ -394,9 +394,9 @@ mod tests {
     #[test]
     fn a_skill_whose_instructions_cannot_be_built_is_a_skill_error() {
         let fx = Fixture::new("broken");
-        std::fs::create_dir_all(fx.home.join(".axh/skills/broken")).unwrap();
+        std::fs::create_dir_all(fx.home.join(".glut/skills/broken")).unwrap();
         std::fs::write(
-            fx.home.join(".axh/skills/broken/SKILL.md"),
+            fx.home.join(".glut/skills/broken/SKILL.md"),
             "---\nname: broken\ndescription: d\nprepend_files: [\"../outside.md\"]\n---\nBody.\n",
         )
         .unwrap();

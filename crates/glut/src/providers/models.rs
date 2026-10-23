@@ -1,5 +1,5 @@
 //! What each provider offers (`docs/plans/glut-providers.md`, PV2, P5): its model list, pulled from the provider
-//! (`GET {root}/models`) and kept in `~/.axh/models/<id>.json` with its fetch time, so a run, the meter and the model
+//! (`GET {root}/models`) and kept in `~/.glut/models/<id>.json` with its fetch time, so a run, the meter and the model
 //! picker know a model's context window, its prices and whether it reasons without asking every time. The owner's
 //! `prices` and `contextWindow` in `settings.json` still beat what a list says.
 
@@ -15,7 +15,7 @@ use serde_json::Value;
 use crate::config::{ModelEndpoint, Prices};
 use crate::error::HarnessError;
 
-/// The folder of the lists, below `~/.axh`.
+/// The folder of the lists, below `~/.glut`.
 pub const DIR: &str = "models";
 /// A list older than this is fetched again before a run uses it.
 pub const FRESH_FOR: Duration = Duration::from_secs(24 * 60 * 60);
@@ -735,7 +735,7 @@ mod tests {
     #[test]
     fn a_kept_list_is_its_roots_and_fresh_for_a_day() {
         let home = std::env::temp_dir().join(format!(
-            "axh-models-{}-{}",
+            "glut-models-{}-{}",
             std::process::id(),
             chrono::Local::now()
                 .timestamp_nanos_opt()

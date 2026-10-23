@@ -1,14 +1,14 @@
 //! Snapshots of the work folder and undo (Glut 2, D, G11 — after Opencode's snapshots): before the first step of a run
-//! that may change files, and before every later such step, the folder is recorded in a shadow git store; `axh undo`
+//! that may change files, and before every later such step, the folder is recorded in a shadow git store; `glut undo`
 //! puts it back as it was before the run, or before one step.
 //!
-//! * **Outside the folder**: the store is `<root>/<hash of the folder>` (the harness's `~/.axh/snapshots`, mode 0700),
+//! * **Outside the folder**: the store is `<root>/<hash of the folder>` (the harness's `~/.glut/snapshots`, mode 0700),
 //!   used with `--git-dir` and `--work-tree` — nothing is written into the folder, its own `.git` is never touched, and
 //!   its `.gitignore` decides what is recorded, plus `target/`, `node_modules/`, nested repositories and every file
 //!   over [`MAX_FILE_BYTES`]. A folder of more than [`MAX_FILES`] files, the home folder or `/` get no snapshots.
 //! * **Isolated from the owner's git setup**: a cleared environment, no global or system config (so no filters, hooks,
 //!   fsmonitor or signing), no attributes or excludes file of the owner's, and a time limit on every git call.
-//! * **One chain per run** (`refs/axh/<run>`, built with `write-tree`/`commit-tree`, its own index file): runs on the
+//! * **One chain per run** (`refs/glut/<run>`, built with `write-tree`/`commit-tree`, its own index file): runs on the
 //!   same folder share neither an index nor a history, and when a run's record is older than [`KEEP`] (G11) its ref
 //!   goes and `gc` frees what only it held. One lock per store serialises snapshots, restores and sweeps.
 //! * **Undo restores the recorded files and removes the ones the run added** — the owner's own changes to them during
@@ -212,7 +212,7 @@ impl Snapshots {
     }
 
     fn reference(&self) -> String {
-        format!("refs/axh/{}", self.record.run)
+        format!("refs/glut/{}", self.record.run)
     }
 
     fn write_record(&self) -> Result<(), String> {
@@ -288,7 +288,7 @@ pub fn restore(
 }
 
 /// Records the folder as it is now in a run of its own, before an undo puts it back (`before-undo-…`): what the
-/// owner had since is not lost, `axh undo --run <it>` brings it back. Returns that run.
+/// owner had since is not lost, `glut undo --run <it>` brings it back. Returns that run.
 ///
 /// # Errors
 ///
@@ -442,7 +442,7 @@ pub fn sweep(root: &Path) {
                 let _ = git(
                     &git_dir,
                     folder,
-                    &["update-ref", "-d", &format!("refs/axh/{run}")],
+                    &["update-ref", "-d", &format!("refs/glut/{run}")],
                 );
                 let _ = std::fs::remove_file(git_dir.join(format!("index-{run}")));
             }
@@ -543,9 +543,9 @@ fn git_command(git_dir: &Path, work_tree: &Path, index: Option<&Path>, args: &[&
             "-c",
             "commit.gpgsign=false",
             "-c",
-            "user.name=axh",
+            "user.name=glut",
             "-c",
-            "user.email=axh@localhost",
+            "user.email=glut@localhost",
             "-c",
             "core.autocrlf=false",
             // A diff names a file as it is, not in C quotes: the review (TUI T17) finds it by that name.
@@ -617,7 +617,7 @@ mod tests {
 
     fn temp(label: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "axh-snap-{label}-{}-{}",
+            "glut-snap-{label}-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(SystemTime::UNIX_EPOCH)

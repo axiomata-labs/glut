@@ -18,7 +18,7 @@ pub const PROTECTED_NAMES: [&str; 14] = [
     ".git",
     ".hg",
     ".jj",
-    ".axh",
+    ".glut",
     ".axiomata",
     ".claude",
     ".opencode",
@@ -272,7 +272,7 @@ pub fn names_protected(path: &str) -> bool {
         })
 }
 
-/// Whether a word with unquoted glob characters could expand to a protected name (`.ax?`, `.[g]it`, `.gi*`).
+/// Whether a word with unquoted glob characters could expand to a protected name (`.gl?t`, `.[g]it`, `.gi*`).
 fn glob_may_name_protected(word: &str) -> bool {
     word.split('/')
         .filter(|component| component.contains(['*', '?', '[']))
@@ -749,7 +749,7 @@ mod tests {
         assert_eq!(analyze("cat a >> notes.md").writes, ["notes.md"]);
         assert_eq!(analyze("cmd &> log").writes, ["log"]);
         assert_eq!(analyze("cmd >| f").writes, ["f"]);
-        assert!(analyze("echo x > .axh/settings.json").protected);
+        assert!(analyze("echo x > .glut/settings.json").protected);
         let input = analyze("cat < input.txt");
         assert!(input.writes.is_empty(), "input is read, not written");
         assert_eq!(input.reads, ["input.txt"]);
@@ -874,11 +874,11 @@ mod tests {
     fn protected_names_are_found_in_any_case_any_word_and_behind_a_glob() {
         for command in [
             "cat .GIT/config",
-            "rm -rf .Axh",
+            "rm -rf .Glut",
             "cp x .claude/settings.json",
             "GIT_DIR=.git git log",
-            "echo x > .ax?/settings.json",
-            "cp x .[a]xh/settings.json",
+            "echo x > .gl?t/settings.json",
+            "cp x .[g]lut/settings.json",
             "cp x .gi*/config",
             "rsync x host:.git",
             "tar --exclude=a,.git c .",

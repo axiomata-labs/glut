@@ -1,4 +1,4 @@
-//! Slash commands (`docs/plans/harness.md`, HS4, C1–C6): the Markdown files below `.axh/commands/`, the built-ins
+//! Slash commands (`docs/plans/harness.md`, HS4, C1–C6): the Markdown files below `.glut/commands/`, the built-ins
 //! answered without a model, and turning a `/name rest of line` into the prompt a run starts with.
 //!
 //! The files are read through `axiomata_files::Root` rooted at the `commands` folder itself, with
@@ -26,7 +26,7 @@ const MAX_FILE_BYTES: u64 = 64 * 1024;
 const MAX_DEPTH: usize = 3;
 /// The extension a file must have to be a command.
 const EXTENSION: &str = ".md";
-/// The folder below `.axh/` the command files live in.
+/// The folder below `.glut/` the command files live in.
 const COMMANDS_DIR: &str = "commands";
 
 /// Where a command comes from.
@@ -34,9 +34,9 @@ const COMMANDS_DIR: &str = "commands";
 pub enum Source {
     /// Written in Rust in [`builtin`]: always there, and always before a file's command of the same name (C5).
     Builtin,
-    /// `~/.axh/commands/**/*.md`.
+    /// `~/.glut/commands/**/*.md`.
     User,
-    /// `<project>/.axh/commands/**/*.md`, and only in a folder the owner trusted once (P5).
+    /// `<project>/.glut/commands/**/*.md`, and only in a folder the owner trusted once (P5).
     Project,
 }
 
@@ -509,7 +509,7 @@ mod tests {
 
     fn temp(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "axh-commands-{name}-{}-{}",
+            "glut-commands-{name}-{}-{}",
             std::process::id(),
             chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
         ));
@@ -522,14 +522,14 @@ mod tests {
         std::fs::write(path, text).unwrap();
     }
 
-    /// An owner home and a project folder, with the owner's command files below `~/.axh/commands/`.
+    /// An owner home and a project folder, with the owner's command files below `~/.glut/commands/`.
     fn setup(name: &str, files: &[(&str, &str)]) -> (PathBuf, PathBuf) {
         let (home, project) = (
             temp(&format!("{name}-home")),
             temp(&format!("{name}-project")),
         );
         for (rel, text) in files {
-            write(&home.join(".axh/commands").join(rel), text);
+            write(&home.join(".glut/commands").join(rel), text);
         }
         (home, project)
     }
@@ -670,8 +670,8 @@ mod tests {
                 ("help.md", "a file that shall never answer"),
             ],
         );
-        write(&project.join(".axh/commands/review.md"), "project");
-        write(&project.join(".axh/commands/only-project.md"), "project");
+        write(&project.join(".glut/commands/review.md"), "project");
+        write(&project.join(".glut/commands/only-project.md"), "project");
 
         let trusted = Registry::load(&home, &project, true).unwrap();
         assert_eq!(prompt(&trusted, "/review").unwrap(), "project");
@@ -764,7 +764,7 @@ mod tests {
         let outside = temp("link-target");
         std::os::unix::fs::symlink(
             outside.join("secret.md"),
-            home.join(".axh/commands/escape.md"),
+            home.join(".glut/commands/escape.md"),
         )
         .unwrap();
         let error = Registry::load(&home, &project, false).unwrap_err();

@@ -1,6 +1,6 @@
 //! The count of what Glut lean saves (`docs/plans/glut-lean.md`, N9): every compacted output, unchanged re-read and
-//! relocated result is one line of `~/.axh/lean.jsonl` — the kind and the characters before and after — written by
-//! every Glut run (the app's, `axh`'s, the Studio's), so `axh gain` shows where the mechanisms fire and what they
+//! relocated result is one line of `~/.glut/lean.jsonl` — the kind and the characters before and after — written by
+//! every Glut run (the app's, `glut`'s, the Studio's), so `glut gain` shows where the mechanisms fire and what they
 //! spare. A known command in front of a pipe is a line too, with nothing saved: it shows whether filtering inside a
 //! pipe would pay (N8).
 //!
@@ -40,7 +40,7 @@ pub struct Saving {
 
 /// Appends `saving` to the count at `path`, the file only the owner's to read (0600); a file grown past
 /// [`MAX_BYTES`] first loses its older half. A missing folder is made the owner's alone (0700), like the rest of
-/// `~/.axh`.
+/// `~/.glut`.
 ///
 /// The run loop calls this on its own task: a line is one small append, and the halving reads and writes at most
 /// [`MAX_BYTES`] once in some 25,000 savings. Two processes halving at once may lose a line or two of the count, which
@@ -164,7 +164,7 @@ pub fn totals(path: &Path, since: Option<DateTime<Utc>>) -> io::Result<Vec<Total
     Ok(totals)
 }
 
-/// The count at `path` as a [`table`], of the last `days` days when given — what `axh gain` prints.
+/// The count at `path` as a [`table`], of the last `days` days when given — what `glut gain` prints.
 ///
 /// # Errors
 ///
@@ -229,7 +229,7 @@ mod tests {
 
     fn scratch() -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "axh-lean-{}-{}",
+            "glut-lean-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

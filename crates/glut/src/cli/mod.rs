@@ -1,8 +1,8 @@
-//! `axh` — the harness as a program of its own: runs one prompt headless and writes every step as a JSON line on
+//! `glut` — the harness as a program of its own: runs one prompt headless and writes every step as a JSON line on
 //! stdout (`docs/plans/harness.md`, H3). Logs go to stderr, so stdout stays machine-readable.
 //!
-//! The key comes from the environment (`AXH_API_KEY`) or, for a provider of `~/.axh/providers.json`, from its own
-//! variable or the secret store (`axh providers`, `docs/plans/glut-providers.md`) — never from an argument: an
+//! The key comes from the environment (`GLUT_API_KEY`) or, for a provider of `~/.glut/providers.json`, from its own
+//! variable or the secret store (`glut providers`, `docs/plans/glut-providers.md`) — never from an argument: an
 //! argument shows in `ps` and in a shell's history.
 //!
 //! Exit codes: 0 answered, 1 failed (model API, bad folder), 2 stopped at a limit (turns, time) or cancelled.
@@ -12,43 +12,35 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
-mod models;
-mod providers;
+pub mod models;
+pub mod providers;
 
-use clap::{Args, Parser, Subcommand};
-use glut::commands::{PermissionsView, Registry};
-use glut::mcp;
-use glut::permissions::settings::Trust;
-use glut::permissions::{GateOptions, Mode, Nobody, build_gate};
-use glut::setup::{self, Draft, Prepared};
-use glut::skills;
-use glut::{
+use crate::commands::{PermissionsView, Registry};
+use crate::mcp;
+use crate::permissions::settings::Trust;
+use crate::permissions::{GateOptions, Mode, Nobody, build_gate};
+use crate::setup::{self, Draft, Prepared};
+use crate::skills;
+use crate::{
     Cancel, Effort, Event, EventSink, FinishReason, Model, ModelEndpoint, RunConfig, SharedSink,
     Usage, run,
 };
+use clap::{Args, Subcommand};
 use serde::{Deserialize, Serialize};
 
 /// The environment variable the key is read from.
-const KEY_ENV: &str = glut::config::API_KEY_ENV;
+const KEY_ENV: &str = crate::config::API_KEY_ENV;
 
-#[derive(Parser)]
-#[command(name = "axh", version, about = "Axiomata's own agent harness")]
-struct Cli {
-    #[command(subcommand)]
-    command: Command,
-}
-
-// Parsed once at start: `Run`'s many flags make it far larger than `Undo`, and boxing them would only complicate the
-// derive.
-#[allow(clippy::large_enum_variant)]
+/// Glut's commands without its screen: a run headless, its journal and snapshots, the savings, the providers and
+/// models. `glut` offers each as a subcommand of its own.
 #[derive(Subcommand)]
-enum Command {
+pub enum Command {
     /// Runs one prompt and writes its events as JSON lines.
-    Run(RunArgs),
+    Run(Box<RunArgs>),
     /// Goes on with a run that was lost before it finished (durable runs, `docs/plans/durable.md`): from its journal in
-    /// `~/.axh/runs`, with the run's own flags. Without a run the newest unfinished one; --list shows them.
+    /// `~/.glut/runs`, with the run's own flags. Without a run the newest unfinished one; --list shows them.
     Resume {
-        /// The run, as `axh` named it when it started (on stderr).
+        /// The run, as `glut` named it when it started (on stderr).
         run: Option<String>,
         /// List the unfinished runs, newest first, and change nothing.
         #[arg(long)]
@@ -73,16 +65,16 @@ enum Command {
         list: bool,
     },
     /// What Glut lean saved (`docs/plans/glut-lean.md`, N9): compacted outputs, unchanged re-reads and relocated
-    /// results per kind, from `~/.axh/lean.jsonl` — every Glut run's, the app's too.
+    /// results per kind, from `~/.glut/lean.jsonl` — every Glut run's, the app's too.
     Gain {
         /// Only the last N days.
         #[arg(long)]
         days: Option<u32>,
     },
-    /// The model providers runs use (`docs/plans/glut-providers.md`): ~/.axh/providers.json, keys in a secret store.
+    /// The model providers runs use (`docs/plans/glut-providers.md`): ~/.glut/providers.json, keys in a secret store.
     #[command(subcommand)]
     Providers(providers::ProvidersCommand),
-    /// The models the providers offer (`docs/plans/glut-providers.md`, PV2), from lists kept in ~/.axh/models.
+    /// The models the providers offer (`docs/plans/glut-providers.md`, PV2), from lists kept in ~/.glut/models.
     #[command(subcommand)]
     Models(models::ModelsCommand),
 }
@@ -100,10 +92,10 @@ impl EventSink for JsonLines {
     }
 }
 
-/// `axh`'s web search: the providers' keys from the environment (`EXA_API_KEY`, `TINYFISH_API_KEY`, `TAVILY_API_KEY`;
+/// `glut`'s web search: the providers' keys from the environment (`EXA_API_KEY`, `TINYFISH_API_KEY`, `TAVILY_API_KEY`;
 /// Exa answers without one) and no budget — the app keeps the limits for its own runs (glut-round CP3).
-fn env_search() -> glut::tools::search::WebSearch {
-    use glut::tools::search::{SearchKeys, Unlimited, WebSearch};
+fn env_search() -> crate::tools::search::WebSearch {
+    use crate::tools::search::{SearchKeys, Unlimited, WebSearch};
     let key = |name: &str| {
         std::env::var(name)
             .ok()
@@ -119,15 +111,15 @@ fn env_search() -> glut::tools::search::WebSearch {
     )
 }
 
-/// `axh run`'s flags — kept in a run's journal, so `axh resume` builds the run again as it began.
+/// `glut run`'s flags — kept in a run's journal, so `glut resume` builds the run again as it began.
 #[derive(Args, Clone, Serialize, Deserialize)]
-struct RunArgs {
-    /// A provider of ~/.axh/providers.json (axh providers list); without it and without --base-url the default one.
+pub struct RunArgs {
+    /// A provider of ~/.glut/providers.json (glut providers list); without it and without --base-url the default one.
     #[arg(long, conflicts_with = "base_url")]
     #[serde(default)]
     provider: Option<String>,
     /// A one-off endpoint instead of a provider: the API's base, without /v1 (https://openrouter.ai/api,
-    /// http://localhost:11434); the key from AXH_API_KEY.
+    /// http://localhost:11434); the key from GLUT_API_KEY.
     #[arg(long)]
     #[serde(default)]
     base_url: Option<String>,
@@ -136,7 +128,7 @@ struct RunArgs {
     #[serde(default)]
     model: Option<String>,
     /// How hard the model reasons: none, minimal, low, medium, high, xhigh or max. Otherwise a skill's or a
-    /// command's `effort:`, else `effort` in ~/.axh/settings.json, else the provider's own default.
+    /// command's `effort:`, else `effort` in ~/.glut/settings.json, else the provider's own default.
     #[arg(long)]
     #[serde(default)]
     effort: Option<String>,
@@ -151,7 +143,7 @@ struct RunArgs {
     /// The run's time limit in seconds.
     #[arg(long)]
     timeout_secs: Option<u64>,
-    /// The model's context window in tokens, over `contextWindow` in ~/.axh/settings.json and the provider's model
+    /// The model's context window in tokens, over `contextWindow` in ~/.glut/settings.json and the provider's model
     /// list: the run compacts its older steps shortly before it is full.
     #[arg(long)]
     #[serde(default)]
@@ -162,11 +154,11 @@ struct RunArgs {
     #[serde(default)]
     max_tokens: Option<u64>,
     /// End the run before its next model call once it has cost this many USD, at the model's `prices` in
-    /// ~/.axh/settings.json (without them a run has no budget in money, and says so).
+    /// ~/.glut/settings.json (without them a run has no budget in money, and says so).
     #[arg(long)]
     #[serde(default)]
     max_usd: Option<f64>,
-    /// Never compact the conversation automatically (`"compact": {"auto": false}` in ~/.axh/settings.json).
+    /// Never compact the conversation automatically (`"compact": {"auto": false}` in ~/.glut/settings.json).
     #[arg(long)]
     #[serde(default)]
     no_auto_compact: bool,
@@ -187,27 +179,26 @@ struct RunArgs {
     /// frontmatter may narrow the tools, pick the model and set the time limit (K5).
     #[arg(long)]
     skill: Option<String>,
-    /// A folder of skills beside `~/.axh/skills` (HS6, K2); repeatable.
+    /// A folder of skills beside `~/.glut/skills` (HS6, K2); repeatable.
     #[arg(long)]
     skill_dir: Vec<PathBuf>,
     /// The run's MCP servers from this file alone (`{"mcpServers": …}`, Claude Code's shape and flag), instead of
-    /// ~/.axh/mcp.json and the project's .mcp.json.
+    /// ~/.glut/mcp.json and the project's .mcp.json.
     #[arg(long)]
     #[serde(default)]
     mcp_config: Option<PathBuf>,
     /// The prompt — extra text beside `--skill`, or a slash command (`/review src/`), read from
-    /// `~/.axh/commands/` and, in a trusted folder, the project's `.axh/commands/` (HS4). Without `--skill` a
+    /// `~/.glut/commands/` and, in a trusted folder, the project's `.glut/commands/` (HS4). Without `--skill` a
     /// prompt is required; with one it defaults to "Run the skill.".
     prompt: Option<String>,
 }
 
-#[tokio::main]
-async fn main() -> ExitCode {
+/// Runs one of the headless commands; its logs go to stderr, so stdout stays machine-readable.
+pub async fn dispatch(command: Command) -> ExitCode {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .with_writer(std::io::stderr)
         .init();
-    let command = Cli::parse().command;
     if let Command::Undo {
         cwd,
         run,
@@ -219,7 +210,7 @@ async fn main() -> ExitCode {
     }
     match command {
         Command::Undo { .. } => unreachable!("undo returned above"),
-        Command::Run(args) => execute(args, None).await,
+        Command::Run(args) => execute(*args, None).await,
         Command::Resume { run, list, discard } => resume_command(run, list, discard).await,
         Command::Gain { days } => gain(days),
         Command::Providers(command) => providers::run(command).await,
@@ -227,23 +218,23 @@ async fn main() -> ExitCode {
     }
 }
 
-/// The count of savings in the harness's home (`$AXH_HOME` or `$HOME`, as the app's runs find it).
+/// The count of savings in the harness's home (`$GLUT_HOME` or `$HOME`, as the app's runs find it).
 fn savings_file() -> Option<PathBuf> {
-    glut::permissions::settings::home_dir()
+    crate::permissions::settings::home_dir()
         .ok()
-        .map(|home| home.join(".axh").join(glut::lean::FILE))
+        .map(|home| home.join(".glut").join(crate::lean::FILE))
 }
 
-/// `axh gain`: the count of savings as a table.
+/// `glut gain`: the count of savings as a table.
 fn gain(days: Option<u32>) -> ExitCode {
     let fail = |message: String| {
-        eprintln!("axh gain: {message}");
+        eprintln!("glut gain: {message}");
         ExitCode::from(1)
     };
     let Some(path) = savings_file() else {
-        return fail("no home folder: set HOME or AXH_HOME".to_owned());
+        return fail("no home folder: set HOME or GLUT_HOME".to_owned());
     };
-    match glut::lean::report(&path, days) {
+    match crate::lean::report(&path, days) {
         Ok(table) => {
             print!("{table}");
             ExitCode::SUCCESS
@@ -269,13 +260,13 @@ fn window_for(
 struct FromProvider {
     id: String,
     /// The wire protocol the provider speaks: which client the run talks to it with (PV3).
-    protocol: glut::providers::catalog::Protocol,
-    list: Option<glut::providers::models::ModelList>,
+    protocol: crate::providers::catalog::Protocol,
+    list: Option<crate::providers::models::ModelList>,
     /// The windows the owner set for the provider's models (T30).
     windows: std::collections::BTreeMap<String, u32>,
 }
 
-/// The run's endpoint: a one-off `--base-url` with `AXH_API_KEY`, else a provider of `~/.axh/providers.json` — then
+/// The run's endpoint: a one-off `--base-url` with `GLUT_API_KEY`, else a provider of `~/.glut/providers.json` — then
 /// with the provider's id, so the journal keeps the provider and model the run began with, not "the default", and
 /// its model list (PV2), which gives the run the model's window and prices where the owner's settings name none.
 async fn endpoint(
@@ -287,7 +278,7 @@ async fn endpoint(
         // The key goes in a header, never in the URL — and a journal keeps the URL as it was given.
         if has_userinfo(&base_url) {
             return Err(
-                "--base-url must not hold a user or a password; the key comes from AXH_API_KEY"
+                "--base-url must not hold a user or a password; the key comes from GLUT_API_KEY"
                     .into(),
             );
         }
@@ -303,10 +294,10 @@ async fn endpoint(
             None,
         ));
     }
-    let home = glut::permissions::settings::home_dir().map_err(|err| err.to_string())?;
-    let providers_file = glut::providers::Providers::load(&home).map_err(|err| err.to_string())?;
+    let home = crate::permissions::settings::home_dir().map_err(|err| err.to_string())?;
+    let providers_file = crate::providers::Providers::load(&home).map_err(|err| err.to_string())?;
     let store = providers_file.store(&home).map_err(|err| err.to_string())?;
-    let resolved = glut::providers::resolve(
+    let resolved = crate::providers::resolve(
         &providers_file,
         store.as_ref(),
         provider,
@@ -314,10 +305,10 @@ async fn endpoint(
         |name| std::env::var(name).ok(),
     )?;
     eprintln!(
-        "axh: provider {} · model {}",
+        "glut: provider {} · model {}",
         resolved.id, resolved.endpoint.model
     );
-    let list = match glut::providers::models::current(
+    let list = match crate::providers::models::current(
         &home,
         &resolved.id,
         &resolved.endpoint,
@@ -328,20 +319,20 @@ async fn endpoint(
         Ok(list) => {
             if list.get(&resolved.endpoint.model).is_none() {
                 eprintln!(
-                    "axh: {} is not in {}'s model list (axh models list --provider {})",
+                    "glut: {} is not in {}'s model list (glut models list --provider {})",
                     resolved.endpoint.model, resolved.id, resolved.id
                 );
             }
             Some(list)
         }
         Err(reason) => {
-            eprintln!("axh: no model list of {}: {reason}", resolved.id);
+            eprintln!("glut: no model list of {}: {reason}", resolved.id);
             None
         }
     };
     // A gateway's model goes to the part of it that speaks its API.
     let (routed, protocol) =
-        glut::providers::route(resolved.endpoint, resolved.protocol, list.as_ref())?;
+        crate::providers::route(resolved.endpoint, resolved.protocol, list.as_ref())?;
     Ok((
         routed,
         Some(FromProvider {
@@ -365,19 +356,19 @@ fn has_userinfo(url: &str) -> bool {
         .is_some_and(|authority| authority.contains('@'))
 }
 
-/// Where `axh` keeps the journals of its own runs (durable runs, D5) — the app keeps its own elsewhere.
+/// Where `glut` keeps the journals of its own runs (durable runs, D5) — the app keeps its own elsewhere.
 fn journal_dir() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .map(PathBuf::from)
         .filter(|home| home.is_absolute())
-        .map(|home| home.join(".axh").join("runs"))
+        .map(|home| home.join(".glut").join("runs"))
 }
 
-/// `axh resume`: lists the unfinished runs, gives one up, or goes on with one — built from the flags it began with.
+/// `glut resume`: lists the unfinished runs, gives one up, or goes on with one — built from the flags it began with.
 async fn resume_command(run: Option<String>, list: bool, discard: bool) -> ExitCode {
-    use glut::journal;
+    use crate::journal;
     let fail = |message: String| {
-        eprintln!("axh resume: {message}");
+        eprintln!("glut resume: {message}");
         ExitCode::from(1)
     };
     let Some(dir) = journal_dir() else {
@@ -407,11 +398,11 @@ async fn resume_command(run: Option<String>, list: bool, discard: bool) -> ExitC
     }
     // Named, never guessed: a resume runs with the flags the journal holds, so the owner picks which.
     let Some(run) = run else {
-        return fail("name the run: axh resume <run> (axh resume --list shows them)".into());
+        return fail("name the run: glut resume <run> (glut resume --list shows them)".into());
     };
     let Some(entry) = unfinished.iter().find(|entry| entry.run == run) else {
         return fail(format!(
-            "no unfinished run {run} (axh resume --list shows them)"
+            "no unfinished run {run} (glut resume --list shows them)"
         ));
     };
     if discard {
@@ -427,14 +418,14 @@ async fn resume_command(run: Option<String>, list: bool, discard: bool) -> ExitC
         Ok(args) => args,
         Err(err) => {
             return fail(format!(
-                "the run {} was not started by axh run: {err}",
+                "the run {} was not started by glut run: {err}",
                 entry.run
             ));
         }
     };
     // What the run goes on with, said before it does: the flags come from the journal, not from this command line.
     eprintln!(
-        "axh resume: {} with {} --model {} --effort {} --cwd {} --permission-mode {} --allow {:?} --deny {:?}",
+        "glut resume: {} with {} --model {} --effort {} --cwd {} --permission-mode {} --allow {:?} --deny {:?}",
         entry.run,
         match (&args.base_url, &args.provider) {
             (Some(base_url), _) => format!("--base-url {base_url}"),
@@ -451,7 +442,7 @@ async fn resume_command(run: Option<String>, list: bool, discard: bool) -> ExitC
     execute(args, Some(entry.run.clone())).await
 }
 
-/// One run of `axh run` — or of `axh resume`, then `resumed` names the run whose journal it goes on from.
+/// One run of `glut run` — or of `glut resume`, then `resumed` names the run whose journal it goes on from.
 async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
     let journal_args = args.clone();
     let RunArgs {
@@ -501,17 +492,17 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
         Err(err) => return fail(format!("cannot use {}: {err}", cwd.display())),
     };
     let mut config = RunConfig::new(&cwd);
-    // Durable runs (D5): every run journals its steps; one the process lost goes on with `axh resume`.
+    // Durable runs (D5): every run journals its steps; one the process lost goes on with `glut resume`.
     if let Some(dir) = journal_dir() {
         let run = resumed.clone().unwrap_or_else(|| {
             format!(
-                "axh-{}-{}",
+                "glut-{}-{}",
                 std::process::id(),
                 chrono::Local::now().timestamp_millis()
             )
         });
         if resumed.is_none() {
-            eprintln!("axh: run {run} (if it is lost before it ends: axh resume {run})");
+            eprintln!("glut: run {run} (if it is lost before it ends: glut resume {run})");
         }
         let mut kept = journal_args;
         kept.cwd = cwd.clone();
@@ -520,18 +511,18 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
             kept.provider = Some(from.id.clone());
             kept.model = Some(endpoint.model.clone());
         }
-        config.journal = Some(glut::journal::JournalSpec {
+        config.journal = Some(crate::journal::JournalSpec {
             dir,
             run,
             meta: serde_json::json!({ "args": kept }),
         });
     }
-    // Glut 2 (D): snapshots before changes, for `axh undo`.
+    // Glut 2 (D): snapshots before changes, for `glut undo`.
     config.snapshots = std::env::var_os("HOME")
         .map(PathBuf::from)
         .filter(|home| home.is_absolute())
-        .map(|home| home.join(".axh").join("snapshots"));
-    // Glut lean (N9): the count of savings, where `axh gain` and the app's runs keep it.
+        .map(|home| home.join(".glut").join("snapshots"));
+    // Glut lean (N9): the count of savings, where `glut gain` and the app's runs keep it.
     config.savings = savings_file();
     // The folders the run reads skills from, beside the owner's and the project's (HS6, K2).
     config.skill_dirs = skill_dir;
@@ -556,7 +547,7 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
         Some((_, Some(mode))) => Some(mode),
         Some((text, None)) => return fail(format!("unknown permission mode {text:?}")),
     };
-    // Without a home there is no owner's settings file: a relative `.axh/` would be the project's, read as the owner's.
+    // Without a home there is no owner's settings file: a relative `.glut/` would be the project's, read as the owner's.
     let Some(home) = std::env::var_os("HOME")
         .map(PathBuf::from)
         .filter(|home| home.is_absolute())
@@ -567,12 +558,12 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
         Ok(trust) => trust.contains(&cwd),
         Err(err) => return fail(err.to_string()),
     };
-    // Skills (HS6, K1/K2): the owner's `~/.axh/skills`, the folders of `--skill-dir` and — in a folder the owner
-    // trusted once, the same trust the project's allow rules need — the project's `.axh/skills`. A skill that
+    // Skills (HS6, K1/K2): the owner's `~/.glut/skills`, the folders of `--skill-dir` and — in a folder the owner
+    // trusted once, the same trust the project's allow rules need — the project's `.glut/skills`. A skill that
     // cannot be used is a note on stderr, never an error (K3).
     let (catalog, notes) = skills::Catalog::load(&home, &cwd, trusted, &config.skill_dirs);
     for note in notes {
-        eprintln!("axh: skill left out: {note}");
+        eprintln!("glut: skill left out: {note}");
     }
     let catalog = Arc::new(catalog);
     // Every event through one shared sink: the loop writes to it, and the `skill` tool reports from inside a call
@@ -591,7 +582,7 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
         Err(err) => return fail(err.to_string()),
     };
     for note in built.notes() {
-        eprintln!("axh: {note}");
+        eprintln!("glut: {note}");
     }
     // HS7: the hooks run with what the settings say about the sandbox, like the shell's own commands (D5).
     // #111, K2/K6: the flags over the owner's settings; without a window the run asks the provider's list.
@@ -609,10 +600,10 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
     config.refusals = built.refusals;
     config.parallel_subagents = built.parallel_subagents;
     if let Some(window) = context_window {
-        if window < glut::config::MIN_CONTEXT_WINDOW {
+        if window < crate::config::MIN_CONTEXT_WINDOW {
             return fail(format!(
                 "--context-window {window}: at least {}",
-                glut::config::MIN_CONTEXT_WINDOW
+                crate::config::MIN_CONTEXT_WINDOW
             ));
         }
         config.compaction.context_window = Some(window);
@@ -671,7 +662,7 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
     );
     // C6 of docs/plans/glut-cards.md: the budget at the prices of the model the run ends up with (a skill or a
     // command may name its own).
-    config.budget = glut::Budget {
+    config.budget = crate::Budget {
         max_tokens,
         max_usd,
         prices: built
@@ -682,7 +673,7 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
     };
     if max_usd.is_some() && config.budget.prices.is_none() {
         eprintln!(
-            "axh: --max-usd has no prices for {} in ~/.axh/settings.json or the provider's list: no budget in money",
+            "glut: --max-usd has no prices for {} in ~/.glut/settings.json or the provider's list: no budget in money",
             endpoint.model
         );
     }
@@ -691,7 +682,7 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
         Ok(model) => model,
         Err(err) => return fail(err.to_string()),
     };
-    // MCP servers (HS5, M1–M3). `axh` has no terminal, so a project's server nobody approved is left out and said
+    // MCP servers (HS5, M1–M3). `glut` has no terminal, so a project's server nobody approved is left out and said
     // so on stderr rather than asked about (M2).
     // A named file stands for the two places; whoever names it stands for what it starts.
     let servers = match &mcp_config {
@@ -722,16 +713,16 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
     };
     // A skill run's task is the skill's body already: loading skills would only cost a turn (glut-round CP4).
     if skill.is_some() {
-        tools.withdraw(glut::skills::tool::NAME);
+        tools.withdraw(crate::skills::tool::NAME);
     }
 
     // Ctrl-C, SIGTERM and SIGHUP end the run cleanly, with its `finished` line and every background job stopped.
     let cancel = Cancel::new();
-    glut::run::cancel_on_signals(&cancel);
+    crate::run::cancel_on_signals(&cancel);
 
     let outcome = match &resumed {
         None => run(&config, &model, &tools, &prompt, &mut sink, &cancel).await,
-        Some(id) => match glut::resume(&config, &model, &tools, id, &mut sink, &cancel).await {
+        Some(id) => match crate::resume(&config, &model, &tools, id, &mut sink, &cancel).await {
             Ok((outcome, _)) => outcome,
             Err(reason) => return fail(reason),
         },
@@ -746,17 +737,17 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
     })
 }
 
-/// `axh undo`: lists a folder's runs with snapshots, or puts the folder back before a run or one of its steps.
+/// `glut undo`: lists a folder's runs with snapshots, or puts the folder back before a run or one of its steps.
 fn undo(cwd: &std::path::Path, run: Option<String>, step: Option<u32>, list: bool) -> ExitCode {
-    use glut::snapshot;
+    use crate::snapshot;
     let fail = |message: String| {
-        eprintln!("axh undo: {message}");
+        eprintln!("glut undo: {message}");
         ExitCode::from(1)
     };
     let Some(root) = std::env::var_os("HOME")
         .map(PathBuf::from)
         .filter(|home| home.is_absolute())
-        .map(|home| home.join(".axh").join("snapshots"))
+        .map(|home| home.join(".glut").join("snapshots"))
     else {
         return fail("HOME is not set to an absolute folder".into());
     };

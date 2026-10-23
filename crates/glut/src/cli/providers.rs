@@ -1,4 +1,4 @@
-//! `axh providers` (`docs/plans/glut-providers.md`, PV1, P6): the owner's providers in `~/.axh/providers.json`,
+//! `glut providers` (`docs/plans/glut-providers.md`, PV1, P6): the owner's providers in `~/.glut/providers.json`,
 //! their keys in the secret store the owner chose. A key is read without echo, never taken as an argument.
 
 use std::io::{BufRead as _, IsTerminal as _, Read as _, Write as _};
@@ -6,10 +6,10 @@ use std::path::Path;
 use std::process::ExitCode;
 use std::time::Instant;
 
+use crate::providers::catalog::{CATALOG, CUSTOM, SignIn};
+use crate::providers::{self, Entry, KeyFrom, Providers};
+use crate::{ChatModel, Message, Model};
 use clap::Subcommand;
-use glut::providers::catalog::{CATALOG, CUSTOM, SignIn};
-use glut::providers::{self, Entry, KeyFrom, Providers};
-use glut::{ChatModel, Message, Model};
 
 /// The longest key `add` reads: far above any provider's, a stop for a file piped in by mistake.
 const MAX_KEY_BYTES: u64 = 8 * 1024;
@@ -25,9 +25,9 @@ pub enum ProvidersCommand {
     /// Every provider Glut knows by name — the kinds `add` takes.
     Catalog,
     /// Adds a provider, or replaces one of the same id. The key is asked for without echo — or read from stdin
-    /// when it is no terminal (`op read … | axh providers add openrouter`).
+    /// when it is no terminal (`op read … | glut providers add openrouter`).
     Add {
-        /// A kind of `axh providers catalog`, or `openai-compatible` with --root.
+        /// A kind of `glut providers catalog`, or `openai-compatible` with --root.
         kind: String,
         /// The name runs use (`--provider`); the kind by default.
         #[arg(long)]
@@ -65,9 +65,9 @@ pub enum ProvidersCommand {
     },
 }
 
-/// Runs one `axh providers` command.
+/// Runs one `glut providers` command.
 pub async fn run(command: ProvidersCommand) -> ExitCode {
-    let home = match glut::permissions::settings::home_dir() {
+    let home = match crate::permissions::settings::home_dir() {
         Ok(home) => home,
         Err(err) => return fail(&err.to_string()),
     };
@@ -110,7 +110,7 @@ pub async fn run(command: ProvidersCommand) -> ExitCode {
 }
 
 fn fail(message: &str) -> ExitCode {
-    eprintln!("axh providers: {message}");
+    eprintln!("glut providers: {message}");
     ExitCode::from(1)
 }
 
@@ -121,7 +121,7 @@ fn load(home: &Path) -> Result<Providers, String> {
 fn list(home: &Path) -> Result<(), String> {
     let providers = load(home)?;
     if providers.providers.is_empty() {
-        println!("No provider yet: axh providers add <kind> (axh providers catalog lists them).");
+        println!("No provider yet: glut providers add <kind> (glut providers catalog lists them).");
         return Ok(());
     }
     let store = providers.store(home).map_err(|err| err.to_string())?;
@@ -247,7 +247,7 @@ fn add(home: &Path, added: Added) -> Result<(), String> {
     } else {
         ""
     };
-    println!("Provider {id} added{default}. axh providers test {id} makes one tiny call.");
+    println!("Provider {id} added{default}. glut providers test {id} makes one tiny call.");
     Ok(())
 }
 
@@ -341,7 +341,7 @@ fn without_echo<T>(read: impl FnOnce() -> std::io::Result<T>) -> std::io::Result
 fn remove(home: &Path, id: &str) -> Result<(), String> {
     let mut providers = load(home)?;
     let Some(removed) = providers.providers.remove(id) else {
-        return Err(format!("no provider {id} (axh providers list shows them)"));
+        return Err(format!("no provider {id} (glut providers list shows them)"));
     };
     let store = providers.store(home).map_err(|err| err.to_string())?;
     if providers.default.as_deref() == Some(id) {
@@ -358,7 +358,7 @@ fn remove(home: &Path, id: &str) -> Result<(), String> {
             println!("Runs without --provider take the one left.");
         }
         _ if providers.default.is_none() => {
-            println!("There is no default now: axh providers default <id>.");
+            println!("There is no default now: glut providers default <id>.");
         }
         _ => {}
     }
@@ -368,7 +368,7 @@ fn remove(home: &Path, id: &str) -> Result<(), String> {
 fn make_default(home: &Path, id: &str) -> Result<(), String> {
     let mut providers = load(home)?;
     if !providers.providers.contains_key(id) {
-        return Err(format!("no provider {id} (axh providers list shows them)"));
+        return Err(format!("no provider {id} (glut providers list shows them)"));
     }
     providers.default = Some(id.to_owned());
     providers.save(home).map_err(|err| err.to_string())?;
@@ -384,7 +384,7 @@ async fn test(home: &Path, id: Option<&str>, model: Option<&str>) -> Result<(), 
     })?;
     let name = format!("{} · {}", resolved.id, resolved.endpoint.model);
     // A gateway's model needs its list to be routed; without one its API is guessed from its id.
-    let list = if resolved.protocol == glut::providers::catalog::Protocol::Gateway {
+    let list = if resolved.protocol == crate::providers::catalog::Protocol::Gateway {
         providers::models::current(home, &resolved.id, &resolved.endpoint, resolved.protocol)
             .await
             .ok()

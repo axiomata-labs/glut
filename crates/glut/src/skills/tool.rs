@@ -3,7 +3,7 @@
 //! ([`Access::Own`]) — what the model then does with it is judged as usual.
 //!
 //! Only offered when the run knows at least one skill: an empty catalog would give the model a tool that can only
-//! fail (`axh` and the CLI leave it out).
+//! fail (`glut` and the CLI leave it out).
 
 use std::sync::Arc;
 
@@ -174,7 +174,7 @@ mod tests {
     /// `SKILL.md`s (`("demo/ref.md", "x")` is `demo`'s).
     fn catalog_of(skills: &[(&str, &str)], files: &[(&str, &str)]) -> Arc<Catalog> {
         let dir = std::env::temp_dir().join(format!(
-            "axh-skilltool-{}-{}",
+            "glut-skilltool-{}-{}",
             std::process::id(),
             chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
         ));

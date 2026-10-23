@@ -1,5 +1,5 @@
 //! Glut's own providers (`docs/plans/glut-providers.md`, PV1): the catalog of known ones, the owner's configured
-//! ones in `~/.axh/providers.json`, and their keys in a secret store. A run named by `--provider` (or the default
+//! ones in `~/.glut/providers.json`, and their keys in a secret store. A run named by `--provider` (or the default
 //! provider) gets its endpoint from here; a host that passes its own endpoint never comes here (P7).
 
 pub mod catalog;
@@ -18,8 +18,8 @@ use catalog::{CUSTOM, SignIn};
 use secrets::{SecretStore, StoreChoice};
 
 /// The owner's folder below the home folder (as `permissions::settings::USER_DIR`).
-pub const DIR: &str = ".axh";
-/// The configured providers, below [`DIR`]. Glut writes it (`axh providers add`), the owner may edit it; it never
+pub const DIR: &str = ".glut";
+/// The configured providers, below [`DIR`]. Glut writes it (`glut providers add`), the owner may edit it; it never
 /// holds a secret. A file of its own rather than a part of `settings.json`: Glut rewrites it whole, and the owner's
 /// hand-written settings are never rewritten by a command.
 pub const FILE: &str = "providers.json";
@@ -28,7 +28,7 @@ const MAX_FILE_BYTES: u64 = 256 * 1024;
 /// The longest provider id.
 const MAX_ID_CHARS: usize = 40;
 
-/// `~/.axh/providers.json`. Unknown fields are refused: a field a later Glut writes (a sign-in kind) must not be
+/// `~/.glut/providers.json`. Unknown fields are refused: a field a later Glut writes (a sign-in kind) must not be
 /// silently dropped by an older one that would then treat the provider as something else.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -74,7 +74,7 @@ impl Providers {
         home.join(DIR).join(FILE)
     }
 
-    /// Reads `~/.axh/providers.json`; a missing file has no providers.
+    /// Reads `~/.glut/providers.json`; a missing file has no providers.
     ///
     /// # Errors
     ///
@@ -157,17 +157,17 @@ impl Providers {
                 .unwrap_or(""),
             None => {
                 return Err(if self.providers.is_empty() {
-                    "no provider yet: axh providers add <kind> (axh providers catalog lists them)"
+                    "no provider yet: glut providers add <kind> (glut providers catalog lists them)"
                         .into()
                 } else {
-                    "no default provider: name one with --provider, or set it with axh providers default <id>".into()
+                    "no default provider: name one with --provider, or set it with glut providers default <id>".into()
                 });
             }
         };
         self.providers
             .get_key_value(id)
             .map(|(id, entry)| (id.as_str(), entry))
-            .ok_or_else(|| format!("no provider {id} (axh providers list shows them)"))
+            .ok_or_else(|| format!("no provider {id} (glut providers list shows them)"))
     }
 }
 
@@ -180,7 +180,7 @@ pub fn open_no_follow(path: &Path) -> std::io::Result<std::fs::File> {
         .open(path)
 }
 
-/// `~/.axh` as only the owner may list it — the folder of the keys file and the providers.
+/// `~/.glut` as only the owner may list it — the folder of the keys file and the providers.
 pub fn make_private_dir(dir: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::DirBuilderExt as _;
     std::fs::DirBuilder::new()
@@ -253,7 +253,7 @@ impl Entry {
             }
         } else if catalog::known(&self.kind).is_none() {
             return Err(format!(
-                "unknown kind {:?} (axh providers catalog lists them)",
+                "unknown kind {:?} (glut providers catalog lists them)",
                 self.kind
             ));
         } else if self.key.is_some() {
@@ -358,7 +358,7 @@ pub fn configured_key_envs() -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Where a run's key came from — said by `axh providers list`, never the key itself.
+/// Where a run's key came from — said by `glut providers list`, never the key itself.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KeyFrom {
     /// The provider's environment variable.
@@ -380,7 +380,7 @@ pub struct Resolved {
 }
 
 /// The endpoint of provider `id` (or the default one) for `model` (or its default model): the key from the
-/// provider's environment variable, else the secret store. `AXH_API_KEY` is not read here — it belongs to a one-off
+/// provider's environment variable, else the secret store. `GLUT_API_KEY` is not read here — it belongs to a one-off
 /// `--base-url`, and taken for every provider it would go to whichever root `--provider` names (security review of
 /// PV1).
 ///
@@ -396,7 +396,7 @@ pub fn resolve(
 ) -> Result<Resolved, String> {
     let (id, entry) = providers.pick(id)?;
     let model = model.or(entry.model.as_deref()).ok_or_else(|| {
-        format!("no model for {id}: name one with --model, or set one with axh providers add")
+        format!("no model for {id}: name one with --model, or set one with glut providers add")
     })?;
     // A key pasted into a variable or a store keeps no newline: it would go into the header with it.
     let trimmed = |value: String| Some(value.trim().to_owned()).filter(|value| !value.is_empty());
@@ -425,7 +425,7 @@ pub fn resolve(
                     String::new()
                 };
                 return Err(format!(
-                    "no key for {id} at {}: axh providers add {}{root} --id {id} puts one in {}",
+                    "no key for {id} at {}: glut providers add {}{root} --id {id} puts one in {}",
                     host(entry.root()),
                     entry.kind,
                     store.place()
@@ -690,7 +690,7 @@ mod tests {
     }
 
     #[test]
-    fn the_key_comes_from_the_providers_variable_then_the_store_never_from_axh_api_key() {
+    fn the_key_comes_from_the_providers_variable_then_the_store_never_from_glut_api_key() {
         let list = providers(&[("openrouter", entry("openrouter"))]);
         let store = Memory::default();
         store
@@ -701,14 +701,14 @@ mod tests {
             &store,
             None,
             None,
-            env(&[("AXH_API_KEY", "sk-host")]),
+            env(&[("GLUT_API_KEY", "sk-host")]),
         )
         .unwrap();
         assert_eq!(from_store.key_from, KeyFrom::Store);
         assert_eq!(
             from_store.endpoint.api_key.as_deref(),
             Some("sk-store"),
-            "trimmed, and not AXH_API_KEY"
+            "trimmed, and not GLUT_API_KEY"
         );
         assert_eq!(from_store.endpoint.base_url, "https://openrouter.ai/api/v1");
         assert!(from_store.endpoint.versioned);
@@ -855,7 +855,7 @@ mod tests {
     #[test]
     fn the_file_round_trips_and_a_bad_one_is_refused() {
         let home = std::env::temp_dir().join(format!(
-            "axh-providers-{}-{}",
+            "glut-providers-{}-{}",
             std::process::id(),
             chrono::Local::now()
                 .timestamp_nanos_opt()
@@ -874,7 +874,7 @@ mod tests {
             .permissions()
             .mode()
             & 0o777;
-        assert_eq!(mode, 0o700, "~/.axh is the owner's alone");
+        assert_eq!(mode, 0o700, "~/.glut is the owner's alone");
         for bad in [
             r#"{"providers":{"Bad":{"kind":"openrouter"}}}"#,
             r#"{"providers":{"x":{"kind":"openrouter","signIn":"chatgpt"}}}"#,

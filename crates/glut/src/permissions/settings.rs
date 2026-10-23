@@ -1,8 +1,8 @@
-//! The harness's own settings files (`docs/plans/harness.md`, P4, P5): `~/.axh/settings.json` (the owner's),
-//! `<project>/.axh/settings.json` and `<project>/.axh/settings.local.json`.
+//! The harness's own settings files (`docs/plans/harness.md`, P4, P5): `~/.glut/settings.json` (the owner's),
+//! `<project>/.glut/settings.json` and `<project>/.glut/settings.local.json`.
 //!
 //! A project may always make a run stricter: its `deny` and `ask` rules count in every folder. What would loosen it —
-//! its `allow` rules — counts only in a folder the owner trusted once (`~/.axh/trusted.json`), and its mode never
+//! its `allow` rules — counts only in a folder the owner trusted once (`~/.glut/trusted.json`), and its mode never
 //! lets through more than the owner's own (security review of HS3a, 2026-10-13).
 
 use std::collections::HashMap;
@@ -17,9 +17,9 @@ use crate::error::HarnessError;
 use crate::hooks::{Hooks, HooksSection};
 
 /// The folder of the owner's settings, below the home folder.
-pub const USER_DIR: &str = ".axh";
+pub const USER_DIR: &str = ".glut";
 /// The folder of a project's settings, below the project.
-pub const PROJECT_DIR: &str = ".axh";
+pub const PROJECT_DIR: &str = ".glut";
 const SETTINGS_FILE: &str = "settings.json";
 const LOCAL_SETTINGS_FILE: &str = "settings.local.json";
 const TRUST_FILE: &str = "trusted.json";
@@ -28,10 +28,10 @@ const MAX_SETTINGS_BYTES: u64 = 256 * 1024;
 /// Rules one file may hold: enough for any real list, a stop for a file that would make every call slow to judge.
 const MAX_RULES: usize = 1_000;
 /// Overrides the harness's home folder — the `AXIOMATA_HOME` pattern of the repo (AGENTS.md), so a test or an
-/// embedder runs against its own `~/.axh` and never reads the owner's settings or starts the owner's MCP servers.
-const HOME_ENV: &str = "AXH_HOME";
+/// embedder runs against its own `~/.glut` and never reads the owner's settings or starts the owner's MCP servers.
+const HOME_ENV: &str = "GLUT_HOME";
 
-/// The harness's home folder: `$AXH_HOME` when set, else `$HOME`.
+/// The harness's home folder: `$GLUT_HOME` when set, else `$HOME`.
 ///
 /// # Errors
 ///
@@ -42,17 +42,17 @@ pub fn home_dir() -> Result<PathBuf, HarnessError> {
 }
 
 /// [`home_dir`] with the two environment values handed in, so the resolution is testable without touching the
-/// environment. An empty variable (`AXH_HOME=`) counts as unset — a script that exports an empty override must
+/// environment. An empty variable (`GLUT_HOME=`) counts as unset — a script that exports an empty override must
 /// not point every run at `""` below the drive root.
 fn home_from_env(
-    axh_home: Option<OsString>,
+    glut_home: Option<OsString>,
     home: Option<OsString>,
 ) -> Result<PathBuf, HarnessError> {
     let folder = |value: Option<OsString>| -> Option<PathBuf> {
         let path = PathBuf::from(value?);
         (!path.as_os_str().is_empty()).then_some(path)
     };
-    let (name, found) = match folder(axh_home) {
+    let (name, found) = match folder(glut_home) {
         Some(path) => (HOME_ENV, Some(path)),
         None => ("HOME", folder(home)),
     };
@@ -495,7 +495,7 @@ pub fn load(home: &Path, project: &Path, trusted: bool) -> Result<Loaded, Harnes
     Ok(loaded)
 }
 
-/// The folders the owner trusted (P5), kept in `~/.axh/trusted.json`.
+/// The folders the owner trusted (P5), kept in `~/.glut/trusted.json`.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Trust {
     #[serde(default)]
@@ -581,7 +581,7 @@ mod tests {
 
     fn temp(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "axh-settings-{name}-{}-{}",
+            "glut-settings-{name}-{}-{}",
             std::process::id(),
             chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
         ));
@@ -595,41 +595,41 @@ mod tests {
     }
 
     #[test]
-    fn axh_home_overrides_home_and_both_must_be_absolute() {
-        let own = home_from_env(Some("/scratch/axh".into()), Some("/Users/owner".into())).unwrap();
-        assert_eq!(own, PathBuf::from("/scratch/axh"));
+    fn glut_home_overrides_home_and_both_must_be_absolute() {
+        let own = home_from_env(Some("/scratch/glut".into()), Some("/Users/owner".into())).unwrap();
+        assert_eq!(own, PathBuf::from("/scratch/glut"));
         // An empty override (an unset-looking variable) counts as absent, not as "" below the drive root.
         let fallback = home_from_env(Some(OsString::new()), Some("/Users/owner".into())).unwrap();
         assert_eq!(fallback, PathBuf::from("/Users/owner"));
         assert!(home_from_env(None, Some("/Users/owner".into())).is_ok());
-        for (axh, home) in [
-            (Some("relative/axh".into()), Some("/Users/owner".into())),
+        for (glut, home) in [
+            (Some("relative/glut".into()), Some("/Users/owner".into())),
             (None, Some("relative".into())),
             (None, None),
         ] {
             assert!(
-                home_from_env(axh, home).is_err(),
+                home_from_env(glut, home).is_err(),
                 "a relative or missing folder is an error"
             );
         }
-        // A valid AXH_HOME never consults HOME, whatever HOME says.
-        assert!(home_from_env(Some("/scratch/axh".into()), Some("relative".into())).is_ok());
+        // A valid GLUT_HOME never consults HOME, whatever HOME says.
+        assert!(home_from_env(Some("/scratch/glut".into()), Some("relative".into())).is_ok());
     }
 
     #[test]
     fn a_project_may_tighten_always_but_loosen_only_when_trusted_and_never_past_the_owner() {
         let (home, project) = (temp("home"), temp("project"));
         write(
-            &home.join(".axh/settings.json"),
+            &home.join(".glut/settings.json"),
             r#"{"permissions": {"allow": ["Bash(git status)"], "defaultMode": "default"}}"#,
         );
         write(
-            &project.join(".axh/settings.json"),
+            &project.join(".glut/settings.json"),
             r#"{"permissions": {"allow": ["Bash(make:*)"], "deny": ["Bash(rm:*)"], "defaultMode": "plan"}}"#,
         );
         // Looser than the owner's own mode: ignored even in a trusted folder.
         write(
-            &project.join(".axh/settings.local.json"),
+            &project.join(".glut/settings.local.json"),
             r#"{"permissions": {"defaultMode": "auto"}}"#,
         );
 
@@ -680,7 +680,7 @@ mod tests {
     #[test]
     fn a_broken_trust_file_is_not_overwritten() {
         let home = temp("trust-broken");
-        write(&home.join(".axh/trusted.json"), "{ not json");
+        write(&home.join(".glut/trusted.json"), "{ not json");
         assert!(Trust::load(&home).is_err());
     }
 
@@ -718,11 +718,11 @@ mod tests {
     fn the_sandbox_section_is_the_owners_and_a_project_may_only_keep_more_secret() {
         let (home, project) = (temp("sbx-home"), temp("sbx-project"));
         write(
-            &home.join(".axh/settings.json"),
+            &home.join(".glut/settings.json"),
             r#"{"sandbox": {"enabled": true, "allowWrite": ["~/.gradle"], "denyRead": ["~/notes/private"]}}"#,
         );
         write(
-            &project.join(".axh/settings.json"),
+            &project.join(".glut/settings.json"),
             r#"{"sandbox": {"enabled": false, "allowWrite": ["/"], "denyRead": ["fixtures/keys"], "allowLocalBinding": true}}"#,
         );
         let loaded = load(&home, &project, true).unwrap().sandbox;
@@ -738,7 +738,7 @@ mod tests {
             [home.join("notes/private"), project.join("fixtures/keys")]
         );
         write(
-            &home.join(".axh/settings.json"),
+            &home.join(".glut/settings.json"),
             r#"{"sandbox": {"enabled": false, "allowLocalBinding": true}}"#,
         );
         let owner = load(&home, &project, false).unwrap().sandbox;
@@ -749,11 +749,11 @@ mod tests {
     fn the_owners_hooks_are_loaded_and_a_projects_are_parsed_but_left_out() {
         let (home, project) = (temp("hooks-home"), temp("hooks-project"));
         write(
-            &home.join(".axh/settings.json"),
+            &home.join(".glut/settings.json"),
             r#"{"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "true"}]}]}}"#,
         );
         write(
-            &project.join(".axh/settings.json"),
+            &project.join(".glut/settings.json"),
             r#"{"hooks": {"PreToolUse": [{"hooks": [{"type": "command", "command": "echo project"}]}]}}"#,
         );
         let loaded = load(&home, &project, false).unwrap();
@@ -767,7 +767,7 @@ mod tests {
 
         // A project whose hooks are broken still stops the run: parsed, not skipped (D1).
         write(
-            &project.join(".axh/settings.json"),
+            &project.join(".glut/settings.json"),
             r#"{"hooks": {"PreToolUse": [{"hooks": [{"type": "prompt", "command": "true"}]}]}}"#,
         );
         assert!(matches!(
@@ -784,17 +784,17 @@ mod tests {
             crate::config::DEFAULT_PARALLEL_SUBAGENTS
         );
         write(
-            &home.join(".axh/settings.json"),
+            &home.join(".glut/settings.json"),
             r#"{"subagents": {"parallel": 1}}"#,
         );
         write(
-            &project.join(".axh/settings.json"),
+            &project.join(".glut/settings.json"),
             r#"{"subagents": {"parallel": 8}}"#,
         );
         assert_eq!(load(&home, &project, true).unwrap().parallel_subagents, 1);
         for odd in [0, crate::config::MAX_PARALLEL_SUBAGENTS + 1] {
             write(
-                &home.join(".axh/settings.json"),
+                &home.join(".glut/settings.json"),
                 &format!(r#"{{"subagents": {{"parallel": {odd}}}}}"#),
             );
             assert!(matches!(
@@ -812,11 +812,11 @@ mod tests {
             RefusalLimits::DEFAULT
         );
         write(
-            &home.join(".axh/settings.json"),
+            &home.join(".glut/settings.json"),
             r#"{"refusals": {"total": 30}}"#,
         );
         write(
-            &project.join(".axh/settings.json"),
+            &project.join(".glut/settings.json"),
             r#"{"refusals": {"repeat": 99, "total": 999}}"#,
         );
         assert_eq!(
@@ -831,12 +831,12 @@ mod tests {
             r#"{"refusals": {"repeat": 1}}"#,
             r#"{"refusals": {"repeat": 5, "total": 4}}"#,
         ] {
-            write(&home.join(".axh/settings.json"), odd);
+            write(&home.join(".glut/settings.json"), odd);
             let err = load(&home, &project, true).unwrap_err().to_string();
             assert!(err.contains("refusals."), "{err}");
         }
         write(
-            &home.join(".axh/settings.json"),
+            &home.join(".glut/settings.json"),
             r#"{"refusals": {"repat": 3}}"#,
         );
         assert!(load(&home, &project, true).is_err(), "a misspelled field");
@@ -848,11 +848,11 @@ mod tests {
         let loaded = load(&home, &project, true).unwrap();
         assert_eq!(loaded.compaction("m"), Compaction::default());
         write(
-            &home.join(".axh/settings.json"),
+            &home.join(".glut/settings.json"),
             r#"{"compact": {"auto": false}, "contextWindow": {"gemma4:12b": 32768}}"#,
         );
         write(
-            &project.join(".axh/settings.json"),
+            &project.join(".glut/settings.json"),
             r#"{"compact": {"auto": true}, "contextWindow": {"other": 999999}}"#,
         );
         let loaded = load(&home, &project, true).unwrap();
@@ -869,7 +869,7 @@ mod tests {
             "a project's is left out"
         );
         write(
-            &home.join(".axh/settings.json"),
+            &home.join(".glut/settings.json"),
             r#"{"contextWindow": {"m": 100}}"#,
         );
         let err = load(&home, &project, true).unwrap_err().to_string();
@@ -880,13 +880,13 @@ mod tests {
     fn the_owners_prices_are_read_and_a_bad_one_is_refused() {
         let (home, project) = (temp("prices-home"), temp("prices-project"));
         write(
-            &home.join(".axh/settings.json"),
+            &home.join(".glut/settings.json"),
             r#"{"prices": {"m": {"input_per_m": 0.1, "output_per_m": 0.4}}}"#,
         );
         let loaded = load(&home, &project, true).unwrap();
         assert_eq!(loaded.prices["m"].output_per_m, 0.4);
         write(
-            &home.join(".axh/settings.json"),
+            &home.join(".glut/settings.json"),
             r#"{"prices": {"m": {"input_per_m": -1, "output_per_m": 0.4}}}"#,
         );
         assert!(load(&home, &project, true).is_err());
@@ -895,13 +895,13 @@ mod tests {
     #[test]
     fn the_owners_effort_counts_a_projects_is_left_out_and_an_unknown_one_stops_the_run() {
         let (home, project) = (temp("effort-home"), temp("effort-project"));
-        write(&home.join(".axh/settings.json"), r#"{"effort": "high"}"#);
-        write(&project.join(".axh/settings.json"), r#"{"effort": "max"}"#);
+        write(&home.join(".glut/settings.json"), r#"{"effort": "high"}"#);
+        write(&project.join(".glut/settings.json"), r#"{"effort": "max"}"#);
         assert_eq!(
             load(&home, &project, true).unwrap().effort,
             Some(Effort::High)
         );
-        write(&home.join(".axh/settings.json"), "{}");
+        write(&home.join(".glut/settings.json"), "{}");
         assert_eq!(
             load(&home, &project, true).unwrap().effort,
             None,
@@ -909,11 +909,14 @@ mod tests {
         );
         // A project's level is never used, so not even a typo in it stops a run; the owner's does.
         write(
-            &project.join(".axh/settings.json"),
+            &project.join(".glut/settings.json"),
             r#"{"effort": "extreme"}"#,
         );
         assert_eq!(load(&home, &project, true).unwrap().effort, None);
-        write(&home.join(".axh/settings.json"), r#"{"effort": "extreme"}"#);
+        write(
+            &home.join(".glut/settings.json"),
+            r#"{"effort": "extreme"}"#,
+        );
         let err = load(&home, &project, false).unwrap_err().to_string();
         assert!(err.contains("unknown effort \"extreme\""), "{err}");
     }

@@ -2,8 +2,8 @@
 //! instructions the run follows — and, in [`tool`], the `skill` tool that lets the model load one while a run goes
 //! on (K1.2). A skill the run starts with becomes that run's instructions (K1.1, [`Skill::start_run`]).
 //!
-//! Skills live in folders (K2): the owner's `~/.axh/skills`, the folders the caller names (`--skill-dir`, in
-//! `axiomata-cli` the app's `~/.axiomata/skills`) and, in a trusted folder, the project's `.axh/skills`. Each is a
+//! Skills live in folders (K2): the owner's `~/.glut/skills`, the folders the caller names (`--skill-dir`, in
+//! `axiomata-cli` the app's `~/.axiomata/skills`) and, in a trusted folder, the project's `.glut/skills`. Each is a
 //! folder of its own with its `SKILL.md` at the top. A skill that cannot be used is left out with a note for
 //! stderr — skill files come from other tools too — and never fails the run.
 
@@ -26,7 +26,7 @@ use crate::error::HarnessError;
 use crate::permissions::settings;
 use crate::permissions::{Gate, Rule};
 
-/// The folder of skills inside `~/.axh/` and a project's `.axh/` (K2).
+/// The folder of skills inside `~/.glut/` and a project's `.glut/` (K2).
 const SKILLS_DIR: &str = "skills";
 /// What a skill run is prompted with when the caller adds no text of its own (K1.1).
 pub const DEFAULT_PROMPT: &str = "Run the skill.";
@@ -247,8 +247,8 @@ pub struct Catalog {
 }
 
 impl Catalog {
-    /// Every skill below `extra_dirs`, `home/.axh/skills` and — where `trusted`, the same trust the project's own
-    /// allow rules need — `project/.axh/skills` (K2). On equal names the more specific folder wins: project over
+    /// Every skill below `extra_dirs`, `home/.glut/skills` and — where `trusted`, the same trust the project's own
+    /// allow rules need — `project/.glut/skills` (K2). On equal names the more specific folder wins: project over
     /// caller folders (later ones over earlier) over the owner's.
     ///
     /// What could not be read comes back as notes for stderr; a broken skill is one of them, never an error (K3).
@@ -683,7 +683,7 @@ mod tests {
     /// A fresh folder for one test — outside the repo, like the other tests' folders.
     fn temp(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "axh-skills-{name}-{}-{}",
+            "glut-skills-{name}-{}-{}",
             std::process::id(),
             chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
         ));
@@ -756,13 +756,13 @@ mod tests {
         let caller = root.join("caller");
         let skill_text = |body: &str| format!("---\nname: demo\ndescription: d\n---\n{body}\n");
         skill_file(
-            &home.join(".axh").join(SKILLS_DIR),
+            &home.join(".glut").join(SKILLS_DIR),
             "demo",
             &skill_text("from the owner"),
         );
         skill_file(&caller, "demo", &skill_text("from the caller"));
         skill_file(
-            &project.join(".axh").join(SKILLS_DIR),
+            &project.join(".glut").join(SKILLS_DIR),
             "demo",
             &skill_text("from the project"),
         );
@@ -784,7 +784,7 @@ mod tests {
         let project = root.join("project");
         let caller = root.join("caller");
         skill_file(
-            &project.join(".axh").join(SKILLS_DIR),
+            &project.join(".glut").join(SKILLS_DIR),
             "project-only",
             "---\nname: project-only\ndescription: d\n---\nP.\n",
         );
@@ -803,7 +803,7 @@ mod tests {
     fn a_broken_skill_is_a_note_and_the_catalog_goes_on() {
         let root = temp("broken");
         let home = root.join("home");
-        let skills = home.join(".axh").join(SKILLS_DIR);
+        let skills = home.join(".glut").join(SKILLS_DIR);
         skill_file(
             &skills,
             "good",

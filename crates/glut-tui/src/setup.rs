@@ -1,5 +1,5 @@
 //! The first start (TUI1c): without any provider Glut does not end with an error but asks for one — which kind, its
-//! key (not shown as it is typed), which model — keeps it the way `axh providers add` does, and starts.
+//! key (not shown as it is typed), which model — keeps it the way `glut providers add` does, and starts.
 
 use std::io::{self, Write as _};
 use std::path::Path;
@@ -66,7 +66,7 @@ pub async fn first_provider(home: &Path) -> Result<bool, String> {
     Ok(true)
 }
 
-/// Asks for the model of a provider that has none — `axh providers add` without `--model` keeps it so — and keeps the
+/// Asks for the model of a provider that has none — `glut providers add` without `--model` keeps it so — and keeps the
 /// answer, so the start goes on instead of ending with "no model". Nothing to do when `--model` names one for this
 /// run or the provider has its model.
 ///

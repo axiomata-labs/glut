@@ -1,4 +1,4 @@
-//! Where a run's MCP servers come from (`docs/plans/harness.md`, HS5, M1): the owner's `~/.axh/mcp.json` and
+//! Where a run's MCP servers come from (`docs/plans/harness.md`, HS5, M1): the owner's `~/.glut/mcp.json` and
 //! the project's `.mcp.json`, both read in one shape and merged, with the owner's winning on a name both hold.
 //!
 //! Both files are Claude Code's `{"mcpServers": {…}}`, so a repository's servers work as they are. What a server
@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::HarnessError;
 
 /// The owner's MCP file, below the home folder.
-const OWNER_FILE: &str = ".axh/mcp.json";
+const OWNER_FILE: &str = ".glut/mcp.json";
 /// The project's MCP file, in Claude Code's spelling so a repository's own servers run as they are.
 const PROJECT_FILE: &str = ".mcp.json";
 /// An MCP file larger than this is no MCP file.
@@ -34,7 +34,7 @@ const MAX_NAME_CHARS: usize = 32;
 /// Where a server came from (M1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Origin {
-    /// `~/.axh/mcp.json`: the owner's own, started without any approval.
+    /// `~/.glut/mcp.json`: the owner's own, started without any approval.
     Owner,
     /// `<project>/.mcp.json`: started only once the owner approved this very server (M2).
     Project,
@@ -326,7 +326,7 @@ pub fn load(home: &Path, project: &Path) -> Result<Vec<ServerEntry>, HarnessErro
     Ok(entries)
 }
 
-/// The owner's servers alone (`~/.axh/mcp.json`), checked as [`load`] checks them: the one list the app's own
+/// The owner's servers alone (`~/.glut/mcp.json`), checked as [`load`] checks them: the one list the app's own
 /// Opencode instances start too (`docs/plans/agent-isolation.md`, D7).
 ///
 /// # Errors
@@ -438,7 +438,7 @@ mod tests {
 
     fn temp(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "axh-mcp-{name}-{}-{}",
+            "glut-mcp-{name}-{}-{}",
             std::process::id(),
             chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
         ));
@@ -478,7 +478,7 @@ mod tests {
     fn both_files_are_merged_and_the_owner_wins() {
         let (home, project) = (temp("merge-home"), temp("merge-project"));
         write(
-            &home.join(".axh/mcp.json"),
+            &home.join(".glut/mcp.json"),
             r#"{"mcpServers": {"mail": {"command": "uvx", "args": ["mcp-mail"]}, "own": {"command": "a"}}}"#,
         );
         write(
@@ -518,12 +518,12 @@ mod tests {
             r#"{"mcpServers": {"a": {"command": "x", "url": "https://x.example"}}}"#,
         ];
         for text in broken {
-            write(&dir.join(".axh/mcp.json"), text);
+            write(&dir.join(".glut/mcp.json"), text);
             assert!(load(&dir, &dir).is_err(), "{text}");
         }
         // And what is fine: the default transport, a loopback http URL, a name at the length limit.
         write(
-            &dir.join(".axh/mcp.json"),
+            &dir.join(".glut/mcp.json"),
             r#"{"mcpServers": {"a": {"type": "stdio", "command": "x"},
                                "b": {"type": "http", "url": "http://127.0.0.1:1/mcp"},
                                "abcdefghijklmnopqrstuvwxyz012345": {"command": "x"}}}"#,
@@ -535,11 +535,11 @@ mod tests {
     #[test]
     fn a_file_that_does_not_parse_is_named_in_the_error() {
         let dir = temp("broken");
-        write(&dir.join(".axh/mcp.json"), "{ not json");
+        write(&dir.join(".glut/mcp.json"), "{ not json");
         let Err(HarnessError::Settings { path, .. }) = load(&dir, &dir) else {
             panic!("a broken file must stop the run");
         };
-        assert!(path.ends_with(".axh/mcp.json"), "{path}");
+        assert!(path.ends_with(".glut/mcp.json"), "{path}");
         // A missing file says nothing at all.
         let empty = temp("missing");
         assert!(load(&empty, &empty).unwrap().is_empty());
@@ -654,7 +654,7 @@ mod tests {
         let dir = temp("loader-vars");
         let home = dir.join("home");
         let project = dir.join("project");
-        std::fs::create_dir_all(home.join(".axh")).unwrap();
+        std::fs::create_dir_all(home.join(".glut")).unwrap();
         std::fs::create_dir_all(&project).unwrap();
         for key in [
             "NODE_OPTIONS",

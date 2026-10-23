@@ -1,4 +1,4 @@
-//! What the owner sets in Glut itself (T29): `~/.axh/prefs.json`, written by Glut's commands (`/editor`) and readable
+//! What the owner sets in Glut itself (T29): `~/.glut/prefs.json`, written by Glut's commands (`/editor`) and readable
 //! by hand. Never the owner's hand-written `settings.json`, which a command does not rewrite.
 
 use std::io::Read as _;
@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-/// The file below the home folder's `.axh`.
+/// The file below the home folder's `.glut`.
 const FILE: &str = "prefs.json";
 /// A prefs file larger than this is none.
 const MAX_BYTES: u64 = 64 * 1024;
@@ -225,7 +225,7 @@ mod tests {
             "the file goes at the end"
         );
         assert_eq!(Prefs::load(&home).editor.as_deref(), Some("nvim {file}"));
-        let path = home.join(".axh").join(FILE);
+        let path = home.join(".glut").join(FILE);
         std::fs::write(&path, r#"{"editor": "vi {file}", "theme": "forest"}"#).unwrap();
         set_editor(&home, "zed {file}:{line}").unwrap();
         let text = std::fs::read_to_string(&path).unwrap();

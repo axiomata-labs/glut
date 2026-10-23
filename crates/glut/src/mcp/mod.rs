@@ -1,4 +1,4 @@
-//! MCP servers (`docs/plans/harness.md`, HS5, M1–M5): the owner's `~/.axh/mcp.json` and the project's
+//! MCP servers (`docs/plans/harness.md`, HS5, M1–M5): the owner's `~/.glut/mcp.json` and the project's
 //! `.mcp.json`, each project server approved on its own, two transports (stdio and Streamable HTTP), and the
 //! tools they offer as `mcp__<server>__<tool>`.
 //!
@@ -121,7 +121,7 @@ mod tests {
             name: name.to_owned(),
             origin,
             config: ServerConfig::Stdio {
-                command: "/nonexistent/axh-test-server".to_owned(),
+                command: "/nonexistent/glut-test-server".to_owned(),
                 args: Vec::new(),
                 env: BTreeMap::new(),
             },

@@ -26,7 +26,7 @@ pub enum SignIn {
 /// One provider of the catalog.
 #[derive(Debug, Clone, Copy)]
 pub struct Known {
-    /// The id the owner names it by (`axh providers add openrouter`).
+    /// The id the owner names it by (`glut providers add openrouter`).
     pub id: &'static str,
     pub name: &'static str,
     pub protocol: Protocol,
@@ -35,7 +35,7 @@ pub struct Known {
     pub sign_in: SignIn,
     /// The environment variable a key may come from instead of the secret store.
     pub key_env: Option<&'static str>,
-    /// One line for `axh providers catalog`.
+    /// One line for `glut providers catalog`.
     pub note: &'static str,
     /// The provider's id in the models.dev catalog, where a gateway's model list (ids alone) finds what each model
     /// speaks, its window and its prices.

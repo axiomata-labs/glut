@@ -886,7 +886,7 @@ impl App {
                 Ok((commit, kept)) => self.transcript.note(
                     format!(
                         "the files are back as they were (snapshot {}); what they were just now is kept as run \
-                         {kept} — axh undo --run {kept} brings it back",
+                         {kept} — glut undo --run {kept} brings it back",
                         &commit[..commit.len().min(8)]
                     ),
                     Tone::Fine,
@@ -1807,7 +1807,7 @@ impl App {
         items.extend(settings.into_iter().map(|(verdict, text)| {
             Item::plain(
                 format!("{verdict} {}", crate::transcript::clean(&text)),
-                "from the settings (~/.axh/settings.json, the project's .axh/)",
+                "from the settings (~/.glut/settings.json, the project's .glut/)",
                 Pick::Shown,
             )
         }));
@@ -1920,7 +1920,7 @@ impl App {
         if files && talk {
             items.push(choice(
                 "conversation and files",
-                "your edits since go too (kept aside first: /steps or axh undo)",
+                "your edits since go too (kept aside first: /steps or glut undo)",
                 true,
                 true,
             ));
@@ -2442,7 +2442,7 @@ impl App {
         let mut title = format!("Model of {}", crate::transcript::clean(only));
         if !missing.is_empty() {
             title.push_str(&format!(
-                " (no list yet: {} — axh models refresh)",
+                " (no list yet: {} — glut models refresh)",
                 missing.join(", ")
             ));
         }
@@ -4802,7 +4802,7 @@ mod tests {
         }
     }
 
-    /// A screen whose session a [`Keeping`] host runs, with the model fixed and nothing kept under `~/.axh`.
+    /// A screen whose session a [`Keeping`] host runs, with the model fixed and nothing kept under `~/.glut`.
     fn hosted() -> (App, mpsc::UnboundedReceiver<Report>, Arc<Keeping>) {
         let (mut parts, engine) = session::for_tests();
         let host = Arc::new(Keeping::default());
@@ -4828,8 +4828,8 @@ mod tests {
         app.keep();
         assert_eq!(*host.kept.lock().unwrap(), [1]);
         assert!(
-            !app.parts.home.join(".axh").join("sessions").exists(),
-            "a hosted session is not kept under ~/.axh"
+            !app.parts.home.join(".glut").join("sessions").exists(),
+            "a hosted session is not kept under ~/.glut"
         );
     }
 

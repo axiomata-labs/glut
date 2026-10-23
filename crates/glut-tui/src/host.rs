@@ -5,7 +5,7 @@
 //! the screen what happened outside: the studio stopped the session, the app's theme changed.
 //!
 //! The standalone `glut` is the plain host: [`Standalone`] takes part in nothing, and [`Launch::owner`] builds the
-//! session from the owner's own `~/.axh` as before. The TUI depends on nothing of a host's — a host depends on it.
+//! session from the owner's own `~/.glut` as before. The TUI depends on nothing of a host's — a host depends on it.
 
 use std::future::Future;
 use std::path::PathBuf;
@@ -28,9 +28,9 @@ pub struct Launch {
     /// The folder the session works in.
     pub cwd: PathBuf,
     /// The gate's start: `mode: None` takes the settings' (a session starts in build when they name none), and
-    /// `trusted` decides whether the project's own `.axh/` rules, skills and servers count.
+    /// `trusted` decides whether the project's own `.glut/` rules, skills and servers count.
     pub gate: GateOptions,
-    /// The folder is trusted when the owner trusted it (`~/.axh/trust.json`), whatever `gate.trusted` says.
+    /// The folder is trusted when the owner trusted it (`~/.glut/trust.json`), whatever `gate.trusted` says.
     pub owner_trust: bool,
     /// What the model is told before the conversation.
     pub instructions: Instructions,
@@ -42,7 +42,7 @@ pub struct Launch {
     pub search: Search,
     /// The model the session starts with.
     pub engine: EngineChoice,
-    /// Whether the session is kept under `~/.axh/sessions/` for `glut -c`/`-r`. A host that keeps its sessions itself
+    /// Whether the session is kept under `~/.glut/sessions/` for `glut -c`/`-r`. A host that keeps its sessions itself
     /// ([`Host::kept`]) says no: they would be found twice.
     pub keep_sessions: bool,
     /// Whether the mode stays as `gate.mode` set it: no Shift+Tab, no other mode out of plan mode. A host whose
@@ -97,7 +97,7 @@ pub enum Instructions {
 
 /// The session's web search.
 pub enum Search {
-    /// With the search providers' keys from the environment, as `axh` has it.
+    /// With the search providers' keys from the environment, as `glut` has it.
     Owner,
     /// The host's, with its keys and its daily limit.
     Given(WebSearch),
@@ -107,7 +107,7 @@ pub enum Search {
 
 /// Which MCP servers the session starts.
 pub enum Servers {
-    /// `~/.axh/mcp.json` and the project's `.mcp.json` as the owner approved them.
+    /// `~/.glut/mcp.json` and the project's `.mcp.json` as the owner approved them.
     Owner,
     /// The servers of the file at this path alone (a card's team server), never the owner's nor the project's.
     Only(PathBuf),
@@ -118,7 +118,7 @@ pub enum Servers {
 
 /// The model the session starts with.
 pub enum EngineChoice {
-    /// A provider of `~/.axh/providers.json` (the default one when `None`) and its model (its default when `None`);
+    /// A provider of `~/.glut/providers.json` (the default one when `None`) and its model (its default when `None`);
     /// `/model`, `/provider` and `/effort` switch among them.
     Providers {
         /// The provider's id; the default one when `None`.
@@ -144,7 +144,7 @@ pub enum EngineChoice {
 /// Where the session's event log goes: its steps and the owner's messages, one JSON line each ([`crate::log`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Log {
-    /// Beside the session in `~/.axh/sessions` (`<id>.events.jsonl`).
+    /// Beside the session in `~/.glut/sessions` (`<id>.events.jsonl`).
     Sessions,
     /// The host's file — Axiomata's card writes its channel's `glut-events.jsonl`.
     At(PathBuf),

@@ -408,32 +408,32 @@ fn a_chain_is_split_outside_quotes_and_only_of_simple_commands() {
 
 #[test]
 fn marks_come_out_again_and_say_where_each_part_began() {
-    let mark = "axh-mark-00ff";
+    let mark = "glut-mark-00ff";
     let chain = chain("cargo fmt && cargo test").unwrap();
     let marked = marked(&chain, mark, "builtin ");
     assert_eq!(
         marked,
-        "{ builtin printf '%s-%s\\n' 'axh-mark-00ff' '0'\ncargo fmt\n} && \
-         { builtin printf '%s-%s\\n' 'axh-mark-00ff' '1'\ncargo test\n}"
+        "{ builtin printf '%s-%s\\n' 'glut-mark-00ff' '0'\ncargo fmt\n} && \
+         { builtin printf '%s-%s\\n' 'glut-mark-00ff' '1'\ncargo test\n}"
     );
     // The command text holds no mark: a part that prints it (`env` shows `AXH_COMMAND`) loses nothing.
-    assert!(!marked.contains("axh-mark-00ff-"));
-    let printed = "[note]\naxh-mark-00ff-0\naxh-mark-00ff-1\nrunning 2 tests\nok\n";
+    assert!(!marked.contains("glut-mark-00ff-"));
+    let printed = "[note]\nglut-mark-00ff-0\nglut-mark-00ff-1\nrunning 2 tests\nok\n";
     let (text, ranges) = unmark(printed, mark);
     assert_eq!(text, "[note]\nrunning 2 tests\nok\n");
     assert_eq!(ranges, Some(vec![(0, 0..7), (1, 7..text.len())]));
     // A part without a closing line break still ends where the next mark begins.
-    let (text, ranges) = unmark("axh-mark-00ff-0\nhalfaxh-mark-00ff-1\nrest", mark);
+    let (text, ranges) = unmark("glut-mark-00ff-0\nhalfglut-mark-00ff-1\nrest", mark);
     assert_eq!(text, "halfrest");
     assert_eq!(ranges, Some(vec![(0, 0..4), (1, 4..8)]));
     // `a || b; c` with `a` succeeding: `b` has no mark and no range.
-    let (text, ranges) = unmark("axh-mark-00ff-0\na\naxh-mark-00ff-2\nc\n", mark);
+    let (text, ranges) = unmark("glut-mark-00ff-0\na\nglut-mark-00ff-2\nc\n", mark);
     assert_eq!(text, "a\nc\n");
     assert_eq!(ranges, Some(vec![(0, 0..2), (2, 2..4)]));
     // Marks out of order (a part printed one) or a lost middle leave no parts, but every mark is taken out.
-    let (text, ranges) = unmark("axh-mark-00ff-1\na\naxh-mark-00ff-0\nb\n", mark);
+    let (text, ranges) = unmark("glut-mark-00ff-1\na\nglut-mark-00ff-0\nb\n", mark);
     assert_eq!((text.as_str(), ranges), ("a\nb\n", None));
-    let cut = format!("axh-mark-00ff-0\na\n[… 9 {DROPPED_MIDDLE} …]\nz\n");
+    let cut = format!("glut-mark-00ff-0\na\n[… 9 {DROPPED_MIDDLE} …]\nz\n");
     assert_eq!(unmark(&cut, mark).1, None);
     assert_eq!(
         unmark("no marks at all\n", mark),

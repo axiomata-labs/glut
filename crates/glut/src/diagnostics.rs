@@ -529,7 +529,7 @@ mod tests {
     #[test]
     #[ignore = "needs rust-analyzer"]
     fn rust_analyzer_reports_a_type_error() {
-        let dir = std::env::temp_dir().join(format!("axh-diag-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("glut-diag-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::write(
             dir.join("Cargo.toml"),

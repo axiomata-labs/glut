@@ -25,7 +25,7 @@ pub enum HarnessError {
     /// The model API's answer was not what the protocol says.
     #[error("unexpected answer from the model API: {0}")]
     Protocol(String),
-    /// A settings file (`~/.axh/settings.json`, a project's `.axh/`) cannot be used: unreadable, malformed, or holding
+    /// A settings file (`~/.glut/settings.json`, a project's `.glut/`) cannot be used: unreadable, malformed, or holding
     /// a rule that does not parse. The run does not start without its rules.
     #[error("settings {path}: {reason}")]
     Settings { path: String, reason: String },

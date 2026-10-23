@@ -1,4 +1,4 @@
-//! What a run reports, step by step: the contract between the harness and whatever shows it — a log, the `axh`
+//! What a run reports, step by step: the contract between the harness and whatever shows it — a log, the `glut`
 //! binary's JSON lines, later a TUI, the Studio or an app of its own.
 
 use std::sync::{Arc, Mutex};
@@ -161,7 +161,7 @@ pub enum Event {
         turn: u32,
         items: Vec<crate::planning::TodoItem>,
     },
-    /// The work folder as it was before a step that changes it (Glut 2, D): `axh undo --run <run> --step <turn>` puts it
+    /// The work folder as it was before a step that changes it (Glut 2, D): `glut undo --run <run> --step <turn>` puts it
     /// back.
     Snapshot {
         turn: u32,

@@ -113,7 +113,7 @@ impl Cancel {
 
 /// Cancels the run on Ctrl-C, on SIGTERM (a supervisor ending the process) and on SIGHUP (its terminal closed), so the
 /// run still ends with its last event and its toolbox is dropped — which ends every background job of the shell.
-/// For a program that runs the harness as its main work (`axh`, the CLI); call it from inside the tokio runtime.
+/// For a program that runs the harness as its main work (`glut`, the CLI); call it from inside the tokio runtime.
 pub fn cancel_on_signals(cancel: &Cancel) {
     use tokio::signal::unix::{SignalKind, signal};
     let cancel = cancel.clone();
@@ -311,7 +311,7 @@ async fn run_inner<M: ChatModel>(
             config,
             // The run's identity for the hooks' payloads (D4) — there are no sessions yet, so one id per run.
             session_id: format!(
-                "axh-{}-{}",
+                "glut-{}-{}",
                 std::process::id(),
                 chrono::Local::now().timestamp_millis()
             ),
@@ -2867,7 +2867,7 @@ mod tests {
             .collect();
         let args = json!({ "text": long }).to_string();
         // A store with a known tag, so the script can name the id the note will name.
-        let dir = std::env::temp_dir().join(format!("axh-readback-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("glut-readback-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let config = RunConfig {
             results: Some(results::StoreSpec {
@@ -3193,7 +3193,7 @@ mod tests {
 
     fn journal_dir(tag: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "axh-run-journal-{tag}-{}-{}",
+            "glut-run-journal-{tag}-{}-{}",
             std::process::id(),
             chrono::Local::now()
                 .timestamp_nanos_opt()
@@ -4446,7 +4446,7 @@ mod tests {
     /// from it, D8).
     fn hooks_config(tag: &str, events: Value) -> RunConfig {
         let cwd = std::env::temp_dir().join(format!(
-            "axh-run-hooks-{tag}-{}-{}",
+            "glut-run-hooks-{tag}-{}-{}",
             std::process::id(),
             chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
         ));
@@ -4629,7 +4629,7 @@ mod tests {
         // The hooks' session needs a working folder; one that cannot be resolved leaves the run without
         // hooks (D8), with a note — B3 applied to the runner itself.
         let model = Script::new(vec![Ok(text("done"))]);
-        let mut config = RunConfig::new("/no/such/folder/axh-hooks");
+        let mut config = RunConfig::new("/no/such/folder/glut-hooks");
         let section: crate::hooks::HooksSection =
             serde_json::from_value(one("SessionStart", "true")).unwrap();
         config.hooks = crate::hooks::Hooks::compile(&section).unwrap();

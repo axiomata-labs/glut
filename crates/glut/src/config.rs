@@ -9,9 +9,9 @@ use serde::{Deserialize, Serialize};
 use crate::hooks::Hooks;
 use crate::permissions::settings::SandboxSettings;
 
-/// The environment variable `axh` reads the model API's key from. Never handed on: not to a command (the shell's
+/// The environment variable `glut` reads the model API's key from. Never handed on: not to a command (the shell's
 /// cleaned environment drops it) and not to an MCP server's `${…}` header (`mcp::client`).
-pub const API_KEY_ENV: &str = "AXH_API_KEY";
+pub const API_KEY_ENV: &str = "GLUT_API_KEY";
 
 /// The most model turns a run takes before it stops (a turn is one model call). Generous for real work, but an end
 /// to a model that keeps calling tools without ever answering.
@@ -171,7 +171,7 @@ impl Default for RefusalLimits {
 /// number is no window a run could work in, and compacting against it would summarise at every step.
 pub const MIN_CONTEXT_WINDOW: u32 = 4_096;
 
-/// What a model's tokens cost, in USD per million (`"prices"` in `~/.axh/settings.json`, or the caller's table): the
+/// What a model's tokens cost, in USD per million (`"prices"` in `~/.glut/settings.json`, or the caller's table): the
 /// one thing a budget in money needs.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -292,12 +292,12 @@ pub struct RunConfig {
     pub timeout: Duration,
     /// Passed to the model as `max_tokens`; `None` leaves it to the API.
     pub max_output_tokens: Option<u32>,
-    /// More folders of skills beside the owner's `~/.axh/skills` and, in a trusted folder, the project's
-    /// `.axh/skills` (HS6, K2): `<folder>/<name>/SKILL.md` each. `axh` fills them from its repeatable
+    /// More folders of skills beside the owner's `~/.glut/skills` and, in a trusted folder, the project's
+    /// `.glut/skills` (HS6, K2): `<folder>/<name>/SKILL.md` each. `glut` fills them from its repeatable
     /// `--skill-dir`; a caller loads the catalog with them (`skills::Catalog::load`).
     pub skill_dirs: Vec<PathBuf>,
     /// The owner's hooks (HS7); empty: the run has none and nothing is built for them. Only the owner's
-    /// `~/.axh/settings.json` contributes — a project's hooks are parsed and left out (`B1`).
+    /// `~/.glut/settings.json` contributes — a project's hooks are parsed and left out (`B1`).
     pub hooks: Hooks,
     /// How the hooks' commands run (HS3b's sandbox, HS7 D5); `None`: as they are, judged by the rules alone.
     pub sandbox: Option<SandboxSettings>,
@@ -323,7 +323,7 @@ pub struct RunConfig {
     pub todos: bool,
     /// The mode a run in Plan mode switches to once the owner approves its plan (`exit_plan`, Glut 2, D).
     pub build_mode: crate::permissions::Mode,
-    /// Where the work folder's snapshots go before a run changes it (Glut 2, D, G11; `~/.axh/snapshots`), for `axh
+    /// Where the work folder's snapshots go before a run changes it (Glut 2, D, G11; `~/.glut/snapshots`), for `glut
     /// undo`. `None`: no snapshots.
     pub snapshots: Option<PathBuf>,
     /// Where the run journals its steps so it can be resumed after the process lost it (durable runs, D5). `None`:
@@ -333,13 +333,13 @@ pub struct RunConfig {
     /// the ids its notes name. `None`: in memory only. Only the run itself, never a subagent (it shares the run's
     /// config but numbers its own texts).
     pub results: Option<crate::results::StoreSpec>,
-    /// Where the run counts what Glut lean saves (N9; `~/.axh/lean.jsonl`, `axh gain`). `None`: only the `lean`
+    /// Where the run counts what Glut lean saves (N9; `~/.glut/lean.jsonl`, `glut gain`). `None`: only the `lean`
     /// events say it.
     pub savings: Option<PathBuf>,
     /// Whether an edit's result carries the language server's errors for the file (Glut 2, D, G12). On by default;
     /// without an installed server for the file's language nothing is added.
     pub diagnostics: bool,
-    /// When refusals end the run (#112); the owner's `"refusals"` in `~/.axh/settings.json` sets them.
+    /// When refusals end the run (#112); the owner's `"refusals"` in `~/.glut/settings.json` sets them.
     pub refusals: RefusalLimits,
     /// When the run compacts itself (#111); the owner's `"compact"` and `"contextWindow"` set it.
     pub compaction: Compaction,

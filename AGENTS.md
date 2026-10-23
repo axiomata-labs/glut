@@ -10,7 +10,10 @@ guarded file tools, an OS sandbox for every command (macOS Seatbelt) and a netwo
 its own, snapshots before every changing step, LSP errors after an edit, code mode (QuickJS), MCP, skills, hooks,
 subagents and journals that let a lost run resume.
 
-- `crates/glut` — the harness as a library, and `axh`, its headless binary (JSON lines on stdout).
+- `crates/glut` — the harness as a library, with its headless commands (`glut::cli`: `glut run` writes JSON lines on
+  stdout, `glut resume|undo|gain|providers|models`).
+- `crates/glut-tui` — the program `glut`: the terminal UI, and the headless commands as its subcommands (T43: `axh`
+  is gone, and so is `~/.axh` — everything is `~/.glut` / `.glut`).
 - Next: the terminal UI, `docs/plans/glut-tui.md` (the master plan, phases TUI0–TUI9).
 
 Glut grew inside Axiomata-OS (`../Axiomata-OS`, its plans `docs/plans/harness*.md`, `glut-*.md`, `durable.md` are the
@@ -22,19 +25,19 @@ too when a public item changes.
 
 - **Glut depends on nothing of Axiomata's** but `axiomata-files` (`../Axiomata-Foundation`, the guarded file service):
   no `axiomata-core`, no Tauri. What Axiomata adds comes in as plain values or a trait the caller implements.
-- **A new Glut setting starts here** — `~/.axh/settings.json` (the owner's only; a project's `.axh/` is read with
-  care), an `axh` flag or frontmatter; Axiomata's settings only pass a value on top.
-- Runtime data: `~/.axh/` (settings, mcp.json, runs, snapshots, lean.jsonl).
+- **A new Glut setting starts here** — `~/.glut/settings.json` (the owner's only; a project's `.glut/` is read with
+  care), a `glut run` flag or frontmatter; Axiomata's settings only pass a value on top.
+- Runtime data: `~/.glut/` (settings, mcp.json, runs, snapshots, lean.jsonl).
 
 ## Commands
 
 ```sh
-cargo build                      # the library, axh and glut (the TUI, crates/glut-tui)
+cargo build                      # the library and glut (the TUI and the headless commands, crates/glut-tui)
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
-cargo test                       # live tests are #[ignore]d (tests/live.rs: AXH_* variables)
-cargo run --bin axh -- run --base-url https://openrouter.ai/api --model <id> "prompt"   # key in AXH_API_KEY
-cargo run --bin axh -- providers add openrouter --model <id>   # once: a provider, its key in the Keychain
+cargo test                       # live tests are #[ignore]d (tests/live.rs: GLUT_LIVE_* variables)
+cargo run --bin glut -- run --base-url https://openrouter.ai/api --model <id> "prompt"   # key in GLUT_API_KEY
+cargo run --bin glut -- providers add openrouter --model <id>   # once: a provider, its key in the Keychain
 cargo run --release --bin glut   # the TUI in the current folder, on the default provider
 ```
 
@@ -49,7 +52,7 @@ cargo run --release --bin glut   # the TUI in the current folder, on the default
   target *once per call* (the network proxy judges every connection) — keep that when feeding it from a new place;
   `FinishReason::Refused` must still answer every call of the last reply. A compaction keeps the system prompt, the
   latest user message and whole steps (a call never parted from its result); what it replaces goes into the result
-  store, never away. Its limits and window are Glut's own (`~/.axh/settings.json` `refusals`, `compact`,
+  store, never away. Its limits and window are Glut's own (`~/.glut/settings.json` `refusals`, `compact`,
   `contextWindow`); Axiomata only passes its catalog's window below them.
 - **Glut never cuts a tool result** (Glut lean): the toolbox hands back the whole text, the loop bounds it once as it
   enters the conversation (`results::bounded`: head + tail, the whole in the run's `ResultStore`) — never cap inside a
@@ -60,9 +63,9 @@ cargo run --release --bin glut   # the TUI in the current folder, on the default
   place Glut touches a command: the gate, the hooks and the events see the command and the output as written, never
   the marks; keep it that way when changing either side.
 - **Hooks veto, they never permit** (HS7, Axiomata-OS `docs/plans/harness-hs7.md`): the `hooks` of
-  `~/.axh/settings.json` (Claude's shape) may only *block* a call or the answer — `allow`/`ask` parse and
+  `~/.glut/settings.json` (Claude's shape) may only *block* a call or the answer — `allow`/`ask` parse and
   are no-ops (the gate stays the only decider), a crash/timeout/odd exit is a fail-open `Event::Hook` note,
-  and only the owner's file counts: a project's `.axh/` hooks are parsed (`project_hooks_skipped`) and
+  and only the owner's file counts: a project's `.glut/` hooks are parsed (`project_hooks_skipped`) and
   printed/folded into `stderr` as a note, never executed.
 - **Subagents: offering `task` and judging `task` are two layers** (HS8, Axiomata-OS `docs/plans/harness-hs8.md`): the
   tool is *offered* when the run configures it (`RunConfig.subagents`, default on; in the core set only
@@ -71,11 +74,11 @@ cargo run --release --bin glut   # the TUI in the current folder, on the default
   `task`, rules then mode; headless an unanswered ask refuses it). A declaration alone never allows, the
   subagent gets the parent's toolbox minus `task` (one level only), and its events arrive wrapped as
   `Event::Sub { depth, event }` — sinks must recurse (`Notes`, `Readable`) or they drop them.
-- **A provider's key is bound to its host and never comes from `AXH_API_KEY`** (`docs/plans/glut-providers.md`,
-  `crates/glut/src/providers/`): providers live in `~/.axh/providers.json` (a file of their own — Glut rewrites it,
-  never the owner's `settings.json`), keys in the Keychain or `~/.axh/credentials.json` (0600 from the first byte,
+- **A provider's key is bound to its host and never comes from `GLUT_API_KEY`** (`docs/plans/glut-providers.md`,
+  `crates/glut/src/providers/`): providers live in `~/.glut/providers.json` (a file of their own — Glut rewrites it,
+  never the owner's `settings.json`), keys in the Keychain or `~/.glut/credentials.json` (0600 from the first byte,
   `write_replacing`) under the account `<id>@<host>`, so a root changed in the file finds no key instead of sending
-  the old one elsewhere. `AXH_API_KEY` belongs to a one-off `--base-url` (and to hosts like Axiomata) only. Every
+  the old one elsewhere. `GLUT_API_KEY` belongs to a one-off `--base-url` (and to hosts like Axiomata) only. Every
   provider key variable — the catalog's and the owner's `keyEnv` — is kept out of MCP headers' `${…}`
   (`mcp::client::header_value`); a new catalog entry gets a variable of its own (a coding plan's key is not its
   pay-as-you-go key). `ModelEndpoint.versioned`: a provider's root already holds its version.

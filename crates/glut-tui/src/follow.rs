@@ -33,7 +33,7 @@ const KEPT_BLOCKS: usize = 5_000;
 /// The longest line the viewer waits for the end of: a file with no line breaks is no log, and must not fill memory.
 const MAX_LINE: usize = 4 * 1024 * 1024;
 
-/// The log `what` names: a file, a session's id in `~/.axh/sessions`, or — `None` — the newest session of `cwd`.
+/// The log `what` names: a file, a session's id in `~/.glut/sessions`, or — `None` — the newest session of `cwd`.
 ///
 /// # Errors
 ///

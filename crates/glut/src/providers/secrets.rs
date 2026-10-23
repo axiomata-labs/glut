@@ -13,12 +13,12 @@ use crate::error::HarnessError;
 
 /// The secret store's service name; the account is the provider's id.
 pub const SERVICE: &str = "glut";
-/// The file store, below `~/.axh`.
+/// The file store, below `~/.glut`.
 pub const FILE: &str = "credentials.json";
 /// A credentials file larger than this is none.
 const MAX_FILE_BYTES: u64 = 64 * 1024;
 
-/// Which store the owner chose (`credentialStore` in `~/.axh/providers.json`).
+/// Which store the owner chose (`credentialStore` in `~/.glut/providers.json`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum StoreChoice {
@@ -27,7 +27,7 @@ pub enum StoreChoice {
     Auto,
     /// The system's store, or an error.
     Keyring,
-    /// `~/.axh/credentials.json`, mode 0600.
+    /// `~/.glut/credentials.json`, mode 0600.
     File,
 }
 
@@ -51,7 +51,7 @@ pub trait SecretStore {
     ///
     /// [`HarnessError::Settings`] when the store cannot be written.
     fn delete(&self, account: &str) -> Result<(), HarnessError>;
-    /// Where the secrets are, for `axh providers list`.
+    /// Where the secrets are, for `glut providers list`.
     fn place(&self) -> String;
 }
 
@@ -133,7 +133,7 @@ impl SecretStore for Keychain {
     }
 }
 
-/// `~/.axh/credentials.json`: `{"secrets": {"<account>": "<secret>"}}`, readable by the owner alone.
+/// `~/.glut/credentials.json`: `{"secrets": {"<account>": "<secret>"}}`, readable by the owner alone.
 ///
 /// Written whole into a new file created with mode 0600 and renamed into place — never written first and narrowed
 /// after, which left Pi's file open to others for a moment (CVE-2026-54327). A file anyone else may read is refused,
@@ -229,7 +229,7 @@ mod tests {
 
     fn scratch(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "axh-secrets-{tag}-{}-{}",
+            "glut-secrets-{tag}-{}-{}",
             std::process::id(),
             chrono::Local::now()
                 .timestamp_nanos_opt()

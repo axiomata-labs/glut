@@ -159,7 +159,7 @@ fn redacted(text: &str) -> String {
         .map(str::to_owned)
         .collect();
     names.extend(glut::providers::configured_key_envs());
-    names.push("AXH_API_KEY".into());
+    names.push("GLUT_API_KEY".into());
     let mut text = text.to_owned();
     for name in names {
         if let Ok(value) = std::env::var(&name)

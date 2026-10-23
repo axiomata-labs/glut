@@ -382,7 +382,7 @@ impl Http {
 }
 
 /// A header's value with its `${NAME}`s put in from `env` (M3) — except the model keys, which are never a server's
-/// to have: a repository's `.mcp.json` asking for `${AXH_API_KEY}`, `${OPENROUTER_API_KEY}` or a variable the
+/// to have: a repository's `.mcp.json` asking for `${GLUT_API_KEY}`, `${OPENROUTER_API_KEY}` or a variable the
 /// owner's `providers.json` names would send it to a host of its choosing.
 fn header_value(value: &str, env: impl Fn(&str) -> Option<String>) -> Result<String, String> {
     header_value_without(value, &crate::providers::configured_key_envs(), env)
@@ -657,7 +657,7 @@ impl Client {
         let initialize = json!({
             "protocolVersion": PROTOCOL_VERSION,
             "capabilities": {},
-            "clientInfo": {"name": "axh", "version": env!("CARGO_PKG_VERSION")},
+            "clientInfo": {"name": "glut", "version": env!("CARGO_PKG_VERSION")},
         });
         let start = client.start;
         client.request("initialize", initialize, start).await?;
@@ -838,7 +838,7 @@ mod tests {
 
     fn temp(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "axh-mcp-{name}-{}-{}",
+            "glut-mcp-{name}-{}-{}",
             std::process::id(),
             chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
         ));
@@ -861,7 +861,7 @@ mod tests {
     #[test]
     fn a_header_never_receives_the_harness_key_even_where_it_is_set() {
         let env = |key: &str| match key {
-            "AXH_API_KEY" => Some("sk-model-key".to_owned()),
+            "GLUT_API_KEY" => Some("sk-model-key".to_owned()),
             "GITHUB_TOKEN" => Some("gh-token".to_owned()),
             _ => None,
         };
@@ -869,7 +869,7 @@ mod tests {
             header_value("Bearer ${GITHUB_TOKEN}", env).unwrap(),
             "Bearer gh-token"
         );
-        let refused = header_value("Bearer ${AXH_API_KEY}", env).unwrap_err();
+        let refused = header_value("Bearer ${GLUT_API_KEY}", env).unwrap_err();
         assert!(!refused.contains("sk-model-key"), "{refused}");
     }
 

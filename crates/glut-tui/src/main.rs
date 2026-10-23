@@ -1,5 +1,5 @@
 //! `glut` — Glut's terminal interface (`docs/plans/glut-tui.md`, TUI1a): one session in a folder, full screen, the
-//! default provider of `~/.axh/providers.json` unless `--provider` names another.
+//! default provider of `~/.glut/providers.json` unless `--provider` names another.
 
 use std::path::PathBuf;
 
@@ -19,7 +19,7 @@ struct Cli {
     /// The folder the session works in.
     #[arg(long, default_value = ".")]
     cwd: PathBuf,
-    /// A provider of ~/.axh/providers.json (axh providers list); the default one otherwise.
+    /// A provider of ~/.glut/providers.json (glut providers list); the default one otherwise.
     #[arg(long)]
     provider: Option<String>,
     /// The model; the provider's default otherwise.
@@ -28,11 +28,11 @@ struct Cli {
     /// Go on with the newest session of the folder.
     #[arg(short = 'c', long = "continue", conflicts_with = "resume")]
     continue_last: bool,
-    /// MCP servers from this file (Claude Code's shape and flag, `{"mcpServers": …}`) beside `~/.axh/mcp.json` and the
+    /// MCP servers from this file (Claude Code's shape and flag, `{"mcpServers": …}`) beside `~/.glut/mcp.json` and the
     /// project's `.mcp.json`; a name both have is the file's.
     #[arg(long, value_name = "FILE")]
     mcp_config: Option<PathBuf>,
-    /// The servers of `--mcp-config` alone, none of the owner's nor the project's — `axh run --mcp-config`'s meaning.
+    /// The servers of `--mcp-config` alone, none of the owner's nor the project's — `glut run --mcp-config`'s meaning.
     #[arg(long, requires = "mcp_config")]
     strict_mcp_config: bool,
     /// Pick an earlier session of the folder to go on with.
@@ -50,15 +50,18 @@ enum Command {
         /// A session's id or a log file; the newest session of the folder when left out.
         what: Option<String>,
     },
+    #[command(flatten)]
+    Headless(glut::cli::Command),
 }
 
 #[tokio::main]
 async fn main() -> std::process::ExitCode {
-    let cli = Cli::parse();
-    if let Some(Command::Watch { what }) = &cli.command {
-        return watch(&cli.cwd, what.as_deref()).await;
+    let mut cli = Cli::parse();
+    match cli.command.take() {
+        Some(Command::Watch { what }) => watch(&cli.cwd, what.as_deref()).await,
+        Some(Command::Headless(command)) => glut::cli::dispatch(command).await,
+        None => glut_tui::standalone(launch(&cli), open(cli)).await,
     }
-    glut_tui::standalone(launch(&cli), open(cli)).await
 }
 
 /// `glut watch`: the log `what` names, followed until the owner quits.

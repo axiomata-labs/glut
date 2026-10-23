@@ -44,7 +44,7 @@ pub struct Meter {
     pub tools: HashMap<String, ToolCount>,
     /// What Glut lean spared this session: calls and characters before and after.
     pub lean: (usize, usize, usize),
-    /// What Glut lean spared on every run so far (`axh gain`): calls and characters spared, read when the tab opens.
+    /// What Glut lean spared on every run so far (`glut gain`): calls and characters spared, read when the tab opens.
     pub lean_all: Option<(usize, usize)>,
 }
 
@@ -205,7 +205,7 @@ impl Meter {
         }));
         if let Some((calls, saved)) = self.lean_all {
             lines.push(quiet(format!(
-                "  all runs: {} chars on {calls} calls (axh gain)",
+                "  all runs: {} chars on {calls} calls (glut gain)",
                 count(saved)
             )));
         }

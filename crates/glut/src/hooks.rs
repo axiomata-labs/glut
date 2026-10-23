@@ -1,5 +1,5 @@
 //! Hooks (HS7, `docs/plans/harness-hs7.md`): Claude Code's four events — `SessionStart`, `PreToolUse`,
-//! `PostToolUse`, `Stop` — run from the owner's `~/.axh/settings.json` around the loop's own steps.
+//! `PostToolUse`, `Stop` — run from the owner's `~/.glut/settings.json` around the loop's own steps.
 //!
 //! What a hook may do is a veto (B2): it can block a call or the answer, and `SessionStart` can add context;
 //! it never lets a call through that the gate would refuse. A hook that crashes, exits with anything but 0/2
@@ -419,7 +419,7 @@ mod tests {
     /// A session for a scratch folder, without a profile, over the test process's own PATH and HOME.
     fn session(tag: &str) -> (PathBuf, Session) {
         let dir = std::env::temp_dir().join(format!(
-            "axh-hooks-{tag}-{}-{}",
+            "glut-hooks-{tag}-{}-{}",
             std::process::id(),
             chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
         ));
@@ -456,7 +456,7 @@ mod tests {
         session: &Session,
         extra: Value,
     ) -> (HookOutcome, Vec<Event>) {
-        let payload = payload("axh-test", Path::new("/w"), event, extra);
+        let payload = payload("glut-test", Path::new("/w"), event, extra);
         let mut events = Vec::new();
         let outcome = run_event(
             Some(1),
@@ -655,7 +655,7 @@ mod tests {
         // A hook running into its timeout: a note, not a block, and the group is gone with it.
         let slow = hooks(one("PreToolUse", None, "sleep 30"));
         let stdin = payload(
-            "axh-test",
+            "glut-test",
             Path::new("/w"),
             HookEvent::PreToolUse,
             json!({}),
@@ -688,7 +688,7 @@ mod tests {
         ]}));
         let mut events = Vec::new();
         let stdin = payload(
-            "axh-test",
+            "glut-test",
             Path::new("/w"),
             HookEvent::PreToolUse,
             json!({}),
@@ -742,13 +742,13 @@ mod tests {
     #[test]
     fn the_payload_carries_claudes_fields_with_ours_in_it() {
         let value = payload(
-            "axh-1-2",
+            "glut-1-2",
             Path::new("/w"),
             HookEvent::PreToolUse,
             json!({"tool_name": "bash", "tool_input": {"command": "ls"}}),
         );
         assert_eq!(value["hook_event_name"], "PreToolUse");
-        assert_eq!(value["session_id"], "axh-1-2");
+        assert_eq!(value["session_id"], "glut-1-2");
         assert_eq!(value["transcript_path"], "");
         assert_eq!(value["cwd"], "/w");
         assert_eq!(value["tool_input"]["command"], "ls");

@@ -1,7 +1,7 @@
 //! The session's event log (`docs/plans/glut-tui.md`, TUI8d): every step of its turns as the run reported it, and
 //! the owner's messages between them, one JSON line each with the time in `at` — what `glut watch` follows from another
 //! terminal, and what a host reads for its own views (Axiomata's meter and Flow tiles read a card's). The owner's
-//! sessions keep theirs beside the session (`~/.axh/sessions/<id>.events.jsonl`), a host names its own file.
+//! sessions keep theirs beside the session (`~/.glut/sessions/<id>.events.jsonl`), a host names its own file.
 //!
 //! The streamed pieces of text and thinking are left out: the whole text follows as one event, and the thinking is
 //! the screen's alone. A log that reached [`MAX_LOG_BYTES`] says so in its last line and takes no more.
@@ -29,7 +29,7 @@ const HEAD: &str = "session";
 /// Where the session's log goes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Target {
-    /// Beside the session in `~/.axh/sessions`, following it when the owner opens another.
+    /// Beside the session in `~/.glut/sessions`, following it when the owner opens another.
     Sessions(PathBuf),
     /// One file the host names, whatever session the screen shows.
     At(PathBuf),
@@ -66,9 +66,9 @@ pub enum Logged {
     Head(PathBuf),
 }
 
-/// The log of the owner's session `id` in `~/.axh/sessions` under `home`.
+/// The log of the owner's session `id` in `~/.glut/sessions` under `home`.
 pub fn session_log(home: &Path, id: &str) -> PathBuf {
-    home.join(".axh")
+    home.join(".glut")
         .join("sessions")
         .join(format!("{id}{SUFFIX}"))
 }
@@ -92,10 +92,10 @@ pub fn read(line: &str) -> Option<Logged> {
     }
 }
 
-/// The newest log in `~/.axh/sessions` under `home` of a session in `cwd`, by when it was last written.
+/// The newest log in `~/.glut/sessions` under `home` of a session in `cwd`, by when it was last written.
 pub fn newest(home: &Path, cwd: &Path) -> Option<PathBuf> {
     use std::io::BufRead as _;
-    let entries = std::fs::read_dir(home.join(".axh").join("sessions")).ok()?;
+    let entries = std::fs::read_dir(home.join(".glut").join("sessions")).ok()?;
     entries
         .flatten()
         .filter(|entry| entry.file_name().to_string_lossy().ends_with(SUFFIX))
@@ -324,7 +324,7 @@ mod tests {
             lines(&file),
             [Logged::Head(dir.clone()), Logged::Owner("Start".into())]
         );
-        assert!(!dir.join(".axh").exists());
+        assert!(!dir.join(".glut").exists());
         let off = EventLog::new(Target::Off, dir.clone());
         off.follow("s1");
         off.owner("nothing");

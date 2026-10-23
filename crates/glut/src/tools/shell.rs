@@ -182,9 +182,9 @@ fn command_script(family: Family) -> String {
          if [ -n \"$AXH_SNAPSHOT\" ]; then . \"$AXH_SNAPSHOT\" >/dev/null 2>&1; fi\n\
          {b}cd \"$AXH_CWD\" || exit 1\n\
          {b}eval \"$AXH_COMMAND\"\n\
-         __axh_status=$?\n\
+         __glut_status=$?\n\
          if [ -n \"$AXH_CWD_FILE\" ]; then {b}pwd -P > \"$AXH_CWD_FILE\" 2>/dev/null; fi\n\
-         exit $__axh_status\n"
+         exit $__glut_status\n"
     )
 }
 
@@ -448,7 +448,7 @@ impl Session {
     fn mark(&self) -> String {
         let seed = self.next_note.fetch_add(1, Ordering::Relaxed);
         format!(
-            "axh-mark-{:016x}",
+            "glut-mark-{:016x}",
             std::hash::RandomState::new().hash_one(seed)
         )
     }
@@ -1174,7 +1174,7 @@ fn scratch_dir() -> std::io::Result<PathBuf> {
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |since| since.as_nanos());
     let dir = std::env::temp_dir().join(format!(
-        "axh-shell-{}-{nanos}-{}",
+        "glut-shell-{}-{nanos}-{}",
         std::process::id(),
         COUNTER.fetch_add(1, Ordering::Relaxed)
     ));
@@ -1401,7 +1401,7 @@ mod tests {
     /// the test process's `PATH` and `HOME`.
     fn setup(shell: &str, extra: &[(&str, &str)]) -> (PathBuf, Toolbox) {
         let dir = std::env::temp_dir().join(format!(
-            "axh-shell-test-{}-{}",
+            "glut-shell-test-{}-{}",
             std::process::id(),
             chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
         ));
@@ -1528,7 +1528,7 @@ mod tests {
             // A chain without output answers as a command without output does, and no mark is ever seen.
             let called = chain("cd . && ls -d sub/missing 2>/dev/null; true").await;
             assert!(
-                !called.text.contains("axh-mark"),
+                !called.text.contains("glut-mark"),
                 "{shell}: {}",
                 called.text
             );
@@ -1560,7 +1560,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_environment_is_cleaned_of_stray_variables() {
-        let (_dir, tools) = setup("/bin/bash", &[("AXH_API_KEY", "sk-secret"), ("LANG", "C")]);
+        let (_dir, tools) = setup("/bin/bash", &[("GLUT_API_KEY", "sk-secret"), ("LANG", "C")]);
         let (_, env) = bash(&tools, "env").await;
         assert!(!env.contains("sk-secret"), "{env}");
         assert!(env.contains("LANG=C"));
@@ -1656,7 +1656,7 @@ mod tests {
             return;
         }
         let home = std::env::temp_dir().join(format!(
-            "axh-home-{}-{}",
+            "glut-home-{}-{}",
             std::process::id(),
             chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
         ));
@@ -1893,13 +1893,13 @@ mod tests {
             return;
         }
         let dir = std::env::temp_dir().join(format!(
-            "axh-shell-direct-{}-{}",
+            "glut-shell-direct-{}-{}",
             std::process::id(),
             chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
         ));
         std::fs::create_dir_all(dir.join("work")).unwrap();
         let outside =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/axh-shell-direct-outside");
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/glut-shell-direct-outside");
         std::fs::create_dir_all(&outside).unwrap();
         let probe = outside
             .canonicalize()
@@ -2035,14 +2035,14 @@ mod tests {
             return;
         }
         let dir = std::env::temp_dir().join(format!(
-            "axh-shell-sandbox-{}-{}",
+            "glut-shell-sandbox-{}-{}",
             std::process::id(),
             chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
         ));
         std::fs::create_dir_all(dir.join("work")).unwrap();
         // Outside every writable place: the workspace's `target/`.
         let outside =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/axh-shell-sandbox-outside");
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/glut-shell-sandbox-outside");
         std::fs::create_dir_all(&outside).unwrap();
         let target = outside
             .canonicalize()

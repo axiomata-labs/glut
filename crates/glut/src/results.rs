@@ -358,21 +358,21 @@ mod store_tests {
 
     #[test]
     fn a_persistent_store_answers_a_later_turn_and_numbers_on() {
-        let dir = std::env::temp_dir().join(format!("axh-results-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("glut-results-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let spec = StoreSpec {
             dir: dir.clone(),
-            tag: "axh-chat".into(),
+            tag: "glut-chat".into(),
         };
         let first_turn = ResultStore::persistent(spec.clone());
-        assert_eq!(first_turn.put("one".into()), "axh-chat-1");
-        assert_eq!(first_turn.put("two".into()), "axh-chat-2");
+        assert_eq!(first_turn.put("one".into()), "glut-chat-1");
+        assert_eq!(first_turn.put("two".into()), "glut-chat-2");
         // The next turn is a new process' store: it reads the earlier ids and goes on numbering.
         let next_turn = ResultStore::persistent(spec);
-        assert_eq!(next_turn.read("axh-chat-1", 0).unwrap(), "one");
-        assert_eq!(next_turn.put("three".into()), "axh-chat-3");
-        assert_eq!(next_turn.read("axh-chat-3", 0).unwrap(), "three");
-        assert!(next_turn.read("axh-chat-9", 0).is_err());
+        assert_eq!(next_turn.read("glut-chat-1", 0).unwrap(), "one");
+        assert_eq!(next_turn.put("three".into()), "glut-chat-3");
+        assert_eq!(next_turn.read("glut-chat-3", 0).unwrap(), "three");
+        assert!(next_turn.read("glut-chat-9", 0).is_err());
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

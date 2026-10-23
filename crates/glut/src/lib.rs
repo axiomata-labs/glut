@@ -2,13 +2,14 @@
 //!
 //! A lean agent loop: a model behind an OpenAI-compatible chat API is given a small system prompt, the caller's
 //! instructions and a set of tools, and the loop runs the tool calls it asks for until it answers without one. Every
-//! step is reported as an [`Event`], so a caller can show it, log it or write it out as JSON lines (the `axh` binary).
+//! step is reported as an [`Event`], so a caller can show it, log it or write it out as JSON lines (the `glut` binary).
 //!
 //! The crate depends on nothing of Axiomata's core or its app (H2): which model to use, the key, the folder to work
 //! in and the instructions come from the caller as plain values, so the harness can later stand on its own. File
 //! access goes through `axiomata-files`' guarded [`axiomata_files::Root`], never through a raw path.
 
 pub mod anthropic;
+pub mod cli;
 pub mod codemode;
 pub mod commands;
 pub mod compact;

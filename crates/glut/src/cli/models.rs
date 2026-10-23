@@ -1,12 +1,12 @@
-//! `axh models` (`docs/plans/glut-providers.md`, PV2, P6): the models each configured provider offers, from its kept
-//! list (`~/.axh/models/<id>.json`), fetched again when it is older than a day or on `refresh`.
+//! `glut models` (`docs/plans/glut-providers.md`, PV2, P6): the models each configured provider offers, from its kept
+//! list (`~/.glut/models/<id>.json`), fetched again when it is older than a day or on `refresh`.
 
 use std::path::Path;
 use std::process::ExitCode;
 
+use crate::providers::models::{self, ModelInfo, ModelList};
+use crate::providers::{self, Providers};
 use clap::Subcommand;
-use glut::providers::models::{self, ModelInfo, ModelList};
-use glut::providers::{self, Providers};
 
 #[derive(Subcommand)]
 pub enum ModelsCommand {
@@ -28,9 +28,9 @@ pub enum ModelsCommand {
     },
 }
 
-/// Runs one `axh models` command.
+/// Runs one `glut models` command.
 pub async fn run(command: ModelsCommand) -> ExitCode {
-    let home = match glut::permissions::settings::home_dir() {
+    let home = match crate::permissions::settings::home_dir() {
         Ok(home) => home,
         Err(err) => return fail(&err.to_string()),
     };
@@ -49,7 +49,7 @@ pub async fn run(command: ModelsCommand) -> ExitCode {
 }
 
 fn fail(message: &str) -> ExitCode {
-    eprintln!("axh models: {message}");
+    eprintln!("glut models: {message}");
     ExitCode::from(1)
 }
 
@@ -58,7 +58,7 @@ fn chosen(providers: &Providers, id: Option<&str>) -> Result<Vec<String>, String
     match id {
         Some(id) => providers.pick(Some(id)).map(|(id, _)| vec![id.to_owned()]),
         None if providers.providers.is_empty() => Err(
-            "no provider yet: axh providers add <kind> (axh providers catalog lists them)".into(),
+            "no provider yet: glut providers add <kind> (glut providers catalog lists them)".into(),
         ),
         None => Ok(providers.providers.keys().cloned().collect()),
     }
@@ -126,7 +126,7 @@ async fn refresh(home: &Path, provider: Option<&str>) -> Result<(), String> {
 /// One provider that failed among several is said and the rest still shown; only when all failed is it an error.
 fn report(failed: Vec<String>, of: usize) -> Result<(), String> {
     for line in &failed {
-        eprintln!("axh models: {line}");
+        eprintln!("glut models: {line}");
     }
     if !failed.is_empty() && failed.len() == of {
         return Err("no list could be read".into());
@@ -176,7 +176,7 @@ mod tests {
             id: "deepseek/deepseek-v4.1-flash".into(),
             name: None,
             context_window: Some(163_840),
-            prices: Some(glut::Prices {
+            prices: Some(crate::Prices {
                 input_per_m: 0.1,
                 cached_input_per_m: None,
                 output_per_m: 0.4,

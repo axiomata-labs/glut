@@ -1,11 +1,11 @@
-//! Which project's MCP server the owner approved (`docs/plans/harness.md`, HS5, M2): `~/.axh/mcp-approved.json`.
+//! Which project's MCP server the owner approved (`docs/plans/harness.md`, HS5, M2): `~/.glut/mcp-approved.json`.
 //!
 //! A project's server starts a process of its own and sends data out, so trusting the folder (P5) is not enough:
 //! each server is approved on its own, keyed by the project's path, its name and the SHA-256 of its config — a
-//! changed command, argument, env or URL asks again. The owner's own servers in `~/.axh/mcp.json` need no
+//! changed command, argument, env or URL asks again. The owner's own servers in `~/.glut/mcp.json` need no
 //! approval; they are their own.
 //!
-//! Where nobody can answer (the `axh` binary, a pipe) an unapproved project server is left out and the fact goes
+//! Where nobody can answer (the `glut` binary, a pipe) an unapproved project server is left out and the fact goes
 //! to stderr: the run goes on without it rather than stopping, and never starts a process nobody said yes to.
 
 use std::io::{IsTerminal, Write as _};
@@ -20,7 +20,7 @@ use crate::permissions::{printable, settings::USER_DIR};
 /// The approvals file, below the owner's settings folder.
 const APPROVALS_FILE: &str = "mcp-approved.json";
 
-/// What the owner approved once (M2), kept in `~/.axh/mcp-approved.json`.
+/// What the owner approved once (M2), kept in `~/.glut/mcp-approved.json`.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Approvals {
     #[serde(default)]
@@ -197,7 +197,7 @@ mod tests {
 
     fn temp(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "axh-mcp-approval-{name}-{}-{}",
+            "glut-mcp-approval-{name}-{}-{}",
             std::process::id(),
             chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
         ));

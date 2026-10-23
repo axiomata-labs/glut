@@ -1,4 +1,4 @@
-//! One Glut session in a folder (TUI1): what `axh run` builds once per run — gate, tools, settings — built once and
+//! One Glut session in a folder (TUI1): what `glut run` builds once per run — gate, tools, settings — built once and
 //! kept, so every message of the session is a turn that goes on from the conversation before it. The model is the
 //! session's [`Engine`], which `/model`, `/provider` and `/effort` replace between turns. What it is built from is
 //! the host's [`Launch`]; the host takes part in it through [`Host`] (TUI8a).
@@ -153,7 +153,7 @@ pub struct Parts {
     pub host: Arc<dyn Host>,
     /// The host fixed the model: no `/model`, `/provider` or `/effort`.
     pub fixed_engine: bool,
-    /// Whether the session is kept under `~/.axh/sessions/` ([`Launch::keep_sessions`]).
+    /// Whether the session is kept under `~/.glut/sessions/` ([`Launch::keep_sessions`]).
     pub keep_sessions: bool,
     /// [`Launch::mode_locked`], [`Launch::owner_shell`], [`Launch::keep_lost_turns`].
     pub mode_locked: bool,
@@ -263,8 +263,8 @@ pub async fn build(
     config.sandbox = Some(built.sandbox.clone());
     config.refusals = built.refusals;
     config.parallel_subagents = built.parallel_subagents;
-    config.snapshots = Some(home.join(".axh").join("snapshots"));
-    config.savings = Some(home.join(".axh").join(glut::lean::FILE));
+    config.snapshots = Some(home.join(".glut").join("snapshots"));
+    config.savings = Some(home.join(".glut").join(glut::lean::FILE));
     host.configure(&mut config, &built);
 
     let (catalog, skill_notes) = skills::Catalog::load(&home, &cwd, trusted, &config.skill_dirs);
@@ -286,7 +286,7 @@ pub async fn build(
     .map_err(|err| err.to_string())?;
     let log = Arc::new(crate::log::EventLog::new(
         match &launch.log {
-            // A session nobody keeps leaves no log behind it in `~/.axh/sessions` either.
+            // A session nobody keeps leaves no log behind it in `~/.glut/sessions` either.
             crate::host::Log::Sessions if !launch.keep_sessions => crate::log::Target::Off,
             crate::host::Log::Sessions => crate::log::Target::Sessions(home.clone()),
             crate::host::Log::At(path) => crate::log::Target::At(path.clone()),
@@ -502,7 +502,7 @@ pub fn keep_window(home: &Path, engine: &Engine, tokens: u32) -> Result<(), Stri
     list.save(home).map_err(|err| err.to_string())
 }
 
-/// The web search with the providers' keys from the environment, as `axh` has it.
+/// The web search with the providers' keys from the environment, as `glut` has it.
 fn web_search() -> glut::tools::search::WebSearch {
     use glut::tools::search::{SearchKeys, Unlimited, WebSearch};
     let key = |name: &str| {
@@ -715,7 +715,7 @@ pub fn switch(
 /// command reaches — asked about one, the model points at them instead of searching the disk.
 const SESSION_NOTE: &str = "You run in Glut's terminal session. Handoffs between sessions are the owner's commands: \
     `/handoff write` has a model write what was done and what comes next, `/handoff read` puts that text into this \
-    conversation (and moves the file aside, so it is read once). They are kept in ~/.axh/handoffs, Glut's own \
+    conversation (and moves the file aside, so it is read once). They are kept in ~/.glut/handoffs, Glut's own \
     folder, which is not yours to read. If the owner asks about a handoff and none is in this conversation, do not \
     search for it: tell them to load it with /handoff read.";
 
@@ -734,7 +734,7 @@ const HANDOFF_PIECE_CHARS: usize = 1_500;
 /// Where a handoff goes once read, below the handoffs' folder.
 const READ_DIR: &str = "read";
 
-/// Where the handoff of the session in `cwd` is kept: `~/.axh/handoffs/<the folder's last names>-<a hash of its
+/// Where the handoff of the session in `cwd` is kept: `~/.glut/handoffs/<the folder's last names>-<a hash of its
 /// whole path>.md` — readable, and never the same file for two folders.
 pub fn handoff_path(home: &Path, cwd: &Path) -> PathBuf {
     let whole = cwd.to_string_lossy();
@@ -767,7 +767,7 @@ pub fn handoff_path(home: &Path, cwd: &Path) -> PathBuf {
     } else {
         readable
     };
-    home.join(".axh")
+    home.join(".glut")
         .join("handoffs")
         .join(format!("{name}-{hash:016x}.md"))
 }

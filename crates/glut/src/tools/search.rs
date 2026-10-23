@@ -115,7 +115,7 @@ pub enum BudgetVerdict {
     Closed(String),
 }
 
-/// A budget that allows everything and keeps nothing — for a caller with no limits of its own (tests, `axh`).
+/// A budget that allows everything and keeps nothing — for a caller with no limits of its own (tests, `glut`).
 pub struct Unlimited;
 
 impl SearchBudget for Unlimited {

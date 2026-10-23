@@ -38,7 +38,7 @@ const PRIVATE_DIRS: [&str; 3] = [".git", ".hg", ".jj"];
 
 /// What a run never writes: the version control's store and the configuration a later program obeys. A line written
 /// into `.git/config` (`core.fsmonitor`, an alias with `!`) runs as the owner at their next `git status`; a role, a
-/// task file or an agent's settings — the harness's own rules in `.axh/` included — would be obeyed by the next
+/// task file or an agent's settings — the harness's own rules in `.glut/` included — would be obeyed by the next
 /// session. Security audit of HS1, 2026-10-13.
 const PROTECTED_DIRS: [&str; 10] = [
     ".git",
@@ -48,7 +48,7 @@ const PROTECTED_DIRS: [&str; 10] = [
     ".claude",
     ".opencode",
     ".vscode",
-    ".axh",
+    ".glut",
     // Run code at the owner's next build or commit: cargo's runner and flags, git hooks of husky.
     ".cargo",
     ".husky",
@@ -111,7 +111,7 @@ fn refuse_hard_links(root: &Root, path: &str) -> Result<(), String> {
     }
 }
 
-/// [`guard`] on the path as written and on where it really leads: a link inside the folder (`docs -> .axh`) must not
+/// [`guard`] on the path as written and on where it really leads: a link inside the folder (`docs -> .glut`) must not
 /// open a protected folder under another name.
 fn guard_resolved(root: &Root, path: &str, dirs: &[&str], files: &[&str]) -> Result<(), String> {
     guard(path, dirs, files)?;
@@ -783,7 +783,7 @@ mod tests {
     /// to write into its folder.
     fn setup_with(skills: &[(&str, &[(&str, &str)])]) -> (std::path::PathBuf, Toolbox) {
         let dir = std::env::temp_dir().join(format!(
-            "axh-files-{}-{}",
+            "glut-files-{}-{}",
             std::process::id(),
             chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
         ));
@@ -1077,9 +1077,9 @@ mod tests {
     #[tokio::test]
     async fn protected_folders_hold_in_any_case_and_behind_a_link() {
         let (dir, tools) = setup();
-        std::fs::create_dir_all(dir.join(".axh")).unwrap();
-        std::os::unix::fs::symlink(dir.join(".axh"), dir.join("docs")).unwrap();
-        for path in [".AXH/settings.json", ".Git/config", "docs/settings.json"] {
+        std::fs::create_dir_all(dir.join(".glut")).unwrap();
+        std::os::unix::fs::symlink(dir.join(".glut"), dir.join("docs")).unwrap();
+        for path in [".GLUT/settings.json", ".Git/config", "docs/settings.json"] {
             let (ok, text) = tools
                 .call(
                     "write_file",
@@ -1088,7 +1088,7 @@ mod tests {
                 .await;
             assert!(!ok && text.contains("protected"), "{path}: {text}");
         }
-        assert!(!dir.join(".axh/settings.json").exists());
+        assert!(!dir.join(".glut/settings.json").exists());
     }
 
     #[tokio::test]

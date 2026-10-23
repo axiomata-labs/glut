@@ -440,7 +440,7 @@ mod tests {
 
     fn scratch(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "axh-journal-{tag}-{}-{}",
+            "glut-journal-{tag}-{}-{}",
             std::process::id(),
             chrono::Local::now()
                 .timestamp_nanos_opt()

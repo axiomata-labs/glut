@@ -1,4 +1,4 @@
-//! Sessions kept to open again (T25): every session is `~/.axh/sessions/<id>.json` — the folder it worked in, a
+//! Sessions kept to open again (T25): every session is `~/.glut/sessions/<id>.json` — the folder it worked in, a
 //! title, when, what it cost, and its conversation — written after every turn, readable by the owner alone (a
 //! conversation can hold anything the session read). `glut -c` goes on with the folder's newest, `glut -r` and
 //! `/resume` pick one.
@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::transcript::{Kind, Transcript};
 
-/// The folder of the sessions, below `~/.axh`.
+/// The folder of the sessions, below `~/.glut`.
 const DIR: &str = "sessions";
 /// The most sessions a list shows.
 const LISTED: usize = 50;
@@ -334,7 +334,7 @@ mod tests {
         assert_eq!(back.conversation.len(), 2);
         use std::os::unix::fs::PermissionsExt as _;
         let file = home
-            .join(".axh/sessions")
+            .join(".glut/sessions")
             .join(format!("{}.json", session.id));
         assert_eq!(
             std::fs::metadata(file).unwrap().permissions().mode() & 0o777,

@@ -134,7 +134,7 @@ mod tests {
     impl Folder {
         fn new(tag: &str) -> Self {
             let dir = std::env::temp_dir().join(format!(
-                "axh-context-{tag}-{}-{}",
+                "glut-context-{tag}-{}-{}",
                 std::process::id(),
                 chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
             ));

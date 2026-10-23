@@ -1370,7 +1370,7 @@ pub struct GateOptions {
     pub allow: Vec<String>,
     pub ask: Vec<String>,
     pub deny: Vec<String>,
-    /// The project's `.axh/` files count (P5).
+    /// The project's `.glut/` files count (P5).
     pub trusted: bool,
 }
 
@@ -1386,17 +1386,17 @@ pub struct BuiltGate {
     pub hooks: crate::hooks::Hooks,
     /// The project has hooks of its own that were parsed but not taken over (B1).
     pub project_hooks_skipped: bool,
-    /// The owner's `effort` from `~/.axh/settings.json` (Glut effort, E1): the run's unless a flag, a skill or a
+    /// The owner's `effort` from `~/.glut/settings.json` (Glut effort, E1): the run's unless a flag, a skill or a
     /// command names one.
     pub effort: Option<crate::config::Effort>,
-    /// The owner's refusal limits from `~/.axh/settings.json` (#112, R6); the defaults without.
+    /// The owner's refusal limits from `~/.glut/settings.json` (#112, R6); the defaults without.
     pub refusals: crate::config::RefusalLimits,
     /// Whether runs compact themselves (#111, K6) and the context windows the owner named (K2).
     pub compact_auto: bool,
     pub context_windows: std::collections::HashMap<String, u32>,
     /// The owner's prices by model id (`docs/plans/glut-cards.md`, C6), for a budget in money.
     pub prices: std::collections::HashMap<String, crate::config::Prices>,
-    /// How many subagents of one reply run at once (TUI T40), from `~/.axh/settings.json`.
+    /// How many subagents of one reply run at once (TUI T40), from `~/.glut/settings.json`.
     pub parallel_subagents: u32,
 }
 
@@ -1420,12 +1420,12 @@ impl BuiltGate {
         let mut notes = Vec::new();
         if self.untrusted_project {
             notes.push(
-                "the project's .axh/ allow rules and mode are left out: this folder is not trusted",
+                "the project's .glut/ allow rules and mode are left out: this folder is not trusted",
             );
         }
         if self.project_hooks_skipped {
             notes.push(
-                "the project's own .axh/ hooks are not run: only ~/.axh/settings.json hooks run",
+                "the project's own .glut/ hooks are not run: only ~/.glut/settings.json hooks run",
             );
         }
         if !self.sandbox.enabled || !crate::sandbox::available() {
@@ -1990,15 +1990,15 @@ mod tests {
     #[test]
     fn the_gate_takes_flags_after_the_files_and_the_flags_mode_first() {
         let base = std::env::temp_dir().join(format!(
-            "axh-gate-{}-{}",
+            "glut-gate-{}-{}",
             std::process::id(),
             chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
         ));
         let (home, project) = (base.join("home"), base.join("project"));
-        std::fs::create_dir_all(home.join(".axh")).unwrap();
+        std::fs::create_dir_all(home.join(".glut")).unwrap();
         std::fs::create_dir_all(&project).unwrap();
         std::fs::write(
-            home.join(".axh/settings.json"),
+            home.join(".glut/settings.json"),
             r#"{"permissions": {"defaultMode": "plan"}}"#,
         )
         .unwrap();
@@ -2120,7 +2120,7 @@ mod tests {
             &["Edit(secrets/**)"],
         );
         assert_eq!(
-            said(&set, "bash", bash("echo x > .axh/settings.json")),
+            said(&set, "bash", bash("echo x > .glut/settings.json")),
             Some(Verdict::Deny)
         );
         assert_eq!(
@@ -2716,7 +2716,7 @@ mod tests {
         assert!(refused.contains("mode plan"), "{refused}");
     }
 
-    /// A skill run started with a slash command (`axh run --skill s "/cmd"`): both `allowed-tools` lists narrow
+    /// A skill run started with a slash command (`glut run --skill s "/cmd"`): both `allowed-tools` lists narrow
     /// the run, so the second can only take away — a call needs both, and the refusal names the one that left
     /// it out.
     #[tokio::test]
