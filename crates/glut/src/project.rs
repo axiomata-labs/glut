@@ -154,7 +154,8 @@ impl Project {
     pub fn prompt(&self) -> String {
         let mut text = format!(
             "Where things are kept (make a place the first time it is needed, never an empty one): plans in \
-             {PLANS_DIR}/<topic>.md; to-dos in {}, a checklist; what lasts between sessions — the owner's \
+             {PLANS_DIR}/<topic>.md; to-dos in {}, a checklist the owner keeps too (tick there what you \
+             finished, add what you find but leave); what lasts between sessions — the owner's \
              preferences, decisions and why, where work stands — in the `{MEMORY_TOOL}` tool, one fact per file \
              with frontmatter and {INDEX_FILE} its index. Asked where things stand, read these first.\nFound here:",
             self.todos
@@ -250,7 +251,7 @@ fn plain_dir(cwd: &Path, rel: &str) -> bool {
 }
 
 /// The to-do list's name as the folder lists it: a file system that ignores case finds `TODO.md` for a `ToDo.md`.
-fn to_do_list(cwd: &Path) -> Option<String> {
+pub fn to_do_list(cwd: &Path) -> Option<String> {
     let listed: Vec<String> = std::fs::read_dir(cwd)
         .ok()?
         .filter_map(Result::ok)

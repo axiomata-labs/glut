@@ -25,6 +25,7 @@ pub mod setup;
 mod shell;
 mod store;
 mod theme;
+mod todos;
 mod transcript;
 mod vi;
 mod view;

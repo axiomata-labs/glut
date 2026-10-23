@@ -71,6 +71,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // The side panel (T28) takes the right of the stream where the screen is wide enough for both.
     app.stream_width = stream.x + stream.width;
     let stream = if app.panel == Some(true) && stream.width >= PANEL_MIN_SCREEN {
+        // The to-dos are looked at once per frame the panel shows: their count heads the tab, the model may change
+        // them.
+        let cwd = app.parts.config.cwd.clone();
+        app.project_todos.refresh(&cwd);
         let [stream, panel] = Layout::horizontal([
             Constraint::Min(40),
             Constraint::Length(panel_width(stream.width)),
@@ -741,6 +745,9 @@ fn draw_keys(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(Paragraph::new(line), area);
 }
 
+/// The panel width from which the To-dos tab shows its count beside its name.
+const TABS_WITH_COUNT: u16 = 46;
+
 /// The side panel: its tabs — the plan the run keeps (done quiet, under way glowing, open plain) and the gate, live
 /// (T15) — under Glimm, who heads it with the session's mood.
 fn draw_panel(frame: &mut Frame, app: &App, area: Rect) {
@@ -756,6 +763,13 @@ fn draw_panel(frame: &mut Frame, app: &App, area: Rect) {
             Span::styled(format!(" {name} "), theme::quiet())
         }
     };
+    let open = app.project_todos.open();
+    // The five names take 40 columns: a narrower panel shows the tab without its count rather than cut it.
+    let todos_title = if open > 0 && area.width >= TABS_WITH_COUNT {
+        format!("To-dos {open}")
+    } else {
+        "To-dos".to_owned()
+    };
     let block = Block::default()
         .borders(Borders::LEFT)
         .border_style(theme::quiet())
@@ -767,6 +781,8 @@ fn draw_panel(frame: &mut Frame, app: &App, area: Rect) {
             tab("Meter", app.tab == Tab::Meter),
             Span::styled("·", theme::quiet()),
             tab("Agents", app.tab == Tab::Agents),
+            Span::styled("·", theme::quiet()),
+            tab(&todos_title, app.tab == Tab::Todos),
         ]));
     let width = usize::from(area.width.saturating_sub(4)).max(8);
     // Glimm heads the panel with the session's mood: working, waiting for the owner, pleased or gone out.
@@ -804,6 +820,39 @@ fn draw_panel(frame: &mut Frame, app: &App, area: Rect) {
                 width + 2,
                 room,
             ));
+        }
+        lines.push(Line::default());
+        lines.extend(keys);
+        frame.render_widget(Paragraph::new(lines).block(block), area);
+        return;
+    }
+    if app.tab == Tab::Todos {
+        lines.push(Line::default());
+        let keys = panel_keys(app, width);
+        let todos = &app.project_todos;
+        if let Some(fault) = &todos.fault {
+            for row in wrap(&format!("{} cannot be read: {fault}", todos.name()), width) {
+                lines.push(Line::from(Span::styled(format!(" {row}"), theme::fault())));
+            }
+        } else if todos.open() + todos.done() == 0 {
+            let text = match todos.path() {
+                Some(_) => format!(
+                    "Nothing to do in {}. /todo <text> (or a here) notes the next idea at its end.",
+                    todos.name()
+                ),
+                None => format!(
+                    "No {} yet. /todo <text> (or a here) notes an idea and creates it: the to-dos that last \
+                     between sessions, yours and Glut's.",
+                    todos.name()
+                ),
+            };
+            for row in wrap(&text, width) {
+                lines.push(Line::from(Span::styled(format!(" {row}"), theme::quiet())));
+            }
+        }
+        let room = usize::from(area.height).saturating_sub(lines.len() + keys.len() + 3);
+        if todos.fault.is_none() {
+            lines.extend(todos.lines(width + 1, room));
         }
         lines.push(Line::default());
         lines.extend(keys);
@@ -870,12 +919,16 @@ fn panel_keys(app: &App, width: usize) -> Vec<Line<'static>> {
     use crate::app::Tab;
     let text = if app.tab == Tab::Agents && app.agents_list.is_some() {
         "↑↓ choose · Enter opens · x stops it · Esc back to the input · Ctrl+A hides".to_owned()
+    } else if app.tab == Tab::Todos && app.project_todos.keys {
+        "↑↓ choose · Space ticks · a adds · o editor · Esc back to the input · Ctrl+Y hides"
+            .to_owned()
     } else {
         [
             (Tab::Plan, "Ctrl+B", "plan"),
             (Tab::Gate, "Ctrl+G", "gate"),
             (Tab::Meter, "Ctrl+N", "meter"),
             (Tab::Agents, "Ctrl+A", "agents"),
+            (Tab::Todos, "Ctrl+Y", "to-dos"),
         ]
         .iter()
         .map(|(tab, key, name)| {

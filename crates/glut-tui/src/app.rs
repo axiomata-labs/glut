@@ -55,9 +55,9 @@ fn init_check(name: &str) -> String {
 /// What `/help` says.
 const HELP: &str = "Commands: /model [id] · /provider [id] · /effort [level] · /context [tokens] · /compact · \
                     /editor [command] · /gate · /meter · /diff [session] · /agents · /plan · /thinking off|folded|open · /theme [name] · /vim on|off · /scrollback · \
-                    /memory · /init · /clear · /help · /quit\n\
+                    /memory · /todo [text|open|clean] · /init · /clear · /help · /quit\n\
                     Keys: Enter send · Shift+Enter or Alt+Enter new line · ↑ history · Shift+Tab plan → ask → \
-                    build → auto · Esc stop · Ctrl+O tool results · Ctrl+T thinking · Ctrl+B panel · Ctrl+G gate · Ctrl+N meter · Ctrl+A agents · Ctrl+R review · \
+                    build → auto · Esc stop · Ctrl+O tool results · Ctrl+T thinking · Ctrl+B panel · Ctrl+G gate · Ctrl+N meter · Ctrl+A agents · Ctrl+Y to-dos · Ctrl+R review · \
                     Ctrl+X E editor · PgUp/PgDn scroll · Ctrl+F search · drag to copy · a click on a subagent's tile \
                     opens it · F2 mouse to the terminal \
                     and back · F3 scrollback · Ctrl+C twice quit\n\
@@ -70,7 +70,7 @@ const HELP: &str = "Commands: /model [id] · /provider [id] · /effort [level] �
                     or doubled · counts · p P · u Ctrl+R), i a I A o O to Insert; Esc in Normal mode stops Glut";
 
 /// The session's commands with what each does, as the list under a typed `/` shows them.
-pub const COMMANDS: [(&str, &str); 25] = [
+pub const COMMANDS: [(&str, &str); 26] = [
     (
         "model",
         "pick a model of the provider in use, or /model <id>",
@@ -134,6 +134,10 @@ pub const COMMANDS: [(&str, &str); 25] = [
         "what the project's memory keeps: Enter shows a fact; /memory open edits its index",
     ),
     (
+        "todo",
+        "the project's TODO.md (Ctrl+Y): /todo <text> adds one, /todo open edits it, /todo clean drops the done",
+    ),
+    (
         "init",
         "a short AGENTS.md for this folder, or check the guide it has (/init --migrate asks about CLAUDE.md again)",
     ),
@@ -162,6 +166,8 @@ pub enum Tab {
     Meter,
     /// The session's subagents (T34).
     Agents,
+    /// The project's `TODO.md` (T41).
+    Todos,
 }
 
 /// What runs in the background besides the screen.
@@ -188,6 +194,8 @@ pub struct App {
     pub session: Session,
     /// The run's task list as `todo_write` last sent it (the Plan tab, T28).
     pub todos: Vec<glut::planning::TodoItem>,
+    /// The project's `TODO.md`, the To-dos tab's (T41).
+    pub project_todos: crate::todos::Todos,
     /// How the last turn ended, for Glimm's mood: answered, or ended by an error or a limit; `None` before the first
     /// and after one the owner stopped.
     pub last_turn: Option<bool>,
@@ -326,6 +334,7 @@ impl App {
             conversation: Vec::new(),
             session,
             todos: Vec::new(),
+            project_todos: crate::todos::Todos::default(),
             last_turn: None,
             panel,
             tab: Tab::Plan,
@@ -1061,6 +1070,10 @@ impl App {
         if key.code != KeyCode::Esc {
             self.last_esc = None;
         }
+        // A question or a list over the screen takes the keys from the To-dos list for good: after it, keys type again.
+        if self.plan_asks() || self.ask.is_some() || self.picker.is_some() {
+            self.project_todos.keys = false;
+        }
         if self.plan_asks() {
             return self.on_plan_key(key);
         }
@@ -1081,6 +1094,9 @@ impl App {
             return self.on_agent_key(key);
         }
         if self.agents_list.is_some() && self.on_agents_list_key(key) {
+            return;
+        }
+        if self.project_todos.keys && self.on_todos_key(key) {
             return;
         }
         if self.search.is_some() {
@@ -1149,6 +1165,7 @@ impl App {
         match key.code {
             KeyCode::Char('x') if ctrl => self.chord = true,
             KeyCode::Char('a') if ctrl => self.show_agents(),
+            KeyCode::Char('y') if ctrl => self.show_todos(),
             KeyCode::Char('b') if ctrl => self.show_tab(Tab::Plan),
             KeyCode::Char('g') if ctrl => self.show_tab(Tab::Gate),
             // Ctrl+M is Enter to a terminal: the meter is on N.
@@ -1551,6 +1568,7 @@ impl App {
             }
             "init" => self.init(rest),
             "memory" => self.memory(rest),
+            "todo" => self.todo(rest),
             "handoff" => match rest {
                 // A paid call: written only when asked by name.
                 "" => self.transcript.note(
@@ -1829,6 +1847,154 @@ impl App {
                 .transcript
                 .note(format!("{name} cannot be read"), Tone::Fault),
         }
+    }
+
+    /// `/todo` (T41): alone the To-dos tab with the keys; `open` the list in the owner's editor; `clean` drops the done
+    /// items after a question; any other text is a new item at the list's end — at once, while Glut works too.
+    fn todo(&mut self, rest: &str) {
+        let cwd = self.parts.config.cwd.clone();
+        self.project_todos.refresh(&cwd);
+        let name = self.project_todos.name();
+        match rest {
+            "" => self.show_todos_keyed(),
+            "open" => self.open_todos(),
+            "clean" => {
+                let done = self.project_todos.done();
+                if done == 0 {
+                    return self
+                        .transcript
+                        .note(format!("nothing done in {name} to drop"), Tone::Quiet);
+                }
+                self.picker = Some(Picker::new(
+                    format!("Drop the {done} done from {name}?"),
+                    vec![
+                        Item::plain(
+                            "yes, drop them",
+                            "an item goes with what stands under it when that is done too",
+                            Pick::TodoClean,
+                        ),
+                        Item::plain("no, keep them", "", Pick::Shown),
+                    ],
+                    None,
+                ));
+            }
+            item => match self.project_todos.add(&cwd, item) {
+                Ok(()) => self
+                    .transcript
+                    .note(format!("added to {name}: {item}"), Tone::Quiet),
+                Err(failure) => self.transcript.note(failure.message(&name), Tone::Fault),
+            },
+        }
+    }
+
+    /// The owner's yes to `/todo clean`.
+    fn todo_clean(&mut self) {
+        let cwd = self.parts.config.cwd.clone();
+        let name = self.project_todos.name();
+        match self.project_todos.clean(&cwd) {
+            Ok(dropped) => self
+                .transcript
+                .note(format!("{dropped} done dropped from {name}"), Tone::Quiet),
+            Err(failure) => self.transcript.note(failure.message(&name), Tone::Fault),
+        }
+    }
+
+    /// `/todo open` and the tab's **o**: the list to the owner's editor, which changes, deletes and sorts.
+    fn open_todos(&mut self) {
+        match self.project_todos.path() {
+            Some(path) => self.open_request = Some(path.to_path_buf()),
+            None => self.transcript.note(
+                format!(
+                    "no {} yet: /todo <text> adds the first",
+                    self.project_todos.name()
+                ),
+                Tone::Quiet,
+            ),
+        }
+    }
+
+    /// Ctrl+Y: the To-dos tab with its list taking the keys; with the list taking them already, the panel goes.
+    fn show_todos(&mut self) {
+        let shown = self.panel == Some(true) && self.tab == Tab::Todos;
+        if shown && self.project_todos.keys {
+            self.project_todos.keys = false;
+            return self.toggle_panel();
+        }
+        self.show_todos_keyed();
+    }
+
+    /// The To-dos tab shown, read anew, its list with the keys.
+    fn show_todos_keyed(&mut self) {
+        self.tab = Tab::Todos;
+        if self.panel != Some(true) {
+            self.toggle_panel();
+        }
+        self.project_todos.search_again();
+        self.project_todos.refresh(&self.parts.config.cwd);
+        self.project_todos.keys = true;
+    }
+
+    /// A key while the To-dos list has them: ↑↓ (j k) choose, Space or Enter ticks (or folds the done ones), a
+    /// starts `/todo ` in the input, o opens the editor, Esc gives the keys back. Any other key gives them back too
+    /// and is the input's — false: not taken here.
+    fn on_todos_key(&mut self, key: KeyEvent) -> bool {
+        let shown = self.panel == Some(true) && self.panel_drawn && self.tab == Tab::Todos;
+        if !shown {
+            self.project_todos.keys = false;
+            return false;
+        }
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            // Ctrl+Y again hides the panel; another tab's key turns to it — the list no longer has the keys.
+            if key.code != KeyCode::Char('y') {
+                self.project_todos.keys = false;
+            }
+            return false;
+        }
+        // Alt and Shift keep their own meanings (Shift+Enter a new line): the input's.
+        if !key.modifiers.is_empty() {
+            self.project_todos.keys = false;
+            return false;
+        }
+        // A held key ticks once: each tick is a write of the file.
+        if key.kind == crossterm::event::KeyEventKind::Repeat
+            && matches!(key.code, KeyCode::Char(' ') | KeyCode::Enter)
+        {
+            return true;
+        }
+        let cwd = self.parts.config.cwd.clone();
+        self.project_todos.refresh(&cwd);
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => self.project_todos.choose(-1),
+            KeyCode::Down | KeyCode::Char('j') => self.project_todos.choose(1),
+            KeyCode::Char(' ') | KeyCode::Enter => {
+                if let Err(failure) = self.project_todos.press(&cwd) {
+                    let name = self.project_todos.name();
+                    self.transcript.note(failure.message(&name), Tone::Fault);
+                }
+            }
+            KeyCode::Char('a') => {
+                self.project_todos.keys = false;
+                if self.input.is_empty() {
+                    self.input.insert_text("/todo ");
+                    // In vi's Normal mode the item is to be typed: Insert mode, as `a` means there.
+                    if let Some(vi) = &mut self.vi {
+                        vi.mode = crate::vi::Mode::Insert;
+                    }
+                } else {
+                    self.transcript.note(
+                        "the input holds a message: /todo <text> after it is sent adds the item",
+                        Tone::Quiet,
+                    );
+                }
+            }
+            KeyCode::Char('o') => self.open_todos(),
+            KeyCode::Esc => self.project_todos.keys = false,
+            _ => {
+                self.project_todos.keys = false;
+                return false;
+            }
+        }
+        true
     }
 
     /// What the editor said of a file it had open (`/memory open`).
@@ -2808,6 +2974,7 @@ impl App {
                     Some(Pick::Fork(mark)) => self.fork(mark),
                     Some(Pick::Init(migrate)) => self.init_with(migrate),
                     Some(Pick::MemoryFact(name)) => self.show_fact(&name),
+                    Some(Pick::TodoClean) => self.todo_clean(),
                     Some(Pick::Step { run, turn }) => self.picker = Some(step_do(run, turn)),
                     Some(Pick::StepDo { run, turn, restore }) => self.step_do(run, turn, restore),
                     Some(Pick::Rewind {
@@ -3390,6 +3557,12 @@ fn palette() -> Picker {
             "the Agents tab: every subagent, live — ↑↓ and Enter open one",
             "/agents",
             Pick::Keys(vec![press(KeyCode::Char('a'), ctrl)]),
+        ),
+        (
+            "Ctrl+Y",
+            "the To-dos tab: the project's TODO.md — Space ticks, a adds",
+            "/todo",
+            Pick::Keys(vec![press(KeyCode::Char('y'), ctrl)]),
         ),
         (
             "Ctrl+R",
@@ -4358,6 +4531,55 @@ mod tests {
             });
         }
         events
+    }
+
+    #[test]
+    fn todo_adds_at_once_and_ctrl_y_shows_the_list_space_ticks_and_esc_gives_the_keys_back() {
+        let dir = std::env::temp_dir().join(format!("glut-tui-app-todos-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (mut parts, engine) = session::for_tests();
+        parts.config.cwd = dir.clone();
+        let (send, _reports) = mpsc::unbounded_channel();
+        let mut app = App::new(Arc::new(parts), engine, send);
+        let wide = |app: &mut App| {
+            let mut terminal =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(140, 30)).unwrap();
+            terminal
+                .draw(|frame| crate::view::draw(frame, app))
+                .unwrap();
+            format!("{:?}", terminal.backend().buffer())
+        };
+        typed(&mut app, "/todo the first idea");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("TODO.md")).unwrap(),
+            "- [ ] the first idea\n"
+        );
+        app.on_terminal(key(KeyCode::Char('y'), KeyModifiers::CONTROL));
+        assert_eq!((app.panel, app.tab), (Some(true), Tab::Todos));
+        let screen = wide(&mut app);
+        assert!(
+            screen.contains("To-dos 1") && screen.contains("the first idea"),
+            "{screen}"
+        );
+        app.on_terminal(key(KeyCode::Char(' '), KeyModifiers::NONE));
+        assert_eq!(
+            std::fs::read_to_string(dir.join("TODO.md")).unwrap(),
+            "- [x] the first idea\n"
+        );
+        assert!(wide(&mut app).contains("1 done"));
+        // a hands the input `/todo `, and the keys with it.
+        app.on_terminal(key(KeyCode::Char('a'), KeyModifiers::NONE));
+        assert_eq!(
+            (app.input.text(), app.project_todos.keys),
+            ("/todo ".to_owned(), false)
+        );
+        app.input.clear();
+        app.on_terminal(key(KeyCode::Char('y'), KeyModifiers::CONTROL));
+        app.on_terminal(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!app.project_todos.keys);
+        app.on_terminal(key(KeyCode::Char('x'), KeyModifiers::NONE));
+        assert_eq!(app.input.text(), "x");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

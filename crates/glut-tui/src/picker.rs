@@ -46,6 +46,8 @@ pub enum Pick {
     Shown,
     /// `/memory` (T35): a fact to show, by its name.
     MemoryFact(String),
+    /// `/todo clean` (T41): the owner's yes to dropping the done items.
+    TodoClean,
     /// `/init` (T35): whether `CLAUDE.md` moves into `AGENTS.md` (`true`) or stays the guide (`false`).
     Init(bool),
     /// `/agents`: a subagent's view, by its path through the streams.
