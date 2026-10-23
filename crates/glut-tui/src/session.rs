@@ -273,6 +273,9 @@ pub async fn build(
         Servers::Owner => mcp::config::load(&home, &cwd)
             .and_then(|entries| mcp::approval::permitted(entries, &home, &cwd, false)),
         Servers::Only(file) => mcp::config::named(file),
+        Servers::Also(file) => mcp::config::load(&home, &cwd)
+            .and_then(|entries| mcp::approval::permitted(entries, &home, &cwd, false))
+            .and_then(|owner| Ok(beside(owner, mcp::config::named(file)?))),
     }
     .map_err(|err| err.to_string())?;
     let mut sink = SharedSink::new(Box::new(ToScreen {
@@ -967,6 +970,23 @@ pub fn shown_folder(cwd: &Path) -> String {
     }
 }
 
+/// `named`'s servers beside `owner`'s: a name both have is `named`'s.
+fn beside(
+    owner: Vec<mcp::config::ServerEntry>,
+    named: Vec<mcp::config::ServerEntry>,
+) -> Vec<mcp::config::ServerEntry> {
+    let mut servers: Vec<_> = owner
+        .into_iter()
+        .filter(|entry| !named.iter().any(|given| given.name == entry.name))
+        .collect();
+    servers.extend(named);
+    servers
+}
+
+/// The test sessions' homes made so far in this process.
+#[cfg(test)]
+static TEST_HOMES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// A session that talks to nothing, for the screen's tests.
 #[cfg(test)]
 pub fn for_tests() -> (Parts, Engine) {
@@ -986,13 +1006,11 @@ pub fn for_tests() -> (Parts, Engine) {
     };
     let parts = Parts {
         // A folder of its own per test session: a test that sets a window or an editor writes there, never in /tmp.
+        // Numbered, not timed: macOS's clock counts microseconds, and two tests at once got the same folder.
         home: std::env::temp_dir().join(format!(
             "glut-tui-test-{}-{}",
             std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|at| at.as_nanos())
-                .unwrap_or_default()
+            TEST_HOMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         )),
         config: RunConfig::new("/tmp"),
         tools: Toolbox::new(),
@@ -1098,5 +1116,30 @@ mod tests {
         }
         assert_eq!(seen, ["ask", "build", "auto", "plan"]);
         assert_eq!(next_mode(Mode::DontAsk), Mode::Plan);
+    }
+
+    #[test]
+    fn a_named_file_s_servers_join_the_owner_s_and_win_a_shared_name() {
+        let dir = std::env::temp_dir().join(format!("glut-tui-beside-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = |name: &str, servers: &str| {
+            let path = dir.join(name);
+            std::fs::write(&path, format!("{{\"mcpServers\":{{{servers}}}}}")).unwrap();
+            mcp::config::named(&path).unwrap()
+        };
+        let owner = file(
+            "owner.json",
+            "\"mail\":{\"command\":\"mail-mcp\"},\"axiomata\":{\"command\":\"old\"}",
+        );
+        let team = file("team.json", "\"axiomata\":{\"command\":\"axiomata-cli\"}");
+        let joined = beside(owner, team);
+        let names: Vec<_> = joined.iter().map(|entry| entry.name.as_str()).collect();
+        assert_eq!(names, ["mail", "axiomata"]);
+        assert!(
+            joined[1].describe().contains("axiomata-cli"),
+            "{}",
+            joined[1].describe()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

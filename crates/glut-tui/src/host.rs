@@ -107,6 +107,9 @@ pub enum Servers {
     Owner,
     /// The servers of the file at this path alone (a card's team server), never the owner's nor the project's.
     Only(PathBuf),
+    /// The owner's servers as [`Servers::Owner`] has them, and the file's beside them (`glut --mcp-config`, a master's
+    /// team server): a name both have is the file's, as the one who named it asked for it.
+    Also(PathBuf),
 }
 
 /// The model the session starts with.

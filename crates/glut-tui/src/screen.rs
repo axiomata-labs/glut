@@ -22,8 +22,8 @@ use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::mpsc;
 
 use crate::app::App;
-use crate::host::{Host, HostLink, Launch, State};
-use crate::{prefs, scrollback, session, store, transcript, vi, view};
+use crate::host::{EngineChoice, Host, HostLink, Launch, State};
+use crate::{prefs, scrollback, session, setup, store, transcript, vi, view};
 
 /// How often the screen moves on its own while Glut works or Glimm is in view (its flicker, its breath).
 const TICK: Duration = Duration::from_millis(120);
@@ -46,6 +46,26 @@ pub struct Open {
     /// A run of the host's that was cut off: it goes on first, from its journal ([`crate::Turn::Resumed`]), and the
     /// first message follows unless the run had it already.
     pub lost_turn: Option<String>,
+}
+
+/// The owner's own session, as the standalone `glut` runs it — also for a host that hands the owner Glut as it is, with
+/// no part of its own (Axiomata's master pane, TUI8c): the first start asks for a provider and a missing model is
+/// chosen before the screen comes up, then [`run`] with the [`Standalone`](crate::Standalone) host.
+pub async fn standalone(launch: Launch, open: Open) -> std::process::ExitCode {
+    if let Ok(home) = glut::permissions::settings::home_dir() {
+        if let Err(reason) = setup::first_provider(&home).await {
+            eprintln!("glut: {reason}");
+            return std::process::ExitCode::from(1);
+        }
+        if let EngineChoice::Providers { provider, model } = &launch.engine
+            && let Err(reason) =
+                setup::missing_model(&home, provider.as_deref(), model.as_deref()).await
+        {
+            eprintln!("glut: {reason}");
+            return std::process::ExitCode::from(1);
+        }
+    }
+    run(launch, Arc::new(crate::Standalone), open, |_| {}).await
 }
 
 /// Runs one session on the terminal: built as `launch` says, with `host` taking part; `linked` gets the host's way

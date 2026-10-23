@@ -31,4 +31,4 @@ pub use host::{
     EngineChoice, Host, HostFuture, HostLink, Instructions, Launch, Search, Servers, Signal,
     Standalone, State, Turn,
 };
-pub use screen::{Open, run};
+pub use screen::{Open, run, standalone};
