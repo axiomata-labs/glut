@@ -527,10 +527,18 @@ fn draw_ask(frame: &mut Frame, app: &App, area: Rect, rows: Vec<String>) {
         .borders(Borders::ALL)
         .border_style(theme::glow())
         .title(Span::styled(
-            format!(
-                " Glut asks: {} ",
-                crate::transcript::clean(&open.request.tool)
-            ),
+            match &open.request.from {
+                // T40: beside others a subagent's ask says whose it is.
+                Some(from) => format!(
+                    " ⬡ {} asks: {} ",
+                    crate::transcript::cut(&crate::transcript::clean(from), 40),
+                    crate::transcript::clean(&open.request.tool)
+                ),
+                None => format!(
+                    " Glut asks: {} ",
+                    crate::transcript::clean(&open.request.tool)
+                ),
+            },
             theme::glow(),
         ));
     let mut lines: Vec<Line> = rows
@@ -861,7 +869,7 @@ fn draw_panel(frame: &mut Frame, app: &App, area: Rect) {
 fn panel_keys(app: &App, width: usize) -> Vec<Line<'static>> {
     use crate::app::Tab;
     let text = if app.tab == Tab::Agents && app.agents_list.is_some() {
-        "↑↓ choose · Enter opens · Esc back to the input · Ctrl+A hides".to_owned()
+        "↑↓ choose · Enter opens · x stops it · Esc back to the input · Ctrl+A hides".to_owned()
     } else {
         [
             (Tab::Plan, "Ctrl+B", "plan"),

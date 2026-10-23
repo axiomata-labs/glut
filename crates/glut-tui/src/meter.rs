@@ -78,7 +78,7 @@ impl Meter {
                     ..Turn::default()
                 });
             }
-            Event::Sub { depth, event } => self.take_at(event, prices, *depth),
+            Event::Sub { depth, event, .. } => self.take_at(event, prices, *depth),
             Event::Usage {
                 input_tokens,
                 cached_input_tokens,
@@ -359,6 +359,7 @@ mod tests {
         meter.take(
             &Event::Sub {
                 depth: 1,
+                task: None,
                 event: Box::new(started()),
             },
             Some(prices),
@@ -366,6 +367,7 @@ mod tests {
         meter.take(
             &Event::Sub {
                 depth: 1,
+                task: None,
                 event: Box::new(usage(0, 0, 1_000_000)),
             },
             Some(prices),

@@ -144,9 +144,12 @@ pub enum Event {
     },
     /// One event of a nested run (HS8, D8): everything a subagent reports arrives wrapped in its depth —
     /// nothing dropped, the parent's own `ToolCall(task)` … `ToolResult(task)` bracketing the whole stream.
-    /// The inner event serialises as `inner`, because the outer tag already owns the field name `event`.
+    /// The inner event serialises as `inner`, because the outer tag already owns the field name `event`. `task` is the
+    /// parent's `task` call the subagent answers (TUI T40: several run at once); a log written before has none.
     Sub {
         depth: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        task: Option<String>,
         #[serde(rename = "inner")]
         event: Box<Event>,
     },
@@ -410,6 +413,7 @@ mod tests {
     fn a_sub_event_holds_its_inner_event_under_inner() {
         let line = serde_json::to_value(Event::Sub {
             depth: 1,
+            task: None,
             event: Box::new(Event::AssistantText {
                 turn: 1,
                 text: "found".into(),

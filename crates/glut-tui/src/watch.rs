@@ -114,7 +114,7 @@ impl Watch {
                 self.same.clear();
                 self.counted.clear();
             }
-            Event::Sub { depth, event } => self.take_at(event, *depth),
+            Event::Sub { depth, event, .. } => self.take_at(event, *depth),
             Event::Permission {
                 id,
                 tool,
@@ -334,6 +334,7 @@ mod tests {
         watch.take(&judged(NETWORK_TOOL, "evil.org", false, "mode build"));
         watch.take(&Event::Sub {
             depth: 1,
+            task: None,
             event: Box::new(judged(NETWORK_TOOL, "evil.org", false, "mode build")),
         });
         // The proxy refused the host twice in one call: the ledger counts it once.
@@ -370,6 +371,7 @@ mod tests {
         // A subagent's start is not a new turn; the session's own is.
         watch.take(&Event::Sub {
             depth: 1,
+            task: None,
             event: Box::new(Event::Started {
                 model: "m".into(),
                 cwd: ".".into(),

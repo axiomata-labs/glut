@@ -607,6 +607,7 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
     config.hooks = built.hooks;
     config.sandbox = Some(built.sandbox.clone());
     config.refusals = built.refusals;
+    config.parallel_subagents = built.parallel_subagents;
     if let Some(window) = context_window {
         if window < glut::config::MIN_CONTEXT_WINDOW {
             return fail(format!(

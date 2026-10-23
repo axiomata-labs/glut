@@ -33,6 +33,13 @@ pub const DEFAULT_SUBAGENT_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 /// that factor while staying inside every other limit.
 pub const DEFAULT_MAX_SUBAGENTS: u32 = 8;
 
+/// How many subagents of one reply run at once (TUI T40); the rest wait for one to end. More would meet a provider's
+/// rate limit, and a local model serves one request at a time anyway.
+pub const DEFAULT_PARALLEL_SUBAGENTS: u32 = 3;
+
+/// The most `subagents.parallel` may say: as many as one run may start in all.
+pub const MAX_PARALLEL_SUBAGENTS: u32 = DEFAULT_MAX_SUBAGENTS;
+
 /// A model behind an OpenAI-compatible chat API (`POST {base_url}/v1/chat/completions`, or
 /// `{base_url}/chat/completions` when [`Self::versioned`]): OpenRouter, Ollama and most others speak it.
 #[derive(Clone)]
@@ -303,6 +310,8 @@ pub struct RunConfig {
     pub subagent_timeout: Duration,
     /// How many subagents the run may start in all; a `task` call past it is answered with an error.
     pub max_subagents: u32,
+    /// How many `task` calls of one reply run at once (TUI T40); 1 runs them one after another.
+    pub parallel_subagents: u32,
     /// Whether the run offers `codemode` and keeps its MCP tools behind it (Glut 2, A + E, G3/G8): the model then sees
     /// the core tools and `codemode`, and reaches the MCP tools from a script. On by default.
     pub codemode: bool,
@@ -396,6 +405,7 @@ impl RunConfig {
             subagent_max_turns: DEFAULT_SUBAGENT_MAX_TURNS,
             subagent_timeout: DEFAULT_SUBAGENT_TIMEOUT,
             max_subagents: DEFAULT_MAX_SUBAGENTS,
+            parallel_subagents: DEFAULT_PARALLEL_SUBAGENTS,
             codemode: true,
             mcp_behind_code: true,
             todos: true,

@@ -262,6 +262,7 @@ pub async fn build(
     config.hooks = built.hooks.clone();
     config.sandbox = Some(built.sandbox.clone());
     config.refusals = built.refusals;
+    config.parallel_subagents = built.parallel_subagents;
     config.snapshots = Some(home.join(".axh").join("snapshots"));
     config.savings = Some(home.join(".axh").join(glut::lean::FILE));
     host.configure(&mut config, &built);

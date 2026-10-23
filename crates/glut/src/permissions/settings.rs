@@ -95,6 +95,17 @@ struct File {
     /// `{"deepseek/deepseek-v4.1-flash": {"input_per_m": 0.1, "output_per_m": 0.4}}`. The owner's only.
     #[serde(default)]
     prices: HashMap<String, Prices>,
+    /// How many subagents of one reply run at once (TUI T40): `{"parallel": 3}`. The owner's only.
+    #[serde(default)]
+    subagents: Option<SubagentsSection>,
+}
+
+/// The `subagents` section (TUI T40).
+#[derive(Debug, Default, Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubagentsSection {
+    #[serde(default)]
+    pub parallel: Option<u32>,
 }
 
 /// The `compact` section (#111, K6).
@@ -224,6 +235,8 @@ pub struct Settings {
     pub context_window: HashMap<String, u32>,
     /// `prices` as written; only the owner's is read.
     pub prices: HashMap<String, Prices>,
+    /// The `subagents` section as written; only the owner's is read.
+    pub subagents: Option<SubagentsSection>,
 }
 
 /// Reads one settings file; a missing file says nothing.
@@ -290,6 +303,7 @@ pub fn read(path: &Path) -> Result<Settings, HarnessError> {
         compact: file.compact,
         context_window: file.context_window,
         prices: file.prices,
+        subagents: file.subagents,
     })
 }
 
@@ -316,6 +330,8 @@ pub struct Loaded {
     pub context_windows: HashMap<String, u32>,
     /// The owner's prices by model id (C6).
     pub prices: HashMap<String, Prices>,
+    /// How many subagents of one reply run at once (T40): the owner's `subagents.parallel`, else the default.
+    pub parallel_subagents: u32,
 }
 
 impl Loaded {
@@ -405,6 +421,19 @@ pub fn load(home: &Path, project: &Path, trusted: bool) -> Result<Loaded, Harnes
             ),
         });
     }
+    let parallel_subagents = match user.subagents.and_then(|section| section.parallel) {
+        None => crate::config::DEFAULT_PARALLEL_SUBAGENTS,
+        Some(parallel @ 1..=crate::config::MAX_PARALLEL_SUBAGENTS) => parallel,
+        Some(parallel) => {
+            return Err(HarnessError::Settings {
+                path: owners.display().to_string(),
+                reason: format!(
+                    "subagents.parallel is {parallel}, from 1 to {}",
+                    crate::config::MAX_PARALLEL_SUBAGENTS
+                ),
+            });
+        }
+    };
     let ceiling = user.mode.unwrap_or_default().looseness();
     let owner = &user.sandbox;
     let mut sandbox = SandboxSettings {
@@ -436,6 +465,7 @@ pub fn load(home: &Path, project: &Path, trusted: bool) -> Result<Loaded, Harnes
             .unwrap_or(true),
         context_windows: user.context_window,
         prices: user.prices,
+        parallel_subagents,
     };
     for file in project_files(project) {
         let settings = read(&file)?;
@@ -744,6 +774,34 @@ mod tests {
             load(&home, &project, false),
             Err(HarnessError::Settings { .. })
         ));
+    }
+
+    #[test]
+    fn the_owner_sets_how_many_subagents_run_at_once_a_project_does_not() {
+        let (home, project) = (temp("parallel-home"), temp("parallel-project"));
+        assert_eq!(
+            load(&home, &project, true).unwrap().parallel_subagents,
+            crate::config::DEFAULT_PARALLEL_SUBAGENTS
+        );
+        write(
+            &home.join(".axh/settings.json"),
+            r#"{"subagents": {"parallel": 1}}"#,
+        );
+        write(
+            &project.join(".axh/settings.json"),
+            r#"{"subagents": {"parallel": 8}}"#,
+        );
+        assert_eq!(load(&home, &project, true).unwrap().parallel_subagents, 1);
+        for odd in [0, crate::config::MAX_PARALLEL_SUBAGENTS + 1] {
+            write(
+                &home.join(".axh/settings.json"),
+                &format!(r#"{{"subagents": {{"parallel": {odd}}}}}"#),
+            );
+            assert!(matches!(
+                load(&home, &project, true),
+                Err(HarnessError::Settings { .. })
+            ));
+        }
     }
 
     #[test]

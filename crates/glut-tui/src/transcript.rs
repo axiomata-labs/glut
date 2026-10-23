@@ -344,17 +344,28 @@ impl Transcript {
             // A subagent's step goes to its tile; one with no tile to go to (none runs) stands indented here.
             Event::Sub {
                 depth: inner,
+                task,
                 event,
-            } if depth > 0 || !self.hand_to_agent(event) => self.take_at(event, *inner),
+            } if depth > 0 || !self.hand_to_agent(task.as_deref(), event) => {
+                self.take_at(event, *inner)
+            }
             _ => {}
         }
     }
 
-    /// A subagent's event to the subagent that runs now: the last tile still running (they run one at a time).
-    fn hand_to_agent(&mut self, event: &Event) -> bool {
-        let Some(block) = self.blocks.iter_mut().rev().find(
-            |block| matches!(&block.kind, Kind::Agent(agent) if agent.state == ToolState::Running),
-        ) else {
+    /// A subagent's event to its tile: the one of its `task` call (T40: several run at once), or — from a log
+    /// written before events named it — the last tile still running, as they then ran one at a time.
+    fn hand_to_agent(&mut self, task: Option<&str>, event: &Event) -> bool {
+        let Some(block) = self
+            .blocks
+            .iter_mut()
+            .rev()
+            .find(|block| match (&block.kind, task) {
+                (Kind::Agent(agent), Some(task)) => agent.id == task,
+                (Kind::Agent(agent), None) => agent.state == ToolState::Running,
+                _ => false,
+            })
+        else {
             return false;
         };
         if let Kind::Agent(agent) = &mut block.kind {
@@ -992,6 +1003,7 @@ mod tests {
         });
         let sub = |event: Event| Event::Sub {
             depth: 1,
+            task: None,
             event: Box::new(event),
         };
         stream.take(&sub(Event::ToolCall {
@@ -1002,6 +1014,7 @@ mod tests {
         }));
         stream.take(&sub(Event::Sub {
             depth: 2,
+            task: None,
             event: Box::new(Event::Usage {
                 turn: 1,
                 input_tokens: 2000,
@@ -1046,10 +1059,48 @@ mod tests {
     }
 
     #[test]
+    fn subagents_at_once_each_get_their_own_events_by_their_task_call() {
+        let mut stream = Transcript::default();
+        for (id, label) in [("t1", "first"), ("t2", "second")] {
+            stream.take(&Event::ToolCall {
+                turn: 1,
+                id: id.into(),
+                name: "task".into(),
+                arguments: format!(r#"{{"description":"{label}","prompt":"p"}}"#),
+            });
+        }
+        let sub = |task: &str, tool: &str| Event::Sub {
+            depth: 1,
+            task: Some(task.into()),
+            event: Box::new(Event::ToolCall {
+                turn: 1,
+                id: "s1".into(),
+                name: tool.into(),
+                arguments: "{}".into(),
+            }),
+        };
+        // Interleaved, and the first one's step after the second started: each to its own tile.
+        stream.take(&sub("t2", "grep"));
+        stream.take(&sub("t1", "read_file"));
+        stream.take(&sub("t1", "glob"));
+        let live: Vec<(String, u32)> = stream
+            .agents()
+            .iter()
+            .map(|(_, agent)| (agent.live.clone(), agent.calls))
+            .collect();
+        assert_eq!(
+            live,
+            [("glob {}".to_owned(), 2), ("grep {}".to_owned(), 1)],
+            "{live:?}"
+        );
+    }
+
+    #[test]
     fn a_subagent_event_with_no_tile_running_stands_indented_as_before() {
         let mut stream = Transcript::default();
         stream.take(&Event::Sub {
             depth: 1,
+            task: None,
             event: Box::new(Event::ToolCall {
                 turn: 1,
                 id: "s1".into(),

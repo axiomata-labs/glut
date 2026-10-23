@@ -751,6 +751,24 @@ impl RuleSet {
     }
 }
 
+tokio::task_local! {
+    /// The subagent whose calls are judged while it runs beside others (TUI T40): its `task` call's id and its label.
+    /// Task-local, so it follows the subagent's future through every await, also when the parent polls several at
+    /// once in one task; a judgement made on a task of its own (the sandbox's proxy) counts as the run's.
+    static SUBAGENT: (String, String);
+}
+
+/// Runs `future` as the subagent of the `task` call `id`, labelled `label`: its judgements are its own
+/// ([`Gate::take_log`]) and its asks name it ([`AskRequest::from`]).
+pub async fn as_subagent<F: Future>(id: String, label: String, future: F) -> F::Output {
+    SUBAGENT.scope((id, label), future).await
+}
+
+/// The subagent the current future runs as, if any.
+fn subagent() -> Option<(String, String)> {
+    SUBAGENT.try_with(Clone::clone).ok()
+}
+
 /// A question to the owner.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AskRequest {
@@ -761,6 +779,8 @@ pub struct AskRequest {
     /// `git status *`, `git *`): [`Answer::AllowWithin`] picks one. Empty: none can be given (a command the rules
     /// cannot read), only this once.
     pub scopes: Vec<String>,
+    /// The subagent that asks, by its task as the parent labelled it (TUI T40); `None`: the run itself.
+    pub from: Option<String>,
 }
 
 /// The owner's answer.
@@ -924,7 +944,8 @@ pub struct Gate {
     /// One question at a time: the proxy's connections can ask while a command runs, and two prompts in one terminal
     /// would mix their answers.
     asking: tokio::sync::Mutex<()>,
-    log: Mutex<Vec<Judgement>>,
+    /// Each judgement under the subagent's `task` call it was made for ([`as_subagent`]); `None`: the run's own.
+    log: Mutex<Vec<(Option<String>, Judgement)>>,
     /// What the owner's "always" answers allowed from then on, oldest first: the scope as the owner read it and the
     /// rules it became — shown and taken back through [`Gate::granted`] and [`Gate::take_back`] (TUI T15).
     granted: Mutex<Vec<(String, Vec<Rule>)>>,
@@ -1099,6 +1120,7 @@ impl Gate {
             tool: tool.to_owned(),
             target: target.to_owned(),
             scopes,
+            from: subagent().map(|(_, label)| label),
         };
         let _one_at_a_time = self.asking.lock().await;
         self.asker.ask(&request).await
@@ -1147,15 +1169,12 @@ impl Gate {
                 .collect::<Vec<_>>()
                 .join(", ");
             let reason = format!("{} allows only: {rules}", narrowing.by);
-            self.log
-                .lock()
-                .unwrap_or_else(|poison| poison.into_inner())
-                .push(Judgement {
-                    tool: tool.to_owned(),
-                    target,
-                    allowed: false,
-                    reason: reason.clone(),
-                });
+            self.record(Judgement {
+                tool: tool.to_owned(),
+                target,
+                allowed: false,
+                reason: reason.clone(),
+            });
             return Err(format!("not permitted: {reason}"));
         }
         let said = self
@@ -1200,6 +1219,7 @@ impl Gate {
                     tool: tool.to_owned(),
                     target: target.clone(),
                     scopes: scopes.iter().map(|scope| scope.label.clone()).collect(),
+                    from: subagent().map(|(_, label)| label),
                 };
                 let _one_at_a_time = self.asking.lock().await;
                 let answer = self.asker.ask(&request).await;
@@ -1242,15 +1262,12 @@ impl Gate {
                 }
             }
         };
-        self.log
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .push(Judgement {
-                tool: tool.to_owned(),
-                target,
-                allowed,
-                reason: reason.clone(),
-            });
+        self.record(Judgement {
+            tool: tool.to_owned(),
+            target,
+            allowed,
+            reason: reason.clone(),
+        });
         if allowed {
             Ok(())
         } else {
@@ -1318,9 +1335,27 @@ impl Gate {
         })
     }
 
-    /// The judgements since the last call, oldest first.
+    /// The judgements since the last call, oldest first — the caller's own: while subagents run at once (TUI T40),
+    /// each takes only what was judged for its calls, the run itself only what was judged outside them. A judgement
+    /// made on a task of its own (the sandbox's proxy, for a command's connection) names no subagent; the run waits
+    /// for its subagents meanwhile, so such a one is a subagent's, and the first to look takes it — never the run's.
     pub fn take_log(&self) -> Vec<Judgement> {
-        std::mem::take(&mut *self.log.lock().unwrap_or_else(|poison| poison.into_inner()))
+        let mine = subagent().map(|(id, _)| id);
+        let mut log = self.log.lock().unwrap_or_else(|poison| poison.into_inner());
+        let (taken, left) = std::mem::take(&mut *log)
+            .into_iter()
+            .partition(|(by, _)| *by == mine || (mine.is_some() && by.is_none()));
+        *log = left;
+        taken.into_iter().map(|(_, judged)| judged).collect()
+    }
+
+    /// One judgement into the log, under the subagent it was made for.
+    fn record(&self, judged: Judgement) {
+        let by = subagent().map(|(id, _)| id);
+        self.log
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .push((by, judged));
     }
 }
 
@@ -1361,6 +1396,8 @@ pub struct BuiltGate {
     pub context_windows: std::collections::HashMap<String, u32>,
     /// The owner's prices by model id (`docs/plans/glut-cards.md`, C6), for a budget in money.
     pub prices: std::collections::HashMap<String, crate::config::Prices>,
+    /// How many subagents of one reply run at once (TUI T40), from `~/.axh/settings.json`.
+    pub parallel_subagents: u32,
 }
 
 impl BuiltGate {
@@ -1439,6 +1476,7 @@ pub fn build_gate(
         compact_auto: loaded.compact_auto,
         context_windows: loaded.context_windows,
         prices: loaded.prices,
+        parallel_subagents: loaded.parallel_subagents,
     })
 }
 
@@ -1769,6 +1807,57 @@ mod tests {
         }
     }
 
+    /// Answers yes and keeps who asked.
+    struct Who(Mutex<Vec<Option<String>>>);
+
+    impl Asker for Who {
+        fn ask<'a>(&'a self, request: &'a AskRequest) -> AnswerFuture<'a> {
+            self.0.lock().unwrap().push(request.from.clone());
+            Box::pin(async { Answer::Allow })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_subagents_judgements_are_its_own_and_its_asks_name_it() {
+        let asker = Arc::new(Who(Mutex::new(Vec::new())));
+        let gate = Gate::new(RuleSet::default(), Mode::Default, asker.clone());
+        gate.judge("read_file", &Access::Read { path: "x".into() })
+            .await
+            .unwrap();
+        let theirs = as_subagent("t1".into(), "find the callers".into(), async {
+            gate.judge("bash", &bash("make build")).await.unwrap();
+            gate.take_log()
+        })
+        .await;
+        assert_eq!(
+            theirs.len(),
+            2,
+            "what was judged for it, and what names nobody"
+        );
+        assert_eq!(
+            (theirs[0].tool.as_str(), theirs[1].tool.as_str()),
+            ("read_file", "bash")
+        );
+        assert!(gate.take_log().is_empty());
+        // Beside another subagent, the other's judgement waits for that one.
+        as_subagent("t2".into(), "other".into(), async {
+            gate.judge("read_file", &Access::Read { path: "y".into() })
+                .await
+                .unwrap();
+        })
+        .await;
+        let theirs = as_subagent("t1".into(), "find the callers".into(), async {
+            gate.take_log()
+        })
+        .await;
+        assert!(theirs.is_empty(), "t2's is not t1's");
+        assert_eq!(gate.take_log().len(), 0, "nor the run's");
+        assert_eq!(
+            *asker.0.lock().unwrap(),
+            [Some("find the callers".to_owned())]
+        );
+    }
+
     #[tokio::test]
     async fn an_ask_goes_to_the_asker_and_always_holds_from_then_on() {
         let asker = Arc::new(Always(Answer::AllowAlways, Mutex::new(0)));
@@ -1957,6 +2046,7 @@ mod tests {
             compact_auto: true,
             context_windows: std::collections::HashMap::new(),
             prices: std::collections::HashMap::new(),
+            parallel_subagents: crate::config::DEFAULT_PARALLEL_SUBAGENTS,
         };
         let off = built(true, true, false).notes();
         assert_eq!(off.len(), 3, "{off:?}");

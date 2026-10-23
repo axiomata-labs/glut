@@ -17,7 +17,8 @@ pub(crate) fn spec() -> ToolSpec {
         name: NAME.into(),
         description: "Start a subagent for a self-contained piece of work. It runs in its own context — yours \
                       stays clean — with the same tools, permissions and folder, and returns only its final \
-                      answer; give it everything it needs in `prompt`, it sees nothing else."
+                      answer; give it everything it needs in `prompt`, it sees nothing else. Independent parts \
+                      go as several `task` calls in one reply: they run at once."
             .into(),
         parameters: json!({
             "type": "object",

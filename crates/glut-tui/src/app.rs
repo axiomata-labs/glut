@@ -2704,6 +2704,7 @@ impl App {
             KeyCode::Enter => {
                 self.agent_view = Some(crate::agents::View::new(list[chosen].clone()))
             }
+            KeyCode::Char('x') => self.stop_subagent(&list[chosen]),
             KeyCode::Esc => self.agents_list = None,
             _ => {
                 self.agents_list = None;
@@ -2711,6 +2712,39 @@ impl App {
             }
         }
         true
+    }
+
+    /// x in the Agents tab (T40): the chosen subagent stops, the turn and the others go on. Only one that still runs
+    /// and that the turn's run started itself — a nested one ends with its parent.
+    fn stop_subagent(&mut self, path: &[usize]) {
+        let Some(agent) = self.transcript.agent(path) else {
+            return;
+        };
+        if agent.state != crate::transcript::ToolState::Running {
+            return self
+                .transcript
+                .note("that subagent has ended already", Tone::Quiet);
+        }
+        let (id, task) = (agent.id.clone(), agent.task.clone());
+        let stopped = path.len() == 1
+            && self
+                .running
+                .as_ref()
+                .is_some_and(|cancel| cancel.cancel_subagent(&id));
+        if stopped {
+            self.transcript.note(
+                format!(
+                    "stopping the subagent “{}”",
+                    crate::transcript::clean(&task)
+                ),
+                Tone::Quiet,
+            );
+        } else {
+            self.transcript.note(
+                "that subagent cannot be stopped alone: Esc stops the turn",
+                Tone::Quiet,
+            );
+        }
     }
 
     /// The turn's second subagent opens the Agents tab (T34), unless the owner closed the panel: on a panel never
@@ -4044,6 +4078,7 @@ mod tests {
         use glut::Event;
         let sub = |event: Event| Event::Sub {
             depth: 1,
+            task: None,
             event: Box::new(event),
         };
         let mut events = vec![Event::ToolCall {
@@ -4073,6 +4108,7 @@ mod tests {
             }));
             events.push(sub(Event::Sub {
                 depth: 2,
+                task: None,
                 event: Box::new(Event::AssistantText {
                     turn: 1,
                     text: "found it deep".into(),
@@ -4190,16 +4226,47 @@ mod tests {
         // A key of the input's gives it the keys back and is typed.
         app.on_terminal(key(KeyCode::Char('a'), KeyModifiers::CONTROL));
         assert!(app.agents_list.is_some());
-        app.on_terminal(key(KeyCode::Char('x'), KeyModifiers::NONE));
+        app.on_terminal(key(KeyCode::Char('q'), KeyModifiers::NONE));
         assert_eq!(
             (app.agents_list.clone(), app.input.text()),
-            (None, "jx".to_owned())
+            (None, "jq".to_owned())
         );
         // Ctrl+A takes the keys again, and once more hides the panel.
         app.on_terminal(key(KeyCode::Char('a'), KeyModifiers::CONTROL));
         wide(&mut app);
         app.on_terminal(key(KeyCode::Char('a'), KeyModifiers::CONTROL));
         assert_eq!((app.panel, app.agents_list), (Some(false), None));
+        let _ = std::fs::remove_dir_all(&app.parts.home);
+    }
+
+    #[test]
+    fn x_in_the_agents_tab_stops_only_a_running_subagent_of_the_turn() {
+        let (mut app, _reports) = app();
+        app.running = Some(Cancel::new());
+        for event in [task("t1", "ended", true), task("t2", "running", false)].concat() {
+            app.on_report(Report::Event(event));
+        }
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(140, 30)).unwrap();
+        app.on_terminal(key(KeyCode::Char('a'), KeyModifiers::CONTROL));
+        terminal
+            .draw(|frame| crate::view::draw(frame, &mut app))
+            .unwrap();
+        let notes = |app: &App| format!("{:?}", app.transcript.blocks.last().map(|b| &b.kind));
+        // The running one is listed first; this cancel lists no subagent of that call, so it cannot stop it alone.
+        app.on_terminal(key(KeyCode::Char('x'), KeyModifiers::NONE));
+        assert!(
+            notes(&app).contains("Esc stops the turn"),
+            "{}",
+            notes(&app)
+        );
+        app.on_terminal(key(KeyCode::Down, KeyModifiers::NONE));
+        app.on_terminal(key(KeyCode::Char('x'), KeyModifiers::NONE));
+        assert!(notes(&app).contains("ended already"), "{}", notes(&app));
+        assert!(
+            !app.running.as_ref().unwrap().is_cancelled(),
+            "the turn goes on"
+        );
         let _ = std::fs::remove_dir_all(&app.parts.home);
     }
 
@@ -4281,6 +4348,7 @@ mod tests {
                 tool: glut::planning::EXIT_PLAN.into(),
                 target: "leave plan mode and carry out: 1. change a.rs …".into(),
                 scopes: vec!["accept_edits".into(), "auto".into(), "default".into()],
+                from: None,
             },
             reply,
         ));
@@ -4366,6 +4434,7 @@ mod tests {
                 tool: glut::planning::EXIT_PLAN.into(),
                 target: "leave plan mode and carry out: cut of".into(),
                 scopes: vec!["accept_edits".into()],
+                from: None,
             },
             reply,
         ));
@@ -4417,6 +4486,7 @@ mod tests {
                     "git status *".into(),
                     "git *".into(),
                 ],
+                from: None,
             },
             reply,
         ));

@@ -1,5 +1,7 @@
 //! The loop: ask the model, run the tools it calls, hand back their results, until it answers without a call.
 
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -35,6 +37,8 @@ pub const MAX_CALLS_PER_TURN: usize = 16;
 pub struct Cancel {
     flag: Arc<AtomicBool>,
     notify: Arc<Notify>,
+    /// The subagents running under this run, by their `task` call (TUI T40): each can be called off alone.
+    subagents: Arc<std::sync::Mutex<HashMap<String, Cancel>>>,
 }
 
 impl Cancel {
@@ -46,6 +50,51 @@ impl Cancel {
     pub fn cancel(&self) {
         self.flag.store(true, Ordering::SeqCst);
         self.notify.notify_waiters();
+        for subagent in self.subagents_now() {
+            subagent.cancel();
+        }
+    }
+
+    /// Calls off the subagent of the `task` call `id` alone (TUI T40): it ends as `cancelled`, its call answers that,
+    /// the run and the others go on. `false` when no such subagent runs.
+    pub fn cancel_subagent(&self, id: &str) -> bool {
+        let found = self
+            .subagents
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .get(id)
+            .cloned();
+        found.inspect(Cancel::cancel).is_some()
+    }
+
+    /// A cancel of its own for the subagent of `id`, called off with this one; dropped from it by [`Self::forget`].
+    fn subagent(&self, id: &str) -> Cancel {
+        let own = Cancel::new();
+        self.subagents
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .insert(id.to_owned(), own.clone());
+        // A cancel just before it was listed is not missed.
+        if self.is_cancelled() {
+            own.cancel();
+        }
+        own
+    }
+
+    fn forget(&self, id: &str) {
+        self.subagents
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .remove(id);
+    }
+
+    fn subagents_now(&self) -> Vec<Cancel> {
+        self.subagents
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .values()
+            .cloned()
+            .collect()
     }
 
     pub fn is_cancelled(&self) -> bool {
@@ -100,6 +149,19 @@ pub struct RunOutcome {
     pub refusals: u32,
 }
 
+impl RunOutcome {
+    /// A subagent whose outcome never came back: failed, nothing spent that the parent could count.
+    fn lost() -> Self {
+        RunOutcome {
+            reason: FinishReason::Failed,
+            answer: None,
+            turns: 0,
+            usage: Usage::default(),
+            refusals: 0,
+        }
+    }
+}
+
 /// Runs `prompt` with `model` and `tools` under `config`, reporting each step to `sink`.
 ///
 /// Never fails as a function: a failing model call ends the run as [`FinishReason::Failed`] after an
@@ -116,7 +178,7 @@ pub async fn run<M: ChatModel>(
         earlier: Vec::new(),
         prompt,
     };
-    run_inner(config, model, tools, opening, sink, cancel, 0)
+    run_inner(config, model, tools, opening, sink, cancel, 0, None)
         .await
         .0
 }
@@ -143,6 +205,7 @@ pub async fn run_continuing<M: ChatModel>(
         sink,
         cancel,
         0,
+        None,
     )
     .await
 }
@@ -187,7 +250,7 @@ pub async fn resume<M: ChatModel>(
         recorded: Box::new(recorded),
         journal: held,
     };
-    Ok(run_inner(config, model, tools, opening, sink, cancel, 0).await)
+    Ok(run_inner(config, model, tools, opening, sink, cancel, 0, None).await)
 }
 
 /// How a run begins: anew with a prompt (after an earlier conversation, maybe), or from its journal.
@@ -218,6 +281,7 @@ async fn run_inner<M: ChatModel>(
     sink: &mut dyn EventSink,
     cancel: &Cancel,
     depth: u32,
+    sibling: Option<Sibling<'_>>,
 ) -> (RunOutcome, Vec<Message>) {
     let continuing = !matches!(&opening, Opening::Fresh { earlier, .. } if earlier.is_empty());
     let deadline = Instant::now() + config.timeout;
@@ -284,6 +348,8 @@ async fn run_inner<M: ChatModel>(
         last_prompt: None,
         compacted_at: None,
         compacted_size: None,
+        sibling,
+        read_at: HashMap::new(),
     };
     let mut resumed_calls = Vec::new();
     match opening {
@@ -458,6 +524,10 @@ struct Loop<'a, M: ChatModel> {
     compacted_at: Option<usize>,
     /// The prompt's estimated size right after the last compaction.
     compacted_size: Option<u64>,
+    /// A subagent run beside others (TUI T40): the batch it shares a budget, the paths' locks and their writes with.
+    sibling: Option<Sibling<'a>>,
+    /// The batch's version of each path at this run's last read or write of it, for a write after another's.
+    read_at: HashMap<PathBuf, u64>,
 }
 
 /// What a run knows of its model's context window (#111, K2).
@@ -637,7 +707,11 @@ impl<M: ChatModel> Loop<'_, M> {
             }
             // Before the next model call, never between a reply and its results: every call of the last reply is
             // answered.
-            if let Some(why) = self.config.budget.spent(&self.usage) {
+            let spent = self
+                .sibling
+                .as_ref()
+                .map_or(self.usage, |sibling| sibling.group.spent());
+            if let Some(why) = self.config.budget.spent(&spent) {
                 sink.emit(Event::Error { message: why });
                 return FinishReason::Budget;
             }
@@ -735,6 +809,9 @@ impl<M: ChatModel> Loop<'_, M> {
             FinishReason::Failed
         })?;
         self.usage += reply.usage;
+        if let Some(sibling) = &self.sibling {
+            sibling.group.spend(reply.usage);
+        }
         sink.emit(Event::Usage {
             turn,
             input_tokens: reply.usage.input_tokens,
@@ -885,6 +962,9 @@ impl<M: ChatModel> Loop<'_, M> {
             }
         };
         self.usage += compacted.usage;
+        if let Some(sibling) = &self.sibling {
+            sibling.group.spend(compacted.usage);
+        }
         sink.emit(Event::Usage {
             turn: self.turns,
             input_tokens: compacted.usage.input_tokens,
@@ -960,14 +1040,15 @@ impl<M: ChatModel> Loop<'_, M> {
     }
 
     /// The reply's tool calls, one after the other in the order asked: a later call may depend on an earlier
-    /// one (write, then read). Past [`MAX_CALLS_PER_TURN`] each is answered with an error instead, so every call
-    /// still gets its reply (the API wants one per call id).
+    /// one (write, then read). `task` calls side by side run at once (TUI T40, [`Self::run_task_batch`]). Past
+    /// [`MAX_CALLS_PER_TURN`] each is answered with an error instead, so every call still gets its reply (the API
+    /// wants one per call id).
     async fn run_calls(
         &mut self,
         calls: Vec<ToolCall>,
         sink: &mut dyn EventSink,
     ) -> Result<(), FinishReason> {
-        let mut calls = calls.into_iter().enumerate();
+        let mut calls = calls.into_iter().enumerate().peekable();
         while let Some((index, call)) = calls.next() {
             sink.emit(Event::tool_call(
                 self.turns,
@@ -982,28 +1063,128 @@ impl<M: ChatModel> Loop<'_, M> {
                 self.answer_call(call, false, output, sink);
                 continue;
             }
-            self.journal_line(
-                &Line::Call {
-                    id: call.id.clone(),
-                },
-                sink,
-            );
-            if let Err(ending) = self.run_call(call, sink).await {
+            let ran = if self.offer_task && call.function.name == crate::task::NAME {
+                let mut batch = vec![call];
+                while let Some((_, next)) = calls.next_if(|(index, next)| {
+                    *index < MAX_CALLS_PER_TURN && next.function.name == crate::task::NAME
+                }) {
+                    sink.emit(Event::tool_call(
+                        self.turns,
+                        &next.id,
+                        &next.function.name,
+                        &next.function.arguments,
+                    ));
+                    batch.push(next);
+                }
+                self.run_task_batch(batch, sink).await
+            } else {
+                self.journal_line(
+                    &Line::Call {
+                        id: call.id.clone(),
+                    },
+                    sink,
+                );
+                self.run_call(call, sink).await
+            };
+            if let Err(ending) = ran {
                 // #112, R3: the reply's other calls still get an answer, so the conversation stays one a provider
                 // takes — a caller may go on with it (`run_continuing`).
                 if ending == FinishReason::Refused {
-                    let message = self.refusals.ended().unwrap_or_default().to_owned();
-                    for (_, call) in calls.by_ref() {
-                        let output = format!("error: not run, the run is ending — {message}");
-                        self.answer_call(call, false, output, sink);
-                    }
-                    self.flush_journal(sink);
+                    self.answer_not_run(calls.by_ref().map(|(_, call)| call), sink);
                 }
                 return Err(ending);
             }
             self.flush_journal(sink);
         }
         self.flush_journal(sink);
+        Ok(())
+    }
+
+    /// The calls a refusal-ended run leaves: each answered that it was not run.
+    fn answer_not_run(&mut self, calls: impl Iterator<Item = ToolCall>, sink: &mut dyn EventSink) {
+        let message = self.refusals.ended().unwrap_or_default().to_owned();
+        for call in calls {
+            let output = format!("error: not run, the run is ending — {message}");
+            self.answer_call(call, false, output, sink);
+        }
+        self.flush_journal(sink);
+    }
+
+    /// `task` calls of one reply side by side (TUI T40): each judged and prepared in turn — its PreToolUse hooks, the
+    /// gate's word on it —, then all of them run at once, at most `config.parallel_subagents` at a time, and last each
+    /// finished in the order asked — its PostToolUse hooks, its answer into the conversation —, so the conversation
+    /// reads as if they had run one after another.
+    async fn run_task_batch(
+        &mut self,
+        calls: Vec<ToolCall>,
+        sink: &mut dyn EventSink,
+    ) -> Result<(), FinishReason> {
+        /// How far a call of the batch came before the subagents ran.
+        enum Step {
+            /// Answered without running: the run is ending, or a hook refused it.
+            Answered(String),
+            /// Not started (over the limit, wrong arguments, refused by the gate): its result and the refusals.
+            Stopped(bool, String, Vec<Refusal>),
+            /// Its subagent runs: its place among them.
+            Runs(usize),
+        }
+        let mut steps = Vec::with_capacity(calls.len());
+        let mut ready = Vec::new();
+        for call in &calls {
+            self.journal_line(
+                &Line::Call {
+                    id: call.id.clone(),
+                },
+                sink,
+            );
+            if let Some(text) = self.perform_before(call, sink).await? {
+                steps.push(Step::Answered(text));
+                continue;
+            }
+            match self.prepare_task(call, sink).await {
+                Ok(task) => {
+                    steps.push(Step::Runs(ready.len()));
+                    ready.push(task);
+                }
+                Err((ok, text, refused)) => steps.push(Step::Stopped(ok, text, refused)),
+            }
+        }
+        let mut outcomes: Vec<Option<(Vec<Refusal>, RunOutcome)>> = self
+            .run_subagents(&ready, sink)
+            .await
+            .into_iter()
+            .zip(ready)
+            .map(|(outcome, task)| Some((task.refused, outcome)))
+            .collect();
+        let mut calls = calls.into_iter().zip(steps);
+        while let Some((call, step)) = calls.next() {
+            let answered = match step {
+                Step::Answered(text) => Ok(text),
+                Step::Stopped(ok, text, refused) => {
+                    self.perform_after(&call, ok, text, refused, 0, sink).await
+                }
+                Step::Runs(at) => {
+                    let (refused, outcome) = outcomes[at]
+                        .take()
+                        .unwrap_or_else(|| (Vec::new(), RunOutcome::lost()));
+                    let from_subagent = outcome.refusals;
+                    let (ok, text) = self.task_answer(outcome);
+                    self.perform_after(&call, ok, text, refused, from_subagent, sink)
+                        .await
+                }
+            };
+            let ended = match answered {
+                Ok(text) => self.answer_with(call, text, sink),
+                Err(ending) => Err(ending),
+            };
+            if let Err(ending) = ended {
+                if ending == FinishReason::Refused {
+                    self.answer_not_run(calls.by_ref().map(|(call, _)| call), sink);
+                }
+                return Err(ending);
+            }
+            self.flush_journal(sink);
+        }
         Ok(())
     }
 
@@ -1108,6 +1289,17 @@ impl<M: ChatModel> Loop<'_, M> {
         sink: &mut dyn EventSink,
     ) -> Result<(), FinishReason> {
         let output = self.perform(&call, sink).await?;
+        self.answer_with(call, output, sink)
+    }
+
+    /// What [`Self::run_call`] does with a call's text: Glut lean's savings, the bound, the message the model gets —
+    /// and the run's end when refusals reached their limit with it.
+    fn answer_with(
+        &mut self,
+        call: ToolCall,
+        output: String,
+        sink: &mut dyn EventSink,
+    ) -> Result<(), FinishReason> {
         let parts = self
             .chain
             .take()
@@ -1214,6 +1406,23 @@ impl<M: ChatModel> Loop<'_, M> {
         call: &ToolCall,
         sink: &mut dyn EventSink,
     ) -> Result<String, FinishReason> {
+        if let Some(text) = self.perform_before(call, sink).await? {
+            return Ok(text);
+        }
+        let (ok, output) = self.execute(call, sink).await?;
+        let refused = std::mem::take(&mut self.refused_now);
+        let from_subagent = std::mem::take(&mut self.subagent_refusals);
+        self.perform_after(call, ok, output, refused, from_subagent, sink)
+            .await
+    }
+
+    /// [`Self::perform`] before the call runs: `Some` with the call's text when it does not run at all — the run is
+    /// ending, or a PreToolUse hook refused it —, else its snapshot taken.
+    async fn perform_before(
+        &mut self,
+        call: &ToolCall,
+        sink: &mut dyn EventSink,
+    ) -> Result<Option<String>, FinishReason> {
         let turn = self.turns;
         // #112: once refusals ended the run, a script's further calls are not run — the script finishes, the loop ends.
         if let Some(message) = self.refusals.ended() {
@@ -1225,7 +1434,7 @@ impl<M: ChatModel> Loop<'_, M> {
                 false,
                 &text,
             ));
-            return Ok(text);
+            return Ok(Some(text));
         }
         // HS7, D3/B2: the owner's hooks may block a call before anything runs — they never let one through,
         // the gate stays the only decider.
@@ -1264,15 +1473,29 @@ impl<M: ChatModel> Loop<'_, M> {
                 false,
                 &text,
             ));
-            return Ok(text);
+            return Ok(Some(text));
         }
         self.snapshot_before(call, sink).await;
-        let (ok, mut output) = self.execute(call, sink).await?;
+        Ok(None)
+    }
+
+    /// [`Self::perform`] after the call ran (or was stopped before its work): the diagnostics of an edit, the gate's
+    /// events and the refusals — `refused` judged outside the gate's log, `from_subagent` its subagent's —, the result
+    /// event, the PostToolUse hooks. Returns the text the model gets.
+    async fn perform_after(
+        &mut self,
+        call: &ToolCall,
+        ok: bool,
+        mut output: String,
+        mut refused: Vec<Refusal>,
+        from_subagent: u32,
+        sink: &mut dyn EventSink,
+    ) -> Result<String, FinishReason> {
+        let turn = self.turns;
         if ok && let Some(note) = self.diagnostics_after(call, sink).await {
             output.push_str("\n\n");
             output.push_str(&note);
         }
-        let mut refused = std::mem::take(&mut self.refused_now);
         if let Some(gate) = self.tools.gate() {
             for judged in gate.take_log() {
                 sink.emit(Event::permission(turn, &call.id, &judged));
@@ -1285,7 +1508,6 @@ impl<M: ChatModel> Loop<'_, M> {
                 }
             }
         }
-        let from_subagent = std::mem::take(&mut self.subagent_refusals);
         if let Some(note) = self.refusals.record(&refused, from_subagent) {
             output.push_str("\n\n");
             output.push_str(&note);
@@ -1376,11 +1598,59 @@ impl<M: ChatModel> Loop<'_, M> {
             return Box::pin(self.run_codemode(call, sink)).await;
         }
         self.chain = None;
+        // T40: beside other subagents a write holds its path, and one after another's write since this run's read
+        // of that file is said so.
+        let shared = self.sibling.as_ref().and_then(|sibling| {
+            match self.tools.access_of(name, &call.function.arguments)? {
+                Access::Edit { path } => Some((sibling, true, lexical(&self.config.cwd, &path))),
+                Access::Read { path } => Some((sibling, false, lexical(&self.config.cwd, &path))),
+                _ => None,
+            }
+        });
+        let mut stale = None;
+        let _held = match &shared {
+            Some((sibling, true, path)) => {
+                let held = tokio::select! {
+                    held = sibling.group.hold(path) => held,
+                    () = tokio::time::sleep_until(self.deadline) => return Err(FinishReason::Timeout),
+                    () = self.cancel.cancelled() => return Err(FinishReason::Cancelled),
+                };
+                let seen = self.read_at.get(path).copied();
+                if sibling
+                    .group
+                    .changed_by_other(path, &sibling.id, seen.unwrap_or(0))
+                {
+                    stale = Some((path.clone(), seen.is_some()));
+                }
+                Some(held)
+            }
+            _ => None,
+        };
         let called = tokio::select! {
             called = self.tools.call_reporting(name, &call.function.arguments, self.stop) => called,
             () = tokio::time::sleep_until(self.deadline) => return Err(FinishReason::Timeout),
             () = self.cancel.cancelled() => return Err(FinishReason::Cancelled),
         };
+        if let Some((sibling, writes, path)) = shared {
+            let version = if writes && called.ok {
+                sibling.group.wrote(&path, &sibling.id)
+            } else {
+                sibling.group.version(&path)
+            };
+            self.read_at.insert(path, version);
+        }
+        let mut called = called;
+        if let Some((path, read)) = stale {
+            let when = if read {
+                "after you last read it"
+            } else {
+                "and you had not read it"
+            };
+            called.text.push_str(&format!(
+                "\n\nNote: another subagent changed {} {when}; read it again before you change it further.",
+                path.display()
+            ));
+        }
         if let Some(parts) = called.parts {
             self.chain = Some(ChainAnswer {
                 call: call.id.clone(),
@@ -1696,56 +1966,91 @@ impl<M: ChatModel> Loop<'_, M> {
         })
     }
 
-    /// The `task` arm (HS8, D2): judge the call, run the subagent, hand its answer back as the tool's result — and
-    /// its tokens, summed into the run's own usage so the spend stays honest (D2.4). A subagent that really ran
-    /// counts against `config.max_subagents`; one refused or asked for wrongly does not.
+    /// The `task` arm (HS8, D2) of a single call — a call of a resumed run that had not started: judge it, run the
+    /// subagent, hand its answer back as the tool's result. A reply's own `task` calls go through
+    /// [`Self::run_task_batch`].
     async fn run_task(&mut self, call: &ToolCall, sink: &mut dyn EventSink) -> (bool, String) {
+        let task = match self.prepare_task(call, sink).await {
+            Ok(task) => task,
+            Err((ok, text, refused)) => {
+                self.refused_now.extend(refused);
+                return (ok, text);
+            }
+        };
+        let outcome = self
+            .run_subagents(std::slice::from_ref(&task), sink)
+            .await
+            .pop()
+            .unwrap_or_else(RunOutcome::lost);
+        self.refused_now.extend(task.refused);
+        self.subagent_refusals += outcome.refusals;
+        self.task_answer(outcome)
+    }
+
+    /// A `task` call up to its subagent's start: the limit, the arguments, the gate's word on it (D2.2 — the parent's
+    /// judgement and event, read before the subagent runs, never inside its stream). A subagent that will run counts
+    /// against `config.max_subagents` from here (T40: several start before any ends); one refused or asked for
+    /// wrongly does not. `Err` with the call's result and the refusals when it does not run.
+    async fn prepare_task(
+        &mut self,
+        call: &ToolCall,
+        sink: &mut dyn EventSink,
+    ) -> Result<Subagent, (bool, String, Vec<Refusal>)> {
         let config = self.config;
         if self.subagents_started >= config.max_subagents {
             let limit = config.max_subagents;
-            return (
+            return Err((
                 false,
                 format!(
                     "error: this run has started its {limit} subagents; do the rest of the work yourself"
                 ),
-            );
+                Vec::new(),
+            ));
         }
-        let prompt = match serde_json::from_str::<Value>(&call.function.arguments) {
-            Ok(arguments @ Value::Object(_)) => match crate::task::prompt_of(&arguments) {
-                Ok(prompt) => prompt,
-                Err(reason) => return (false, format!("error: {reason}")),
+        let parsed = serde_json::from_str::<Value>(&call.function.arguments);
+        let (prompt, label) = match &parsed {
+            Ok(arguments @ Value::Object(_)) => match crate::task::prompt_of(arguments) {
+                Ok(prompt) => (
+                    prompt,
+                    arguments
+                        .get("description")
+                        .and_then(Value::as_str)
+                        .unwrap_or("subagent")
+                        .to_owned(),
+                ),
+                Err(reason) => return Err((false, format!("error: {reason}"), Vec::new())),
             },
             Ok(_) => {
-                return (
+                return Err((
                     false,
                     "error: the arguments must be a JSON object".to_owned(),
-                );
+                    Vec::new(),
+                ));
             }
             Err(err) => {
-                return (
+                return Err((
                     false,
                     format!("error: the arguments are not valid JSON: {err}"),
-                );
+                    Vec::new(),
+                ));
             }
         };
-        let (turn, id) = (self.turns, call.id.as_str());
-        // The judgement and its event belong to the parent (D2.2): the nested run drains this very log in its
-        // own loop, so what the parent judged is read here, before the subagent starts — never inside its
-        // stream, never lost. B1: `task` is judged like any other call of a name the rules know.
+        let mut refused = Vec::new();
+        // B1: `task` is judged like any other call of a name the rules know.
         if let Some(gate) = self.tools.gate() {
             let judged = gate.judge(crate::task::NAME, &Access::Other).await;
             for entry in gate.take_log() {
-                sink.emit(Event::permission(turn, id, &entry));
+                sink.emit(Event::permission(self.turns, &call.id, &entry));
                 if !entry.allowed {
-                    self.refused_now.push(Refusal {
+                    refused.push(Refusal {
                         tool: entry.tool,
                         target: entry.target,
                         reason: entry.reason,
                     });
                 }
             }
-            if let Err(refused) = judged {
-                return (false, format!("error: {refused}"));
+            if let Err(why) = judged {
+                return Err((false, format!("error: {why}"), refused));
             }
         }
         let mut sub = config.clone();
@@ -1753,40 +2058,71 @@ impl<M: ChatModel> Loop<'_, M> {
         // whatever the parent's model put into `prompt`.
         sub.instructions = None;
         sub.max_turns = config.subagent_max_turns;
-        // Its usage counts from nothing: it may spend only what the run has left (glut-cards C6).
+        // Its usage counts from nothing: it may spend only what the run has left (glut-cards C6) — with the subagents
+        // beside it, which count against the same rest (T40, `Group`).
         sub.budget = config.budget.less(&self.usage);
-        // The subagent never outlives the run that started it (D2.3).
-        sub.timeout = config
-            .subagent_timeout
-            .min(self.deadline.saturating_duration_since(Instant::now()));
-        let depth = self.depth + 1;
-        let mut wrapped = SubSink { depth, inner: sink };
-        let nested = run_inner(
-            &sub,
-            self.model,
-            self.tools,
-            Opening::Fresh {
-                earlier: Vec::new(),
-                prompt: &prompt,
-            },
-            &mut wrapped,
-            self.cancel,
-            depth,
-        );
-        let (outcome, _) = Box::pin(nested).await;
-        // What the subagent judged but did not get to report (it was cancelled mid-call) still belongs to its
-        // stream: drained here, wrapped, before the parent's `ToolResult(task)` brackets it (D2.4).
-        if let Some(gate) = self.tools.gate() {
-            for entry in gate.take_log() {
-                wrapped.emit(Event::permission(turn, id, &entry));
-            }
-        }
-        self.usage += outcome.usage;
         self.subagents_started += 1;
-        self.subagent_refusals += outcome.refusals;
+        Ok(Subagent {
+            id: call.id.clone(),
+            label,
+            prompt,
+            config: sub,
+            refused,
+        })
+    }
+
+    /// Runs `tasks` at once, at most `config.parallel_subagents` at a time and the rest in the order asked, and
+    /// returns their outcomes in that order. Their events arrive in `sink` as they come, each wrapped in the
+    /// [`Event::Sub`] of its `task` call; what they spend is the run's (D2.4).
+    async fn run_subagents(
+        &mut self,
+        tasks: &[Subagent],
+        sink: &mut dyn EventSink,
+    ) -> Vec<RunOutcome> {
+        let group = Group::default();
+        let permits = tokio::sync::Semaphore::new(self.config.parallel_subagents.max(1) as usize);
+        let (events, mut arriving) = tokio::sync::mpsc::unbounded_channel();
+        let place = Place {
+            model: self.model,
+            tools: self.tools,
+            cancel: self.cancel,
+            deadline: self.deadline,
+            depth: self.depth + 1,
+            turn: self.turns,
+            timeout: self.config.subagent_timeout,
+        };
+        let running: Vec<_> = tasks
+            .iter()
+            .map(|task| Box::pin(place.subagent(task, &group, &permits, events.clone())))
+            .collect();
+        drop(events);
+        let all = join_all(running);
+        tokio::pin!(all);
+        let outcomes = loop {
+            tokio::select! {
+                Some(event) = arriving.recv() => sink.emit(event),
+                outcomes = &mut all => break outcomes,
+            }
+        };
+        while let Ok(event) = arriving.try_recv() {
+            sink.emit(event);
+        }
+        for outcome in &outcomes {
+            self.usage += outcome.usage;
+        }
+        outcomes
+    }
+
+    /// A subagent's outcome as its `task` call's result.
+    fn task_answer(&self, outcome: RunOutcome) -> (bool, String) {
         match outcome.reason {
+            // Called off alone (T40, `Cancel::cancel_subagent`): the run goes on, the model is told whose doing it was.
+            FinishReason::Cancelled if !self.cancel.is_cancelled() => (
+                false,
+                "error: the owner stopped this subagent before it answered".to_owned(),
+            ),
             FinishReason::Answered => match outcome.answer {
-                // Bounded like every tool result when it enters the conversation (`run_call`).
+                // Bounded like every tool result when it enters the conversation (`answer_with`).
                 Some(answer) => (true, answer),
                 None => (true, "the subagent finished without text".to_owned()),
             },
@@ -1797,11 +2133,217 @@ impl<M: ChatModel> Loop<'_, M> {
         }
     }
 }
+
+/// A `task` call ready to run (HS8, T40): its id and label, the subagent's prompt and config, and what the gate
+/// refused while judging the call.
+struct Subagent {
+    id: String,
+    label: String,
+    prompt: String,
+    config: RunConfig,
+    refused: Vec<Refusal>,
+}
+
+/// What the subagents of one parent share from it: its model, tools and cancel, the time it has, where they nest.
+struct Place<'a, M: ChatModel> {
+    model: &'a M,
+    tools: &'a Toolbox,
+    cancel: &'a Cancel,
+    deadline: Instant,
+    depth: u32,
+    turn: u32,
+    timeout: std::time::Duration,
+}
+
+impl<M: ChatModel> Place<'_, M> {
+    /// One subagent, once a place among those running at once is free: its own run, as the subagent of its `task`
+    /// call (its judgements and asks its own), its events sent to the parent.
+    async fn subagent(
+        &self,
+        task: &Subagent,
+        group: &Group,
+        permits: &tokio::sync::Semaphore,
+        events: tokio::sync::mpsc::UnboundedSender<Event>,
+    ) -> RunOutcome {
+        // Never closed: the semaphore lives as long as the batch.
+        let _place = permits.acquire().await;
+        let mut config = task.config.clone();
+        // From its own start, which may come late: the subagent never outlives the run that started it (D2.3).
+        config.timeout = self
+            .timeout
+            .min(self.deadline.saturating_duration_since(Instant::now()));
+        let mut sink = SubSink {
+            depth: self.depth,
+            task: Some(task.id.clone()),
+            inner: &mut ChannelSink(events),
+        };
+        let sibling = Sibling {
+            group,
+            id: task.id.clone(),
+        };
+        let cancel = self.cancel.subagent(&task.id);
+        let run = async {
+            let nested = run_inner(
+                &config,
+                self.model,
+                self.tools,
+                Opening::Fresh {
+                    earlier: Vec::new(),
+                    prompt: &task.prompt,
+                },
+                &mut sink,
+                &cancel,
+                self.depth,
+                Some(sibling),
+            );
+            let (outcome, _) = Box::pin(nested).await;
+            // What the subagent judged but did not get to report (it was cancelled mid-call) still belongs to its
+            // stream (D2.4).
+            if let Some(gate) = self.tools.gate() {
+                for entry in gate.take_log() {
+                    sink.emit(Event::permission(self.turn, &task.id, &entry));
+                }
+            }
+            outcome
+        };
+        let outcome =
+            crate::permissions::as_subagent(task.id.clone(), task.label.clone(), run).await;
+        self.cancel.forget(&task.id);
+        outcome
+    }
+}
+
+/// Polls `futures` together until each is done; their outputs in their order.
+async fn join_all<F: std::future::Future + Unpin>(mut futures: Vec<F>) -> Vec<F::Output> {
+    let mut outputs: Vec<Option<F::Output>> = futures.iter().map(|_| None).collect();
+    std::future::poll_fn(|cx| {
+        let mut pending = false;
+        for (future, output) in futures.iter_mut().zip(outputs.iter_mut()) {
+            if output.is_none() {
+                match std::pin::Pin::new(future).poll(cx) {
+                    std::task::Poll::Ready(done) => *output = Some(done),
+                    std::task::Poll::Pending => pending = true,
+                }
+            }
+        }
+        if pending {
+            std::task::Poll::Pending
+        } else {
+            std::task::Poll::Ready(())
+        }
+    })
+    .await;
+    outputs.into_iter().flatten().collect()
+}
+
+/// What the subagents of one batch share (TUI T40): what they spent together, which the budget is checked against
+/// before each of their model calls; a lock per path, held by a write; and which of them last wrote a file.
+#[derive(Default)]
+struct Group {
+    usage: std::sync::Mutex<Usage>,
+    paths: std::sync::Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>,
+    written: std::sync::Mutex<HashMap<PathBuf, (u64, String)>>,
+    writes: std::sync::atomic::AtomicU64,
+}
+
+impl Group {
+    /// Adds what one of them spent; returns what all of them have spent.
+    fn spend(&self, usage: Usage) -> Usage {
+        let mut total = self
+            .usage
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        *total += usage;
+        *total
+    }
+
+    fn spent(&self) -> Usage {
+        *self
+            .usage
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+    }
+
+    /// The path's lock, held for one write.
+    async fn hold(&self, path: &Path) -> tokio::sync::OwnedMutexGuard<()> {
+        let lock = Arc::clone(
+            self.paths
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .entry(path.to_owned())
+                .or_default(),
+        );
+        lock.lock_owned().await
+    }
+
+    /// The path's last write among them (0: none).
+    fn version(&self, path: &Path) -> u64 {
+        self.written
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .get(path)
+            .map_or(0, |(version, _)| *version)
+    }
+
+    /// Whether another than `me` wrote the path after the write `seen`.
+    fn changed_by_other(&self, path: &Path, me: &str, seen: u64) -> bool {
+        matches!(
+            self.written
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .get(path),
+            Some((version, by)) if *version > seen && by != me
+        )
+    }
+
+    /// `me` wrote the path: its new version.
+    fn wrote(&self, path: &Path, me: &str) -> u64 {
+        let version = self.writes.fetch_add(1, Ordering::SeqCst) + 1;
+        self.written
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .insert(path.to_owned(), (version, me.to_owned()));
+        version
+    }
+}
+
+/// A subagent's place in its batch: the batch it shares, and its own `task` call's id.
+struct Sibling<'a> {
+    group: &'a Group,
+    id: String,
+}
+
+/// A path as the tools reach it, below `cwd`, without `.` and `..` — the same file named two ways is one lock.
+fn lexical(cwd: &Path, path: &str) -> PathBuf {
+    let mut whole = PathBuf::new();
+    for part in cwd.join(path).components() {
+        match part {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                whole.pop();
+            }
+            other => whole.push(other),
+        }
+    }
+    whole
+}
+
+/// The parent's end of a subagent's events while several run at once: each sent on, in the order it came.
+struct ChannelSink(tokio::sync::mpsc::UnboundedSender<Event>);
+
+impl EventSink for ChannelSink {
+    fn emit(&mut self, event: Event) {
+        // The parent drains until every subagent ended: a send can only fail after that, when nobody reads.
+        let _ = self.0.send(event);
+    }
+}
+
 /// The nested run's view of the parent's sink (HS8, D8): every event it emits arrives wrapped in
-/// [`Event::Sub`] at the depth it happened at — nothing dropped. Accounting never counts events; the
-/// parent sums `RunOutcome`s (D2.4), so a viewer may count each run's own `Finished` and no other's.
+/// [`Event::Sub`] at the depth it happened at, with the `task` call it answers — nothing dropped. Accounting never
+/// counts events; the parent sums `RunOutcome`s (D2.4), so a viewer may count each run's own `Finished` and no other's.
 struct SubSink<'a> {
     depth: u32,
+    task: Option<String>,
     inner: &'a mut dyn EventSink,
 }
 
@@ -1809,6 +2351,7 @@ impl EventSink for SubSink<'_> {
     fn emit(&mut self, event: Event) {
         self.inner.emit(Event::Sub {
             depth: self.depth,
+            task: self.task.clone(),
             event: Box::new(event),
         });
     }
@@ -4240,6 +4783,277 @@ mod tests {
         .await;
         assert_eq!(outcome.reason, FinishReason::Answered);
         assert_eq!(model.seen.lock().unwrap().len(), 2, "no subagent at all");
+    }
+
+    /// A model that answers by the conversation's first user message (T40: subagents ask in no fixed order), each
+    /// reply after `delay`, and keeps how many requests were in flight at most.
+    struct ByPrompt {
+        replies: Mutex<HashMap<String, Vec<Reply>>>,
+        delay: Duration,
+        flying: std::sync::atomic::AtomicUsize,
+        most: std::sync::atomic::AtomicUsize,
+        last_parent: Mutex<Vec<Message>>,
+    }
+
+    impl ByPrompt {
+        fn new(replies: Vec<(&str, Vec<Reply>)>, delay: Duration) -> Self {
+            ByPrompt {
+                replies: Mutex::new(
+                    replies
+                        .into_iter()
+                        .map(|(prompt, replies)| (prompt.to_owned(), replies))
+                        .collect(),
+                ),
+                delay,
+                flying: std::sync::atomic::AtomicUsize::new(0),
+                most: std::sync::atomic::AtomicUsize::new(0),
+                last_parent: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    impl ChatModel for ByPrompt {
+        async fn complete(
+            &self,
+            messages: &[Message],
+            _tools: &[ToolSpec],
+            _max: Option<u32>,
+        ) -> Result<Reply, HarnessError> {
+            use std::sync::atomic::Ordering::SeqCst;
+            let prompt = messages
+                .iter()
+                .find(|m| m.role == Role::User)
+                .and_then(|m| m.content.clone())
+                .unwrap_or_default();
+            if prompt == "go" {
+                *self.last_parent.lock().unwrap() = messages.to_vec();
+            }
+            let now = self.flying.fetch_add(1, SeqCst) + 1;
+            self.most.fetch_max(now, SeqCst);
+            tokio::time::sleep(self.delay).await;
+            self.flying.fetch_sub(1, SeqCst);
+            let mut replies = self.replies.lock().unwrap();
+            let left = replies.get_mut(&prompt).filter(|left| !left.is_empty());
+            Ok(left.map_or_else(|| text("nothing more"), |left| left.remove(0)))
+        }
+
+        fn name(&self) -> &str {
+            "by-prompt"
+        }
+    }
+
+    /// One reply with a `task` call per prompt, ids `t0`, `t1`, ….
+    fn tasks(prompts: &[&str]) -> Reply {
+        let arguments: Vec<String> = prompts
+            .iter()
+            .map(|prompt| {
+                json!({"description": format!("do {prompt}"), "prompt": prompt}).to_string()
+            })
+            .collect();
+        let ids: Vec<String> = (0..prompts.len()).map(|at| format!("t{at}")).collect();
+        let list: Vec<(&str, &str, &str)> = ids
+            .iter()
+            .zip(&arguments)
+            .map(|(id, arguments)| (id.as_str(), "task", arguments.as_str()))
+            .collect();
+        calls(&list)
+    }
+
+    #[tokio::test]
+    async fn a_replys_task_calls_run_at_once_as_many_as_allowed_and_answer_in_their_order() {
+        for (parallel, most) in [(3, 3), (2, 2), (1, 1)] {
+            let model = ByPrompt::new(
+                vec![
+                    ("go", vec![tasks(&["A", "B", "C"]), text("All done.")]),
+                    ("A", vec![text("answer A")]),
+                    ("B", vec![text("answer B")]),
+                    ("C", vec![text("answer C")]),
+                ],
+                Duration::from_millis(40),
+            );
+            let mut config = RunConfig::new("/w");
+            config.parallel_subagents = parallel;
+            let mut events = Vec::new();
+            let outcome = run(
+                &config,
+                &model,
+                &toolbox(),
+                "go",
+                &mut events,
+                &Cancel::new(),
+            )
+            .await;
+            assert_eq!(outcome.reason, FinishReason::Answered);
+            assert_eq!(
+                model.most.load(std::sync::atomic::Ordering::SeqCst),
+                most,
+                "at most {parallel} at once"
+            );
+            let answers: Vec<(String, String)> = model
+                .last_parent
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|m| m.role == Role::Tool)
+                .map(|m| (m.tool_call_id.clone().unwrap(), m.content.clone().unwrap()))
+                .collect();
+            assert_eq!(
+                answers,
+                [("t0", "answer A"), ("t1", "answer B"), ("t2", "answer C")]
+                    .map(|(id, text)| (id.to_owned(), text.to_owned())),
+                "in the order asked"
+            );
+            // Each subagent's events name its `task` call.
+            for id in ["t0", "t1", "t2"] {
+                assert!(events.iter().any(|event| matches!(event,
+                    Event::Sub { task: Some(task), event, .. }
+                    if task == id && matches!(&**event, Event::Finished { .. }))));
+            }
+            // Spent: the parent's two calls and the three subagents'.
+            assert_eq!(outcome.usage.input_tokens, 7 + 10 + 3 * 10);
+        }
+    }
+
+    #[tokio::test]
+    async fn one_subagent_called_off_alone_leaves_the_run_and_the_others_going() {
+        let model = ByPrompt::new(
+            vec![
+                ("go", vec![tasks(&["A", "B"]), text("All done.")]),
+                ("A", vec![text("answer A")]),
+                ("B", vec![text("answer B")]),
+            ],
+            Duration::from_millis(150),
+        );
+        let config = RunConfig::new("/w");
+        let cancel = Cancel::new();
+        let mut events = Vec::new();
+        let tools = toolbox();
+        let (outcome, stopped) = tokio::join!(
+            run(&config, &model, &tools, "go", &mut events, &cancel),
+            async {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                cancel.cancel_subagent("t0")
+            }
+        );
+        assert!(stopped, "t0 was running");
+        assert_eq!(outcome.reason, FinishReason::Answered);
+        let answers: Vec<String> = model
+            .last_parent
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|m| m.role == Role::Tool)
+            .map(|m| m.content.clone().unwrap())
+            .collect();
+        assert!(
+            answers[0].contains("the owner stopped this subagent"),
+            "{answers:?}"
+        );
+        assert_eq!(answers[1], "answer B");
+        assert!(
+            !cancel.cancel_subagent("t1"),
+            "an ended one is no longer listed"
+        );
+    }
+
+    #[tokio::test]
+    async fn subagents_at_once_share_what_is_left_of_the_budget() {
+        let work = || vec![calls(&[("e", "echo", r#"{"text":"x"}"#)]), text("done")];
+        let model = ByPrompt::new(
+            vec![
+                ("go", vec![tasks(&["A", "B"]), text("All done.")]),
+                ("A", work()),
+                ("B", work()),
+            ],
+            Duration::from_millis(20),
+        );
+        let mut config = RunConfig::new("/w");
+        // The parent's first call spends 8, which leaves 12; a subagent's first call spends 8 — alone either goes on
+        // and answers, together they are past what is left once both have called (which checks first is timing).
+        config.budget.max_tokens = Some(8 + 12);
+        let mut events = Vec::new();
+        run(
+            &config,
+            &model,
+            &toolbox(),
+            "go",
+            &mut events,
+            &Cancel::new(),
+        )
+        .await;
+        let stopped = events
+            .iter()
+            .filter(|event| {
+                matches!(event, Event::ToolResult { name, output, .. }
+                if name == "task" && output.contains("Budget"))
+            })
+            .count();
+        assert!(
+            stopped >= 1,
+            "the shared budget stopped one of them at least"
+        );
+    }
+
+    #[test]
+    fn a_batch_knows_who_wrote_a_file_after_whose_read() {
+        let group = Group::default();
+        let file = lexical(Path::new("/w"), "src/../src/./a.rs");
+        assert_eq!(file, Path::new("/w/src/a.rs"));
+        let seen = group.version(&file);
+        assert_eq!(seen, 0);
+        assert!(!group.changed_by_other(&file, "t1", seen));
+        let written = group.wrote(&file, "t0");
+        assert!(
+            group.changed_by_other(&file, "t1", seen),
+            "t0 wrote after t1's read"
+        );
+        assert!(
+            !group.changed_by_other(&file, "t0", seen),
+            "its own write is no news to it"
+        );
+        assert!(
+            !group.changed_by_other(&file, "t1", written),
+            "read again since"
+        );
+        assert_eq!(
+            group
+                .spend(Usage {
+                    input_tokens: 5,
+                    ..Usage::default()
+                })
+                .input_tokens,
+            5
+        );
+        assert_eq!(
+            group
+                .spend(Usage {
+                    input_tokens: 2,
+                    ..Usage::default()
+                })
+                .input_tokens,
+            7
+        );
+    }
+
+    #[tokio::test]
+    async fn a_write_holds_its_path_until_it_is_done() {
+        let group = Group::default();
+        let file = PathBuf::from("/w/a.rs");
+        let held = group.hold(&file).await;
+        let waiting = tokio::time::timeout(Duration::from_millis(30), group.hold(&file)).await;
+        assert!(waiting.is_err(), "a second write of the path waits");
+        assert!(
+            tokio::time::timeout(Duration::from_millis(30), group.hold(Path::new("/w/b.rs")))
+                .await
+                .is_ok(),
+            "another path does not"
+        );
+        drop(held);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(30), group.hold(&file))
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]
