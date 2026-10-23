@@ -147,6 +147,109 @@ fn footer(agent: &Agent, width: usize) -> Line<'static> {
     Line::from(Span::styled(cut(&keys, width), theme::quiet()))
 }
 
+/// The Agents tab's list (T34): every subagent of the session, each under the one that started it. The session's own
+/// subagents that still run come first, then the others, newest first; a subagent's own stay under it in their order.
+pub fn overview(stream: &crate::transcript::Transcript) -> Vec<(Vec<usize>, &Agent)> {
+    let found = stream.agents();
+    let mut groups: Vec<Vec<(Vec<usize>, &Agent)>> = Vec::new();
+    for (path, agent) in found {
+        if path.len() == 1 {
+            groups.push(Vec::new());
+        }
+        if let Some(group) = groups.last_mut() {
+            group.push((path, agent));
+        }
+    }
+    // Stable: equals keep their order, so the newest of the running or of the rest is reached by reversing first.
+    groups.reverse();
+    groups.sort_by_key(|group| group[0].1.state != ToolState::Running);
+    groups.into_iter().flatten().collect()
+}
+
+/// The tab's rows at `width` for at most `room` rows: per subagent its task — glowing while it runs, quiet once it
+/// ended — and under it what it does now or how it ended, with its calls and tokens. `chosen` is marked; the list
+/// starts late enough for it to be seen.
+pub fn overview_lines(
+    list: &[(Vec<usize>, &Agent)],
+    chosen: Option<usize>,
+    width: usize,
+    room: usize,
+) -> Vec<Line<'static>> {
+    let mut entries: Vec<Vec<Line<'static>>> = Vec::new();
+    for (at, (path, agent)) in list.iter().enumerate() {
+        // Deep nesting stops indenting where the panel would have no room left for the task.
+        let indent = "  ".repeat((path.len() - 1).min(width / 4));
+        let picked = chosen == Some(at);
+        let running = agent.state == ToolState::Running;
+        let (mark, end) = match agent.state {
+            ToolState::Running => ("⬡", ""),
+            ToolState::Done => ("✓", "done"),
+            ToolState::Failed => ("✗", "stopped"),
+            ToolState::Refused => ("⊘", "refused"),
+        };
+        let mut task_style = if running {
+            theme::glow()
+        } else {
+            theme::quiet()
+        };
+        if picked {
+            task_style = task_style.add_modifier(ratatui::style::Modifier::BOLD);
+        }
+        let room_for_text = width.saturating_sub(indent.len() + 4).max(4);
+        let mut rows = vec![Line::from(vec![
+            Span::styled(if picked { "▸" } else { " " }, theme::glow()),
+            Span::raw(indent.clone()),
+            Span::styled(format!("{mark} "), task_style),
+            Span::styled(
+                cut(&crate::transcript::clean(&agent.task), room_for_text),
+                task_style,
+            ),
+        ])];
+        let spent = format!(
+            "{} calls · {} tokens",
+            agent.calls,
+            crate::meter::tokens(agent.input_tokens + agent.output_tokens)
+        );
+        if running {
+            rows.push(Line::from(Span::raw(format!(
+                " {indent}  {}",
+                cut(&crate::transcript::clean(&agent.live), room_for_text)
+            ))));
+            rows.push(Line::from(Span::styled(
+                format!(" {indent}  {spent}"),
+                theme::quiet(),
+            )));
+        } else {
+            rows.push(Line::from(Span::styled(
+                cut(&format!(" {indent}  {end} · {spent}"), width),
+                theme::quiet(),
+            )));
+        }
+        entries.push(rows);
+    }
+    // From the chosen one back, as many entries as fit; then on from the first one shown.
+    let first = match chosen {
+        Some(chosen) if chosen < entries.len() => {
+            let mut used = 0;
+            let mut first = chosen + 1;
+            while first > 0 && used + entries[first - 1].len() <= room {
+                first -= 1;
+                used += entries[first].len();
+            }
+            first.min(chosen)
+        }
+        _ => 0,
+    };
+    let mut lines = Vec::new();
+    for entry in entries.into_iter().skip(first) {
+        if lines.len() + entry.len() > room {
+            break;
+        }
+        lines.extend(entry);
+    }
+    lines
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -159,6 +262,53 @@ mod tests {
             kind: KeyEventKind::Press,
             state: crossterm::event::KeyEventState::NONE,
         }
+    }
+
+    fn task(id: &str, label: &str) -> glut::Event {
+        glut::Event::ToolCall {
+            turn: 1,
+            id: id.into(),
+            name: "task".into(),
+            arguments: format!(r#"{{"description":"{label}","prompt":"go"}}"#),
+        }
+    }
+
+    fn ended(id: &str) -> glut::Event {
+        glut::Event::ToolResult {
+            turn: 1,
+            id: id.into(),
+            name: "task".into(),
+            ok: true,
+            output: "ok".into(),
+            truncated: false,
+        }
+    }
+
+    #[test]
+    fn the_overview_puts_the_running_first_then_the_newest_and_marks_the_chosen() {
+        let mut stream = crate::transcript::Transcript::default();
+        for event in [
+            task("a", "first"),
+            ended("a"),
+            task("b", "second"),
+            ended("b"),
+            task("c", "third"),
+        ] {
+            stream.take(&event);
+        }
+        let list = overview(&stream);
+        let tasks: Vec<&str> = list.iter().map(|(_, agent)| agent.task.as_str()).collect();
+        assert_eq!(tasks, ["third", "second", "first"]);
+        let rows = overview_lines(&list, Some(2), 40, 100);
+        let text: Vec<String> = rows.iter().map(ToString::to_string).collect();
+        // The running one has its live line and its spending under it, an ended one a single line.
+        assert_eq!(text.len(), 3 + 2 * 2, "{text:?}");
+        assert!(text[0].contains("⬡ third"));
+        assert!(text[3].contains("✓ second") && text[4].contains("done · 0 calls"));
+        assert!(text[5].starts_with('▸') && text[5].contains("first"));
+        // Little room: the chosen one is still shown.
+        let rows = overview_lines(&list, Some(2), 40, 2);
+        assert!(rows[0].to_string().contains("first"), "{rows:?}");
     }
 
     #[test]

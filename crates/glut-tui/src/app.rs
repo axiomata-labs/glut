@@ -32,7 +32,7 @@ const HELP: &str = "Commands: /model [id] · /provider [id] · /effort [level] �
                     /editor [command] · /gate · /meter · /diff [session] · /agents · /plan · /thinking off|folded|open · /theme [name] · /vim on|off · /scrollback · \
                     /clear · /help · /quit\n\
                     Keys: Enter send · Shift+Enter or Alt+Enter new line · ↑ history · Shift+Tab plan → ask → \
-                    build → auto · Esc stop · Ctrl+O tool results · Ctrl+T thinking · Ctrl+B panel · Ctrl+G gate · Ctrl+N meter · Ctrl+R review · \
+                    build → auto · Esc stop · Ctrl+O tool results · Ctrl+T thinking · Ctrl+B panel · Ctrl+G gate · Ctrl+N meter · Ctrl+A agents · Ctrl+R review · \
                     Ctrl+X E editor · PgUp/PgDn scroll · Ctrl+F search · drag to copy · a click on a subagent's tile \
                     opens it · F2 mouse to the terminal \
                     and back · F3 scrollback · Ctrl+C twice quit\n\
@@ -81,7 +81,7 @@ pub const COMMANDS: [(&str, &str); 23] = [
     ),
     (
         "agents",
-        "the session's subagents: open one's own stream (a click on its tile does too)",
+        "the session's subagents: open one's own stream (a click on its tile does too; Ctrl+A: the Agents tab)",
     ),
     (
         "plan",
@@ -127,6 +127,8 @@ pub enum Tab {
     Gate,
     /// The meter, exact (T16).
     Meter,
+    /// The session's subagents (T34).
+    Agents,
 }
 
 /// What runs in the background besides the screen.
@@ -168,6 +170,9 @@ pub struct App {
     pub review: crate::review::Review,
     /// The subagent whose own stream is open over the session's (T18).
     pub agent_view: Option<crate::agents::View>,
+    /// The Agents tab's chosen subagent, by its path, while its list has the keys (T34, Ctrl+A) — a path, not a row,
+    /// so the choice stays on its subagent as the list reorders; `None`: the input has them.
+    pub agents_list: Option<Vec<usize>>,
     /// The plan `exit_plan` sent last (T19), and its view: the dialog while Glut asks, else only to read.
     pub plan: Option<crate::plan::Plan>,
     pub plan_view: Option<crate::plan::Dialog>,
@@ -229,6 +234,8 @@ pub struct App {
     files: Option<(Instant, Vec<String>, bool)>,
     /// Where the stream ended at the last frame, the panel right of it: a click there is not the stream's.
     pub stream_width: u16,
+    /// Whether the last frame drew the side panel (a narrow screen leaves it out though it is on).
+    pub panel_drawn: bool,
     pub frame: usize,
     quit_armed: Option<Instant>,
     pub quit: bool,
@@ -289,6 +296,7 @@ impl App {
             meter: crate::meter::Meter::default(),
             review: crate::review::Review::default(),
             agent_view: None,
+            agents_list: None,
             plan: None,
             plan_view: None,
             offered_plan: None,
@@ -323,6 +331,7 @@ impl App {
             shells: 0,
             files: None,
             stream_width: u16::MAX,
+            panel_drawn: false,
             frame: 0,
             quit_armed: None,
             quit: false,
@@ -622,6 +631,9 @@ impl App {
                 self.watch.take(&event);
                 self.meter.take(&event, self.engine.prices);
                 self.transcript.take(&event);
+                if matches!(&event, Event::ToolCall { name, .. } if name == "task") {
+                    self.second_agent_opens_tab();
+                }
             }
             Report::Ask(request, reply) => {
                 // A chord begun before the question came does not take the first key after it.
@@ -1029,6 +1041,9 @@ impl App {
         if self.agent_view.is_some() {
             return self.on_agent_key(key);
         }
+        if self.agents_list.is_some() && self.on_agents_list_key(key) {
+            return;
+        }
         if self.search.is_some() {
             return self.on_search_key(key);
         }
@@ -1094,6 +1109,7 @@ impl App {
         }
         match key.code {
             KeyCode::Char('x') if ctrl => self.chord = true,
+            KeyCode::Char('a') if ctrl => self.show_agents(),
             KeyCode::Char('b') if ctrl => self.show_tab(Tab::Plan),
             KeyCode::Char('g') if ctrl => self.show_tab(Tab::Gate),
             // Ctrl+M is Enter to a terminal: the meter is on N.
@@ -1150,7 +1166,6 @@ impl App {
             }
             KeyCode::Char('w') if ctrl => self.input.delete_word(),
             KeyCode::Char('u') if ctrl => self.input.delete_to_start(),
-            KeyCode::Char('a') if ctrl => self.input.home(),
             KeyCode::Char('e') if ctrl => self.input.end(),
             KeyCode::Char('b') if alt => self.input.word_left(),
             KeyCode::Char('f') if alt => self.input.word_right(),
@@ -2620,9 +2635,97 @@ impl App {
     /// The views over the stream that name its blocks or the session's plan go with the stream they belong to.
     fn forget_views(&mut self) {
         self.agent_view = None;
+        self.agents_list = None;
         self.plan = None;
         self.plan_view = None;
         self.offered_plan = None;
+    }
+
+    /// Ctrl+A: the Agents tab with its list taking the keys; with the list taking them already, the panel goes.
+    fn show_agents(&mut self) {
+        let first = crate::agents::overview(&self.transcript)
+            .first()
+            .map(|(path, _)| path.clone());
+        let shown = self.panel == Some(true) && self.tab == Tab::Agents;
+        // An empty list never takes the keys: there Ctrl+A hides at once.
+        if shown && (self.agents_list.is_some() || first.is_none()) {
+            self.agents_list = None;
+            return self.toggle_panel();
+        }
+        self.tab = Tab::Agents;
+        if self.panel != Some(true) {
+            self.toggle_panel();
+        }
+        self.agents_list = first;
+    }
+
+    /// The row of the Agents tab's chosen subagent; one no longer listed gives way to the first.
+    pub fn agents_chosen(&self) -> Option<usize> {
+        let chosen = self.agents_list.as_ref()?;
+        let list = crate::agents::overview(&self.transcript);
+        Some(
+            list.iter()
+                .position(|(path, _)| path == chosen)
+                .unwrap_or(0),
+        )
+    }
+
+    /// A key while the Agents tab's list has them: ↑↓ (j k) choose, Enter opens the chosen one's view, Esc gives the
+    /// keys back. Any other key gives them back too and is the input's — false: not taken here.
+    fn on_agents_list_key(&mut self, key: KeyEvent) -> bool {
+        let list: Vec<Vec<usize>> = crate::agents::overview(&self.transcript)
+            .into_iter()
+            .map(|(path, _)| path)
+            .collect();
+        let shown = self.panel == Some(true) && self.panel_drawn && self.tab == Tab::Agents;
+        let Some(chosen) = self.agents_chosen().filter(|_| shown && !list.is_empty()) else {
+            self.agents_list = None;
+            return false;
+        };
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            // Ctrl+A again hides the panel; another tab's key turns to it — the list no longer has the keys.
+            if key.code != KeyCode::Char('a') {
+                self.agents_list = None;
+            }
+            return false;
+        }
+        // Alt and Shift keep their own meanings (Alt+b a word left, Shift+Enter a new line): the input's.
+        if !key.modifiers.is_empty() {
+            self.agents_list = None;
+            return false;
+        }
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.agents_list = Some(list[chosen.saturating_sub(1)].clone())
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.agents_list = Some(list[(chosen + 1).min(list.len() - 1)].clone())
+            }
+            KeyCode::Enter => {
+                self.agent_view = Some(crate::agents::View::new(list[chosen].clone()))
+            }
+            KeyCode::Esc => self.agents_list = None,
+            _ => {
+                self.agents_list = None;
+                return false;
+            }
+        }
+        true
+    }
+
+    /// The turn's second subagent opens the Agents tab (T34), unless the owner closed the panel: on a panel never
+    /// opened it opens without being remembered, as the first plan does; a shown panel turns to it unless it shows a
+    /// plan under way. The keys stay with the input.
+    fn second_agent_opens_tab(&mut self) {
+        if self.transcript.agents_this_turn() != 2 || self.panel == Some(false) {
+            return;
+        }
+        if self.panel.is_none() {
+            self.panel = Some(true);
+        } else if self.tab == Tab::Plan && !self.todos.is_empty() {
+            return;
+        }
+        self.tab = Tab::Agents;
     }
 
     /// `/agents`: the session's subagents, each under the one that started it; Enter opens one's stream.
@@ -2636,8 +2739,8 @@ impl App {
         }
         let items = found
             .into_iter()
-            .map(|(path, depth, task, state)| {
-                let state = match state {
+            .map(|(path, agent)| {
+                let state = match agent.state {
                     crate::transcript::ToolState::Running => "running",
                     crate::transcript::ToolState::Done => "done",
                     crate::transcript::ToolState::Failed => "stopped",
@@ -2646,8 +2749,8 @@ impl App {
                 Item::plain(
                     format!(
                         "{}⬡ {}",
-                        "  ".repeat(depth),
-                        crate::transcript::cut(&crate::transcript::clean(&task), 60)
+                        "  ".repeat(path.len() - 1),
+                        crate::transcript::cut(&crate::transcript::clean(&agent.task), 60)
                     ),
                     state,
                     Pick::Agent(path),
@@ -2780,7 +2883,7 @@ impl App {
     /// y allows once; 1, 2, 3 for the rest of the session, as far as the card's scope with that number reaches
     /// (`git status --short`, `git status *`, `git *`), a the first of them; n or Esc refuses — plain keys only,
     /// pressed once, and not in the first moment after the card came up: a key typed (or held) for the input must
-    /// not answer a question the owner has not read yet, nor Ctrl+A ("home") allow for the whole session.
+    /// not answer a question the owner has not read yet, nor Ctrl+A (a key of its own) allow for the whole session.
     fn on_ask_key(&mut self, key: KeyEvent) {
         let Some(open) = &self.ask else { return };
         if key.kind == KeyEventKind::Repeat
@@ -3046,6 +3149,12 @@ fn palette() -> Picker {
             "the meter: context, tokens and cost per turn and tool",
             "/meter",
             Pick::Keys(vec![press(KeyCode::Char('n'), ctrl)]),
+        ),
+        (
+            "Ctrl+A",
+            "the Agents tab: every subagent, live — ↑↓ and Enter open one",
+            "/agents",
+            Pick::Keys(vec![press(KeyCode::Char('a'), ctrl)]),
         ),
         (
             "Ctrl+R",
@@ -3993,6 +4102,131 @@ mod tests {
         events
     }
 
+    /// A task call and its answer at depth 0: a subagent that came and went.
+    fn task(id: &str, label: &str, ended: bool) -> Vec<Event> {
+        let mut events = vec![Event::ToolCall {
+            turn: 1,
+            id: id.into(),
+            name: "task".into(),
+            arguments: format!(r#"{{"description":"{label}","prompt":"go"}}"#),
+        }];
+        if ended {
+            events.push(Event::ToolResult {
+                turn: 1,
+                id: id.into(),
+                name: "task".into(),
+                ok: true,
+                output: "ok".into(),
+                truncated: false,
+            });
+        }
+        events
+    }
+
+    #[test]
+    fn ctrl_a_shows_the_agents_tab_its_list_takes_the_keys_and_enter_opens_one() {
+        let (mut app, _reports) = app();
+        let wide = |app: &mut App| {
+            let mut terminal =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(140, 30)).unwrap();
+            terminal
+                .draw(|frame| crate::view::draw(frame, app))
+                .unwrap();
+            format!("{:?}", terminal.backend().buffer())
+        };
+        // Before any subagent the tab opens with its hint and leaves the keys to the input.
+        app.on_terminal(key(KeyCode::Char('a'), KeyModifiers::CONTROL));
+        assert_eq!(
+            (app.panel, app.tab, app.agents_list.clone()),
+            (Some(true), Tab::Agents, None)
+        );
+        assert!(wide(&mut app).contains("No subagent yet"));
+        // An empty list never takes the keys: Ctrl+A hides at once, and shows again.
+        app.on_terminal(key(KeyCode::Char('a'), KeyModifiers::CONTROL));
+        assert_eq!(app.panel, Some(false));
+        app.on_terminal(key(KeyCode::Char('a'), KeyModifiers::CONTROL));
+        assert_eq!(app.panel, Some(true));
+        for event in subagent_events(true) {
+            app.on_report(Report::Event(event));
+        }
+        // Shown already, Ctrl+A hands the list the keys; the nested one stands under its parent.
+        app.on_terminal(key(KeyCode::Char('a'), KeyModifiers::CONTROL));
+        // A note may stand before it in the stream: its path is its block's.
+        let tile = app.transcript.agent_blocks()[0];
+        assert_eq!(app.agents_list, Some(vec![tile]));
+        let screen = wide(&mut app);
+        assert!(
+            screen.contains("find the callers") && screen.contains("deeper"),
+            "{screen}"
+        );
+        assert!(screen.contains("Enter opens"));
+        app.on_terminal(key(KeyCode::Down, KeyModifiers::NONE));
+        app.on_terminal(key(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(
+            app.agents_chosen(),
+            Some(1),
+            "the list ends at its last row"
+        );
+        app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.agent_view.as_ref().unwrap().path.len(), 2);
+        app.on_terminal(key(KeyCode::Esc, KeyModifiers::NONE));
+        app.on_terminal(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.agent_view.is_none());
+        // A new one running goes on top; the choice stays on its subagent, not on its row.
+        app.on_terminal(key(KeyCode::Up, KeyModifiers::NONE));
+        for event in task("t9", "newer", false) {
+            app.on_report(Report::Event(event));
+        }
+        assert_eq!(app.agents_chosen(), Some(1));
+        app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.agent_view.as_ref().unwrap().path, [tile]);
+        app.on_terminal(key(KeyCode::Esc, KeyModifiers::NONE));
+        // Esc gives the keys back; an Alt key is the input's too.
+        app.on_terminal(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(app.agents_list, None);
+        app.on_terminal(key(KeyCode::Char('a'), KeyModifiers::CONTROL));
+        app.on_terminal(key(KeyCode::Char('j'), KeyModifiers::ALT));
+        assert_eq!(app.agents_list, None, "Alt+j is the input's");
+        // A key of the input's gives it the keys back and is typed.
+        app.on_terminal(key(KeyCode::Char('a'), KeyModifiers::CONTROL));
+        assert!(app.agents_list.is_some());
+        app.on_terminal(key(KeyCode::Char('x'), KeyModifiers::NONE));
+        assert_eq!(
+            (app.agents_list.clone(), app.input.text()),
+            (None, "jx".to_owned())
+        );
+        // Ctrl+A takes the keys again, and once more hides the panel.
+        app.on_terminal(key(KeyCode::Char('a'), KeyModifiers::CONTROL));
+        wide(&mut app);
+        app.on_terminal(key(KeyCode::Char('a'), KeyModifiers::CONTROL));
+        assert_eq!((app.panel, app.agents_list), (Some(false), None));
+        let _ = std::fs::remove_dir_all(&app.parts.home);
+    }
+
+    #[test]
+    fn the_turns_second_subagent_opens_the_agents_tab_unless_the_panel_was_closed() {
+        let (mut app, _reports) = app();
+        for event in task("t1", "one", true) {
+            app.on_report(Report::Event(event));
+        }
+        assert_eq!(app.panel, None, "one subagent is its tile in the stream");
+        for event in task("t2", "two", false) {
+            app.on_report(Report::Event(event));
+        }
+        assert_eq!(
+            (app.panel, app.tab, app.agents_list.clone()),
+            (Some(true), Tab::Agents, None)
+        );
+        // Closed by the owner, it stays closed.
+        let (mut app, _reports) = self::app();
+        app.panel = Some(false);
+        for event in [task("t1", "one", true), task("t2", "two", false)].concat() {
+            app.on_report(Report::Event(event));
+        }
+        assert_eq!(app.panel, Some(false));
+        let _ = std::fs::remove_dir_all(&app.parts.home);
+    }
+
     #[test]
     fn a_click_on_a_subagents_tile_opens_its_stream_and_a_number_its_own_subagent() {
         let (mut app, _reports) = app();
@@ -4197,10 +4431,7 @@ mod tests {
         let (mut app, _reports) = app();
         let mut answer = asked(&mut app);
         app.on_terminal(key(KeyCode::Char('a'), KeyModifiers::CONTROL));
-        assert!(
-            app.ask.is_some(),
-            "Ctrl+A (home) does not allow for the session"
-        );
+        assert!(app.ask.is_some(), "Ctrl+A does not allow for the session");
         app.on_terminal(TermEvent::Key(KeyEvent {
             kind: KeyEventKind::Repeat,
             ..KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE)

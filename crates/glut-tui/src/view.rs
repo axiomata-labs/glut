@@ -78,8 +78,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         .areas(stream);
         draw_panel(frame, app, panel);
         app.stream_width = stream.x + stream.width;
+        app.panel_drawn = true;
         stream
     } else {
+        app.panel_drawn = false;
         stream
     };
     // Before the first message there are only notes (the guides read, a provider's word): Glimm welcomes above them.
@@ -755,6 +757,8 @@ fn draw_panel(frame: &mut Frame, app: &App, area: Rect) {
             tab("Gate", app.tab == Tab::Gate),
             Span::styled("·", theme::quiet()),
             tab("Meter", app.tab == Tab::Meter),
+            Span::styled("·", theme::quiet()),
+            tab("Agents", app.tab == Tab::Agents),
         ]));
     let width = usize::from(area.width.saturating_sub(4)).max(8);
     // Glimm heads the panel with the session's mood: working, waiting for the owner, pleased or gone out.
@@ -768,10 +772,33 @@ fn draw_panel(frame: &mut Frame, app: &App, area: Rect) {
         let room = usize::from(area.height).saturating_sub(lines.len() + 2);
         lines.extend(app.meter.lines(&app.meter_window(), width + 2, room));
         lines.push(Line::default());
-        lines.push(Line::from(Span::styled(
-            " Ctrl+N hides · Ctrl+B plan · Ctrl+G gate",
-            theme::quiet(),
-        )));
+        lines.extend(panel_keys(app, width));
+        frame.render_widget(Paragraph::new(lines).block(block), area);
+        return;
+    }
+    if app.tab == Tab::Agents {
+        lines.push(Line::default());
+        let keys = panel_keys(app, width);
+        let list = crate::agents::overview(&app.transcript);
+        if list.is_empty() {
+            for row in wrap(
+                "No subagent yet. When Glut hands a piece of work to one, it shows here: what it does now, its calls \
+                 and tokens.",
+                width,
+            ) {
+                lines.push(Line::from(Span::styled(format!(" {row}"), theme::quiet())));
+            }
+        } else {
+            let room = usize::from(area.height).saturating_sub(lines.len() + keys.len() + 3);
+            lines.extend(crate::agents::overview_lines(
+                &list,
+                app.agents_chosen(),
+                width + 2,
+                room,
+            ));
+        }
+        lines.push(Line::default());
+        lines.extend(keys);
         frame.render_widget(Paragraph::new(lines).block(block), area);
         return;
     }
@@ -789,10 +816,7 @@ fn draw_panel(frame: &mut Frame, app: &App, area: Rect) {
         let room = usize::from(area.height).saturating_sub(lines.len() + 2);
         lines.extend(app.watch.lines(&guard, width + 2, room));
         lines.push(Line::default());
-        lines.push(Line::from(Span::styled(
-            " Ctrl+G hides · Ctrl+B plan · Ctrl+N meter",
-            theme::quiet(),
-        )));
+        lines.extend(panel_keys(app, width));
         frame.render_widget(Paragraph::new(lines).block(block), area);
         return;
     }
@@ -828,11 +852,38 @@ fn draw_panel(frame: &mut Frame, app: &App, area: Rect) {
         lines.extend(crate::plan::todo_lines(&app.todos, width + 1));
     }
     lines.push(Line::default());
-    lines.push(Line::from(Span::styled(
-        " Ctrl+B hides · Ctrl+G gate · Ctrl+N meter",
-        theme::quiet(),
-    )));
+    lines.extend(panel_keys(app, width));
     frame.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+/// The panel's last rows: the shown tab's key hides it, the others' turn to them; the Agents list's own keys while it
+/// has them.
+fn panel_keys(app: &App, width: usize) -> Vec<Line<'static>> {
+    use crate::app::Tab;
+    let text = if app.tab == Tab::Agents && app.agents_list.is_some() {
+        "↑↓ choose · Enter opens · Esc back to the input · Ctrl+A hides".to_owned()
+    } else {
+        [
+            (Tab::Plan, "Ctrl+B", "plan"),
+            (Tab::Gate, "Ctrl+G", "gate"),
+            (Tab::Meter, "Ctrl+N", "meter"),
+            (Tab::Agents, "Ctrl+A", "agents"),
+        ]
+        .iter()
+        .map(|(tab, key, name)| {
+            if *tab == app.tab {
+                format!("{key} hides")
+            } else {
+                format!("{key} {name}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" · ")
+    };
+    wrap(&text, width)
+        .into_iter()
+        .map(|row| Line::from(Span::styled(format!(" {row}"), theme::quiet())))
+        .collect()
 }
 
 /// The commands a typed `/` fits, in a small list just above the input, the chosen one marked.

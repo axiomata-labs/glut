@@ -377,31 +377,33 @@ impl Transcript {
         }
     }
 
-    /// Every subagent of the stream, each under its parent: its path, how deep it is, its task and state.
-    pub fn agents(&self) -> Vec<(Vec<usize>, usize, String, ToolState)> {
+    /// Every subagent of the stream, each under its parent, with its path (one index per level, so its depth is the
+    /// path's length less one).
+    pub fn agents(&self) -> Vec<(Vec<usize>, &Agent)> {
         let mut found = Vec::new();
         self.gather(&mut Vec::new(), &mut found);
         found
     }
 
-    fn gather(
-        &self,
-        path: &mut Vec<usize>,
-        found: &mut Vec<(Vec<usize>, usize, String, ToolState)>,
-    ) {
+    fn gather<'a>(&'a self, path: &mut Vec<usize>, found: &mut Vec<(Vec<usize>, &'a Agent)>) {
         for (at, block) in self.blocks.iter().enumerate() {
             if let Kind::Agent(agent) = &block.kind {
                 path.push(at);
-                found.push((
-                    path.clone(),
-                    path.len() - 1,
-                    agent.task.clone(),
-                    agent.state,
-                ));
+                found.push((path.clone(), agent));
                 agent.stream.gather(path, found);
                 path.pop();
             }
         }
+    }
+
+    /// How many subagents the session started since the owner's last message: the turn's, as far as it has come.
+    pub fn agents_this_turn(&self) -> usize {
+        self.blocks
+            .iter()
+            .rev()
+            .take_while(|block| !matches!(block.kind, Kind::Owner(_)))
+            .filter(|block| matches!(block.kind, Kind::Agent(_)))
+            .count()
     }
 
     /// The indexes of the blocks that are subagents, in order.
