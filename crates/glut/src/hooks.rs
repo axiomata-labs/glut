@@ -166,6 +166,14 @@ impl Hooks {
         Ok(hooks)
     }
 
+    /// Adds `other`'s hooks after these: both run, each list on its own (TUI T37b, `hooks.json` beside `settings.json`).
+    pub(crate) fn extend(&mut self, other: Hooks) {
+        self.session_start.extend(other.session_start);
+        self.pre_tool_use.extend(other.pre_tool_use);
+        self.post_tool_use.extend(other.post_tool_use);
+        self.stop.extend(other.stop);
+    }
+
     /// Whether there is anything to run at all.
     pub fn is_empty(&self) -> bool {
         self.session_start.is_empty()

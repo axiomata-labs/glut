@@ -24,7 +24,7 @@ use crate::refusals::{Ledger, Refusal};
 use crate::results::{self, ResultStore};
 use crate::snapshot::{self, Snapshots};
 use crate::tools::shell::{Session, ShellOptions};
-use crate::tools::{StopFlag, Toolbox};
+use crate::tools::{StopFlag, Toolbox, glut_files};
 
 /// The most tool calls of one model reply that are run. Each call can write a file; a reply asking for hundreds is a
 /// model gone wrong, not a plan. The rest are answered with an error, so every call still gets its reply (the API
@@ -289,7 +289,14 @@ async fn run_inner<M: ChatModel>(
     // subagent never sees the tool, so nesting deeper than one cannot start; and its name is in the run's
     // tool list from the first turn on.
     let offer_task = depth == 0 && config.subagents;
-    let offer = Offer::of(config, tools, depth);
+    // T37b: `glut_file` from the start when the turn begins with a maker skill or the conversation already loaded one
+    // — the make-* flow asks, shows and writes over several turns, each of them a run of its own.
+    let history = match &opening {
+        Opening::Fresh { earlier, .. } => earlier.as_slice(),
+        Opening::Resumed { recorded, .. } => recorded.messages.as_slice(),
+    };
+    let glut = config.glut_files || maker_loaded(history);
+    let offer = Offer::of(config, tools, depth, glut);
     sink.emit(Event::Started {
         model: model.name().to_owned(),
         cwd: config.cwd.display().to_string(),
@@ -611,12 +618,19 @@ impl Offer {
     /// The toolbox's offered tools — in code mode the MCP tools behind `codemode` (G3) unless the run keeps them
     /// direct (G7) — then the loop's own: `codemode`, `task` (depth 0, HS8), `read_full_result` (B), `todo_write`
     /// and, in Plan mode, `exit_plan` (D).
-    fn of(config: &RunConfig, tools: &Toolbox, depth: u32) -> Self {
-        let (direct, behind) = if config.mcp_behind_code {
+    fn of(config: &RunConfig, tools: &Toolbox, depth: u32, glut: bool) -> Self {
+        let (mut direct, mut behind) = if config.mcp_behind_code {
             tools.split_specs()
         } else {
             (tools.specs(), Vec::new())
         };
+        // T37b: Glut's own files only while a maker skill runs — from the start when the turn began with one — and
+        // never in a subagent.
+        let offers_glut = glut && depth == 0;
+        if !offers_glut {
+            direct.retain(|spec| spec.name != glut_files::NAME);
+            behind.retain(|spec| spec.name != glut_files::NAME);
+        }
         let codemode = config.codemode && !(direct.is_empty() && behind.is_empty());
         let catalog = Arc::new(codemode::Catalog {
             specs: direct.iter().chain(&behind).cloned().collect(),
@@ -624,7 +638,9 @@ impl Offer {
         let mut specs = if codemode {
             direct.clone()
         } else {
-            tools.specs()
+            let mut all = tools.specs();
+            all.retain(|spec| offers_glut || spec.name != glut_files::NAME);
+            all
         };
         if codemode {
             specs.push(codemode::spec(&direct, &behind));
@@ -646,6 +662,29 @@ impl Offer {
             catalog,
         }
     }
+}
+
+/// Whether a `skill` call's `arguments` load one of the maker skills (T37b).
+fn names_maker(arguments: &str) -> bool {
+    serde_json::from_str::<Value>(arguments)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("name")?
+                .as_str()
+                .map(|name| name.trim().to_owned())
+        })
+        .is_some_and(|name| glut_files::MAKERS.contains(&name.as_str()))
+}
+
+/// Whether `messages` hold a `skill` call that loaded a maker skill (T37b): the conversation is making something.
+fn maker_loaded(messages: &[Message]) -> bool {
+    messages
+        .iter()
+        .flat_map(|message| message.tool_calls.iter())
+        .any(|call| {
+            call.function.name == crate::skills::tool::NAME && names_maker(&call.function.arguments)
+        })
 }
 
 /// How often a script may be found waiting with no call open before it counts as stuck: it waits on a promise nothing
@@ -1503,6 +1542,28 @@ impl<M: ChatModel> Loop<'_, M> {
         Ok(None)
     }
 
+    /// Offers `glut_file` once the `skill` call `arguments` loaded a maker skill (T37b) — the tool list grows by one
+    /// for the rest of the run.
+    fn offer_glut_files(&mut self, arguments: &str) {
+        if !names_maker(arguments)
+            || self
+                .offer
+                .specs
+                .iter()
+                .any(|spec| spec.name == glut_files::NAME)
+        {
+            return;
+        }
+        if let Some(spec) = self
+            .tools
+            .specs()
+            .into_iter()
+            .find(|spec| spec.name == glut_files::NAME)
+        {
+            self.offer.specs.push(spec);
+        }
+    }
+
     /// [`Self::perform`] after the call ran (or was stopped before its work): the diagnostics of an edit, the gate's
     /// events and the refusals — `refused` judged outside the gate's log, `from_subagent` its subagent's —, the result
     /// event, the PostToolUse hooks. Returns the text the model gets.
@@ -1516,6 +1577,10 @@ impl<M: ChatModel> Loop<'_, M> {
         sink: &mut dyn EventSink,
     ) -> Result<String, FinishReason> {
         let turn = self.turns;
+        // T37b: a maker skill loaded mid-run brings `glut_file` from the next model call on.
+        if ok && self.depth == 0 && call.function.name == crate::skills::tool::NAME {
+            self.offer_glut_files(&call.function.arguments);
+        }
         if ok && let Some(note) = self.diagnostics_after(call, sink).await {
             output.push_str("\n\n");
             output.push_str(&note);
@@ -1594,6 +1659,16 @@ impl<M: ChatModel> Loop<'_, M> {
         let name = &call.function.name;
         if self.offer_task && name == crate::task::NAME {
             return Ok(self.run_task(call, sink).await);
+        }
+        // T37b: what is not offered is not run, whatever the model calls.
+        if name == glut_files::NAME && !self.offer.specs.iter().any(|spec| spec.name == *name) {
+            return Ok((
+                false,
+                format!(
+                    "error: {name} is offered only while one of {} runs",
+                    glut_files::MAKERS.join(", ")
+                ),
+            ));
         }
         // Only the run's own store: nothing for the gate to judge, like `bash_output`.
         if name == results::NAME {
@@ -1861,7 +1936,8 @@ impl<M: ChatModel> Loop<'_, M> {
                     turn: self.turns,
                     mode: gate.mode_name().to_owned(),
                 });
-                self.offer = Offer::of(self.config, self.tools, self.depth);
+                let glut = self.offer.specs.iter().any(|spec| spec.name == glut_files::NAME);
+                self.offer = Offer::of(self.config, self.tools, self.depth, glut);
                 (
                     true,
                     format!("The owner approved the plan: carry it out now (mode {}).", gate.mode_name()),
@@ -5406,6 +5482,90 @@ mod tests {
             1,
             "only the agent that could run started"
         );
+    }
+
+    #[tokio::test]
+    async fn glut_file_is_offered_only_while_a_maker_skill_runs_and_not_run_otherwise() {
+        let scratch = std::env::temp_dir().join(format!("glut-run-files-{}", std::process::id()));
+        std::fs::create_dir_all(&scratch).unwrap();
+        let mut tools = toolbox();
+        tools.extend([
+            Box::new(glut_files::GlutFiles::new(&scratch, &scratch, true))
+                as Box<dyn crate::tools::Tool>,
+        ]);
+        let listing = json!({"action": "list", "scope": "owner"}).to_string();
+        let model = || {
+            Script::new(vec![
+                Ok(calls(&[("c1", glut_files::NAME, listing.as_str())])),
+                Ok(text("done")),
+            ])
+        };
+
+        let plain = model();
+        run(
+            &RunConfig::new("/w"),
+            &plain,
+            &tools,
+            "go",
+            &mut Vec::new(),
+            &Cancel::new(),
+        )
+        .await;
+        assert!(!plain.offered.lock().unwrap()[0].contains(&glut_files::NAME.to_owned()));
+        assert!(
+            tool_answer(&plain).contains("offered only while one of make-skill"),
+            "{}",
+            tool_answer(&plain)
+        );
+
+        let mut config = RunConfig::new("/w");
+        config.glut_files = true;
+        let making = model();
+        run(
+            &config,
+            &making,
+            &tools,
+            "go",
+            &mut Vec::new(),
+            &Cancel::new(),
+        )
+        .await;
+        assert!(making.offered.lock().unwrap()[0].contains(&glut_files::NAME.to_owned()));
+        assert!(
+            tool_answer(&making).contains("nothing there yet"),
+            "{}",
+            tool_answer(&making)
+        );
+        // A later turn of a conversation that loaded a maker keeps it: the flow asks, shows and writes over turns.
+        let earlier = vec![
+            Message::user("make me an agent"),
+            Message {
+                role: Role::Assistant,
+                tool_calls: vec![ToolCall {
+                    id: "s1".into(),
+                    kind: "function".into(),
+                    function: FunctionCall {
+                        name: crate::skills::tool::NAME.into(),
+                        arguments: json!({"name": " make-agent"}).to_string(),
+                    },
+                }],
+                ..Message::user("")
+            },
+            Message::tool("s1", "the skill's text"),
+        ];
+        let later = model();
+        run_continuing(
+            &RunConfig::new("/w"),
+            &later,
+            &tools,
+            earlier,
+            "yes, write it",
+            &mut Vec::new(),
+            &Cancel::new(),
+        )
+        .await;
+        assert!(later.offered.lock().unwrap()[0].contains(&glut_files::NAME.to_owned()));
+        let _ = std::fs::remove_dir_all(&scratch);
     }
 
     #[tokio::test]

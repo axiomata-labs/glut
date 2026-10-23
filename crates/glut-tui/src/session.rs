@@ -347,6 +347,9 @@ pub async fn build(
             },
             direct: Vec::new(),
             memory: memory.clone(),
+            glut_files: Some(glut::tools::glut_files::GlutFiles::new(
+                &home, &cwd, trusted,
+            )),
         },
         &mut sink,
     )

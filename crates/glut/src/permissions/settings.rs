@@ -18,6 +18,8 @@ use crate::hooks::{Hooks, HooksSection};
 
 /// The folder of the owner's settings, below the home folder.
 pub const USER_DIR: &str = ".glut";
+/// The owner's hooks file Glut may write (TUI T37b), below [`USER_DIR`].
+pub const HOOKS_FILE: &str = "hooks.json";
 /// The folder of a project's settings, below the project.
 pub const PROJECT_DIR: &str = ".glut";
 const SETTINGS_FILE: &str = "settings.json";
@@ -264,10 +266,59 @@ pub fn read(path: &Path) -> Result<Settings, HarnessError> {
         path: path.display().to_string(),
         reason,
     };
+    let Some(text) = read_capped(path)? else {
+        return Ok(Settings::default());
+    };
+    let file: File = serde_json::from_str(&text).map_err(|err| fail(err.to_string()))?;
+    settings_of(file, &fail)
+}
+
+/// The owner's `~/.glut/hooks.json` (TUI T37b): hooks in Claude's shape (`{"hooks": {…}}`) in a file Glut may write —
+/// `make-hook` does, never the owner's hand-written `settings.json`. A missing file has none.
+///
+/// # Errors
+///
+/// A file that cannot be read, is no hooks file, or holds a hook that does not compile — like a broken `settings.json`.
+pub fn read_hooks(path: &Path) -> Result<Hooks, HarnessError> {
+    let fail = |reason: String| HarnessError::Settings {
+        path: path.display().to_string(),
+        reason,
+    };
+    let Some(text) = read_capped(path)? else {
+        return Ok(Hooks::default());
+    };
+    let file: HooksFile = serde_json::from_str(&text).map_err(|err| fail(err.to_string()))?;
+    Hooks::compile(&file.hooks).map_err(|reason| fail(format!("hooks: {reason}")))
+}
+
+/// Whether `text` is a `hooks.json` Glut would run (TUI T37b, before `glut_file` writes it).
+///
+/// # Errors
+///
+/// Why it would stop the run: no hooks file, a hook that does not compile.
+pub fn check_hooks(text: &str) -> Result<(), String> {
+    let file: HooksFile = serde_json::from_str(text).map_err(|err| err.to_string())?;
+    Hooks::compile(&file.hooks).map(|_| ())
+}
+
+/// `hooks.json` as written: nothing but its hooks.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HooksFile {
+    #[serde(default)]
+    hooks: HooksSection,
+}
+
+/// A settings-like file's text, at most [`MAX_SETTINGS_BYTES`]; `None` when there is none.
+fn read_capped(path: &Path) -> Result<Option<String>, HarnessError> {
+    let fail = |reason: String| HarnessError::Settings {
+        path: path.display().to_string(),
+        reason,
+    };
     use std::io::Read as _;
     let file = match std::fs::File::open(path) {
         Ok(file) => file,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Settings::default()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(fail(err.to_string())),
     };
     // Opened once and checked on the open file: a FIFO or a file swapped in between is not read.
@@ -285,7 +336,14 @@ pub fn read(path: &Path) -> Result<Settings, HarnessError> {
     if text.len() as u64 > MAX_SETTINGS_BYTES {
         return Err(fail(format!("larger than {MAX_SETTINGS_BYTES} bytes")));
     }
-    let file: File = serde_json::from_str(&text).map_err(|err| fail(err.to_string()))?;
+    Ok(Some(text))
+}
+
+/// A settings file's fields, checked: its rules parsed, its mode known, its hooks compiled.
+fn settings_of(
+    file: File,
+    fail: &dyn Fn(String) -> HarnessError,
+) -> Result<Settings, HarnessError> {
     let count =
         file.permissions.allow.len() + file.permissions.ask.len() + file.permissions.deny.len();
     if count > MAX_RULES {
@@ -486,7 +544,12 @@ pub fn load(home: &Path, project: &Path, trusted: bool) -> Result<Loaded, Harnes
         rules: user.rules,
         untrusted_project: false,
         sandbox: SandboxSettings::default(),
-        hooks: user.hooks,
+        hooks: {
+            // T37b: the hooks of the owner's `hooks.json` run beside those of `settings.json`.
+            let mut hooks = user.hooks;
+            hooks.extend(read_hooks(&home.join(USER_DIR).join(HOOKS_FILE))?);
+            hooks
+        },
         project_hooks_skipped: false,
         effort,
         refusals,
@@ -775,6 +838,34 @@ mod tests {
         );
         let owner = load(&home, &project, false).unwrap().sandbox;
         assert!(!owner.enabled && owner.allow_local_binding, "the owner can");
+    }
+
+    #[test]
+    fn the_owners_hooks_json_runs_beside_settings_and_a_broken_one_stops_the_run() {
+        let (home, project) = (temp("hooks-json-home"), temp("hooks-json-project"));
+        assert!(load(&home, &project, false).unwrap().hooks.is_empty());
+        write(
+            &home.join(".glut/hooks.json"),
+            r#"{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "true"}]}]}}"#,
+        );
+        assert!(!load(&home, &project, false).unwrap().hooks.is_empty());
+        // Nothing but hooks belongs there: rules in it would be read nowhere.
+        write(
+            &home.join(".glut/hooks.json"),
+            r#"{"permissions": {"allow": ["Bash"]}}"#,
+        );
+        assert!(matches!(
+            load(&home, &project, false),
+            Err(HarnessError::Settings { .. })
+        ));
+        write(
+            &home.join(".glut/hooks.json"),
+            r#"{"hooks": {"Stop": [{"hooks": [{"type": "prompt", "command": "x"}]}]}}"#,
+        );
+        assert!(matches!(
+            load(&home, &project, false),
+            Err(HarnessError::Settings { .. })
+        ));
     }
 
     #[test]

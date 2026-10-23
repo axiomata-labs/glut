@@ -49,6 +49,10 @@ pub enum Access {
     /// A change of the project's memory (TUI T35): what it would keep or remove, and where, as the owner reads it. It
     /// outlives the run and is read into every later session — so it is asked even in `auto`, never done in plan mode.
     Memory { change: String },
+    /// A write of Glut's own files — a skill, an agent, the owner's hooks (TUI T37b): what and where, as the owner
+    /// reads it. Like [`Self::Memory`] it is asked even in `auto` and refused in plan mode, and an answer never
+    /// reaches beyond this one write: a hook is a command that runs on every call from then on.
+    GlutFile { change: String },
     /// A `task` call that names an agent (TUI T37a): which, and on what it runs where its file says, as the owner
     /// reads it in an ask. Judged as [`Self::Other`] is — the rules know `task` by its name.
     Agent { what: String },
@@ -236,7 +240,10 @@ impl Rule {
                 tool: called,
             } => self.kind == RuleKind::Mcp && mcp_matches(&self.tool, server, called),
             Access::Own => true,
-            Access::Other | Access::Memory { .. } | Access::Agent { .. } => named,
+            Access::Other
+            | Access::Memory { .. }
+            | Access::Agent { .. }
+            | Access::GlutFile { .. } => named,
         }
     }
 
@@ -481,7 +488,7 @@ impl Mode {
     fn fallback(self, access: &Access) -> Verdict {
         use Verdict::{Allow, Ask, Deny};
         match (self, access) {
-            (Mode::Auto, Access::Memory { .. }) => Ask,
+            (Mode::Auto, Access::Memory { .. } | Access::GlutFile { .. }) => Ask,
             (Mode::Auto, _) => Allow,
             (_, Access::Read { .. }) => Allow,
             (Mode::AcceptEdits, Access::Edit { .. }) => Allow,
@@ -1246,12 +1253,19 @@ impl Gate {
         };
         // Plan mode writes nothing, whatever a rule says (P3) — neither with the file tools nor by a redirection.
         let writes = match access {
-            Access::Edit { .. } | Access::Memory { .. } => true,
+            Access::Edit { .. } | Access::Memory { .. } | Access::GlutFile { .. } => true,
             Access::Bash { command, .. } => !analyze(command).writes.is_empty(),
             _ => false,
         };
         if self.mode() == Mode::Plan && writes {
             (verdict, reason) = (Verdict::Deny, mode.clone());
+        }
+        // T37b: Glut's own files are asked every time — no allow rule stands in for the owner's look at a hook.
+        if verdict == Verdict::Allow && matches!(access, Access::GlutFile { .. }) {
+            (verdict, reason) = (
+                Verdict::Ask,
+                format!("{reason}; Glut's own files are always asked"),
+            );
         }
         if verdict == Verdict::Ask && self.mode().asks_nothing() {
             verdict = Verdict::Deny;
@@ -1618,6 +1632,8 @@ fn scopes(tool: &str, access: &Access) -> Vec<Scope> {
         Access::Own | Access::Other | Access::Memory { .. } | Access::Agent { .. } => {
             one(tool.to_owned())
         }
+        // T37b: this once only — no "always" for a write of a skill, an agent or a hook.
+        Access::GlutFile { .. } => Vec::new(),
     }
 }
 
@@ -1639,7 +1655,9 @@ fn describe(access: &Access) -> String {
         Access::Network { host } => host.clone(),
         // For an ask and the events: server and tool, the way the rule names them (M5).
         Access::Mcp { server, tool } => format!("{server}/{tool}"),
-        Access::Memory { change } | Access::Agent { what: change } => change.clone(),
+        Access::Memory { change }
+        | Access::Agent { what: change }
+        | Access::GlutFile { change } => change.clone(),
         Access::Own | Access::Other => String::new(),
     }
 }
@@ -1898,6 +1916,31 @@ mod tests {
             plan.judge("memory", &Access::Own).await.is_ok(),
             "reading stays free"
         );
+    }
+
+    #[tokio::test]
+    async fn a_glut_file_write_is_asked_in_every_mode_once_only_and_plan_refuses_it() {
+        let change = Access::GlutFile {
+            change: "write /h/.glut/hooks.json (90 bytes)".into(),
+        };
+        assert!(
+            scopes("glut_file", &change).is_empty(),
+            "no \"always\" for it"
+        );
+        // An allow rule does not stand in for the ask.
+        let asker = Arc::new(Always(Answer::Allow, Mutex::new(0)));
+        let allowing = Gate::new(rules(&["glut_file"], &[], &[]), Mode::Auto, asker.clone());
+        assert!(allowing.judge("glut_file", &change).await.is_ok());
+        assert_eq!(*asker.1.lock().unwrap(), 1, "asked despite the rule");
+        for mode in [Mode::Default, Mode::AcceptEdits, Mode::Auto] {
+            let asker = Arc::new(Always(Answer::Allow, Mutex::new(0)));
+            let gate = Gate::new(RuleSet::default(), mode, asker.clone());
+            assert!(gate.judge("glut_file", &change).await.is_ok());
+            assert_eq!(*asker.1.lock().unwrap(), 1, "asked in {mode:?}");
+        }
+        let asker = Arc::new(Always(Answer::Allow, Mutex::new(0)));
+        let plan = Gate::new(RuleSet::default(), Mode::Plan, asker);
+        assert!(plan.judge("glut_file", &change).await.is_err());
     }
 
     #[tokio::test]

@@ -817,6 +817,9 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
             search: Some(env_search()),
             direct: Vec::new(),
             memory,
+            glut_files: Some(crate::tools::glut_files::GlutFiles::new(
+                &home, &cwd, trusted,
+            )),
         },
         &mut sink,
     )

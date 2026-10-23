@@ -338,6 +338,9 @@ pub struct RunConfig {
     pub agents: std::sync::Arc<crate::agents::Catalog>,
     /// What builds the model of an agent that names its own; `None`: such an agent's calls fail.
     pub models: Option<crate::agents::Models>,
+    /// Whether the run offers `glut_file` from its start (TUI T37b): a turn that starts with a maker skill. Else it
+    /// is offered from the moment the model loads one.
+    pub glut_files: bool,
     /// Whether the run offers `codemode` and keeps its MCP tools behind it (Glut 2, A + E, G3/G8): the model then sees
     /// the core tools and `codemode`, and reaches the MCP tools from a script. On by default.
     pub codemode: bool,
@@ -434,6 +437,7 @@ impl RunConfig {
             parallel_subagents: DEFAULT_PARALLEL_SUBAGENTS,
             agents: std::sync::Arc::default(),
             models: None,
+            glut_files: false,
             codemode: true,
             mcp_behind_code: true,
             todos: true,

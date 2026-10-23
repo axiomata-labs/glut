@@ -128,6 +128,15 @@ impl Skill {
         })
     }
 
+    /// Whether `raw` is a `SKILL.md` Glut would read for the skill `name` (TUI T37b, before `glut_file` writes it).
+    ///
+    /// # Errors
+    ///
+    /// Why the skill would be left out.
+    pub(crate) fn check(name: &str, raw: &str) -> Result<(), String> {
+        Skill::parse(name, PathBuf::new(), raw).map(|_| ())
+    }
+
     /// What a skill run is told (K1.1, K5): its `prepend_files` as context blocks ([`context::context_blocks`]),
     /// read from the working folder through a contained root — a link inside it may lead elsewhere inside, never
     /// out — then the body.
@@ -193,6 +202,8 @@ impl Skill {
         if let Some(timeout) = self.timeout {
             config.timeout = config.timeout.min(timeout);
         }
+        // T37b: a maker skill's run writes Glut's own files.
+        config.glut_files |= crate::tools::glut_files::MAKERS.contains(&self.name.as_str());
         Ok(())
     }
 

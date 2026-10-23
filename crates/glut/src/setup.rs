@@ -40,6 +40,7 @@ pub async fn toolbox(
         search,
         direct,
         memory,
+        glut_files,
     } = extras;
     let mut tools = Toolbox::new();
     tools.extend(file_tools(cwd, SkillRoots::new(&catalog.folders()))?);
@@ -56,6 +57,10 @@ pub async fn toolbox(
     // T35: the project's memory, outside the folder the file tools reach — offered where the caller names one.
     if let Some(dir) = memory {
         tools.extend([Box::new(crate::tools::memory::Memory::new(dir)) as Box<dyn Tool>]);
+    }
+    // T37b: Glut's own files of skills, agents and hooks — in the toolbox, offered only while a maker skill runs.
+    if let Some(files) = glut_files {
+        tools.extend([Box::new(files) as Box<dyn Tool>]);
     }
     tools.set_gate(Arc::new(gate));
     tools.extend(mcp::start(servers, sink).await);
@@ -78,6 +83,8 @@ pub struct Extras {
     pub search: Option<WebSearch>,
     pub direct: Vec<DirectProgram>,
     pub memory: Option<std::path::PathBuf>,
+    /// The owner's and the project's `.glut` folders for the `glut_file` tool (TUI T37b); none, no tool.
+    pub glut_files: Option<crate::tools::glut_files::GlutFiles>,
 }
 
 /// A run as it stands before a slash command and a skill have had their say about it.
@@ -438,6 +445,7 @@ mod tests {
                 search: Some(search),
                 direct: Vec::new(),
                 memory: None,
+                glut_files: None,
             },
             &mut sink,
         )
