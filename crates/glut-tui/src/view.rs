@@ -801,7 +801,7 @@ fn draw_panel(frame: &mut Frame, app: &mut App, area: Rect) {
     if app.tab == Tab::Keys {
         lines.push(Line::default());
         let keys = panel_keys(app, width);
-        let sheet = crate::commands::sheet(width + 2, app.separators);
+        let sheet = crate::commands::sheet(width + 2);
         // The tab names' row and the gap above the keys come off too.
         let room = usize::from(area.height).saturating_sub(lines.len() + keys.len() + 2);
         // Scrolled no further than its end: the wheel past it does not leave rows to scroll back first.
@@ -1077,7 +1077,7 @@ fn draw_keys_sheet(frame: &mut Frame, app: &mut App, area: Rect) {
     let inner = block.inner(place);
     let rows = usize::from(inner.height);
     app.overlay_rows = rows;
-    let sheet = crate::commands::sheet(usize::from(inner.width).saturating_sub(1), app.separators);
+    let sheet = crate::commands::sheet(usize::from(inner.width).saturating_sub(1));
     let most = sheet.len().saturating_sub(rows);
     let scroll = app.keys_sheet.map_or(0, |scroll| scroll.min(most));
     app.keys_sheet = Some(scroll);

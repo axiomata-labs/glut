@@ -2,7 +2,7 @@
 //! sheet (Ctrl+K, a tab of the side panel) and `/help`, kept here once — each entry carries its topic, and the topics
 //! follow [`Topic::ALL`].
 
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
 
@@ -94,6 +94,7 @@ pub const COMMANDS: [Command; 28] = [
         "/handoff write: what was done and what comes next; /handoff read in a new session",
     ),
     command(Topic::Session, "quit", "", "end the session"),
+    command(Topic::Session, "exit", "", "end the session, as /quit does"),
     command(
         Topic::Model,
         "model",
@@ -221,8 +222,6 @@ pub const COMMANDS: [Command; 28] = [
         "edit the input the vi way: /vim on or off",
     ),
     command(Topic::Help, "help", "", "commands and keys"),
-    // Typed as /quit is: the lists show /quit alone.
-    command(Topic::Session, "exit", "", "end the session"),
 ];
 
 /// A key of the Keys sheet: the key as written, what it does, the `/` command that does the same (or `""`), and its
@@ -347,7 +346,7 @@ pub const KEYS: [Key; 25] = [
 /// then — from three characters on, so `to` or `or` match no filler — those with a word in what they do starting with
 /// it (`/hook` finds `/skill`).
 pub fn fitting(typed: &str) -> Vec<&'static Command> {
-    let listed = COMMANDS.iter().filter(|command| command.name != "exit");
+    let listed = COMMANDS.iter();
     if typed.is_empty() {
         return listed.collect();
     }
@@ -376,7 +375,7 @@ pub fn help() -> String {
     for topic in Topic::ALL {
         let names: Vec<String> = COMMANDS
             .iter()
-            .filter(|command| command.topic == topic && command.name != "exit")
+            .filter(|command| command.topic == topic)
             .map(|command| match command.args {
                 "" => format!("/{}", command.name),
                 args => format!("/{} {args}", command.name),
@@ -417,20 +416,12 @@ pub const LEGEND: &str = "⌃ Ctrl · ⇧ Shift · ⌥ Alt · ⏎ Enter · ⇥ T
 /// The panel width from which a key's row also names its `/` command.
 pub const SHEET_WITH_COMMANDS: usize = 46;
 
-/// How far the Keys sheet's two row colours are mixed from the theme's ink toward its quiet grey: further apart
-/// than the footer's calm pair, so the rows read as stripes (the owner, after the build).
-const ROW_SHADES: [f32; 2] = [0.12, 0.38];
-
-/// The Keys sheet `width` cells wide: each topic's heading, then its keys, one stripe each — the whole row on a
-/// background lighter and darker by turns, a wrapped row keeping its key's, round at both ends where the footer has
-/// Powerline's look —, the key bold, what it does beside it, the `/` command after it where the sheet is wide enough.
-pub fn sheet(width: usize, separators: crate::footer::Separators) -> Vec<Line<'static>> {
-    let cap_width = KEYS.iter().map(|key| key.key.width()).max().unwrap_or(0);
-    // Both ends, the key with a space before and two after it.
-    let what_width = width.saturating_sub(cap_width + 5).max(8);
+/// The Keys sheet `width` cells wide: each topic's heading, then its keys — the key in a column of its own, what it
+/// does wrapped beside it, the `/` command after it where the sheet is wide enough.
+pub fn sheet(width: usize) -> Vec<Line<'static>> {
+    let key_width = KEYS.iter().map(|key| key.key.width()).max().unwrap_or(0) + 2;
+    let what_width = width.saturating_sub(key_width + 1).max(8);
     let commands = width >= SHEET_WITH_COMMANDS;
-    let palette = theme::c();
-    let shades = ROW_SHADES.map(|share| theme::mix(palette.ink, palette.quiet, share));
     let mut lines: Vec<Line<'static>> = wrap(LEGEND, width.saturating_sub(1).max(8))
         .into_iter()
         .map(|row| Line::from(Span::styled(format!(" {row}"), theme::quiet())))
@@ -447,34 +438,17 @@ pub fn sheet(width: usize, separators: crate::footer::Separators) -> Vec<Line<'s
             format!(" {}", topic.label()),
             theme::glow().add_modifier(Modifier::BOLD),
         )));
-        for (turn, key) in keys.into_iter().enumerate() {
-            let bg = shades[turn % 2];
-            let stripe = Style::default().bg(bg).fg(Color::Reset);
+        for key in keys {
             let what = match key.command {
                 command if commands && !command.is_empty() => format!("{} · {command}", key.what),
                 _ => key.what.to_owned(),
             };
-            let (start, end) = match separators {
-                crate::footer::Separators::Powerline => (
-                    Span::styled(crate::footer::ROUND_LEFT, Style::default().fg(bg)),
-                    Span::styled(crate::footer::ROUND_RIGHT, Style::default().fg(bg)),
-                ),
-                crate::footer::Separators::Plain => {
-                    (Span::styled(" ", stripe), Span::styled(" ", stripe))
-                }
-            };
             for (at, row) in wrap(&what, what_width).into_iter().enumerate() {
                 let head = if at == 0 { key.key } else { "" };
-                let pad = cap_width - head.width();
-                let fill = what_width.saturating_sub(row.width());
+                let pad = key_width - head.width();
                 lines.push(Line::from(vec![
-                    start.clone(),
-                    Span::styled(
-                        format!(" {head}{}  ", " ".repeat(pad)),
-                        stripe.add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(format!("{row}{}", " ".repeat(fill)), stripe),
-                    end.clone(),
+                    Span::styled(format!(" {head}{}", " ".repeat(pad)), theme::strong()),
+                    Span::styled(row, theme::quiet()),
                 ]));
             }
         }
@@ -509,10 +483,7 @@ mod tests {
                 .all(|pair| order(pair[0].topic) <= order(pair[1].topic)),
             "the keys are grouped"
         );
-        assert!(
-            !names(&listed).contains(&"exit"),
-            "the old name is not listed"
-        );
+        assert!(names(&listed).contains(&"exit"), "/exit beside /quit");
     }
 
     #[test]
@@ -532,7 +503,7 @@ mod tests {
     #[test]
     fn help_writes_every_command_and_key_by_topic() {
         let help = help();
-        for command in COMMANDS.iter().filter(|command| command.name != "exit") {
+        for command in &COMMANDS {
             assert!(
                 help.contains(&format!("/{}", command.name)),
                 "/{}",
@@ -559,25 +530,11 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join("\n")
         };
-        let narrow = text(sheet(28, crate::footer::Separators::Plain));
+        let narrow = text(sheet(28));
         assert!(narrow.contains(" Session") && narrow.contains(" Help"));
         assert!(!narrow.contains("/gate"));
         assert!(narrow.lines().all(|row| row.width() <= 28), "{narrow}");
-        let wide = text(sheet(60, crate::footer::Separators::Powerline));
+        let wide = text(sheet(60));
         assert!(wide.contains("· /gate"));
-        assert!(wide.lines().all(|row| row.width() <= 60), "{wide}");
-        let striped = sheet(60, crate::footer::Separators::Plain);
-        let keyed: Vec<&Line> = striped
-            .iter()
-            .filter(|line| line.spans.len() == 4)
-            .collect();
-        assert!(
-            keyed.iter().all(|line| line.width() == 60),
-            "a stripe spans the sheet"
-        );
-        assert_ne!(
-            keyed[0].spans[1].style.bg, keyed[1].spans[1].style.bg,
-            "lighter and darker by turns"
-        );
     }
 }

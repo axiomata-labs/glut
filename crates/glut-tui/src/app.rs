@@ -5264,8 +5264,8 @@ mod tests {
         app.on_terminal(key(KeyCode::Char('/'), KeyModifiers::NONE));
         assert_eq!(
             app.suggestions().len(),
-            crate::commands::COMMANDS.len() - 1,
-            "a lone slash shows them all but /exit"
+            crate::commands::COMMANDS.len(),
+            "a lone slash shows them all"
         );
         app.on_terminal(key(KeyCode::Char('c'), KeyModifiers::NONE));
         assert_eq!(

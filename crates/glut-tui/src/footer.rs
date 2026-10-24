@@ -10,13 +10,13 @@ use unicode_width::UnicodeWidthStr;
 use crate::theme;
 
 /// Powerline's arrow after a segment (U+E0B0, a private-use glyph only patched fonts and some terminals draw).
-pub const ARROW: &str = "\u{e0b0}";
+const ARROW: &str = "\u{e0b0}";
 /// The arrow pointing the other way (U+E0B2), where the hints' bar starts.
 const ARROW_LEFT: &str = "\u{e0b2}";
 /// The rounded ends (U+E0B6 facing left, U+E0B4 facing right): a bar is round on the outside, pointed toward the
 /// middle of the line (the owner's look, after Powerlevel10k).
-pub const ROUND_LEFT: &str = "\u{e0b6}";
-pub const ROUND_RIGHT: &str = "\u{e0b4}";
+const ROUND_LEFT: &str = "\u{e0b6}";
+const ROUND_RIGHT: &str = "\u{e0b4}";
 /// Powerline's branch glyph (U+E0A0); the plain footer has Unicode's own branch sign.
 const BRANCH_POWERLINE: &str = "\u{e0a0}";
 const BRANCH_PLAIN: &str = "⎇";
@@ -137,7 +137,7 @@ pub fn context(used: u64, window: Option<u32>, compacts_at: Option<u64>) -> Segm
 
 /// The two calm backgrounds, mixed from the theme's ink (its background) and its quiet grey: quiet in a dark theme
 /// and a light one alike, the terminal's own text colour readable on both.
-pub fn calm_backgrounds() -> [Color; 2] {
+fn calm_backgrounds() -> [Color; 2] {
     let palette = theme::c();
     [
         theme::mix(palette.ink, palette.quiet, 0.25),
@@ -172,13 +172,8 @@ pub fn line(
     moment: bool,
 ) -> Line<'static> {
     let mut kept: Vec<&Segment> = segments.iter().collect();
-    // The hints' bar has its arrow, its round end and a space on either side in Powerline's look.
-    let hints_frame = match separators {
-        Separators::Powerline => 4,
-        Separators::Plain => 0,
-    };
     let hints_room = if moment {
-        hints.width() + hints_frame + 1
+        hints_width(&hints.split(" · ").collect::<Vec<_>>(), separators) + 1
     } else {
         0
     };
@@ -232,44 +227,65 @@ pub fn line(
         }
     }
     let used = segments_width(&kept, separators);
-    let room = width.saturating_sub(used + 1 + hints_frame);
-    let shown = fitted_hints(hints, room);
+    let room = width.saturating_sub(used + 1);
+    let shown = fitted_hints(hints, room, separators);
     if !shown.is_empty() {
-        let gap = width.saturating_sub(used + shown.width() + hints_frame);
+        let gap = width.saturating_sub(used + hints_width(&shown, separators));
         spans.push(Span::raw(" ".repeat(gap)));
         match separators {
-            // The mirror of the segments' bar: pointed toward the middle, round at the edge.
+            // The mirror of the segments' bar: each key its own segment, calm backgrounds by turns, pointed toward
+            // the middle, round at the edge.
             Separators::Powerline => {
-                let bg = backgrounds[0];
-                spans.push(Span::styled(ARROW_LEFT, Style::default().fg(bg)));
-                spans.push(Span::styled(
-                    format!(" {shown} "),
-                    Style::default().bg(bg).fg(Color::Reset),
-                ));
-                spans.push(Span::styled(ROUND_RIGHT, Style::default().fg(bg)));
+                let mut before = Color::Reset;
+                for (at, item) in shown.iter().enumerate() {
+                    let bg = backgrounds[at % 2];
+                    spans.push(Span::styled(ARROW_LEFT, Style::default().fg(bg).bg(before)));
+                    spans.push(Span::styled(
+                        format!(" {item} "),
+                        Style::default().bg(bg).fg(Color::Reset),
+                    ));
+                    before = bg;
+                }
+                spans.push(Span::styled(ROUND_RIGHT, Style::default().fg(before)));
             }
-            Separators::Plain => spans.push(Span::styled(shown, theme::quiet())),
+            Separators::Plain => spans.push(Span::styled(shown.join(" · "), theme::quiet())),
         }
     }
     Line::from(spans)
 }
 
-/// As many of the hints, from the first, as `room` holds whole; the first one cut where not even it fits.
-fn fitted_hints(hints: &str, room: usize) -> String {
-    let mut shown = String::new();
-    for item in hints.split(" · ") {
-        let next = if shown.is_empty() {
-            item.to_owned()
-        } else {
-            format!("{shown} · {item}")
-        };
-        if next.width() > room {
+/// The width the hint items take: in Powerline's look each its own segment (an arrow and a space either side) and
+/// a round end; plain, joined by ` · `.
+fn hints_width(items: &[impl AsRef<str>], separators: Separators) -> usize {
+    if items.is_empty() {
+        return 0;
+    }
+    let texts: usize = items.iter().map(|item| item.as_ref().width()).sum();
+    match separators {
+        Separators::Powerline => texts + items.len() * 3 + 1,
+        Separators::Plain => texts + (items.len() - 1) * 3,
+    }
+}
+
+/// As many of the hint items (`a · b · c`), from the first, as `room` holds whole; the first one cut where not even
+/// it fits.
+fn fitted_hints(hints: &str, room: usize, separators: Separators) -> Vec<String> {
+    let items: Vec<&str> = hints.split(" · ").filter(|item| !item.is_empty()).collect();
+    let mut shown: Vec<String> = Vec::new();
+    for item in &items {
+        shown.push((*item).to_owned());
+        if hints_width(&shown, separators) > room {
+            shown.pop();
             break;
         }
-        shown = next;
     }
-    if shown.is_empty() && room > 1 {
-        return crate::transcript::cut(hints, room);
+    if shown.is_empty()
+        && let Some(first) = items.first()
+    {
+        let frame = hints_width(&[""], separators);
+        if room > frame + 1 {
+            shown.push(crate::transcript::cut(first, room - frame));
+        }
     }
     shown
 }
@@ -391,6 +407,33 @@ mod tests {
             text(&line(segments, "", 40, Separators::Plain, false)),
             " a   b "
         );
+    }
+
+    #[test]
+    fn each_hint_is_a_segment_of_its_own_lighter_and_darker_by_turns() {
+        let drawn = line(
+            vec![Segment::calm("a", 0)],
+            "⏎ send · ⌃K keys",
+            40,
+            Separators::Powerline,
+            false,
+        );
+        assert_eq!(
+            text(&drawn),
+            format!(
+                "{ROUND_LEFT} a {ARROW}{}{ARROW_LEFT} ⏎ send {ARROW_LEFT} ⌃K keys {ROUND_RIGHT}",
+                " ".repeat(15)
+            )
+        );
+        let backgrounds: Vec<_> = drawn
+            .spans
+            .iter()
+            .filter(|span| span.content.contains("send") || span.content.contains("keys"))
+            .map(|span| span.style.bg)
+            .collect();
+        assert_eq!(backgrounds.len(), 2);
+        assert_ne!(backgrounds[0], backgrounds[1]);
+        assert_eq!(text(&drawn).width(), 40);
     }
 
     #[test]
