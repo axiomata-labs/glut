@@ -301,9 +301,11 @@ fn draw_plan(frame: &mut Frame, app: &mut App, area: Rect) {
     app.overlay_rows = usize::from(inner.height);
     let modes = app.plan_modes();
     let auto_unsandboxed = !session::sandboxed(&app.parts);
+    let others = app.others.first().copied();
     let (Some(plan), Some(view)) = (&app.plan, &mut app.plan_view) else {
         return;
     };
+    view.elsewhere = others;
     let lines = crate::plan::lines(
         plan,
         &app.todos,

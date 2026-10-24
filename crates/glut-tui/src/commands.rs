@@ -77,7 +77,7 @@ const fn command(
 }
 
 /// Every command, grouped by topic in [`Topic::ALL`]'s order, the most used first inside a topic.
-pub const COMMANDS: [Command; 30] = [
+pub const COMMANDS: [Command; 31] = [
     command(Topic::Session, "clear", "", "start a new session"),
     command(
         Topic::Session,
@@ -170,6 +170,12 @@ pub const COMMANDS: [Command; 30] = [
         "close",
         "",
         "close this pane; its session stays for /resume",
+    ),
+    command(
+        Topic::Panes,
+        "send",
+        "[n] <text>|plan",
+        "a message to the other pane, taken there as if typed; /send plan hands it your plan to build",
     ),
     command(
         Topic::Changes,

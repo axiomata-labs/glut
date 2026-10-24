@@ -93,6 +93,38 @@ pub enum Request {
     CloseAs(Leaving),
     /// The keys to the other pane.
     Toggle,
+    /// A message to pane `to` (the other one when `None`), taken there as if the owner typed it (T36b); `whole` is
+    /// the text with the number, sent as it is when no pane has that number (`/send 3 files changed`).
+    Send {
+        to: Option<u8>,
+        text: String,
+        whole: String,
+    },
+    /// The asking pane's last plan with its task list, to be built in pane `to`.
+    SendPlan { to: Option<u8> },
+}
+
+/// `/send`'s words: an optional pane number, then the text — or `plan`.
+///
+/// # Errors
+///
+/// What `/send` takes, when nothing is to be sent.
+pub fn parse_send(rest: &str) -> Result<Request, String> {
+    let rest = rest.trim();
+    let (to, text) = match rest.split_once(char::is_whitespace) {
+        Some((first, text)) if first.parse::<u8>().is_ok() => (first.parse().ok(), text.trim()),
+        _ if rest.parse::<u8>().is_ok() => (rest.parse().ok(), ""),
+        _ => (None, rest),
+    };
+    match text {
+        "" => Err("/send <text> — or /send plan; a number first picks the pane".to_owned()),
+        "plan" => Ok(Request::SendPlan { to }),
+        text => Ok(Request::Send {
+            to,
+            text: text.to_owned(),
+            whole: rest.to_owned(),
+        }),
+    }
 }
 
 /// `/split`'s words: a side (`l r u d`), `resume`, and where — `here`, or `tree` with an optional branch name.
@@ -245,6 +277,7 @@ impl Panes {
     /// active pane's word is the screen's) and the sessions the others hold.
     pub fn sync(&mut self) {
         let held = self.list[self.active].app.mouse_held;
+        let numbers: Vec<u8> = self.list.iter().map(|pane| pane.number).collect();
         let open: Vec<String> = self
             .list
             .iter()
@@ -253,6 +286,11 @@ impl Panes {
         for (at, pane) in self.list.iter_mut().enumerate() {
             pane.app.drop_answered_ask();
             pane.app.mouse_held = held;
+            pane.app.others = numbers
+                .iter()
+                .copied()
+                .filter(|number| *number != pane.number)
+                .collect();
             pane.app.others_open = open
                 .iter()
                 .enumerate()
@@ -319,6 +357,21 @@ impl Panes {
                     resume,
                     place,
                 } => self.start(side, resume, place, host),
+                Request::Send { to, text, whole } => {
+                    // A number naming no other pane is the message's own first word.
+                    let named = to.is_some_and(|number| {
+                        self.list
+                            .iter()
+                            .enumerate()
+                            .any(|(at, pane)| at != self.active && pane.number == number)
+                    });
+                    if named || to.is_none() {
+                        self.send(to, Some(text));
+                    } else {
+                        self.send(None, Some(whole));
+                    }
+                }
+                Request::SendPlan { to } => self.send(to, None),
             }
         }
     }
@@ -347,7 +400,7 @@ impl Panes {
         self.quit_armed = Some(Instant::now());
         let app = &mut self.list[at].app;
         app.quit = false;
-        app.say(format!(
+        app.tell(format!(
             "pane {} still works — /quit again ends it too",
             numbers(&working)
         ));
@@ -357,7 +410,7 @@ impl Panes {
     /// Closes the active pane; a turn under way is stopped — said once first. The last pane is not closed.
     fn close(&mut self) {
         if !self.split() {
-            return self.active().say("the last pane — /quit ends Glut");
+            return self.active().tell("the last pane — /quit ends Glut");
         }
         let number = self.list[self.active].number;
         let armed = self
@@ -367,7 +420,7 @@ impl Panes {
             self.close_armed = Some((number, Instant::now()));
             return self
                 .active()
-                .say("this pane works — /close again stops it and closes the pane");
+                .tell("this pane works — /close again stops it and closes the pane");
         }
         self.close_armed = None;
         if let Some(tree) = self.list[self.active].tree.clone() {
@@ -376,7 +429,7 @@ impl Panes {
                 self.active().stop_turn();
                 return self
                     .active()
-                    .say("its turn is stopping — /close again once it has stopped, to say how the worktree ends");
+                    .tell("its turn is stopping — /close again once it has stopped, to say how the worktree ends");
             }
             let picker = leaving_picker(&tree, crate::worktree::standing(&tree));
             self.active().picker = Some(picker);
@@ -394,7 +447,7 @@ impl Panes {
         if self.active().working() {
             return self
                 .active()
-                .say("this pane works again — /close once it is done");
+                .tell("this pane works again — /close once it is done");
         }
         let standing = crate::worktree::standing(&tree);
         // What cannot be read is taken as work a discard would lose.
@@ -419,7 +472,7 @@ impl Panes {
         match done {
             Ok(said) => {
                 self.remove_active();
-                self.active().say(said);
+                self.active().tell(said);
             }
             Err(reason) => self.active().transcript.note(reason, Tone::Fault),
         }
@@ -443,7 +496,7 @@ impl Panes {
             (false, Some(_)) => "its session is kept",
             (false, None) => "/resume finds its session",
         };
-        self.active().say(format!("pane {number} closed — {kept}"));
+        self.active().tell(format!("pane {number} closed — {kept}"));
     }
 
     /// Starts a new pane beside the active one: a session in the same folder, on the active pane's provider and
@@ -452,13 +505,13 @@ impl Panes {
         if !self.may_split {
             return self
                 .active()
-                .say("this session's host keeps one pane: its studio splits its own windows");
+                .tell("this session's host keeps one pane: its studio splits its own windows");
         }
         if self.list.len() >= MOST {
-            return self.active().say(format!("at most {MOST} panes for now"));
+            return self.active().tell(format!("at most {MOST} panes for now"));
         }
         if self.building.is_some() {
-            return self.active().say("a pane is starting already");
+            return self.active().tell("a pane is starting already");
         }
         let number = (1..=u8::MAX)
             .find(|number| self.list.iter().all(|pane| pane.number != *number))
@@ -471,7 +524,7 @@ impl Panes {
         let tree = match (place, repo) {
             (Place::Here, _) | (Place::Ask, Ok(None)) => None,
             (Place::Ask, Err(reason)) => {
-                self.active().say(format!("no worktree offered: {reason}"));
+                self.active().tell(format!("no worktree offered: {reason}"));
                 None
             }
             (Place::Ask, Ok(Some(repo))) => {
@@ -485,7 +538,7 @@ impl Panes {
             (Place::Tree(_), Ok(None)) => {
                 return self
                     .active()
-                    .say("this folder is in no git repository: /split here");
+                    .tell("this folder is in no git repository: /split here");
             }
             (Place::Tree(branch), Ok(Some(repo))) => {
                 let branch = if branch.is_empty() {
@@ -508,7 +561,7 @@ impl Panes {
         if let Some(tree) = &tree {
             launch.cwd = tree.place.clone();
         }
-        app.say(format!("pane {number} starts…"));
+        app.tell(format!("pane {number} starts…"));
         let (reports, inlet) = mpsc::unbounded_channel();
         forward(id, inlet, self.reports.clone());
         self.building = Some(Building {
@@ -586,10 +639,62 @@ impl Panes {
             }
             let number = building.number;
             self.active()
-                .say(format!("pane {number} is ready — ⌃P goes there"));
+                .tell(format!("pane {number} is ready — ⌃P goes there"));
         } else {
             self.focus(at);
         }
+    }
+
+    /// Sends the active pane's `text` — or its plan, with `None` — to pane `to` (the other one): taken there as if
+    /// the owner typed it, the keys staying here.
+    fn send(&mut self, to: Option<u8>, text: Option<String>) {
+        let from = self.list[self.active].number;
+        let others: Vec<usize> = (0..self.list.len())
+            .filter(|at| *at != self.active)
+            .collect();
+        let target = match to {
+            Some(number) => others
+                .iter()
+                .copied()
+                .find(|at| self.list[*at].number == number),
+            None if others.len() == 1 => others.first().copied(),
+            None => None,
+        };
+        let Some(target) = target else {
+            let said = match (to, others.len()) {
+                (_, 0) => "one pane — /split first".to_owned(),
+                (Some(number), _) => format!("no pane {number}"),
+                (None, _) => "which pane? /send <number> …".to_owned(),
+            };
+            return self.active().tell(said);
+        };
+        let number = self.list[target].number;
+        let plan = text.is_none();
+        let text = match text {
+            Some(text) => text,
+            None => match self.active().plan_to_build() {
+                Some(plan) => plan,
+                None => return self.active().tell("no plan yet: plan mode (⇧⇥) makes one"),
+            },
+        };
+        let delivered = self.list[target]
+            .app
+            .deliver(format!("From pane {from}: {text}"));
+        // Marked handed only once it went.
+        if plan && let Some(plan) = &mut self.active().plan {
+            plan.state = crate::plan::State::Handed(number);
+        }
+        use crate::app::Delivered;
+        let when = match delivered {
+            Delivered::Now => "it starts on it now",
+            Delivered::AfterTurn => "it takes it after its turn",
+            Delivered::WhenFree => "it takes it once it is free",
+            Delivered::OnEnter => {
+                "it waits there for Enter (a list was open or messages were waiting)"
+            }
+        };
+        self.active()
+            .tell(format!("sent to pane {number} — {when}"));
     }
 
     /// Moves the keys to pane `at`; what it asks counts as shown from now.
@@ -1060,6 +1165,83 @@ mod tests {
         panes.settle(&(Arc::new(crate::Standalone) as Arc<dyn Host>));
         assert!(!tree.place.exists() && panes.list.len() == 1);
         let _ = std::fs::remove_dir_all(repo.top.parent().unwrap());
+    }
+
+    #[test]
+    fn send_reads_a_pane_number_then_the_text_or_plan() {
+        assert_eq!(
+            parse_send("look at a.rs").unwrap(),
+            Request::Send {
+                to: None,
+                text: "look at a.rs".into(),
+                whole: "look at a.rs".into()
+            }
+        );
+        assert_eq!(
+            parse_send("2 look").unwrap(),
+            Request::Send {
+                to: Some(2),
+                text: "look".into(),
+                whole: "2 look".into()
+            }
+        );
+        assert_eq!(parse_send("plan").unwrap(), Request::SendPlan { to: None });
+        assert_eq!(
+            parse_send("2 plan").unwrap(),
+            Request::SendPlan { to: Some(2) }
+        );
+        assert!(parse_send("").is_err() && parse_send("2").is_err());
+    }
+
+    #[tokio::test]
+    async fn a_message_reaches_the_other_pane_as_if_typed_there_now_or_after_its_turn() {
+        let owners = |app: &App| -> Vec<String> {
+            app.transcript
+                .blocks
+                .iter()
+                .filter_map(|block| match &block.kind {
+                    crate::transcript::Kind::Owner(text) => Some(text.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+        let (mut panes, _inlets) = split(Side::Right);
+        panes.active = 0;
+        panes.sync();
+        panes.active().pane_request = Some(parse_send("look at a.rs").unwrap());
+        panes.settle(&(Arc::new(crate::Standalone) as Arc<dyn Host>));
+        assert_eq!(owners(&panes.list[1].app), ["From pane 1: look at a.rs"]);
+        assert_eq!(panes.active, 0, "the keys stay");
+        panes.list[1].app.working_for_tests();
+        panes.active().pane_request = Some(parse_send("2 and the tests").unwrap());
+        panes.settle(&(Arc::new(crate::Standalone) as Arc<dyn Host>));
+        assert_eq!(owners(&panes.list[1].app).len(), 1, "it waits for the turn");
+        panes.active().pane_request = Some(Request::SendPlan { to: None });
+        panes.settle(&(Arc::new(crate::Standalone) as Arc<dyn Host>));
+        let notes: Vec<String> = panes.list[0]
+            .app
+            .transcript
+            .blocks
+            .iter()
+            .filter_map(|block| match &block.kind {
+                crate::transcript::Kind::Note { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            notes.iter().any(|note| note.contains("after its turn")),
+            "{notes:?}"
+        );
+        assert!(
+            notes.iter().any(|note| note.contains("no plan yet")),
+            "{notes:?}"
+        );
+        // A first number naming no other pane is the message's own word.
+        let (mut panes, _inlets) = split(Side::Right);
+        panes.active = 0;
+        panes.active().pane_request = Some(parse_send("3 files changed").unwrap());
+        panes.settle(&(Arc::new(crate::Standalone) as Arc<dyn Host>));
+        assert_eq!(owners(&panes.list[1].app), ["From pane 1: 3 files changed"]);
     }
 
     #[tokio::test]

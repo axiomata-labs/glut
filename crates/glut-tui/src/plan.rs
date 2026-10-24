@@ -25,6 +25,8 @@ pub enum State {
     SentBack(Option<String>),
     /// The turn ended before the owner decided.
     Dropped,
+    /// Handed to another pane to be built there (T36b); this one stays in plan mode.
+    Handed(u8),
 }
 
 /// The plan as the model wrote it.
@@ -56,6 +58,10 @@ impl Plan {
             State::SentBack(Some(note)) => (format!("sent back: {}", clean(note)), theme::quiet()),
             State::SentBack(None) => ("sent back".to_owned(), theme::quiet()),
             State::Dropped => ("not decided: the turn ended".to_owned(), theme::quiet()),
+            State::Handed(pane) => (
+                format!("built in pane {pane}"),
+                Style::default().fg(theme::c().fine),
+            ),
         }
     }
 }
@@ -67,6 +73,8 @@ pub struct Dialog {
     pub asking: bool,
     /// Lines scrolled down from the plan's top.
     pub scroll: usize,
+    /// The other pane a plan can be handed to, while the window is split (T36b).
+    pub elsewhere: Option<u8>,
     /// The note being typed to send the plan back with.
     pub note: Option<String>,
 }
@@ -79,6 +87,8 @@ pub enum Choice {
     Approve(usize),
     /// Send the plan back, with a note when one was typed.
     SendBack(Option<String>),
+    /// Hand it to the other pane to be built there (T36b).
+    BuildElsewhere(u8),
     /// Close the view (only to read).
     Close,
 }
@@ -135,6 +145,11 @@ impl Dialog {
                 }
             }
             KeyCode::Char('n') if self.asking => self.note = Some(String::new()),
+            KeyCode::Char('b') if self.asking => {
+                if let Some(pane) = self.elsewhere {
+                    return Choice::BuildElsewhere(pane);
+                }
+            }
             // Esc answers as on every ask: no, without a note.
             KeyCode::Esc if self.asking => return Choice::SendBack(None),
             _ => {}
@@ -186,6 +201,9 @@ pub fn lines(
                     clean(mode)
                 };
                 choices.push(((at + 1).to_string(), label));
+            }
+            if let Some(pane) = dialog.elsewhere {
+                choices.push(("b".to_owned(), format!("build in pane {pane}")));
             }
             choices.push(("n".to_owned(), "send back with a note".to_owned()));
             choices.push(("⎋".to_owned(), "send back".to_owned()));

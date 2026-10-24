@@ -52,6 +52,19 @@ fn init_check(name: &str) -> String {
     )
 }
 
+/// When a message from another pane is taken (T36b).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Delivered {
+    /// At once: a turn started.
+    Now,
+    /// After the turn under way, if it ends answered.
+    AfterTurn,
+    /// Once the compaction, handoff or switch under way is done.
+    WhenFree,
+    /// On Enter there: a list was open or messages were waiting.
+    OnEnter,
+}
+
 /// A question of the gate on the screen.
 pub struct OpenAsk {
     pub request: AskRequest,
@@ -207,6 +220,8 @@ pub struct App {
     pub pane_request: Option<crate::panes::Request>,
     /// The sessions the other panes hold: not opened here a second time.
     pub others_open: Vec<String>,
+    /// The other panes' numbers (T36b: where `/send` and a plan go).
+    pub others: Vec<u8>,
     /// The folder's branch for the footer (T39).
     pub branch: crate::branch::Branch,
     /// How the footer joins its segments, and whether Glut guessed it (`Some`, with the terminal it knew, if any)
@@ -352,6 +367,7 @@ impl App {
             branch: crate::branch::Branch::default(),
             pane_request: None,
             others_open: Vec::new(),
+            others: Vec::new(),
             separators,
             separators_from,
             frame: 0,
@@ -466,6 +482,11 @@ impl App {
     pub fn say(&mut self, text: impl Into<String>) {
         // A toast may name a file the model made: cleaned like everything else drawn.
         self.toast = Some((crate::transcript::clean(&text.into()), Instant::now()));
+    }
+
+    /// A quiet line in the stream that stays, where a toast would pass: what happened to a pane (T36a).
+    pub fn tell(&mut self, text: impl Into<String>) {
+        self.transcript.note(text.into(), Tone::Quiet);
     }
 
     /// Says where the mouse went.
@@ -1729,6 +1750,10 @@ impl App {
                 Err(reason) => self.transcript.note(reason, Tone::Fault),
             },
             "close" => self.pane_request = Some(crate::panes::Request::Close),
+            "send" => match crate::panes::parse_send(rest) {
+                Ok(request) => self.pane_request = Some(request),
+                Err(reason) => self.transcript.note(reason, Tone::Fault),
+            },
             "steps" => self.picker = Some(self.steps_picker()),
             "theme" if rest.is_empty() => self.picker = Some(theme_picker()),
             "theme" => self.set_theme(rest),
@@ -3495,6 +3520,46 @@ impl App {
         }
     }
 
+    /// A message from another pane (T36b), taken as if the owner had typed it here: at once while this pane is
+    /// free, else after its turn.
+    pub fn deliver(&mut self, text: String) -> Delivered {
+        if self.steering.is_some() {
+            // A turn: after it, as Tab queues — not after a turn the owner stopped, which waits for Enter.
+            self.queue.push(text);
+            Delivered::AfterTurn
+        } else if self.working() {
+            // A compaction, a handoff, a switch: as soon as it is done, as a message typed meanwhile is.
+            self.queue.push(text);
+            self.send_when_free = true;
+            Delivered::WhenFree
+        } else if self.picker.is_some() || !self.queue.is_empty() {
+            // A list open here, or messages left waiting: neither closed nor jumped — it waits with them.
+            self.queue.push(text);
+            Delivered::OnEnter
+        } else {
+            self.send(text);
+            Delivered::Now
+        }
+    }
+
+    /// The plan with its task list as another pane gets it to build (T36b); `None` without a plan.
+    pub fn plan_to_build(&self) -> Option<String> {
+        let plan = self.plan.as_ref()?;
+        let mut text = format!("Build this plan:\n\n{}", plan.text);
+        if !self.todos.is_empty() {
+            text.push_str("\n\nTask list:");
+            for item in &self.todos {
+                let mark = if item.status == glut::planning::TodoStatus::Done {
+                    "x"
+                } else {
+                    " "
+                };
+                text.push_str(&format!("\n- [{mark}] {}", item.text));
+            }
+        }
+        Some(text)
+    }
+
     /// A turn under way, for the panes' tests.
     #[cfg(test)]
     pub fn working_for_tests(&mut self) {
@@ -3569,6 +3634,7 @@ impl App {
             return;
         };
         let page = self.overlay_rows.saturating_sub(4);
+        view.elsewhere = self.others.first().copied();
         let choice = view.key(key, modes.len(), page);
         use crate::plan::{Choice, State};
         match choice {
@@ -3594,6 +3660,21 @@ impl App {
                 if let Some(plan) = &mut self.plan {
                     plan.state = State::Approved(mode);
                 }
+            }
+            Choice::BuildElsewhere(pane) => {
+                // This pane's model hears why its plan was not approved here, and stays in plan mode.
+                let Some(open) = self.ask.take() else { return };
+                let _ = open.reply.send(Answer::Deny);
+                self.plan_view = None;
+                let note = format!(
+                    "The owner hands your plan to pane {pane}, where another session builds it. Stay in plan mode \
+                     and wait for the owner."
+                );
+                match &self.steering {
+                    Some(inbox) => inbox.send(note),
+                    None => self.queue.push(note),
+                }
+                self.pane_request = Some(crate::panes::Request::SendPlan { to: Some(pane) });
             }
             Choice::SendBack(note) => {
                 let Some(open) = self.ask.take() else { return };
@@ -5090,6 +5171,26 @@ mod tests {
             open.opened = Instant::now() - ASK_SETTLE * 2;
         }
         answer
+    }
+
+    #[test]
+    fn while_split_the_plan_can_be_built_in_the_other_pane_and_this_one_stays_in_plan_mode() {
+        let (mut app, _reports) = app();
+        let mut answer = plan_asked(&mut app);
+        app.on_terminal(key(KeyCode::Char('b'), KeyModifiers::NONE));
+        assert!(answer.try_recv().is_err(), "alone, b is no choice");
+        app.others = vec![2];
+        app.on_terminal(key(KeyCode::Char('b'), KeyModifiers::NONE));
+        assert_eq!(answer.try_recv().unwrap(), Answer::Deny);
+        assert_eq!(
+            app.pane_request,
+            Some(crate::panes::Request::SendPlan { to: Some(2) })
+        );
+        let plan = app.plan_to_build().unwrap();
+        assert!(
+            plan.starts_with("Build this plan:") && plan.contains("2. test it"),
+            "{plan}"
+        );
     }
 
     #[test]
