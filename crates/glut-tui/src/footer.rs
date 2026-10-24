@@ -384,7 +384,7 @@ mod tests {
             )),
             format!(
                 "{ROUND_LEFT} a {ARROW}{}{ARROW_LEFT} keys {ROUND_RIGHT}",
-                " ".repeat(6)
+                " ".repeat(7)
             )
         );
         assert_eq!(
