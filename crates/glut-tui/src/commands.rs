@@ -15,6 +15,8 @@ pub enum Topic {
     Session,
     Model,
     View,
+    /// Several sessions in one window (T36a).
+    Panes,
     Changes,
     Project,
     Settings,
@@ -24,10 +26,11 @@ pub enum Topic {
 }
 
 impl Topic {
-    pub const ALL: [Topic; 8] = [
+    pub const ALL: [Topic; 9] = [
         Topic::Session,
         Topic::Model,
         Topic::View,
+        Topic::Panes,
         Topic::Changes,
         Topic::Project,
         Topic::Settings,
@@ -40,6 +43,7 @@ impl Topic {
             Topic::Session => "Session",
             Topic::Model => "Model",
             Topic::View => "View",
+            Topic::Panes => "Panes",
             Topic::Changes => "Changes",
             Topic::Project => "Project",
             Topic::Settings => "Settings",
@@ -73,7 +77,7 @@ const fn command(
 }
 
 /// Every command, grouped by topic in [`Topic::ALL`]'s order, the most used first inside a topic.
-pub const COMMANDS: [Command; 28] = [
+pub const COMMANDS: [Command; 30] = [
     command(Topic::Session, "clear", "", "start a new session"),
     command(
         Topic::Session,
@@ -154,6 +158,18 @@ pub const COMMANDS: [Command; 28] = [
         "scrollback",
         "",
         "the conversation into the terminal's own scrollback (F3)",
+    ),
+    command(
+        Topic::Panes,
+        "split",
+        "[l|r|u|d] [resume]",
+        "a second session beside this one, right unless told; /split d below, /split r resume an earlier one",
+    ),
+    command(
+        Topic::Panes,
+        "close",
+        "",
+        "close this pane; its session stays for /resume",
     ),
     command(
         Topic::Changes,
@@ -244,7 +260,7 @@ const fn key(topic: Topic, key: &'static str, what: &'static str, command: &'sta
 }
 
 /// Every key Glut has, grouped as [`COMMANDS`] are; a topic without keys shows no heading.
-pub const KEYS: [Key; 25] = [
+pub const KEYS: [Key; 29] = [
     key(
         Topic::Session,
         "⇧⇥",
@@ -311,6 +327,15 @@ pub const KEYS: [Key; 25] = [
         "hand the mouse to the terminal and back",
         "",
     ),
+    key(Topic::Panes, "⌃]", "the other pane", ""),
+    key(
+        Topic::Panes,
+        "⌃X 2",
+        "a second pane, to the right",
+        "/split",
+    ),
+    key(Topic::Panes, "⌃X 3", "a second pane, below", "/split d"),
+    key(Topic::Panes, "⌃X 0", "close this pane", "/close"),
     key(
         Topic::Changes,
         "⌃R",
@@ -488,7 +513,10 @@ mod tests {
 
     #[test]
     fn a_typed_part_takes_the_names_first_then_what_they_do() {
-        assert_eq!(names(&fitting("c")), ["clear", "compact", "context"]);
+        assert_eq!(
+            names(&fitting("c")),
+            ["clear", "compact", "context", "close"]
+        );
         assert_eq!(names(&fitting("hook")), ["skill"]);
         let con = fitting("con");
         assert_eq!(names(&con[..1]), ["context"], "the names first");

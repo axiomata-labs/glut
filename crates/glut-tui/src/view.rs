@@ -26,8 +26,117 @@ fn panel_width(width: u16) -> u16 {
     (width / PANEL_SHARE).max(PANEL_MIN_WIDTH)
 }
 
+/// What a session's drawing has around it: the whole screen (one pane), or a pane among others (T36a).
+#[derive(Debug, Clone, Default)]
+pub struct Chrome {
+    /// The pane's number, shown first in its footer; `None` alone on the screen.
+    pub number: Option<u8>,
+    /// The pane the keys go to: its footer glows, the cursor is its.
+    pub active: bool,
+    /// The other panes waiting for the owner's word (the active pane's footer says so).
+    pub others_ask: Vec<u8>,
+}
+
+impl Chrome {
+    fn whole() -> Self {
+        Chrome {
+            number: None,
+            active: true,
+            others_ask: Vec::new(),
+        }
+    }
+
+    fn alone(&self) -> bool {
+        self.number.is_none()
+    }
+}
+
 pub fn draw(frame: &mut Frame, app: &mut App) {
-    let area = frame.area();
+    draw_in(frame, app, frame.area(), &Chrome::whole());
+}
+
+/// The screen's panes (T36a): one is drawn as ever; several share the header, stand side by side or one above the
+/// other, each with its own footer, and the active one's side panel takes the right where there is room.
+pub fn draw_panes(frame: &mut Frame, panes: &mut crate::panes::Panes) {
+    if !panes.split() {
+        let pane = &mut panes.list[0];
+        pane.area = frame.area();
+        return draw(frame, &mut pane.app);
+    }
+    let [header, body] =
+        Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(frame.area());
+    let active = panes.active;
+    draw_header(frame, &panes.list[active].app, header);
+    // The panel beside two panes only where each pane keeps a readable width.
+    let panel = panel_width(body.width);
+    // Stacked panes share the width, so one pane's minimum is enough beside the panel.
+    let beside = if panes.stacked {
+        SPLIT_PANE_MIN
+    } else {
+        SPLIT_PANE_MIN * 2 + 1
+    };
+    let room = body.width >= beside + panel;
+    let shows_panel = room && panes.list[active].app.panel == Some(true);
+    let body = if shows_panel {
+        let [body, side] =
+            Layout::horizontal([Constraint::Min(1), Constraint::Length(panel)]).areas(body);
+        let app = &mut panes.list[active].app;
+        let cwd = app.parts.config.cwd.clone();
+        app.project_todos.refresh(&cwd);
+        draw_panel(frame, app, side);
+        body
+    } else {
+        body
+    };
+    let areas = panes.areas(body);
+    let asking: Vec<u8> = panes
+        .list
+        .iter()
+        .filter(|pane| pane.app.waits_for_owner())
+        .map(|pane| pane.number)
+        .collect();
+    // The active pane last: its cursor is the one the terminal shows.
+    let mut order: Vec<usize> = (0..panes.list.len()).filter(|at| *at != active).collect();
+    order.push(active);
+    for at in order {
+        let pane = &mut panes.list[at];
+        pane.area = areas[at];
+        let chrome = Chrome {
+            number: Some(pane.number),
+            active: at == active,
+            others_ask: if at == active {
+                asking
+                    .iter()
+                    .copied()
+                    .filter(|number| *number != pane.number)
+                    .collect()
+            } else {
+                Vec::new()
+            },
+        };
+        draw_in(frame, &mut pane.app, areas[at], &chrome);
+        pane.app.panel_drawn = at == active && shows_panel;
+        pane.app.panel_fits = room;
+    }
+    // A quiet line parts panes side by side.
+    if !panes.stacked {
+        for area in areas.iter().skip(1) {
+            let x = area.x.saturating_sub(1);
+            for y in body.y..body.y + body.height {
+                frame.render_widget(
+                    Paragraph::new(Span::styled("│", theme::quiet())),
+                    Rect::new(x, y, 1, 1),
+                );
+            }
+        }
+    }
+}
+
+/// The narrowest a pane beside another is let be before the side panel stays away.
+const SPLIT_PANE_MIN: u16 = 60;
+
+/// One session in `area`: alone, the whole screen with its header and side panel; among panes, without either.
+fn draw_in(frame: &mut Frame, app: &mut App, area: Rect, chrome: &Chrome) {
     let input_width = usize::from(area.width.saturating_sub(2));
     let (rows, cursor) = app.input.layout(input_width);
     let input_height = rows.len().clamp(1, INPUT_ROWS) as u16 + 1;
@@ -56,7 +165,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         });
     let waiting = waiting_lines(app, usize::from(area.width));
     let [header, stream, ask, queue, input, keys] = Layout::vertical([
-        Constraint::Length(1),
+        Constraint::Length(if chrome.alone() { 1 } else { 0 }),
         Constraint::Min(1),
         Constraint::Length(ask_height),
         Constraint::Length(waiting.len() as u16),
@@ -67,11 +176,16 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if !waiting.is_empty() {
         frame.render_widget(Paragraph::new(waiting), queue);
     }
-    draw_header(frame, app, header);
-    // The side panel (T28) takes the right of the stream where the screen is wide enough for both.
+    if chrome.alone() {
+        draw_header(frame, app, header);
+    }
+    // The side panel (T28) takes the right of the stream where the screen is wide enough for both; among panes it is
+    // the screen's, drawn beside them.
     app.stream_width = stream.x + stream.width;
-    app.panel_fits = stream.width >= PANEL_MIN_SCREEN;
-    let stream = if app.panel == Some(true) && app.panel_fits {
+    if chrome.alone() {
+        app.panel_fits = stream.width >= PANEL_MIN_SCREEN;
+    }
+    let stream = if chrome.alone() && app.panel == Some(true) && app.panel_fits {
         // The to-dos are looked at once per frame the panel shows: their count heads the tab, the model may change
         // them.
         let cwd = app.parts.config.cwd.clone();
@@ -112,14 +226,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if let Some(rows) = ask_rows {
         draw_ask(frame, app, ask, rows);
     }
-    draw_input(frame, app, input, &rows, cursor);
+    draw_input(frame, app, input, &rows, cursor, chrome.active);
     let cwd = app.parts.config.cwd.clone();
     // One row: a line break in a hostile HEAD would part the width counted from the width drawn.
     let branch = app
         .branch
         .name(&cwd)
         .map(|name| crate::transcript::clean(name).replace('\n', " "));
-    draw_keys(frame, app, keys, branch);
+    draw_keys(frame, app, keys, branch, chrome);
     if app.picker.is_some() {
         draw_picker(frame, app, stream);
     } else if app.keys_sheet.is_some() {
@@ -554,7 +668,14 @@ fn asked_rows(target: &str, width: usize, most: usize) -> Vec<String> {
     shown
 }
 
-fn draw_input(frame: &mut Frame, app: &App, area: Rect, rows: &[String], cursor: (usize, usize)) {
+fn draw_input(
+    frame: &mut Frame,
+    app: &App,
+    area: Rect,
+    rows: &[String],
+    cursor: (usize, usize),
+    active: bool,
+) {
     let [rule, text] = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(area);
     frame.render_widget(
         Paragraph::new(Span::styled(
@@ -580,10 +701,12 @@ fn draw_input(frame: &mut Frame, app: &App, area: Rect, rows: &[String], cursor:
             ])),
             text,
         );
-        frame.set_cursor_position(Position {
-            x: text.x + 7 + query.width() as u16,
-            y: text.y,
-        });
+        if active {
+            frame.set_cursor_position(Position {
+                x: text.x + 7 + query.width() as u16,
+                y: text.y,
+            });
+        }
         return;
     }
     let visible = usize::from(text.height);
@@ -610,7 +733,7 @@ fn draw_input(frame: &mut Frame, app: &App, area: Rect, rows: &[String], cursor:
         })
         .collect();
     frame.render_widget(Paragraph::new(lines), text);
-    if app.ask.is_none() && app.picker.is_none() {
+    if active && app.ask.is_none() && app.picker.is_none() {
         frame.set_cursor_position(Position {
             x: text.x + 2 + cursor.1 as u16,
             y: text.y + (cursor.0 - first) as u16,
@@ -626,10 +749,22 @@ const USUAL_HINTS: &str =
 
 /// The footer (T39): the status as segments — the vi state, the mode, the model, the context, the cost, the branch —
 /// and the key hints, the moment's or the usual ones.
-fn draw_keys(frame: &mut Frame, app: &App, area: Rect, branch: Option<String>) {
+fn draw_keys(frame: &mut Frame, app: &App, area: Rect, branch: Option<String>, chrome: &Chrome) {
     use crate::footer::Segment;
     let mode = app.mode();
     let mut segments = Vec::new();
+    let asks = app.waits_for_owner();
+    // Among panes the number comes first (T36a): the active one glows, one that waits for the owner's word while
+    // the keys are elsewhere is the fault colour, so it is seen from the other pane.
+    if let Some(number) = chrome.number {
+        segments.push(if chrome.active {
+            Segment::marked(number.to_string(), theme::c().glow, 0)
+        } else if asks {
+            Segment::marked(number.to_string(), theme::c().fault, 0)
+        } else {
+            Segment::calm(number.to_string(), 0)
+        });
+    }
     // The vi mode's state first, where a vi user looks for it.
     if let Some(vi) = &app.vi {
         segments.push(match vi.mode {
@@ -706,6 +841,19 @@ fn draw_keys(frame: &mut Frame, app: &App, area: Rect, branch: Option<String>) {
         WORKING_HINTS.to_owned()
     } else {
         USUAL_HINTS.to_owned()
+    };
+    // A pane the keys are not in shows only what waits there; the active one says which other pane asks.
+    let hints = if !chrome.active {
+        if asks {
+            "asks — ⌃] answers".to_owned()
+        } else {
+            String::new()
+        }
+    } else if !chrome.others_ask.is_empty() {
+        let numbers: Vec<String> = chrome.others_ask.iter().map(u8::to_string).collect();
+        format!("pane {} asks — ⌃] · {hints}", numbers.join(", "))
+    } else {
+        hints
     };
     // Any other hint is the moment's: it goes after the segments that may.
     let moment = hints != WORKING_HINTS && hints != USUAL_HINTS;

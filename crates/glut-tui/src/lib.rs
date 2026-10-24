@@ -17,6 +17,7 @@ pub mod log;
 mod markdown;
 mod memory;
 mod meter;
+mod panes;
 mod picker;
 mod plan;
 mod prefs;

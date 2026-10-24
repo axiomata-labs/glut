@@ -203,6 +203,10 @@ pub struct App {
     pub keys_sheet: Option<usize>,
     /// How far the Keys tab is scrolled (the wheel over the panel).
     pub keys_scroll: usize,
+    /// What this pane asks of the screen (T36a): a split, a close, the other pane.
+    pub pane_request: Option<crate::panes::Request>,
+    /// The sessions the other panes hold: not opened here a second time.
+    pub others_open: Vec<String>,
     /// The folder's branch for the footer (T39).
     pub branch: crate::branch::Branch,
     /// How the footer joins its segments, and whether Glut guessed it (`Some`, with the terminal it knew, if any)
@@ -346,6 +350,8 @@ impl App {
             keys_sheet: None,
             keys_scroll: 0,
             branch: crate::branch::Branch::default(),
+            pane_request: None,
+            others_open: Vec::new(),
             separators,
             separators_from,
             frame: 0,
@@ -1085,6 +1091,14 @@ impl App {
         if ctrl && matches!(key.code, KeyCode::Char('c' | 'C')) {
             return self.interrupt();
         }
+        // ⌃] the other pane (T36a) — whatever this one shows: it is how the owner reaches the other's question. A
+        // terminal without the keyboard protocol sends it as ⌃5.
+        if ctrl && matches!(key.code, KeyCode::Char(']' | '5')) && key.kind != KeyEventKind::Repeat
+        {
+            self.chord = false;
+            self.pane_request = Some(crate::panes::Request::Toggle);
+            return;
+        }
         self.quit_armed = None;
         // Esc Esc is two Esc in a row: any other key between them makes it none.
         if key.code != KeyCode::Esc {
@@ -1191,8 +1205,23 @@ impl App {
             self.chord = false;
         }
         if std::mem::take(&mut self.chord) {
-            if matches!(key.code, KeyCode::Char('e' | 'E')) {
-                self.edit_request = Some(self.input.expanded());
+            match key.code {
+                KeyCode::Char('e' | 'E') => self.edit_request = Some(self.input.expanded()),
+                // T36a, as Emacs has them but for the owner's order: after 1 comes 2, to the right.
+                KeyCode::Char('2') => {
+                    self.pane_request = Some(crate::panes::Request::Split {
+                        side: crate::panes::Side::Right,
+                        resume: false,
+                    })
+                }
+                KeyCode::Char('3') => {
+                    self.pane_request = Some(crate::panes::Request::Split {
+                        side: crate::panes::Side::Down,
+                        resume: false,
+                    })
+                }
+                KeyCode::Char('0') => self.pane_request = Some(crate::panes::Request::Close),
+                _ => {}
             }
             return;
         }
@@ -1684,6 +1713,24 @@ impl App {
                     .transcript
                     .note(format!("/footer {other}: powerline or plain"), Tone::Fault),
             },
+            "split" => {
+                let mut side = crate::panes::Side::Right;
+                let mut resume = false;
+                for word in rest.split_whitespace() {
+                    match (word, crate::panes::Side::parse(word)) {
+                        (_, Some(given)) => side = given,
+                        ("resume", None) => resume = true,
+                        (other, None) => {
+                            return self.transcript.note(
+                                format!("/split {other}: l, r, u or d, and resume"),
+                                Tone::Fault,
+                            );
+                        }
+                    }
+                }
+                self.pane_request = Some(crate::panes::Request::Split { side, resume });
+            }
+            "close" => self.pane_request = Some(crate::panes::Request::Close),
             "steps" => self.picker = Some(self.steps_picker()),
             "theme" if rest.is_empty() => self.picker = Some(theme_picker()),
             "theme" => self.set_theme(rest),
@@ -3184,6 +3231,13 @@ impl App {
                         Tone::Quiet,
                     ),
                     Some(Pick::Session(id)) if id == self.session.id => {}
+                    // Two panes on one session file would write over each other's turns.
+                    Some(Pick::Session(id)) if self.others_open.contains(&id) => {
+                        self.transcript.note(
+                            "that session is open in the other pane — ⌃] goes there",
+                            Tone::Quiet,
+                        )
+                    }
                     Some(Pick::Session(id)) => match Session::load(&self.parts.home, &id) {
                         Ok(session) => self.open(session),
                         Err(reason) => self.transcript.note(reason, Tone::Fault),
@@ -3417,6 +3471,27 @@ impl App {
                 self.agent_view = Some(crate::agents::View::new(path));
             }
         }
+    }
+
+    /// A turn under way, for the panes' tests.
+    #[cfg(test)]
+    pub fn working_for_tests(&mut self) {
+        self.busy = Some(Busy::Turn);
+    }
+
+    /// The pane comes into view again (T36a, `⌃]` or a click): its open question and its open model list count as
+    /// shown only from now — a key meant for the other pane never answers what this one asks.
+    pub fn shown_again(&mut self) {
+        if let Some(open) = &mut self.ask {
+            open.opened = Instant::now();
+        }
+        self.model_pick_opened = Instant::now();
+    }
+
+    /// Whether this session waits for the owner's word: the gate's question, the plan's, or the model list a
+    /// `glut_file` call opened — what another pane's footer points to (T36a).
+    pub fn waits_for_owner(&self) -> bool {
+        self.ask.is_some() || self.picker.as_ref().is_some_and(|picker| picker.asks_model)
     }
 
     /// Whether the question open is the plan's, with its dialog on the screen.
@@ -5273,7 +5348,7 @@ mod tests {
                 .iter()
                 .map(|command| command.name)
                 .collect::<Vec<_>>(),
-            ["clear", "compact", "context"]
+            ["clear", "compact", "context", "close"]
         );
         app.on_terminal(key(KeyCode::Down, KeyModifiers::NONE));
         app.on_terminal(key(KeyCode::Tab, KeyModifiers::NONE));

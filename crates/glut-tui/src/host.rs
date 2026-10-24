@@ -106,6 +106,7 @@ pub enum Search {
 }
 
 /// Which MCP servers the session starts.
+#[derive(Debug, Clone)]
 pub enum Servers {
     /// `~/.glut/mcp.json` and the project's `.mcp.json` as the owner approved them.
     Owner,
@@ -229,6 +230,12 @@ pub trait Host: Send + Sync + 'static {
         let _ = state;
     }
 
+    /// Whether the screen may split into panes of sessions of the owner's own (T36a, `/split`): a host whose session
+    /// is one pane of its own studio says no — the default.
+    fn may_split(&self) -> bool {
+        false
+    }
+
     /// The conversation after a turn, a compaction, a rewind or `/clear`.
     fn kept(&self, conversation: &[Message]) {
         let _ = conversation;
@@ -238,7 +245,11 @@ pub trait Host: Send + Sync + 'static {
 /// The plain host of the standalone `glut`.
 pub struct Standalone;
 
-impl Host for Standalone {}
+impl Host for Standalone {
+    fn may_split(&self) -> bool {
+        true
+    }
+}
 
 /// What a host tells the screen from outside the session.
 #[derive(Debug, Clone, PartialEq, Eq)]

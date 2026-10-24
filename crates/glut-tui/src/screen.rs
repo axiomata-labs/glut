@@ -23,6 +23,7 @@ use tokio::sync::mpsc;
 
 use crate::app::App;
 use crate::host::{EngineChoice, Host, HostLink, Launch, State};
+use crate::panes::{Inlets, Panes};
 use crate::{prefs, scrollback, session, setup, store, transcript, vi, view};
 
 /// How often the screen moves on its own while Glut works or Glimm is in view (its flicker, its breath).
@@ -77,7 +78,9 @@ pub async fn run(
     open: Open,
     linked: impl FnOnce(HostLink),
 ) -> std::process::ExitCode {
-    let (reports, mut from_session) = mpsc::unbounded_channel();
+    let (reports, from_session) = mpsc::unbounded_channel();
+    // A pane split off later starts the same servers, never more (`--strict-mcp-config` stays strict).
+    let servers = launch.servers.clone();
     eprintln!("Glut is starting…");
     let (parts, engine) = match session::build(launch, Arc::clone(&host), reports.clone()).await {
         Ok((parts, engine)) => (Arc::new(parts), engine),
@@ -112,15 +115,17 @@ pub async fn run(
         (None, Some(prompt)) => app.send(prompt),
         (None, None) => {}
     }
-    let outcome = screen(&mut app, &mut from_session).await;
+    let (mut panes, mut inlets) = Panes::new(app, from_session, host.may_split(), servers);
+    let outcome = screen(&mut panes, &mut inlets, &host).await;
     host.state(State::Ended);
     outcome
 }
 
 /// The session on the terminal, from taking it to giving it back.
 async fn screen(
-    app: &mut App,
-    from_session: &mut mpsc::UnboundedReceiver<session::Report>,
+    panes: &mut Panes,
+    inlets: &mut Inlets,
+    host: &Arc<dyn Host>,
 ) -> std::process::ExitCode {
     let enhanced = match enter() {
         Ok(enhanced) => enhanced,
@@ -147,7 +152,7 @@ async fn screen(
     let stop = Arc::new(AtomicBool::new(false));
     let pause = Arc::new(Pause::default());
     let mut keys = terminal_events(Arc::clone(&stop), Arc::clone(&pause));
-    let outcome = run_loop(app, &mut keys, from_session, enhanced, &pause).await;
+    let outcome = run_loop(panes, &mut keys, inlets, host, enhanced, &pause).await;
     stop.store(true, Ordering::Relaxed);
     leave(enhanced);
     let _ = std::panic::take_hook();
@@ -155,6 +160,7 @@ async fn screen(
     // The session stays where the terminal keeps it, above the shell's next prompt — settled first (a turn stopped
     // by the quit shows as stopped), its last lines only: a terminal keeps a few thousand anyway. Printed after an
     // error too: the alternate screen it was on is gone.
+    let app = panes.active();
     if !app.welcoming() {
         app.transcript.settle();
         let width = terminal::size().map_or(80, |(width, _)| width);
@@ -164,16 +170,26 @@ async fn screen(
     }
     match outcome {
         Ok(()) => {
-            // Written, not printed: a terminal that is gone (SIGHUP) must not turn the end into a panic.
-            let _ = writeln!(
-                io::stdout(),
-                "Glut: session ended — {} tokens in, {} out{}",
-                app.usage.input_tokens,
-                app.usage.output_tokens,
-                app.cost
-                    .map(|cost| format!(", ${cost:.4}"))
-                    .unwrap_or_default()
-            );
+            // Written, not printed: a terminal that is gone (SIGHUP) must not turn the end into a panic. Among
+            // panes, each session's own figures.
+            let split = panes.split();
+            for pane in &panes.list {
+                let app = &pane.app;
+                let which = if split {
+                    format!(" (pane {})", pane.number)
+                } else {
+                    String::new()
+                };
+                let _ = writeln!(
+                    io::stdout(),
+                    "Glut: session ended{which} — {} tokens in, {} out{}",
+                    app.usage.input_tokens,
+                    app.usage.output_tokens,
+                    app.cost
+                        .map(|cost| format!(", ${cost:.4}"))
+                        .unwrap_or_default()
+                );
+            }
             std::process::ExitCode::SUCCESS
         }
         Err(err) => {
@@ -185,9 +201,10 @@ async fn screen(
 
 /// The main loop: draws, then waits for a key, a step of the run or the next tick.
 async fn run_loop(
-    app: &mut App,
+    panes: &mut Panes,
     keys: &mut mpsc::UnboundedReceiver<event::Event>,
-    from_session: &mut mpsc::UnboundedReceiver<session::Report>,
+    inlets: &mut Inlets,
+    host: &Arc<dyn Host>,
     enhanced: bool,
     pause: &Pause,
 ) -> io::Result<()> {
@@ -208,7 +225,13 @@ async fn run_loop(
     // The cursor's shape follows the vi mode: a block in Normal mode, the owner's own shape otherwise.
     let mut block_cursor = false;
     loop {
-        let wanted = app
+        // A session built beside the screen may have written to the terminal: drawn anew from blank.
+        if std::mem::take(&mut panes.redraw) {
+            execute!(io::stdout(), Clear(ClearType::All))?;
+            terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
+        }
+        let wanted = panes
+            .active()
             .vi
             .as_ref()
             .is_some_and(|vi| vi.mode == vi::Mode::Normal);
@@ -221,30 +244,36 @@ async fn run_loop(
             execute!(io::stdout(), shape)?;
             block_cursor = wanted;
         }
-        app.drop_answered_ask();
+        panes.sync();
         // Every frame inside synchronized output (DEC 2026): the terminal shows it whole or not at all — and the end
         // is sent even when the frame failed, or the terminal would hold every later one back.
         execute!(io::stdout(), BeginSynchronizedUpdate)?;
-        let drawn = terminal.draw(|frame| view::draw(frame, app));
+        let drawn = terminal.draw(|frame| view::draw_panes(frame, panes));
         execute!(io::stdout(), EndSynchronizedUpdate)?;
         drawn?;
-        if app.quit {
-            // A turn the host can go on with later is left to its journal when the terminal is gone.
-            if !(app.abandoned && app.parts.keep_lost_turns) {
-                app.stop_turn();
+        if panes.quitting() {
+            for pane in &mut panes.list {
+                let app = &mut pane.app;
+                // A turn the host can go on with later is left to its journal when the terminal is gone.
+                if !(app.abandoned && app.parts.keep_lost_turns) {
+                    app.stop_turn();
+                }
             }
             return Ok(());
         }
-        // F2: the mouse to the terminal (its own selection) and back.
-        if let Some(held) = app.mouse_request.take() {
+        // F2: the mouse to the terminal (its own selection) and back — the screen's, so every pane's.
+        if let Some(held) = panes.active().mouse_request.take() {
             if held {
                 execute!(io::stdout(), EnableMouseCapture)?;
             } else {
                 execute!(io::stdout(), DisableMouseCapture)?;
             }
-            app.mouse_held = held;
-            app.mouse_said(held);
+            for pane in &mut panes.list {
+                pane.app.mouse_held = held;
+            }
+            panes.active().mouse_said(held);
         }
+        let app = panes.active();
         // F3 or /scrollback: the stream where the terminal keeps it, until the owner comes back with Enter.
         if std::mem::take(&mut app.scrollback_request) {
             pause.ask.store(true, Ordering::SeqCst);
@@ -325,26 +354,38 @@ async fn run_loop(
             block_cursor = false;
             continue;
         }
+        let animated = panes.list.iter().any(|pane| pane.app.animated());
         tokio::select! {
             // A closed window or a kill ends the session cleanly: the turn stopped, the terminal given back.
-            _ = terminate.recv() => app.abandon(),
-            _ = hangup.recv() => app.abandon(),
+            _ = terminate.recv() => panes.list.iter_mut().for_each(|pane| pane.app.abandon()),
+            _ = hangup.recv() => panes.list.iter_mut().for_each(|pane| pane.app.abandon()),
             key = keys.recv() => match key {
-                Some(key) => app.on_terminal(key),
+                Some(key) => panes.on_terminal(key),
                 None => return Ok(()),
             },
-            report = from_session.recv() => {
-                if let Some(report) = report {
-                    app.on_report(report);
+            report = inlets.reports.recv() => {
+                if let Some((session, report)) = report {
+                    panes.on_report(session, report);
                 }
                 // A stream of small pieces is drawn once, not once per piece.
-                while let Ok(report) = from_session.try_recv() {
-                    app.on_report(report);
+                while let Ok((session, report)) = inlets.reports.try_recv() {
+                    panes.on_report(session, report);
+                }
+            }
+            built = inlets.built.recv() => {
+                if let Some(built) = built {
+                    panes.on_built(built);
                 }
             }
             // The tick runs, and a frame is drawn, only while something moves: Glut works, or Glimm is in view.
-            _ = tick.tick(), if app.animated() => app.frame = app.frame.wrapping_add(1),
+            _ = tick.tick(), if animated => {
+                for pane in &mut panes.list {
+                    pane.app.frame = pane.app.frame.wrapping_add(1);
+                }
+            }
         }
+        // What a pane asked for — a split, a close, the other pane — once its key or command is through.
+        panes.settle(host);
     }
 }
 
