@@ -1014,6 +1014,18 @@ fn draw_keys(frame: &mut Frame, app: &App, area: Rect, branch: Option<String>, c
             ),
         );
     }
+    // TUI10: how fast the model writes — live while its answer streams (guessed from its characters), the last
+    // turn's own count once it rests.
+    let rate = if app.working() {
+        app.meter
+            .live_rate()
+            .map(|rate| format!("~{rate:.0} tok/s"))
+    } else {
+        app.meter.last_rate().map(|rate| format!("{rate:.0} tok/s"))
+    };
+    if let Some(rate) = rate {
+        segments.push(Segment::calm(rate, 2));
+    }
     if let Some(cost) = app.cost {
         segments.push(Segment::calm(format!("${cost:.4}"), 2));
     }

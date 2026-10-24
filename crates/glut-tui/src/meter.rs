@@ -27,6 +27,20 @@ pub struct Turn {
     pub calls: u32,
     /// Tool calls.
     pub tools: u32,
+    /// The tokens the session's own calls wrote while their answers streamed, and how long that took (TUI10): the
+    /// speed the model writes at.
+    pub written: u64,
+    pub writing: std::time::Duration,
+    /// How long the turn's first call took to its first piece of answer.
+    pub first_token: Option<std::time::Duration>,
+}
+
+impl Turn {
+    /// Tokens a second the model wrote at this turn; `None` where nothing streamed.
+    pub fn rate(&self) -> Option<f64> {
+        let seconds = self.writing.as_secs_f64();
+        (self.written > 0 && seconds > 0.05).then(|| self.written as f64 / seconds)
+    }
 }
 
 /// How often one tool was called and failed.
@@ -48,6 +62,29 @@ pub struct Meter {
     pub lean_all: Option<(usize, usize)>,
     /// The prices of each subagent on a model of its own (T37a), by its `task` call: its `Started` says them.
     sub_prices: HashMap<String, Prices>,
+    /// When the session's own call under way was sent — the turn's start, or the last tool's answer before it.
+    call_sent: Option<std::time::Instant>,
+    /// When the call under way sent its first piece, and how many characters it has sent since (TUI10).
+    streaming: Option<(std::time::Instant, usize)>,
+}
+
+/// Characters a token of English or code holds, roughly: what the speed is guessed by while an answer streams, before
+/// the provider counts its tokens.
+const CHARS_PER_TOKEN: f64 = 4.0;
+
+impl Meter {
+    /// Tokens a second the answer streaming now comes at, guessed from its characters; `None` when none streams, or
+    /// too briefly to say.
+    pub fn live_rate(&self) -> Option<f64> {
+        let (since, chars) = self.streaming?;
+        let seconds = since.elapsed().as_secs_f64();
+        (seconds > 0.3 && chars > 0).then(|| chars as f64 / CHARS_PER_TOKEN / seconds)
+    }
+
+    /// The speed of the last turn that streamed.
+    pub fn last_rate(&self) -> Option<f64> {
+        self.turns.iter().rev().find_map(Turn::rate)
+    }
 }
 
 /// What the Meter tab says beside the sums: the window and how the turn under way stands.
@@ -72,6 +109,10 @@ impl Meter {
     }
 
     fn take_at(&mut self, event: &Event, prices: Option<Prices>, depth: u32) {
+        // The next call goes once the tools have answered: its wait is counted from the last of them (TUI10).
+        if depth == 0 && matches!(event, Event::ToolResult { .. }) {
+            self.call_sent = Some(std::time::Instant::now());
+        }
         match event {
             Event::Started { .. } if depth == 0 => {
                 let number = self.turns.len() + 1;
@@ -79,6 +120,23 @@ impl Meter {
                     number,
                     ..Turn::default()
                 });
+                self.call_sent = Some(std::time::Instant::now());
+                self.streaming = None;
+            }
+            // The session's own answer streaming (TUI10): when it began, and how much came.
+            Event::TextDelta { text, .. } | Event::ReasoningDelta { text, .. } if depth == 0 => {
+                let now = std::time::Instant::now();
+                match &mut self.streaming {
+                    Some((_, chars)) => *chars += text.chars().count(),
+                    None => {
+                        self.streaming = Some((now, text.chars().count()));
+                        let waited = self.call_sent.map(|sent| now.duration_since(sent));
+                        let turn = self.turn();
+                        if turn.first_token.is_none() {
+                            turn.first_token = waited;
+                        }
+                    }
+                }
             }
             Event::Sub { depth, task, event } => {
                 // Each start says it anew: a provider that numbers its calls the same in every reply reuses a task id.
@@ -105,7 +163,18 @@ impl Meter {
                     cached_input_tokens: *cached_input_tokens,
                     output_tokens: *output_tokens,
                 };
+                // The session's own call ends: what it wrote, and how long its answer streamed.
+                let streamed = if depth == 0 {
+                    self.call_sent = Some(std::time::Instant::now());
+                    self.streaming.take().map(|(since, _)| since.elapsed())
+                } else {
+                    None
+                };
                 let turn = self.turn();
+                if let Some(took) = streamed {
+                    turn.written += *output_tokens;
+                    turn.writing += took;
+                }
                 turn.usage += call;
                 turn.calls += 1;
                 if let Some(prices) = prices {
@@ -252,6 +321,22 @@ impl Meter {
                 turn.calls,
                 turn.tools
             )));
+            // TUI10: how fast the model wrote, and how long the first piece took.
+            let speed = match (turn.rate(), turn.first_token) {
+                (Some(rate), Some(first)) => Some(format!(
+                    "       {rate:.0} tok/s · first token after {:.1} s",
+                    first.as_secs_f64()
+                )),
+                (Some(rate), None) => Some(format!("       {rate:.0} tok/s")),
+                (None, Some(first)) => Some(format!(
+                    "       first token after {:.1} s",
+                    first.as_secs_f64()
+                )),
+                (None, None) => None,
+            };
+            if let Some(speed) = speed {
+                lines.push(quiet(speed));
+            }
         }
 
         lines.push(Line::default());
@@ -355,6 +440,44 @@ mod tests {
             cached_input_tokens: cached,
             output_tokens: output,
         }
+    }
+
+    #[test]
+    fn the_speed_counts_the_streamed_answers_tokens_over_their_time_and_the_wait_for_the_first() {
+        let mut meter = Meter::default();
+        meter.take(
+            &Event::Started {
+                model: "m".into(),
+                cwd: String::new(),
+                tools: Vec::new(),
+                prices: None,
+            },
+            None,
+        );
+        meter.take(
+            &Event::TextDelta {
+                turn: 1,
+                text: "Hello world, this streams".into(),
+            },
+            None,
+        );
+        std::thread::sleep(std::time::Duration::from_millis(350));
+        assert!(meter.live_rate().is_some(), "guessed while it streams");
+        meter.take(
+            &Event::Usage {
+                turn: 1,
+                input_tokens: 10,
+                cached_input_tokens: 0,
+                output_tokens: 70,
+            },
+            None,
+        );
+        assert!(meter.live_rate().is_none());
+        let turn = &meter.turns[0];
+        assert_eq!(turn.written, 70);
+        assert!(turn.first_token.is_some());
+        let rate = meter.last_rate().unwrap();
+        assert!(rate > 50.0 && rate < 250.0, "{rate}");
     }
 
     #[test]
