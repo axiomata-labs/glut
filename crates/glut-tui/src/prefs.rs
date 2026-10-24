@@ -58,6 +58,9 @@ pub struct Prefs {
     /// Whether the first start's welcome was seen (TUI9c): it goes with the first message or command.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub welcomed: Option<bool>,
+    /// How images are drawn (T46, `/images`); `None`: inline where the terminal can, half blocks elsewhere.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub images: Option<crate::pictures::Drawing>,
     /// How links are shown (TUI9d, `/links`); `None`: clickable where the terminal speaks OSC 8.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub links: Option<crate::links::Links>,
@@ -215,6 +218,17 @@ pub fn set_footer(home: &Path, separators: crate::footer::Separators) -> Result<
 pub fn set_welcomed(home: &Path) -> Result<(), String> {
     let mut prefs = Prefs::read(home)?;
     prefs.welcomed = Some(true);
+    prefs.save(home)
+}
+
+/// Keeps how images are drawn (`/images`).
+///
+/// # Errors
+///
+/// A message when the file cannot be read (it is not written over) or written.
+pub fn set_images(home: &Path, drawing: crate::pictures::Drawing) -> Result<(), String> {
+    let mut prefs = Prefs::read(home)?;
+    prefs.images = Some(drawing);
     prefs.save(home)
 }
 

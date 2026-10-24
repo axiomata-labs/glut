@@ -285,9 +285,8 @@ pub struct App {
     images_given: u32,
     /// The highest image number sent: a message's images are numbered on from it when it goes.
     images_sent: u32,
-    /// The images of the turn under way (T45): the conversation is the turn's while it runs, and they open all the
-    /// same.
-    turn_images: Vec<glut::images::Image>,
+    /// An image shown whole over the stream (T46), from a click or ⏎ on its picture.
+    pub picture_view: Option<glut::images::Image>,
     /// Since when Glut works (TUI9b): what the footer counts while the screen holds still.
     pub busy_since: Option<Instant>,
     /// The state last seen (TUI9b): the reader mode says each change in a line of its own.
@@ -342,6 +341,7 @@ impl App {
             prefs.reader.unwrap_or(false),
         );
         crate::links::set(prefs.links);
+        crate::pictures::set_drawing(prefs.images);
         engine
             .model
             .set_cache_hour(cache_mode == crate::warm::CacheMode::Hour);
@@ -470,7 +470,7 @@ impl App {
             busy_since: None,
             images_given: 0,
             images_sent: 0,
-            turn_images: Vec::new(),
+            picture_view: None,
             switch_note: None,
             first_start,
             seen_state: None,
@@ -730,13 +730,13 @@ impl App {
             self.transcript.note(shown, Tone::Heed);
         } else {
             self.owner_spoke = true;
-            // The images stand under the words, each a line: what was sent, and how large.
-            let mut shown = prompt.clone();
+            // The images stand under the words, each a picture of its own (T46).
+            self.transcript
+                .push(crate::transcript::Kind::Owner(prompt.clone()));
             for image in &images {
-                shown.push('\n');
-                shown.push_str(&image.label());
+                self.transcript
+                    .push(crate::transcript::Kind::Picture(image.clone()));
             }
-            self.transcript.push(crate::transcript::Kind::Owner(shown));
         }
         // The session is named by the owner's first own message, not by a handoff read in front of it, nor by
         // another pane's model.
@@ -762,10 +762,7 @@ impl App {
             Arc::clone(&self.parts),
             self.engine.clone(),
             std::mem::take(&mut self.conversation),
-            {
-                self.turn_images.clone_from(&images);
-                session::TurnInput::Message(prompt, images)
-            },
+            session::TurnInput::Message(prompt, images),
             cancel,
             inbox,
             self.reports.clone(),
@@ -923,6 +920,14 @@ impl App {
                 self.scroll = 0;
             }
             Report::Done(outcome, conversation) => {
+                // The images the turn's tools showed, under their calls (T46).
+                for message in &conversation {
+                    if let Some(call) = &message.tool_call_id
+                        && !message.images.is_empty()
+                    {
+                        self.transcript.show_pictures(call, &message.images);
+                    }
+                }
                 self.keep_warm(
                     outcome.reason == FinishReason::Answered,
                     outcome.warm.as_ref(),
@@ -1419,6 +1424,9 @@ impl App {
         }
         if self.agent_view.is_some() {
             return self.on_agent_key(key);
+        }
+        if self.picture_view.is_some() {
+            return self.on_picture_key(key);
         }
         if self.reading.is_some() && self.on_reading_key(key) {
             return;
@@ -2167,6 +2175,20 @@ impl App {
                 None => self.tell(format!(
                     "links: {} — /links clickable or /links plain",
                     if crate::links::clickable() { "clickable" } else { "plain" }
+                )),
+            },
+            "images" => match crate::pictures::Drawing::parse(rest) {
+                Some(drawing) => {
+                    crate::pictures::set_drawing(Some(drawing));
+                    crate::motion::relook();
+                    match prefs::set_images(&self.parts.home, drawing) {
+                        Ok(()) => self.say(format!("images: {}", drawing.label())),
+                        Err(reason) => self.transcript.note(reason, Tone::Fault),
+                    }
+                }
+                None => self.tell(format!(
+                    "images: {} — /images inline, blocks or off",
+                    crate::pictures::drawing().label()
                 )),
             },
             "reader" => match rest {
@@ -3881,7 +3903,8 @@ impl App {
 
     /// Whether something stands over the stream: a list, the review, the plan, a subagent's view.
     fn overlaid(&self) -> bool {
-        self.picker.is_some()
+        self.picture_view.is_some()
+            || self.picker.is_some()
             || self.keys_sheet.is_some()
             || self.review.open
             || self.plan_view.is_some()
@@ -4704,8 +4727,8 @@ impl App {
                         Some(crate::transcript::Kind::Agent(_))
                     ) {
                         self.agent_view = Some(crate::agents::View::new(vec![block]));
-                    } else if let Some(number) = self.image_of(block) {
-                        self.open_image(number);
+                    } else if let Some(image) = self.image_of(block) {
+                        self.picture_view = Some(image);
                     } else {
                         self.transcript.toggle(block);
                     }
@@ -4783,31 +4806,33 @@ impl App {
         }
     }
 
-    /// The image a block of the stream names, if it is a message of the owner's with one (T45).
-    fn image_of(&self, block: usize) -> Option<u32> {
+    /// The image a block of the stream is (T46).
+    fn image_of(&self, block: usize) -> Option<glut::images::Image> {
         match &self.transcript.blocks.get(block)?.kind {
-            crate::transcript::Kind::Owner(text) => crate::pictures::first_number(text),
+            crate::transcript::Kind::Picture(image) => Some(image.clone()),
             _ => None,
         }
     }
 
-    /// The kept image `number` of this session's conversation, for a look.
-    fn open_image(&mut self, number: u32) {
-        let found = self
-            .conversation
-            .iter()
-            .flat_map(|message| &message.images)
-            .chain(&self.turn_images)
-            .find(|image| image.number == number)
-            .map(|image| image.path.clone());
-        // Only a file Glut keeps opens, whatever a session file says.
-        let found = found.filter(|path| glut::images::kept_media(path).is_some());
-        let said = match found {
-            Some(path) => crate::pictures::open(&path).map(|()| format!("image #{number} opens")),
-            None => Err(format!("image #{number} is no longer in this conversation")),
-        };
-        match said {
-            Ok(said) | Err(said) => self.say(said),
+    /// A key while an image is shown whole: ⎋ closes it, `o` opens it in the system's viewer.
+    fn on_picture_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => self.picture_view = None,
+            KeyCode::Char('o') => {
+                let Some(image) = self.picture_view.clone() else {
+                    return;
+                };
+                let said = if glut::images::kept_media(&image.path).is_some() {
+                    crate::pictures::open(&image.path)
+                        .map(|()| format!("image #{} opens", image.number))
+                } else {
+                    Err(format!("image #{} is no image Glut keeps", image.number))
+                };
+                match said {
+                    Ok(said) | Err(said) => self.say(said),
+                }
+            }
+            _ => {}
         }
     }
 
@@ -4939,9 +4964,9 @@ impl App {
                     crate::transcript::Kind::Agent(_)
                 ) {
                     self.agent_view = Some(crate::agents::View::new(vec![chosen]));
-                } else if let Some(number) = self.image_of(chosen) {
-                    // A message of the owner's with an image: the image opens (T45).
-                    self.open_image(number);
+                } else if let Some(image) = self.image_of(chosen) {
+                    // A picture shows whole (T46).
+                    self.picture_view = Some(image);
                 } else {
                     self.transcript.toggle(chosen);
                     if let Some(reading) = &mut self.reading {
@@ -6580,13 +6605,28 @@ mod tests {
             .blocks
             .iter()
             .find_map(|block| match &block.kind {
-                crate::transcript::Kind::Owner(text) => Some(text.clone()),
+                crate::transcript::Kind::Picture(image) => Some(image.label()),
                 _ => None,
             });
-        assert!(shown.unwrap().ends_with("[image #1 · 2×1 · 1 kB]"));
-        // While its turn runs the conversation is the turn's: the image opens all the same.
-        assert!(app.working() && app.conversation.is_empty());
-        assert!(app.turn_images.iter().any(|image| image.number == 1));
+        assert_eq!(shown.unwrap(), "[image #1 · 2×1 · 1 kB]");
+        // The picture stands under the message and opens whole on ⏎ in the reading mode (T46).
+        let picture = app
+            .transcript
+            .blocks
+            .iter()
+            .position(|block| matches!(block.kind, crate::transcript::Kind::Picture(_)))
+            .unwrap();
+        assert_eq!(app.image_of(picture).map(|image| image.number), Some(1));
+        // Drawn in half blocks under the message; whole over the stream on a click or ⏎, ⎋ closes it.
+        let screen = wide_screen(&mut app);
+        assert!(
+            screen.contains("▀") && screen.contains("[image #1 · 2×1 · 1 kB]"),
+            "{screen}"
+        );
+        app.picture_view = app.image_of(picture);
+        assert!(wide_screen(&mut app).contains("⎋ closes · o opens it"));
+        app.on_terminal(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.picture_view.is_none());
         // The next image numbers on, and a mark deleted takes its image out.
         let mut sent = glut::Message::user("earlier");
         sent.images = vec![glut::images::keep(&app.parts.home, &TINY_PNG, 1).unwrap()];

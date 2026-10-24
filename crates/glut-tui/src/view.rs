@@ -301,6 +301,8 @@ fn draw_in(frame: &mut Frame, app: &mut App, area: Rect, chrome: &Chrome) {
         draw_plan(frame, app, stream);
     } else if app.agent_view.is_some() {
         draw_agent(frame, app, stream);
+    } else if app.picture_view.is_some() {
+        draw_picture(frame, app, stream);
     } else {
         draw_suggestions(frame, app, stream);
     }
@@ -375,6 +377,48 @@ fn draw_plan(frame: &mut Frame, app: &mut App, area: Rect) {
     );
     frame.render_widget(Clear, area);
     frame.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+/// An image shown whole over the stream (T46): as large as the stream holds it, its proportions kept, its line in
+/// the frame.
+fn draw_picture(frame: &mut Frame, app: &mut App, area: Rect) {
+    let Some(image) = app.picture_view.clone() else {
+        return;
+    };
+    if area.width < 12 || area.height < 6 {
+        return;
+    }
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(theme::glow())
+        .title(Span::styled(
+            format!(" {} · ⎋ closes · o opens it ", image.label()),
+            theme::glow(),
+        ));
+    let inner = block.inner(area);
+    frame.render_widget(Clear, area);
+    frame.render_widget(block, area);
+    if crate::pictures::drawing() == crate::pictures::Drawing::Off {
+        return;
+    }
+    let (columns, rows) =
+        crate::pictures::fitted(image.width, image.height, inner.width, inner.height);
+    let place = Rect {
+        x: inner.x + (inner.width - columns) / 2,
+        y: inner.y + (inner.height - rows) / 2,
+        width: columns,
+        height: rows,
+    };
+    match crate::pictures::half_blocks(&image, columns, rows) {
+        Some(lines) => frame.render_widget(Paragraph::new(lines), place),
+        None => frame.render_widget(
+            Paragraph::new(Span::styled(
+                format!("image #{} cannot be drawn: it is gone", image.number),
+                theme::fault(),
+            )),
+            inner,
+        ),
+    }
 }
 
 /// A subagent's own stream (T18) over the session's: the frame glows while it works.

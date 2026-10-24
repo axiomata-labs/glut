@@ -248,13 +248,11 @@ impl Session {
             match message.role {
                 Role::User => {
                     if let Some(text) = &message.content {
-                        // Its images under the words, as they stood when it was sent (T45).
-                        let mut shown = text.clone();
+                        transcript.push(Kind::Owner(text.clone()));
+                        // Its images under the words, as they stood when it was sent (T46).
                         for image in &message.images {
-                            shown.push('\n');
-                            shown.push_str(&image.label());
+                            transcript.push(Kind::Picture(image.clone()));
                         }
-                        transcript.push(Kind::Owner(shown));
                     }
                 }
                 Role::Assistant => {
@@ -287,6 +285,8 @@ impl Session {
                             output: message.content.clone().unwrap_or_default(),
                             truncated: false,
                         });
+                        // The images it showed, under it (T46).
+                        transcript.show_pictures(id, &message.images);
                     }
                 }
                 Role::System => {}

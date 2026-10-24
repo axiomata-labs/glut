@@ -159,6 +159,46 @@ fn scaled(bytes: &[u8]) -> Result<Encoded, String> {
     Ok((jpeg, "image/jpeg", "jpg", size))
 }
 
+/// The kept image `image` as `columns` × `rows` pixels of RGB, row by row, for a picture in a terminal (T46): drawn
+/// over black where it is transparent. Only a file Glut keeps is read.
+///
+/// # Errors
+///
+/// A message when it is no kept image, is gone, or cannot be read.
+pub fn thumbnail(image: &Image, columns: u32, rows: u32) -> Result<Vec<Vec<[u8; 3]>>, String> {
+    kept_media(&image.path)
+        .ok_or_else(|| format!("image #{} is no image Glut keeps", image.number))?;
+    let bytes = read_file(&image.path).map_err(|_| format!("image #{} is gone", image.number))?;
+    let columns = columns.max(1);
+    let rows = rows.max(1);
+    std::panic::catch_unwind(|| {
+        let mut limits = image::Limits::default();
+        limits.max_image_width = Some(MOST_DECODED_SIDE);
+        limits.max_image_height = Some(MOST_DECODED_SIDE);
+        limits.max_alloc = Some(MOST_DECODED_BYTES);
+        let mut reader = image::ImageReader::new(Cursor::new(&bytes))
+            .with_guessed_format()
+            .map_err(|err| err.to_string())?;
+        reader.limits(limits);
+        let decoded = reader.decode().map_err(|err| err.to_string())?;
+        let small = decoded
+            .resize_exact(columns, rows, image::imageops::FilterType::Triangle)
+            .to_rgba8();
+        Ok(small
+            .rows()
+            .map(|row| {
+                row.map(|pixel| {
+                    let [r, g, b, a] = pixel.0;
+                    let over = |c: u8| (u16::from(c) * u16::from(a) / 255) as u8;
+                    [over(r), over(g), over(b)]
+                })
+                .collect()
+            })
+            .collect())
+    })
+    .unwrap_or_else(|_| Err("its decoder gave up on it".into()))
+}
+
 /// The image file at `path`, read in: no larger than [`MOST_FILE_BYTES`], through no link.
 ///
 /// # Errors
@@ -383,6 +423,15 @@ mod tests {
         assert!(keep(&home, &claimed_png(60_000, 60_000), 1).is_err());
         assert!(keep(&home, &claimed_png(4, 3), 2).is_err(), "no pixels");
         assert!(started.elapsed() < std::time::Duration::from_secs(2));
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn a_kept_image_comes_back_as_few_pixels() {
+        let (home, image) = kept_for_tests("thumbnail");
+        let pixels = thumbnail(&image, 2, 2).unwrap();
+        assert_eq!((pixels.len(), pixels[0].len()), (2, 2));
+        assert_eq!(pixels[0][0], [200, 80, 20]);
         let _ = std::fs::remove_dir_all(&home);
     }
 

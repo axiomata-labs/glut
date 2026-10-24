@@ -56,6 +56,9 @@ pub enum Kind {
     },
     /// A subagent (T18): a tile here, its own stream inside.
     Agent(Box<Agent>),
+    /// An image (T46): the owner's under their message, `read_file`'s under its call — drawn as `/images` says,
+    /// its line under it.
+    Picture(glut::images::Image),
     /// The model's thinking (T8), shown as the owner chose: hidden, a folded line, or open.
     Thinking {
         text: String,
@@ -87,6 +90,7 @@ impl Kind {
                 }
             }
             Kind::Agent(agent) => agent.task.clone(),
+            Kind::Picture(image) => image.label(),
         }
     }
 }
@@ -245,6 +249,27 @@ pub struct Transcript {
 }
 
 impl Transcript {
+    /// The images a tool's answer showed (T46), under its call — once, when the turn's conversation is back.
+    pub fn show_pictures(&mut self, call: &str, images: &[glut::images::Image]) {
+        let Some(at) = self
+            .blocks
+            .iter()
+            .position(|block| matches!(&block.kind, Kind::Tool { id, .. } if id == call))
+        else {
+            return;
+        };
+        if matches!(
+            self.blocks.get(at + 1).map(|block| &block.kind),
+            Some(Kind::Picture(_))
+        ) {
+            return;
+        }
+        for (offset, image) in images.iter().enumerate() {
+            self.blocks
+                .insert(at + 1 + offset, Block::new(Kind::Picture(image.clone())));
+        }
+    }
+
     pub fn push(&mut self, kind: Kind) {
         self.blocks.push(Block::new(kind));
     }
@@ -836,6 +861,31 @@ fn render(kind: &Kind, width: u16, thinking: Thinking, frame: usize) -> Vec<Line
             }
         }
         Kind::Agent(agent) => tile(agent, width, &mut lines),
+        Kind::Picture(image) => {
+            // Half the stream wide at most, ten rows high, its proportions kept; inline drawing (T46b) stands on
+            // the same cells.
+            if crate::pictures::drawing() != crate::pictures::Drawing::Off {
+                let room = u16::try_from(width.saturating_sub(2) / 2)
+                    .unwrap_or(u16::MAX)
+                    .max(8);
+                let (columns, rows) = crate::pictures::fitted(
+                    image.width,
+                    image.height,
+                    room,
+                    crate::pictures::MOST_ROWS,
+                );
+                if let Some(rows) = crate::pictures::half_blocks(image, columns, rows) {
+                    for mut row in rows {
+                        row.spans.insert(0, Span::raw("  "));
+                        lines.push(row);
+                    }
+                }
+            }
+            lines.push(Line::from(Span::styled(
+                format!("  {}", image.label()),
+                theme::quiet(),
+            )));
+        }
         Kind::Note { text, tone } => {
             let style = match tone {
                 Tone::Quiet => theme::quiet(),

@@ -81,7 +81,7 @@ const fn command(
 }
 
 /// Every command, grouped by topic in [`Topic::ALL`]'s order, the most used first inside a topic.
-pub const COMMANDS: [Command; 40] = [
+pub const COMMANDS: [Command; 41] = [
     command(Topic::Session, "clear", "", "start a new session"),
     command(
         Topic::Session,
@@ -252,6 +252,12 @@ pub const COMMANDS: [Command; 40] = [
         "gate",
         "",
         "the rules in force; take an \"always\" back (⌃G: the gate, live)",
+    ),
+    command(
+        Topic::Settings,
+        "images",
+        "inline|blocks|off",
+        "how images are drawn: the real one where the terminal can, true-colour half blocks, or their line alone",
     ),
     command(
         Topic::Settings,
