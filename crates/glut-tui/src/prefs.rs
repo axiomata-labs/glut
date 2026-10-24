@@ -55,6 +55,9 @@ pub struct Prefs {
         deserialize_with = "crate::warm::lenient"
     )]
     pub cache: Option<crate::warm::CacheMode>,
+    /// Whether the first start's welcome was seen (TUI9c): it goes with the first message or command.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub welcomed: Option<bool>,
     /// How much the screen moves (TUI9b, `/motion`); `None`: fully.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub motion: Option<crate::motion::Motion>,
@@ -76,6 +79,11 @@ pub struct Prefs {
 }
 
 impl Prefs {
+    /// Whether Glut ever kept a preference here: no file is a first start (TUI9c).
+    pub fn kept(home: &Path) -> bool {
+        Self::dir(home).join(FILE).exists()
+    }
+
     fn dir(home: &Path) -> PathBuf {
         home.join(glut::providers::DIR)
     }
@@ -193,6 +201,17 @@ pub fn set_cache(home: &Path, mode: crate::warm::CacheMode) -> Result<(), String
 pub fn set_footer(home: &Path, separators: crate::footer::Separators) -> Result<(), String> {
     let mut prefs = Prefs::read(home)?;
     prefs.footer = Some(separators);
+    prefs.save(home)
+}
+
+/// Keeps that the first start's welcome was seen.
+///
+/// # Errors
+///
+/// A message when the file cannot be read (it is not written over) or written.
+pub fn set_welcomed(home: &Path) -> Result<(), String> {
+    let mut prefs = Prefs::read(home)?;
+    prefs.welcomed = Some(true);
     prefs.save(home)
 }
 

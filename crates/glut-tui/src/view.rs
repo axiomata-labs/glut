@@ -499,6 +499,24 @@ fn draw_welcome(frame: &mut Frame, app: &mut App, area: Rect) {
         theme::quiet(),
     )));
     lines.push(Line::from(Span::styled(app.folder.clone(), theme::quiet())));
+    // The very first start (TUI9c): the keys to begin with, and `/init` where the folder has no guide yet.
+    if app.first_start {
+        lines.push(Line::default());
+        let mut first = vec![
+            "⌃K all the keys · / all the commands".to_owned(),
+            "⇧⇥ plan first, or build".to_owned(),
+        ];
+        if !app.parts.config.cwd.join("AGENTS.md").exists() {
+            first
+                .push("/init writes AGENTS.md: what Glut should know about this folder".to_owned());
+        }
+        for line in first {
+            lines.push(Line::from(Span::styled(
+                crate::motion::spoken(&line).into_owned(),
+                theme::glow(),
+            )));
+        }
+    }
     let height = lines.len() as u16;
     let top = area.y + area.height.saturating_sub(height) / 2;
     let place = Rect {

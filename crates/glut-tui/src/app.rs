@@ -269,6 +269,8 @@ pub struct App {
     pub held: Vec<String>,
     /// When the last of them came: an Enter right after it (meant for something else) lets none go.
     pub(crate) held_since: Option<Instant>,
+    /// Glut's very first start (TUI9c): the welcome shows the first keys until a message or a command goes.
+    pub first_start: bool,
     /// Since when Glut works (TUI9b): what the footer counts while the screen holds still.
     pub busy_since: Option<Instant>,
     /// The state last seen (TUI9b): the reader mode says each change in a line of its own.
@@ -311,6 +313,9 @@ impl App {
     pub fn new(parts: Arc<Parts>, engine: Engine, reports: mpsc::UnboundedSender<Report>) -> Self {
         let folder = session::shown_folder(&parts.config.cwd);
         let session = Session::new(&parts.config.cwd, &engine.provider, engine.model_name());
+        // Only a Glut that never kept a preference starts for the first time (TUI9c): an owner of long standing is
+        // not welcomed afresh.
+        let first_start = !Prefs::kept(&parts.home);
         let prefs = Prefs::load(&parts.home);
         let panel = prefs.panel;
         let vi = prefs.vi.unwrap_or(false);
@@ -445,6 +450,7 @@ impl App {
             cache_seen: false,
             held_since: None,
             busy_since: None,
+            first_start,
             seen_state: None,
             seen_turns: 0,
             waiting_models: Vec::new(),
@@ -1594,6 +1600,13 @@ impl App {
     /// stays in the input, like a message; a first word with a slash in it (`/usr/bin is missing`) is a message.
     fn submit(&mut self) {
         let text = self.input.text();
+        // The first word sent, whatever it is, says the welcome was read (TUI9c).
+        if self.first_start && !text.trim().is_empty() {
+            self.first_start = false;
+            if let Err(reason) = prefs::set_welcomed(&self.parts.home) {
+                self.transcript.note(reason, Tone::Fault);
+            }
+        }
         if self.input.broken_pastes() > 0 {
             self.transcript.note(
                 "a paste lost its mark to an edit and is left out; ⌃U clears the line, paste it again",
@@ -6044,6 +6057,27 @@ mod tests {
         app.working_for_tests();
         app.track_state_saying(false);
         assert!(app.busy_since.is_some() && notes(&app).len() == before + 4);
+    }
+
+    #[test]
+    fn the_first_start_welcomes_with_the_first_keys_until_something_is_sent() {
+        let (mut app, _reports) = app();
+        assert!(
+            app.first_start,
+            "a home without prefs starts for the first time"
+        );
+        let screen = wide_screen(&mut app);
+        assert!(
+            screen.contains("all the keys") && screen.contains("plan first"),
+            "{screen}"
+        );
+        type_text(&mut app, "/motion");
+        app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
+        app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
+        // Kept: the next start of that home is no first one.
+        assert!(!app.first_start && Prefs::kept(&app.parts.home));
+        assert!(!wide_screen(&mut app).contains("all the keys"));
+        let _ = std::fs::remove_dir_all(&app.parts.home);
     }
 
     #[test]
