@@ -2,7 +2,7 @@
 //! sheet (Ctrl+K, a tab of the side panel) and `/help`, kept here once — each entry carries its topic, and the topics
 //! follow [`Topic::ALL`].
 
-use ratatui::style::Modifier;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
 
@@ -417,12 +417,15 @@ pub const LEGEND: &str = "⌃ Ctrl · ⇧ Shift · ⌥ Alt · ⏎ Enter · ⇥ T
 /// The panel width from which a key's row also names its `/` command.
 pub const SHEET_WITH_COMMANDS: usize = 46;
 
-/// The Keys sheet `width` cells wide: each topic's heading, then its keys — the key in a column of its own, what it
+/// The Keys sheet `width` cells wide: each topic's heading, then its keys — each key a cap in the footer's look (T39:
+/// the calm backgrounds taking turns, light and darker, Powerline's arrow after it where the footer has them), what it
 /// does wrapped beside it, the `/` command after it where the sheet is wide enough.
-pub fn sheet(width: usize) -> Vec<Line<'static>> {
-    let key_width = KEYS.iter().map(|key| key.key.width()).max().unwrap_or(0) + 2;
-    let what_width = width.saturating_sub(key_width + 1).max(8);
+pub fn sheet(width: usize, separators: crate::footer::Separators) -> Vec<Line<'static>> {
+    let cap_width = KEYS.iter().map(|key| key.key.width()).max().unwrap_or(0);
+    // The gap in front, the cap with a space on either side, its joint and the gap after it.
+    let what_width = width.saturating_sub(cap_width + 5).max(8);
     let commands = width >= SHEET_WITH_COMMANDS;
+    let backgrounds = crate::footer::calm_backgrounds();
     let mut lines: Vec<Line<'static>> = wrap(LEGEND, width.saturating_sub(1).max(8))
         .into_iter()
         .map(|row| Line::from(Span::styled(format!(" {row}"), theme::quiet())))
@@ -439,16 +442,30 @@ pub fn sheet(width: usize) -> Vec<Line<'static>> {
             format!(" {}", topic.label()),
             theme::glow().add_modifier(Modifier::BOLD),
         )));
-        for key in keys {
+        for (turn, key) in keys.into_iter().enumerate() {
+            let bg = backgrounds[turn % 2];
             let what = match key.command {
                 command if commands && !command.is_empty() => format!("{} · {command}", key.what),
                 _ => key.what.to_owned(),
             };
+            // A wrapped row keeps the cap's colour, empty: the key and all it does read as one.
             for (at, row) in wrap(&what, what_width).into_iter().enumerate() {
                 let head = if at == 0 { key.key } else { "" };
-                let pad = key_width - head.width();
+                let pad = cap_width - head.width();
+                let joint = match separators {
+                    crate::footer::Separators::Powerline => {
+                        Span::styled(crate::footer::ARROW, Style::default().fg(bg))
+                    }
+                    crate::footer::Separators::Plain => Span::raw(" "),
+                };
                 lines.push(Line::from(vec![
-                    Span::styled(format!(" {head}{}", " ".repeat(pad)), theme::strong()),
+                    Span::raw(" "),
+                    Span::styled(
+                        format!(" {head}{} ", " ".repeat(pad)),
+                        Style::default().bg(bg).add_modifier(Modifier::BOLD),
+                    ),
+                    joint,
+                    Span::raw(" "),
                     Span::styled(row, theme::quiet()),
                 ]));
             }
@@ -534,11 +551,11 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join("\n")
         };
-        let narrow = text(sheet(28));
+        let narrow = text(sheet(28, crate::footer::Separators::Plain));
         assert!(narrow.contains(" Session") && narrow.contains(" Help"));
         assert!(!narrow.contains("/gate"));
         assert!(narrow.lines().all(|row| row.width() <= 28), "{narrow}");
-        let wide = text(sheet(60));
+        let wide = text(sheet(60, crate::footer::Separators::Powerline));
         assert!(wide.contains("· /gate"));
     }
 }

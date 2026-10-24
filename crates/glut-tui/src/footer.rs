@@ -10,7 +10,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::theme;
 
 /// Powerline's arrow after a segment (U+E0B0, a private-use glyph only patched fonts and some terminals draw).
-const ARROW: &str = "\u{e0b0}";
+pub const ARROW: &str = "\u{e0b0}";
 /// Powerline's branch glyph (U+E0A0); the plain footer has Unicode's own branch sign.
 const BRANCH_POWERLINE: &str = "\u{e0a0}";
 const BRANCH_PLAIN: &str = "⎇";
@@ -131,7 +131,7 @@ pub fn context(used: u64, window: Option<u32>, compacts_at: Option<u64>) -> Segm
 
 /// The two calm backgrounds, mixed from the theme's ink (its background) and its quiet grey: quiet in a dark theme
 /// and a light one alike, the terminal's own text colour readable on both.
-fn calm_backgrounds() -> [Color; 2] {
+pub fn calm_backgrounds() -> [Color; 2] {
     let palette = theme::c();
     [
         theme::mix(palette.ink, palette.quiet, 0.25),
