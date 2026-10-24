@@ -302,6 +302,10 @@ impl Default for Compaction {
     }
 }
 
+/// The tools a host's screen adds for sessions side by side (TUI T36c): offered only where the run says so
+/// ([`RunConfig::pane_tools`]) and never in a subagent — whatever the toolbox holds.
+pub const PANE_TOOLS: [&str; 1] = ["tell"];
+
 /// One run's settings.
 #[derive(Debug, Clone)]
 pub struct RunConfig {
@@ -341,6 +345,9 @@ pub struct RunConfig {
     /// Whether the run offers `glut_file` from its start (TUI T37b): a turn that starts with a maker skill. Else it
     /// is offered from the moment the model loads one.
     pub glut_files: bool,
+    /// Whether the run offers [`PANE_TOOLS`] (TUI T36c): the screen around it is split into panes of sessions that
+    /// may write to each other. Never to a subagent.
+    pub pane_tools: bool,
     /// Whether the run offers `codemode` and keeps its MCP tools behind it (Glut 2, A + E, G3/G8): the model then sees
     /// the core tools and `codemode`, and reaches the MCP tools from a script. On by default.
     pub codemode: bool,
@@ -438,6 +445,7 @@ impl RunConfig {
             agents: std::sync::Arc::default(),
             models: None,
             glut_files: false,
+            pane_tools: false,
             codemode: true,
             mcp_behind_code: true,
             todos: true,

@@ -40,7 +40,7 @@ mod task;
 pub mod tools;
 
 pub use config::{
-    Budget, Compaction, Effort, Inbox, ModelEndpoint, Prices, RefusalLimits, RunConfig,
+    Budget, Compaction, Effort, Inbox, ModelEndpoint, PANE_TOOLS, Prices, RefusalLimits, RunConfig,
 };
 pub use error::HarnessError;
 pub use event::{Event, EventSink, FinishReason, McpStatus, SharedSink, SkillHow};

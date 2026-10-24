@@ -52,6 +52,17 @@ fn init_check(name: &str) -> String {
     )
 }
 
+/// The most messages of other panes' models held in one pane for the owner's Enter (T36c).
+pub const MOST_HELD: usize = 5;
+
+/// What a pane's model could do when it wrote to another pane (T36c): a message waiting for a turn's end goes on only
+/// if the receiving pane is still no wider than this by then.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Sender {
+    pub looseness: u8,
+    pub granted: Vec<String>,
+}
+
 /// When a message from another pane is taken (T36b).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Delivered {
@@ -222,6 +233,16 @@ pub struct App {
     pub others_open: Vec<String>,
     /// The other panes' numbers (T36b: where `/send` and a plan go).
     pub others: Vec<u8>,
+    /// The owner sent a message here since the screen last looked (T36c: it ends a chain between models).
+    pub owner_spoke: bool,
+    /// How many messages this session's model sent to other panes (T36c: at most [`crate::panes::MOST_TELLS`]).
+    pub tells_sent: u32,
+    /// Messages of another pane's model that wait for the owner's Enter here (T36c): never sent by a turn's end.
+    pub held: Vec<String>,
+    /// When the last of them came: an Enter right after it (meant for something else) lets none go.
+    pub(crate) held_since: Option<Instant>,
+    /// Messages of another pane's model for after the turn under way, with what their sender could do (T36c).
+    waiting_models: Vec<(String, Sender)>,
     /// The folder's branch for the footer (T39).
     pub branch: crate::branch::Branch,
     /// How the footer joins its segments, and whether Glut guessed it (`Some`, with the terminal it knew, if any)
@@ -368,6 +389,11 @@ impl App {
             pane_request: None,
             others_open: Vec::new(),
             others: Vec::new(),
+            owner_spoke: false,
+            tells_sent: 0,
+            held: Vec::new(),
+            held_since: None,
+            waiting_models: Vec::new(),
             separators,
             separators_from,
             frame: 0,
@@ -419,6 +445,7 @@ impl App {
     pub fn open(&mut self, session: Session) {
         // What waited for the other session is not this one's.
         self.queue.clear();
+        self.forget_models();
         self.pending.clear();
         self.transcript = Transcript {
             thinking: self.transcript.thinking,
@@ -543,10 +570,18 @@ impl App {
         }
         // A picker left open (glut -r with a first message) is no place to choose from while the turn runs.
         self.picker = None;
-        self.transcript
-            .push(crate::transcript::Kind::Owner(prompt.clone()));
-        // The session is named by the owner's first own message, not by a handoff read in front of it.
-        if self.session.title.is_empty() {
+        // Another pane's model is not the owner (T36c): its message stands apart, and only the owner's word ends a
+        // chain of messages between models.
+        if let Some(shown) = crate::tell::shown(&prompt) {
+            self.transcript.note(shown, Tone::Heed);
+        } else {
+            self.owner_spoke = true;
+            self.transcript
+                .push(crate::transcript::Kind::Owner(prompt.clone()));
+        }
+        // The session is named by the owner's first own message, not by a handoff read in front of it, nor by
+        // another pane's model.
+        if self.session.title.is_empty() && crate::tell::shown(&prompt).is_none() {
             self.session.title = crate::store::title_of(&prompt);
         }
         self.scroll = 0;
@@ -783,7 +818,15 @@ impl App {
                 }
                 // The next queued message follows a turn that answered; after a stop, a failure or a limit it waits
                 // for Enter, or it would run into the same wall.
-                if outcome.reason == FinishReason::Answered && !self.queue.is_empty() {
+                // T36c: another model's message first — if this pane is still no wider than its sender was.
+                if outcome.reason == FinishReason::Answered && !self.waiting_models.is_empty() {
+                    let (message, sender) = self.waiting_models.remove(0);
+                    if self.no_wider_than(&sender) {
+                        self.send(message);
+                    } else {
+                        self.hold(message, "this pane runs wider now than when it was written");
+                    }
+                } else if outcome.reason == FinishReason::Answered && !self.queue.is_empty() {
                     let next = self.queue.remove(0);
                     self.send(next);
                 }
@@ -880,6 +923,10 @@ impl App {
                     Tone::Fault,
                 );
                 self.transcript.settle();
+            }
+            // T36c: only the screen of several panes delivers; a pane alone has no one to tell.
+            Report::Tell { reply, .. } => {
+                let _ = reply.send(Err("there is no other pane".to_owned()));
             }
             // T37c: `glut_file` asks for a model of an agent's or a skill's own — every provider's list.
             Report::PickModel(reply) => {
@@ -1410,6 +1457,8 @@ impl App {
                 return;
             }
             let text = self.input.take();
+            // A steer or a queued message is the owner's word too (T36c: it ends a chain between models).
+            self.owner_spoke = true;
             match &self.steering {
                 Some(inbox) => {
                     inbox.send(text);
@@ -1423,7 +1472,18 @@ impl App {
             }
             return;
         }
-        // Enter on an empty input sends what waits in the queue (after a turn the owner stopped).
+        // Enter on an empty input lets a held message of another pane's model go on (T36c) — the owner read it in
+        // the stream — before what waits in the queue (after a turn the owner stopped).
+        if self.input.is_empty()
+            && !self.held.is_empty()
+            && self
+                .held_since
+                .is_none_or(|since| since.elapsed() >= ASK_SETTLE)
+        {
+            let next = self.held.remove(0);
+            self.owner_spoke = true;
+            return self.send(next);
+        }
         if self.input.is_empty() && !self.queue.is_empty() {
             let next = self.queue.remove(0);
             return self.send(next);
@@ -1439,6 +1499,7 @@ impl App {
         }
         let text = self.input.take();
         self.queue.push(text);
+        self.owner_spoke = true;
         self.say("queued for after this turn — ⌥↑ takes it back");
     }
 
@@ -1597,6 +1658,7 @@ impl App {
                 self.search = None;
                 self.pending.clear();
                 self.queue.clear();
+        self.forget_models();
                 self.conversation.clear();
                 self.todos.clear();
         self.forget_views();
@@ -2677,6 +2739,7 @@ impl App {
         self.selection = None;
         self.search = None;
         self.queue.clear();
+        self.forget_models();
         self.todos.clear();
         self.forget_views();
         self.last_turn = None;
@@ -3540,6 +3603,86 @@ impl App {
             self.send(text);
             Delivered::Now
         }
+    }
+
+    /// A message of another pane's model (T36c): at once only where `may_start` (this pane is no wider than the
+    /// sender's) and nothing else is open here; after the turn under way, checked again then; otherwise held for the
+    /// owner's Enter, its text shown. `Err` when too many wait here already.
+    pub fn deliver_model(
+        &mut self,
+        message: String,
+        from: u8,
+        may_start: bool,
+        sender: Sender,
+    ) -> Result<Delivered, String> {
+        let free = !self.working()
+            && self.picker.is_none()
+            && self.queue.is_empty()
+            && self.held.is_empty()
+            && self.waiting_models.is_empty();
+        if may_start && self.steering.is_some() {
+            self.waiting_models.push((message, sender));
+            return Ok(Delivered::AfterTurn);
+        }
+        if may_start && free {
+            self.send(message);
+            return Ok(Delivered::Now);
+        }
+        if self.held.len() >= MOST_HELD {
+            return Err(format!(
+                "{MOST_HELD} messages wait there for the owner already: tell the owner instead"
+            ));
+        }
+        self.hold(
+            message,
+            &format!("Enter here lets pane {from}'s message go on"),
+        );
+        Ok(Delivered::OnEnter)
+    }
+
+    /// Holds another model's message for the owner's Enter, its text shown with `why`.
+    fn hold(&mut self, message: String, why: &str) {
+        let shown = crate::tell::shown(&message).unwrap_or_default();
+        self.transcript
+            .note(format!("{shown}\n— held: {why}"), Tone::Heed);
+        self.held.push(message);
+        self.held_since = Some(Instant::now());
+    }
+
+    /// Whether this pane can do no more than `sender` could: no looser mode, no "always" it lacked.
+    pub fn no_wider_than(&self, sender: &Sender) -> bool {
+        let mine = self.sender();
+        mine.looseness <= sender.looseness
+            && mine
+                .granted
+                .iter()
+                .all(|rule| sender.granted.contains(rule))
+    }
+
+    /// What this pane's model can do now, as a sender.
+    pub fn sender(&self) -> Sender {
+        let granted = self
+            .parts
+            .tools
+            .gate()
+            .map(|gate| {
+                gate.granted()
+                    .into_iter()
+                    .flat_map(|granted| granted.rules)
+                    .collect()
+            })
+            .unwrap_or_default();
+        Sender {
+            looseness: self.mode().looseness(),
+            granted,
+        }
+    }
+
+    /// Other models' messages go with the conversation they were shown in.
+    fn forget_models(&mut self) {
+        self.held.clear();
+        self.held_since = None;
+        self.waiting_models.clear();
     }
 
     /// The plan with its task list as another pane gets it to build (T36b); `None` without a plan.

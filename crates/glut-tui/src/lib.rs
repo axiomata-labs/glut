@@ -29,6 +29,7 @@ mod session;
 pub mod setup;
 mod shell;
 mod store;
+mod tell;
 mod theme;
 mod todos;
 mod transcript;

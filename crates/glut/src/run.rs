@@ -631,6 +631,13 @@ impl Offer {
             direct.retain(|spec| spec.name != glut_files::NAME);
             behind.retain(|spec| spec.name != glut_files::NAME);
         }
+        // T36c: the panes' tools only where the screen is split, and never to a subagent.
+        let offers_panes = config.pane_tools && depth == 0;
+        let pane_tool = |name: &str| crate::config::PANE_TOOLS.contains(&name);
+        if !offers_panes {
+            direct.retain(|spec| !pane_tool(&spec.name));
+            behind.retain(|spec| !pane_tool(&spec.name));
+        }
         let codemode = config.codemode && !(direct.is_empty() && behind.is_empty());
         let catalog = Arc::new(codemode::Catalog {
             specs: direct.iter().chain(&behind).cloned().collect(),
@@ -640,6 +647,7 @@ impl Offer {
         } else {
             let mut all = tools.specs();
             all.retain(|spec| offers_glut || spec.name != glut_files::NAME);
+            all.retain(|spec| offers_panes || !pane_tool(&spec.name));
             all
         };
         if codemode {
@@ -1660,6 +1668,15 @@ impl<M: ChatModel> Loop<'_, M> {
         if self.offer_task && name == crate::task::NAME {
             return Ok(self.run_task(call, sink).await);
         }
+        // T36c: nor are the panes' tools.
+        if crate::config::PANE_TOOLS.contains(&name.as_str())
+            && !self.offer.specs.iter().any(|spec| spec.name == *name)
+        {
+            return Ok((
+                false,
+                format!("error: {name} is offered only while the screen is split into panes"),
+            ));
+        }
         // T37b: what is not offered is not run, whatever the model calls.
         if name == glut_files::NAME && !self.offer.specs.iter().any(|spec| spec.name == *name) {
             return Ok((
@@ -2043,7 +2060,12 @@ impl<M: ChatModel> Loop<'_, M> {
     ) -> Result<(bool, String), FinishReason> {
         sink.emit(Event::tool_call(self.turns, &id, &name, &arguments));
         // Another script, a subagent, or the owner's plan question are the model's own steps, not a script's.
-        if name == codemode::NAME || name == crate::task::NAME || name == planning::EXIT_PLAN {
+        // T36c: nor a message to another pane — each one is the model's own word, judged and seen as such.
+        if name == codemode::NAME
+            || name == crate::task::NAME
+            || name == planning::EXIT_PLAN
+            || crate::config::PANE_TOOLS.contains(&name.as_str())
+        {
             let text = format!("not permitted: a script cannot start {name}");
             sink.emit(Event::tool_result(self.turns, &id, &name, false, &text));
             return Ok((false, text));
@@ -3022,6 +3044,53 @@ mod tests {
         fn call(&self, arguments: Value, _context: crate::tools::CallContext) -> ToolFuture<'_> {
             Box::pin(async move { Ok(arguments["text"].as_str().unwrap_or_default().to_owned()) })
         }
+    }
+
+    /// A stand-in for the screen's `tell` (TUI T36c).
+    struct PaneTool;
+
+    impl Tool for PaneTool {
+        fn spec(&self) -> ToolSpec {
+            ToolSpec {
+                name: crate::config::PANE_TOOLS[0].into(),
+                description: "t".into(),
+                parameters: json!({"type": "object"}),
+            }
+        }
+
+        fn access(&self, _arguments: &Value) -> crate::permissions::Access {
+            crate::permissions::Access::Other
+        }
+
+        fn call(&self, _arguments: Value, _context: crate::tools::CallContext) -> ToolFuture<'_> {
+            Box::pin(async move { Ok("told".to_owned()) })
+        }
+    }
+
+    #[test]
+    fn the_panes_tools_are_offered_only_where_the_screen_is_split_and_never_to_a_subagent() {
+        let mut tools = Toolbox::new();
+        tools.extend([
+            Box::new(PaneTool) as Box<dyn Tool>,
+            Box::new(Echo) as Box<dyn Tool>,
+        ]);
+        let names = |config: &RunConfig, depth: u32| -> Vec<String> {
+            Offer::of(config, &tools, depth, false)
+                .specs
+                .iter()
+                .map(|spec| spec.name.clone())
+                .collect()
+        };
+        let mut config = RunConfig::new("/tmp");
+        config.codemode = false;
+        assert!(!names(&config, 0).contains(&"tell".to_owned()));
+        config.pane_tools = true;
+        assert!(names(&config, 0).contains(&"tell".to_owned()));
+        assert!(
+            !names(&config, 1).contains(&"tell".to_owned()),
+            "never to a subagent"
+        );
+        assert!(names(&config, 1).contains(&"echo".to_owned()));
     }
 
     fn toolbox() -> Toolbox {

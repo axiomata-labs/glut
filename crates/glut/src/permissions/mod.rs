@@ -56,6 +56,10 @@ pub enum Access {
     /// A `task` call that names an agent (TUI T37a): which, and on what it runs where its file says, as the owner
     /// reads it in an ask. Judged as [`Self::Other`] is — the rules know `task` by its name.
     Agent { what: String },
+    /// A message from this pane's model to another pane of the screen (TUI T36c, `tell`): to whom and what, as the
+    /// owner reads it in an ask. Known to the rules by the tool's name; asked in plan mode too — a planner writes to
+    /// the pane that builds, which changes nothing here.
+    Pane { what: String },
     /// A tool the rules know only by its name.
     Other,
 }
@@ -243,6 +247,7 @@ impl Rule {
             Access::Other
             | Access::Memory { .. }
             | Access::Agent { .. }
+            | Access::Pane { .. }
             | Access::GlutFile { .. } => named,
         }
     }
@@ -491,6 +496,7 @@ impl Mode {
             (Mode::Auto, Access::Memory { .. } | Access::GlutFile { .. }) => Ask,
             (Mode::Auto, _) => Allow,
             (_, Access::Read { .. }) => Allow,
+            (Mode::Plan | Mode::Default | Mode::AcceptEdits, Access::Pane { .. }) => Ask,
             (Mode::AcceptEdits, Access::Edit { .. }) => Allow,
             (Mode::Plan | Mode::DontAsk, _) => Deny,
             (Mode::Default | Mode::AcceptEdits, _) => Ask,
@@ -1267,7 +1273,9 @@ impl Gate {
                 format!("{reason}; Glut's own files are always asked"),
             );
         }
-        if verdict == Verdict::Ask && self.mode().asks_nothing() {
+        // A message to another pane is asked in plan mode too (T36c): it writes nothing here.
+        let plan_asks = self.mode() == Mode::Plan && matches!(access, Access::Pane { .. });
+        if verdict == Verdict::Ask && self.mode().asks_nothing() && !plan_asks {
             verdict = Verdict::Deny;
             reason = format!("{reason}; {mode} asks nothing");
         }
@@ -1629,9 +1637,11 @@ fn scopes(tool: &str, access: &Access) -> Vec<Scope> {
         Access::Network { host } => one(format!("Network({host})")),
         // An MCP call's allowance is the tool's own rule, which names it exactly (M5).
         Access::Mcp { server, tool } => one(format!("mcp__{server}__{tool}")),
-        Access::Own | Access::Other | Access::Memory { .. } | Access::Agent { .. } => {
-            one(tool.to_owned())
-        }
+        Access::Own
+        | Access::Other
+        | Access::Memory { .. }
+        | Access::Agent { .. }
+        | Access::Pane { .. } => one(tool.to_owned()),
         // T37b: this once only — no "always" for a write of a skill, an agent or a hook.
         Access::GlutFile { .. } => Vec::new(),
     }
@@ -1657,6 +1667,7 @@ fn describe(access: &Access) -> String {
         Access::Mcp { server, tool } => format!("{server}/{tool}"),
         Access::Memory { change }
         | Access::Agent { what: change }
+        | Access::Pane { what: change }
         | Access::GlutFile { change } => change.clone(),
         Access::Own | Access::Other => String::new(),
     }
@@ -1941,6 +1952,35 @@ mod tests {
         let asker = Arc::new(Always(Answer::Allow, Mutex::new(0)));
         let plan = Gate::new(RuleSet::default(), Mode::Plan, asker);
         assert!(plan.judge("glut_file", &change).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn a_message_to_another_pane_is_asked_even_in_plan_mode_and_says_to_whom_and_what() {
+        let told = Access::Pane {
+            what: "to pane 2: the parser is done".into(),
+        };
+        assert_eq!(describe(&told), "to pane 2: the parser is done");
+        assert_eq!(
+            scopes("tell", &told).len(),
+            1,
+            "an \"always\" for the session"
+        );
+        for mode in [Mode::Plan, Mode::Default, Mode::AcceptEdits] {
+            let asker = Arc::new(Always(Answer::Allow, Mutex::new(0)));
+            let gate = Gate::new(RuleSet::default(), mode, asker.clone());
+            assert!(gate.judge("tell", &told).await.is_ok(), "{mode:?}");
+            assert_eq!(*asker.1.lock().unwrap(), 1, "asked in {mode:?}");
+        }
+        let asker = Arc::new(Always(Answer::Allow, Mutex::new(0)));
+        let auto = Gate::new(RuleSet::default(), Mode::Auto, asker.clone());
+        assert!(auto.judge("tell", &told).await.is_ok());
+        assert_eq!(*asker.1.lock().unwrap(), 0, "auto lets it through");
+        let asker = Arc::new(Always(Answer::Allow, Mutex::new(0)));
+        let quiet = Gate::new(RuleSet::default(), Mode::DontAsk, asker);
+        assert!(
+            quiet.judge("tell", &told).await.is_err(),
+            "dont-ask asks nothing"
+        );
     }
 
     #[tokio::test]

@@ -39,6 +39,12 @@ pub enum Report {
     ChooseModel(String),
     /// `glut_file`'s `pick_model` (T37c): the owner picks a provider and a model from Glut's lists; `None`: none.
     PickModel(oneshot::Sender<Option<(String, String)>>),
+    /// `tell` (T36c): the model's message to pane `to` (the other one when `None`); the reply says what became of it.
+    Tell {
+        to: Option<u8>,
+        text: String,
+        reply: oneshot::Sender<Result<String, String>>,
+    },
     /// The owner's `!cmd` (for the model, `to_model`) or `!!cmd` (for the owner alone) ended.
     Shell {
         /// The stream's block of it.
@@ -173,6 +179,8 @@ pub struct Parts {
     pub skills: Vec<(String, String)>,
     /// The project's memory folder (T35), for `/memory`; a host's session has none.
     pub memory: Option<PathBuf>,
+    /// What the screen tells this session's `tell` about the other panes (T36c).
+    pub pane_link: Arc<crate::tell::Link>,
 }
 
 /// The model the session talks to now.
@@ -341,12 +349,15 @@ pub async fn build(
     let picker = Arc::new(ScreenPicker {
         reports: reports.clone(),
     });
+    // T36c: `tell` is in every screen session's toolbox, offered only while the screen is split.
+    let pane_link = Arc::new(crate::tell::Link::default());
+    let tell = crate::tell::Tell::new(Arc::clone(&pane_link), reports.clone());
     let mut sink = SharedSink::new(Box::new(ToScreen {
         reports,
         host: Arc::clone(&host),
         log: Arc::clone(&log),
     }));
-    let tools = setup::toolbox(
+    let mut tools = setup::toolbox(
         &cwd,
         &catalog,
         built.gate,
@@ -368,6 +379,7 @@ pub async fn build(
     )
     .await
     .map_err(|err| err.to_string())?;
+    tools.extend([Box::new(tell) as Box<dyn glut::Tool>]);
     let parts = Parts {
         home,
         config,
@@ -389,6 +401,7 @@ pub async fn build(
         guide_warn_bytes,
         skills,
         memory,
+        pane_link,
     };
     let engine = match launch.engine {
         EngineChoice::Providers { provider, model } => {
@@ -649,6 +662,7 @@ pub fn turn(
             inbox: Some(inbox),
             ..engine.config(&parts)
         };
+        config.pane_tools = parts.pane_link.split();
         // A named agent's own model is built like the session's (T37a): the providers, their keys, the model list.
         config.models = Some(glut::agents::Models(Arc::new(SessionModels {
             parts: Arc::clone(&parts),
@@ -1163,6 +1177,7 @@ pub fn for_tests() -> (Parts, Engine) {
         guide_warn_bytes: u64::from(glut::config::DEFAULT_GUIDE_WARN_KB) * 1024,
         skills: Vec::new(),
         memory: None,
+        pane_link: Arc::new(crate::tell::Link::default()),
     };
     let engine = Engine {
         provider: "test".into(),

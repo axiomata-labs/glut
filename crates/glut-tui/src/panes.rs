@@ -17,6 +17,10 @@ use crate::transcript::Tone;
 
 /// The most panes for now (T36a): two side by side, or one above the other.
 pub const MOST: usize = 2;
+/// How many messages models send each other without the owner's word before the next waits for it (T36c).
+pub const MOST_CHAIN: u32 = 6;
+/// How many messages one session's model may send to other panes (T36c).
+pub const MOST_TELLS: u32 = 30;
 /// How long a first `/quit` or `/close` stays armed while a pane works: the second within it goes on.
 const ARMED: Duration = Duration::from_secs(10);
 
@@ -213,6 +217,8 @@ pub struct Panes {
     close_armed: Option<(u8, Instant)>,
     /// The screen is drawn anew from blank: a session built beside it may have written to the terminal.
     pub redraw: bool,
+    /// Messages between models since the owner's last word in any pane (T36c).
+    chain: u32,
 }
 
 /// The other ends of [`Panes`]' channels, which the screen's loop waits on.
@@ -253,6 +259,7 @@ impl Panes {
             quit_armed: None,
             close_armed: None,
             redraw: false,
+            chain: 0,
         };
         (
             panes,
@@ -283,8 +290,42 @@ impl Panes {
             .iter()
             .map(|pane| pane.app.session.id.clone())
             .collect();
+        // What `tell` says of each pane to the others (T36c).
+        let described: Vec<(u8, String)> = self
+            .list
+            .iter()
+            .map(|pane| {
+                let app = &pane.app;
+                let mode = session::mode_label(app.mode());
+                let model = format!("{} ({})", app.engine.model_name(), app.engine.provider);
+                (
+                    pane.number,
+                    format!(
+                        "pane {}: all-rounder, {}, {mode} mode, in {}",
+                        pane.number,
+                        glut::permissions::printable(&model),
+                        crate::transcript::cut(&glut::permissions::printable(&app.folder), 80)
+                    ),
+                )
+            })
+            .collect();
+        if self
+            .list
+            .iter_mut()
+            .any(|pane| std::mem::take(&mut pane.app.owner_spoke))
+        {
+            self.chain = 0;
+        }
         for (at, pane) in self.list.iter_mut().enumerate() {
             pane.app.drop_answered_ask();
+            pane.app.parts.pane_link.set(
+                pane.number,
+                described
+                    .iter()
+                    .filter(|(number, _)| *number != pane.number)
+                    .map(|(_, line)| line.clone())
+                    .collect(),
+            );
             pane.app.mouse_held = held;
             pane.app.others = numbers
                 .iter()
@@ -302,9 +343,77 @@ impl Panes {
 
     /// A report of session `id`; one of a pane closed since is nobody's.
     pub fn on_report(&mut self, id: u64, report: Report) {
+        // A model's message to another pane is the screen's to deliver (T36c).
+        if let Report::Tell { to, text, reply } = report {
+            let _ = reply.send(self.tell(id, to, text));
+            return;
+        }
         if let Some(pane) = self.list.iter_mut().find(|pane| pane.id == id) {
             pane.app.on_report(report);
         }
+    }
+
+    /// Session `id`'s model writes to pane `to` (the other one): delivered as a message of the other model, never the
+    /// owner's — held for the owner's Enter once the models have written [`MOST_CHAIN`] times without the owner's word,
+    /// refused past [`MOST_TELLS`]. What it became, for the model.
+    fn tell(&mut self, id: u64, to: Option<u8>, text: String) -> Result<String, String> {
+        let source = self
+            .list
+            .iter()
+            .position(|pane| pane.id == id)
+            .ok_or("this pane is closed")?;
+        let from = self.list[source].number;
+        let others: Vec<usize> = (0..self.list.len()).filter(|at| *at != source).collect();
+        let target = match to {
+            Some(number) => others
+                .iter()
+                .copied()
+                .find(|at| self.list[*at].number == number)
+                .ok_or(format!("there is no pane {number}"))?,
+            None if others.len() == 1 => others[0],
+            None if others.is_empty() => return Err("there is no other pane".into()),
+            None => return Err("name the pane: there are several".into()),
+        };
+        if self.list[source].app.tells_sent >= MOST_TELLS {
+            return Err(format!(
+                "this session has sent {MOST_TELLS} messages to other panes: no more — tell the owner instead"
+            ));
+        }
+        self.list[source].app.tells_sent += 1;
+        self.chain += 1;
+        let number = self.list[target].number;
+        let message = crate::tell::wrapped(from, &text);
+        // A model may start a turn only in a pane that can do no more than its own: no looser mode, no "always" it
+        // lacks, and the same folder — a pane elsewhere (a worktree, the repository) writes where the sender cannot —
+        // unless it only plans. Else, and past the chain, it waits for the owner's Enter there, its text shown.
+        let sender = self.list[source].app.sender();
+        let target_app = &self.list[target].app;
+        let same_folder = target_app.parts.config.cwd == self.list[source].app.parts.config.cwd;
+        let only_plans = target_app.mode() == glut::permissions::Mode::Plan;
+        let wider = !target_app.no_wider_than(&sender) || !(same_folder || only_plans);
+        let may_start = !wider && self.chain <= MOST_CHAIN;
+        use crate::app::Delivered;
+        let delivered = self.list[target]
+            .app
+            .deliver_model(message, from, may_start, sender)?;
+        Ok(match delivered {
+            Delivered::Now => format!("delivered: pane {number} starts on it now"),
+            Delivered::AfterTurn => {
+                format!("delivered: pane {number} reads it after its current turn")
+            }
+            Delivered::WhenFree => format!("delivered: pane {number} reads it once it is free"),
+            Delivered::OnEnter if wider => format!(
+                "held: pane {number} can do more than this pane (its mode, its rules or its folder), so it reads it \
+                 once the owner says so there"
+            ),
+            Delivered::OnEnter if !may_start => format!(
+                "held: the panes have written to each other often without the owner — pane {number} reads it once \
+                 the owner says so"
+            ),
+            Delivered::OnEnter => {
+                format!("held: pane {number} reads it once the owner goes on there")
+            }
+        })
     }
 
     /// A key, a paste or the mouse: the active pane's, but a click moves into the pane under it (the click itself
@@ -677,9 +786,15 @@ impl Panes {
                 None => return self.active().tell("no plan yet: plan mode (⇧⇥) makes one"),
             },
         };
-        let delivered = self.list[target]
-            .app
-            .deliver(format!("From pane {from}: {text}"));
+        // A plan was written by a model: the owner hands it over, the words stay the planner's.
+        let message = if plan {
+            format!(
+                "From pane {from} — its plan, handed over by the owner to be built here:\n\n{text}"
+            )
+        } else {
+            format!("From pane {from}: {text}")
+        };
+        let delivered = self.list[target].app.deliver(message);
         // Marked handed only once it went.
         if plan && let Some(plan) = &mut self.active().plan {
             plan.state = crate::plan::State::Handed(number);
@@ -875,6 +990,7 @@ fn numbers(numbers: &[u8]) -> String {
 mod tests {
     use super::*;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent};
+    use tokio::sync::oneshot;
 
     fn app() -> (App, mpsc::UnboundedReceiver<Report>) {
         let (parts, engine) = session::for_tests();
@@ -1242,6 +1358,160 @@ mod tests {
         panes.active().pane_request = Some(parse_send("3 files changed").unwrap());
         panes.settle(&(Arc::new(crate::Standalone) as Arc<dyn Host>));
         assert_eq!(owners(&panes.list[1].app), ["From pane 1: 3 files changed"]);
+    }
+
+    fn told(panes: &mut Panes, from: u64, to: Option<u8>, text: &str) -> Result<String, String> {
+        let (reply, mut answer) = oneshot::channel();
+        panes.on_report(
+            from,
+            Report::Tell {
+                to,
+                text: text.into(),
+                reply,
+            },
+        );
+        answer.try_recv().unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_models_message_is_no_word_of_the_owners_and_a_long_chain_waits_for_one() {
+        let (mut panes, _inlets) = split(Side::Right);
+        panes.sync();
+        let (first, second) = (panes.list[0].id, panes.list[1].id);
+        let said = told(&mut panes, first, None, "which test fails?").unwrap();
+        assert!(said.contains("delivered: pane 2"), "{said}");
+        let target = &panes.list[1].app;
+        assert!(target.transcript.blocks.iter().any(|block| matches!(
+            &block.kind,
+            crate::transcript::Kind::Note { text, tone: Tone::Heed }
+                if text.starts_with("pane 1's model (not the owner): which test fails?")
+        )));
+        assert!(
+            !target
+                .transcript
+                .blocks
+                .iter()
+                .any(|block| matches!(block.kind, crate::transcript::Kind::Owner(_))),
+            "never shown as the owner's"
+        );
+        assert!(
+            !panes.list[1].app.owner_spoke,
+            "nor counted as the owner's word"
+        );
+        for n in 2..=MOST_CHAIN {
+            let from = if n % 2 == 0 { second } else { first };
+            assert!(
+                told(&mut panes, from, None, "and?")
+                    .unwrap()
+                    .starts_with("delivered")
+            );
+        }
+        // Past the chain the message waits for Enter — also in a pane whose turn ends meanwhile.
+        let held = told(&mut panes, second, None, "one more").unwrap();
+        assert!(held.starts_with("held"), "{held}");
+        assert_eq!(panes.list[0].app.held.len(), 1);
+        assert!(
+            panes.list[0]
+                .app
+                .queue
+                .iter()
+                .all(|queued| !queued.contains("one more")),
+            "a held message is not what a turn's end sends"
+        );
+        // The owner's word anywhere starts the count anew.
+        panes.list[0].app.owner_spoke = true;
+        panes.sync();
+        assert!(
+            told(&mut panes, second, None, "again")
+                .unwrap()
+                .starts_with("delivered"),
+            "the chain starts anew"
+        );
+        panes.list[1].app.tells_sent = MOST_TELLS;
+        assert!(
+            told(&mut panes, second, None, "too many")
+                .unwrap_err()
+                .contains("no more")
+        );
+        assert!(
+            told(&mut panes, first, Some(9), "x")
+                .unwrap_err()
+                .contains("no pane 9")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_model_does_not_start_a_turn_in_a_looser_pane_and_enter_lets_it_go_on() {
+        use glut::permissions::{AnswerFuture, AskRequest, Asker, Mode};
+        struct No;
+        impl Asker for No {
+            fn ask<'a>(&'a self, _request: &'a AskRequest) -> AnswerFuture<'a> {
+                Box::pin(async { glut::permissions::Answer::Deny })
+            }
+        }
+        let gated = |mode: Mode| {
+            let (mut parts, engine) = session::for_tests();
+            parts.tools.set_gate(Arc::new(glut::Gate::new(
+                glut::RuleSet::default(),
+                mode,
+                Arc::new(No),
+            )));
+            let (send, reports) = mpsc::unbounded_channel();
+            (App::new(Arc::new(parts), engine, send), reports)
+        };
+        let (first_app, first_reports) = gated(Mode::Plan);
+        let (mut panes, _inlets) = Panes::new(first_app, first_reports, true, Servers::Owner);
+        let (second_app, _second_reports) = gated(Mode::Auto);
+        panes.list.push(Pane {
+            id: 2,
+            number: 2,
+            app: second_app,
+            area: Rect::default(),
+            tree: None,
+        });
+        panes.sync();
+        let first = panes.list[0].id;
+        let held = told(&mut panes, first, None, "build it all").unwrap();
+        assert!(held.contains("can do more"), "{held}");
+        let target = &mut panes.list[1].app;
+        assert!(!target.working() && target.held.len() == 1);
+        assert!(target.transcript.blocks.iter().any(|block| matches!(
+            &block.kind,
+            crate::transcript::Kind::Note { text, .. } if text.contains("build it all") && text.contains("held")
+        )), "the owner reads it before letting it go");
+        panes.active = 1;
+        press(&mut panes, KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(
+            panes.list[1].app.held.len(),
+            1,
+            "no Enter right after it came lets it go"
+        );
+        panes.list[1].app.held_since = Some(Instant::now() - Duration::from_secs(1));
+        press(&mut panes, KeyCode::Enter, KeyModifiers::NONE);
+        assert!(
+            panes.list[1].app.held.is_empty() && panes.list[1].app.working(),
+            "Enter lets it go on"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_model_does_not_start_a_turn_in_a_pane_of_another_folder() {
+        let (first_app, first_reports) = app();
+        let (mut panes, _inlets) = Panes::new(first_app, first_reports, true, Servers::Owner);
+        let (mut parts, engine) = session::for_tests();
+        parts.config.cwd = std::env::temp_dir().join("glut-tui-elsewhere");
+        let (send, _reports) = mpsc::unbounded_channel();
+        panes.list.push(Pane {
+            id: 2,
+            number: 2,
+            app: App::new(Arc::new(parts), engine, send),
+            area: Rect::default(),
+            tree: None,
+        });
+        panes.sync();
+        let held = told(&mut panes, 1, None, "change main.rs").unwrap();
+        assert!(held.contains("its folder"), "{held}");
+        assert!(!panes.list[1].app.working() && panes.list[1].app.held.len() == 1);
     }
 
     #[tokio::test]
