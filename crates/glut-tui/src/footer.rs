@@ -13,8 +13,8 @@ use crate::theme;
 const ARROW: &str = "\u{e0b0}";
 /// The arrow pointing the other way (U+E0B2), where the hints' bar starts.
 const ARROW_LEFT: &str = "\u{e0b2}";
-/// The rounded ends (U+E0B6 facing left, U+E0B4 facing right): a bar is round on the outside, pointed toward the
-/// middle of the line (the owner's look, after Powerlevel10k).
+/// The rounded ends (U+E0B6 facing left, U+E0B4 facing right): a bar is round on the outside and where its segments
+/// meet, pointed only at its inner end, toward the middle of the line (the owner's prompt, Powerlevel10k).
 const ROUND_LEFT: &str = "\u{e0b6}";
 const ROUND_RIGHT: &str = "\u{e0b4}";
 /// Powerline's branch glyph (U+E0A0); the plain footer has Unicode's own branch sign.
@@ -152,7 +152,7 @@ fn segments_width(segments: &[&Segment], separators: Separators) -> usize {
         .map(|segment| segment.text.width() + 2)
         .sum();
     let joints = match separators {
-        // The round start, and an arrow after each, the last one included: it closes the bar.
+        // The round start, a joint after each segment and the point at the end: one cell each.
         Separators::Powerline if segments.is_empty() => 0,
         Separators::Powerline => segments.len() + 1,
         Separators::Plain => segments.len().saturating_sub(1),
@@ -220,7 +220,13 @@ pub fn line(
                     .and_then(|style| style.bg)
                     .unwrap_or(Color::Reset);
                 let here = styles[at].bg.unwrap_or(Color::Reset);
-                spans.push(Span::styled(ARROW, Style::default().fg(here).bg(next)));
+                // Round where one segment meets the next, pointed only at the bar's inner end.
+                let joint = if at + 1 < kept.len() {
+                    ROUND_RIGHT
+                } else {
+                    ARROW
+                };
+                spans.push(Span::styled(joint, Style::default().fg(here).bg(next)));
             }
             Separators::Plain if at + 1 < kept.len() => spans.push(Span::raw(" ")),
             Separators::Plain => {}
@@ -239,7 +245,8 @@ pub fn line(
                 let mut before = Color::Reset;
                 for (at, item) in shown.iter().enumerate() {
                     let bg = backgrounds[at % 2];
-                    spans.push(Span::styled(ARROW_LEFT, Style::default().fg(bg).bg(before)));
+                    let joint = if at == 0 { ARROW_LEFT } else { ROUND_LEFT };
+                    spans.push(Span::styled(joint, Style::default().fg(bg).bg(before)));
                     spans.push(Span::styled(
                         format!(" {item} "),
                         Style::default().bg(bg).fg(Color::Reset),
@@ -377,7 +384,7 @@ mod tests {
     }
 
     #[test]
-    fn powerline_bars_are_round_outside_and_pointed_toward_the_middle_and_plain_puts_a_space_between()
+    fn powerline_bars_are_round_outside_and_between_and_pointed_toward_the_middle_and_plain_puts_a_space_between()
      {
         let segments = vec![Segment::calm("a", 0), Segment::calm("b", 0)];
         assert_eq!(
@@ -388,7 +395,7 @@ mod tests {
                 Separators::Powerline,
                 false
             )),
-            format!("{ROUND_LEFT} a {ARROW} b {ARROW}")
+            format!("{ROUND_LEFT} a {ROUND_RIGHT} b {ARROW}")
         );
         assert_eq!(
             text(&line(
@@ -421,7 +428,7 @@ mod tests {
         assert_eq!(
             text(&drawn),
             format!(
-                "{ROUND_LEFT} a {ARROW}{}{ARROW_LEFT} ⏎ send {ARROW_LEFT} ⌃K keys {ROUND_RIGHT}",
+                "{ROUND_LEFT} a {ARROW}{}{ARROW_LEFT} ⏎ send {ROUND_LEFT} ⌃K keys {ROUND_RIGHT}",
                 " ".repeat(15)
             )
         );
