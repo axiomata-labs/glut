@@ -622,10 +622,21 @@ fn draw_stream(frame: &mut Frame, app: &mut App, area: Rect) {
     let place = Rect { width, ..area };
     frame.render_widget(Paragraph::new(lines), place);
     mark_stream(frame, app, place);
-    // The reading mode's block: a bar in the column the stream leaves free at its right.
+    // The reading mode's block: its rows faintly underlaid across the stream, so it is seen where its text is however
+    // wide the window — what has a background of its own (code, a match, a selection) keeps it —, and a bar in the
+    // column the stream leaves free at its right.
     if let Some(chosen) = chosen {
+        let palette = theme::c();
+        let tint = theme::mix(palette.ink, palette.quiet, 0.25);
         for (row, block, _) in &app.rows {
             if *block == chosen {
+                for x in area.x..area.x + width {
+                    if let Some(cell) = frame.buffer_mut().cell_mut(Position { x, y: *row })
+                        && cell.bg == ratatui::style::Color::Reset
+                    {
+                        cell.bg = tint;
+                    }
+                }
                 let bar = Rect {
                     x: area.x + width,
                     y: *row,

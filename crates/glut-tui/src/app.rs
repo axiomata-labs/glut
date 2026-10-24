@@ -6263,6 +6263,22 @@ mod tests {
             screen.contains("▐") && screen.contains("c copies"),
             "{screen}"
         );
+        // The chosen block's rows are underlaid, so it is seen where its text is.
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(140, 30)).unwrap();
+        terminal
+            .draw(|frame| crate::view::draw(frame, &mut app))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let answer_row = (0..30)
+            .find(|y| {
+                (0..140)
+                    .map(|x| buffer[(x, *y)].symbol())
+                    .collect::<String>()
+                    .contains("a.rs is empty")
+            })
+            .unwrap();
+        assert_ne!(buffer[(0, answer_row)].bg, ratatui::style::Color::Reset);
         app.on_terminal(key(KeyCode::Up, KeyModifiers::NONE));
         app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
         assert!(matches!(
