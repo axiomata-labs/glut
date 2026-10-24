@@ -17,8 +17,9 @@ use crate::transcript::{Kind, Transcript};
 const DIR: &str = "sessions";
 /// The most sessions a list shows.
 const LISTED: usize = 50;
-/// A session file larger than this is not read.
-const MAX_BYTES: u64 = 64 * 1024 * 1024;
+/// A session file larger than this is not read. Measured (TUI9f): 10,000 steps whose every tenth result is as long
+/// as the conversation keeps one write 70 MB — a session Glut saved must open again.
+const MAX_BYTES: u64 = 256 * 1024 * 1024;
 /// How long a title is.
 const TITLE_CHARS: usize = 72;
 
@@ -88,7 +89,7 @@ impl Session {
         }
     }
 
-    fn dir(home: &Path) -> PathBuf {
+    pub(crate) fn dir(home: &Path) -> PathBuf {
         home.join(glut::providers::DIR).join(DIR)
     }
 

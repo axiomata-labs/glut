@@ -6098,6 +6098,133 @@ mod tests {
         let _ = std::fs::remove_dir_all(&app.parts.home);
     }
 
+    /// The resident memory of this process, in MB, as `ps` says it.
+    fn resident_mb() -> u64 {
+        let out = std::process::Command::new("ps")
+            .args(["-o", "rss=", "-p", &std::process::id().to_string()])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout)
+            .trim()
+            .parse::<u64>()
+            .unwrap_or(0)
+            / 1024
+    }
+
+    /// TUI9f: a session of 10,000 steps, measured — `cargo test --release -p glut-tui long_sessions -- --ignored
+    /// --nocapture`. Each step is a message of the owner's, a tool call with its output (4 kB, every tenth the most a
+    /// result keeps in the conversation, 30,000 characters) and an answer.
+    #[test]
+    #[ignore = "a measurement: run it in release"]
+    fn long_sessions_open_draw_scroll_and_search_in_time() {
+        const STEPS: usize = 10_000;
+        let (mut app, _reports) = app();
+        let small = "a line of a tool's output, as a build or a grep prints it\n".repeat(70);
+        let large = "x".repeat(glut::tools::MAX_TOOL_OUTPUT_CHARS);
+        let mut conversation = Vec::new();
+        for step in 0..STEPS {
+            conversation.push(glut::Message::user(format!(
+                "step {step}: look at file {step}.rs"
+            )));
+            let mut call = glut::Message::user("");
+            call.role = glut::model::Role::Assistant;
+            call.content = None;
+            call.tool_calls = vec![glut::ToolCall {
+                id: format!("c{step}"),
+                kind: "function".into(),
+                function: glut::model::FunctionCall {
+                    name: "read_file".into(),
+                    arguments: format!("{{\"path\":\"src/{step}.rs\"}}"),
+                },
+            }];
+            conversation.push(call);
+            let output = if step % 10 == 0 { &large } else { &small };
+            conversation.push(glut::Message::tool(format!("c{step}"), output.clone()));
+            let mut answer = glut::Message::user(format!(
+                "Step {step} done: **{step}.rs** reads fine, see [the docs](https://example.com/{step})."
+            ));
+            answer.role = glut::model::Role::Assistant;
+            conversation.push(answer);
+        }
+        let mut session = crate::store::Session::new(std::path::Path::new("/tmp"), "p", "m");
+        session.conversation = conversation;
+        let saved = Instant::now();
+        let written = session.save(&app.parts.home);
+        let bytes = std::fs::metadata(
+            crate::store::Session::dir(&app.parts.home).join(format!("{}.json", session.id)),
+        )
+        .map(|meta| meta.len())
+        .unwrap_or(0);
+        println!(
+            "session file: {} MB, written in {:?} ({written:?})",
+            bytes / 1_000_000,
+            saved.elapsed()
+        );
+        let loaded = Instant::now();
+        // `/resume`: the file read and the session opened.
+        let read = crate::store::Session::load(&app.parts.home, &session.id)
+            .expect("a saved session opens again");
+        let read_in = loaded.elapsed();
+        drop(session);
+        let opened = Instant::now();
+        app.open(read);
+        let resumed = read_in + opened.elapsed();
+        println!(
+            "resumed ({} blocks): read {read_in:?}, all {resumed:?}",
+            app.transcript.blocks.len()
+        );
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(160, 50)).unwrap();
+        let mut frame = |app: &mut App| {
+            let at = Instant::now();
+            terminal
+                .draw(|frame| crate::view::draw(frame, app))
+                .unwrap();
+            at.elapsed()
+        };
+        // The first frame lays every block out once, to count the stream; later ones only what is in view.
+        println!("first frame: {:?}", frame(&mut app));
+        let steady = (0..20).map(|_| frame(&mut app)).max().unwrap();
+        println!("a frame after: {steady:?}");
+        let mut most = std::time::Duration::ZERO;
+        for _ in 0..200 {
+            app.on_terminal(key(KeyCode::PageUp, KeyModifiers::NONE));
+            most = most.max(frame(&mut app));
+        }
+        println!("scrolling 200 pages up, the slowest frame: {most:?}");
+        app.on_terminal(key(KeyCode::Char('f'), KeyModifiers::CONTROL));
+        type_text(&mut app, "step 4242");
+        let searched = frame(&mut app);
+        let typed = frame(&mut app);
+        println!(
+            "search: the frame finding it {searched:?}, a frame while it stays open {typed:?}"
+        );
+        app.on_terminal(key(KeyCode::Esc, KeyModifiers::NONE));
+        app.on_terminal(key(KeyCode::Char('x'), KeyModifiers::CONTROL));
+        app.on_terminal(key(KeyCode::Up, KeyModifiers::NONE));
+        println!(
+            "reading mode, the frame scrolling to the last block: {:?}",
+            frame(&mut app)
+        );
+        let memory = resident_mb();
+        println!("resident memory: {memory} MB");
+        let _ = std::fs::remove_dir_all(&app.parts.home);
+        let frame_budget = std::time::Duration::from_millis(16);
+        assert!(
+            resumed < std::time::Duration::from_secs(1),
+            "/resume under a second"
+        );
+        assert!(
+            steady < frame_budget && most < frame_budget,
+            "a frame under 16 ms, scrolling too"
+        );
+        assert!(
+            searched.max(typed) < std::time::Duration::from_millis(50),
+            "the search without a felt pause"
+        );
+        assert!(memory < 500, "under 500 MB");
+    }
+
     #[test]
     fn ctrl_a_is_the_lines_start_as_in_the_shell() {
         let (mut app, _reports) = app();
