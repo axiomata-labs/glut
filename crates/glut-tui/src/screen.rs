@@ -256,7 +256,7 @@ async fn run_loop(
             let lines = app.stream_at(width);
             let shown = scrollback::print(&mut io::stdout(), &lines).and_then(|()| {
                 print!(
-                    "\n— Glut: the conversation is in your terminal's scrollback. Enter or Ctrl+C goes back. "
+                    "\n— Glut: the conversation is in your terminal's scrollback. ⏎ or ⌃C goes back. "
                 );
                 io::stdout().flush()
             });

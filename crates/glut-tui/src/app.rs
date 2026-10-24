@@ -203,6 +203,12 @@ pub struct App {
     pub keys_sheet: Option<usize>,
     /// How far the Keys tab is scrolled (the wheel over the panel).
     pub keys_scroll: usize,
+    /// The folder's branch for the footer (T39).
+    pub branch: crate::branch::Branch,
+    /// How the footer joins its segments, and whether Glut guessed it (`Some`, with the terminal it knew, if any)
+    /// or the owner chose it (`None`).
+    pub separators: crate::footer::Separators,
+    separators_from: Option<Option<&'static str>>,
     pub frame: usize,
     quit_armed: Option<Instant>,
     pub quit: bool,
@@ -234,6 +240,16 @@ impl App {
         let prefs = Prefs::load(&parts.home);
         let panel = prefs.panel;
         let vi = prefs.vi.unwrap_or(false);
+        let (separators, separators_from) = match prefs.footer {
+            Some(kept) => (kept, None),
+            None => {
+                let (guessed, terminal) = crate::footer::guess(
+                    std::env::var("TERM_PROGRAM").ok().as_deref(),
+                    std::env::var("TERM").ok().as_deref(),
+                );
+                (guessed, Some(terminal))
+            }
+        };
         // The theme kept from an earlier session; an unknown name (a theme dropped since) keeps Glut's own.
         if let Some(name) = &prefs.theme {
             crate::theme::set(name);
@@ -329,6 +345,9 @@ impl App {
             panel_fits: false,
             keys_sheet: None,
             keys_scroll: 0,
+            branch: crate::branch::Branch::default(),
+            separators,
+            separators_from,
             frame: 0,
             quit_armed: None,
             quit: false,
@@ -536,7 +555,7 @@ impl App {
             return;
         }
         self.transcript.note(
-            "a turn of this session was cut off — it goes on; Esc stops it",
+            "a turn of this session was cut off — it goes on; ⎋ stops it",
             Tone::Quiet,
         );
         self.after_resume = then;
@@ -843,7 +862,7 @@ impl App {
                 }
                 let mut picker = self.models_picker(None, true);
                 picker.title = format!(
-                    "Glut asks: the model of an agent or a skill of its own · Enter picks it, Esc none · {}",
+                    "Glut asks: the model of an agent or a skill of its own · ⏎ picks it, ⎋ none · {}",
                     picker.title
                 );
                 picker.asks_model = true;
@@ -1286,7 +1305,7 @@ impl App {
         let text = self.input.text();
         if self.input.broken_pastes() > 0 {
             self.transcript.note(
-                "a paste lost its mark to an edit and is left out; Ctrl+U clears the line, paste it again",
+                "a paste lost its mark to an edit and is left out; ⌃U clears the line, paste it again",
                 Tone::Fault,
             );
             return;
@@ -1296,7 +1315,9 @@ impl App {
             if !name.is_empty() && !name.contains('/') {
                 if self.working() && waits(name, rest.trim()) {
                     self.transcript.note(
-                        format!("/{name} waits until Glut is done — it stays in the input; Esc stops Glut"),
+                        format!(
+                            "/{name} waits until Glut is done — it stays in the input; ⎋ stops Glut"
+                        ),
                         Tone::Quiet,
                     );
                     return;
@@ -1331,12 +1352,12 @@ impl App {
             match &self.steering {
                 Some(inbox) => {
                     inbox.send(text);
-                    self.say("Glut takes this in before its next step — Alt+↑ takes it back");
+                    self.say("Glut takes this in before its next step — ⌥↑ takes it back");
                 }
                 None => {
                     self.queue.push(text);
                     self.send_when_free = true;
-                    self.say("queued: it goes when Glut is free — Alt+↑ takes it back");
+                    self.say("queued: it goes when Glut is free — ⌥↑ takes it back");
                 }
             }
             return;
@@ -1357,7 +1378,7 @@ impl App {
         }
         let text = self.input.take();
         self.queue.push(text);
-        self.say("queued for after this turn — Alt+↑ takes it back");
+        self.say("queued for after this turn — ⌥↑ takes it back");
     }
 
     /// Alt+↑ (or Ctrl+↑, which macOS keeps for Mission Control): the last message waiting — queued, or sent to steer
@@ -1628,7 +1649,7 @@ impl App {
             "plan" => match &self.plan {
                 Some(_) => self.plan_view = Some(crate::plan::Dialog::reading()),
                 None => self.transcript.note(
-                    "no plan yet: in plan mode (Shift+Tab) Glut sends its plan for you to approve",
+                    "no plan yet: in plan mode (⇧⇥) Glut sends its plan for you to approve",
                     Tone::Quiet,
                 ),
             },
@@ -1641,6 +1662,27 @@ impl App {
                 "on" | "" => self.set_vi(true),
                 "off" => self.set_vi(false),
                 other => self.transcript.note(format!("/vim {other}: on or off"), Tone::Fault),
+            },
+            "footer" => match rest {
+                "powerline" => self.set_footer(crate::footer::Separators::Powerline),
+                "plain" => self.set_footer(crate::footer::Separators::Plain),
+                "" => {
+                    let why = match self.separators_from {
+                        Some(Some(terminal)) => format!("guessed: {terminal} draws Powerline's glyphs"),
+                        Some(None) => "guessed: a terminal that may lack Powerline's glyphs".to_owned(),
+                        None => "your choice".to_owned(),
+                    };
+                    self.transcript.note(
+                        format!(
+                            "footer: {} ({why}) — /footer powerline or /footer plain keeps one",
+                            self.separators.label()
+                        ),
+                        Tone::Quiet,
+                    );
+                }
+                other => self
+                    .transcript
+                    .note(format!("/footer {other}: powerline or plain"), Tone::Fault),
             },
             "steps" => self.picker = Some(self.steps_picker()),
             "theme" if rest.is_empty() => self.picker = Some(theme_picker()),
@@ -1835,7 +1877,7 @@ impl App {
                     .map(|(name, about)| Item::plain(name.clone(), about, Pick::MemoryFact(name)))
                     .collect();
                 self.picker = Some(Picker::new(
-                    format!("Memory — {} · Enter shows one", dir.display()),
+                    format!("Memory — {} · ⏎ shows one", dir.display()),
                     items,
                     None,
                 ));
@@ -1920,7 +1962,7 @@ impl App {
                 })
                 .collect();
             self.picker = Some(Picker::new(
-                "Skills · Enter takes one into the input",
+                "Skills · ⏎ takes one into the input",
                 items,
                 None,
             ));
@@ -2297,7 +2339,7 @@ impl App {
                         "allow {}",
                         crate::transcript::clean(&given.rules.join(", "))
                     ),
-                    "your \"always\" this session · Enter takes it back",
+                    "your \"always\" this session · ⏎ takes it back",
                     Pick::TakeBack(given.rules.clone()),
                 )
             })
@@ -2380,8 +2422,8 @@ impl App {
         self.transcript.show_thinking(thinking);
         let said = match thinking {
             Thinking::Off => "thinking: hidden",
-            Thinking::Folded => "thinking: folded — a click opens one, Ctrl+T all",
-            Thinking::Open => "thinking: open — a click folds one, Ctrl+T folds all",
+            Thinking::Folded => "thinking: folded — a click opens one, ⌃T all",
+            Thinking::Open => "thinking: open — a click folds one, ⌃T folds all",
         };
         match prefs::set_thinking(&self.parts.home, thinking) {
             Ok(()) => self.transcript.note(said, Tone::Quiet),
@@ -2521,7 +2563,7 @@ impl App {
         if self.working() {
             return self
                 .transcript
-                .note("rewind waits until Glut is done; Esc stops it", Tone::Quiet);
+                .note("rewind waits until Glut is done; ⎋ stops it", Tone::Quiet);
         }
         let Some(target) = self.session.marks.get(mark).cloned() else {
             return;
@@ -2591,7 +2633,7 @@ impl App {
         if self.working() {
             return self
                 .transcript
-                .note("a fork waits until Glut is done; Esc stops it", Tone::Quiet);
+                .note("a fork waits until Glut is done; ⎋ stops it", Tone::Quiet);
         }
         let Some(target) = self.session.marks.get(mark).cloned() else {
             return;
@@ -2716,7 +2758,7 @@ impl App {
             } => {
                 if self.working() {
                     return self.transcript.note(
-                        "a hunk goes back when Glut is done; Esc stops it",
+                        "a hunk goes back when Glut is done; ⎋ stops it",
                         Tone::Quiet,
                     );
                 }
@@ -2806,7 +2848,7 @@ impl App {
         if restore {
             if self.working() {
                 return self.transcript.note(
-                    "the files go back when Glut is done; Esc stops it",
+                    "the files go back when Glut is done; ⎋ stops it",
                     Tone::Quiet,
                 );
             }
@@ -2822,12 +2864,24 @@ impl App {
     fn set_vi(&mut self, on: bool) {
         self.vi = on.then(crate::vi::Vi::default);
         let said = if on {
-            "vim: on — Esc to Normal mode, i a o to Insert; Esc in Normal mode stops Glut"
+            "vim: on — ⎋ to Normal mode, i a o to Insert; ⎋ in Normal mode stops Glut"
         } else {
             "vim: off"
         };
         match prefs::set_vi(&self.parts.home, on) {
             Ok(()) => self.transcript.note(said, Tone::Quiet),
+            Err(reason) => self.transcript.note(reason, Tone::Fault),
+        }
+    }
+
+    /// Uses and keeps how the footer joins its segments.
+    fn set_footer(&mut self, separators: crate::footer::Separators) {
+        self.separators = separators;
+        self.separators_from = None;
+        match prefs::set_footer(&self.parts.home, separators) {
+            Ok(()) => self
+                .transcript
+                .note(format!("footer: {}", separators.label()), Tone::Quiet),
             Err(reason) => self.transcript.note(reason, Tone::Fault),
         }
     }
@@ -3286,7 +3340,7 @@ impl App {
             );
         } else {
             self.transcript.note(
-                "that subagent cannot be stopped alone: Esc stops the turn",
+                "that subagent cannot be stopped alone: ⎋ stops the turn",
                 Tone::Quiet,
             );
         }
@@ -3336,7 +3390,7 @@ impl App {
                 )
             })
             .collect();
-        self.picker = Some(Picker::new("Subagents — Enter opens one", items, None));
+        self.picker = Some(Picker::new("Subagents — ⏎ opens one", items, None));
     }
 
     /// A key in a subagent's view: scroll, open one of its own subagents, or go back one level.
@@ -3518,7 +3572,7 @@ impl App {
             Some(at) if at.elapsed() < QUIT_WINDOW => self.quit = true,
             _ => {
                 self.quit_armed = Some(Instant::now());
-                self.transcript.note("Ctrl+C again to quit", Tone::Quiet);
+                self.transcript.note("⌃C again to quit", Tone::Quiet);
             }
         }
     }
@@ -3914,6 +3968,43 @@ mod tests {
             .draw(|frame| crate::view::draw(frame, app))
             .unwrap();
         terminal
+    }
+
+    #[test]
+    fn the_footer_carries_the_status_and_the_keys_tab_reads_with_its_legend() {
+        let (mut app, _reports) = app();
+        app.separators = crate::footer::Separators::Plain;
+        app.cost = Some(0.0123);
+        app.panel = Some(true);
+        app.tab = Tab::Keys;
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(130, 30)).unwrap();
+        terminal
+            .draw(|frame| crate::view::draw(frame, &mut app))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let row = |y: u16| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol().to_owned())
+                .collect::<String>()
+        };
+        let screen: Vec<String> = (0..buffer.area.height).map(row).collect();
+        if std::env::var_os("GLUT_SHOW_SCREEN").is_some() {
+            println!("{}", screen.join("\n"));
+        }
+        let footer = screen.last().unwrap();
+        assert!(
+            footer.contains(app.engine.model_name())
+                && footer.contains("ctx ")
+                && footer.contains("$0.0123"),
+            "{footer}"
+        );
+        assert!(!screen[0].contains("ctx "), "the header no longer counts");
+        assert!(
+            screen.iter().any(|row| row.contains("⌃ Ctrl · ⇧ Shift")),
+            "the legend heads the sheet"
+        );
+        let _ = std::fs::remove_dir_all(&app.parts.home);
     }
 
     #[test]
@@ -4742,7 +4833,7 @@ mod tests {
             screen.contains("find the callers") && screen.contains("deeper"),
             "{screen}"
         );
-        assert!(screen.contains("Enter opens"));
+        assert!(screen.contains("⏎ opens"));
         app.on_terminal(key(KeyCode::Down, KeyModifiers::NONE));
         app.on_terminal(key(KeyCode::Down, KeyModifiers::NONE));
         assert_eq!(
@@ -4802,11 +4893,7 @@ mod tests {
         let notes = |app: &App| format!("{:?}", app.transcript.blocks.last().map(|b| &b.kind));
         // The running one is listed first; this cancel lists no subagent of that call, so it cannot stop it alone.
         app.on_terminal(key(KeyCode::Char('x'), KeyModifiers::NONE));
-        assert!(
-            notes(&app).contains("Esc stops the turn"),
-            "{}",
-            notes(&app)
-        );
+        assert!(notes(&app).contains("⎋ stops the turn"), "{}", notes(&app));
         app.on_terminal(key(KeyCode::Down, KeyModifiers::NONE));
         app.on_terminal(key(KeyCode::Char('x'), KeyModifiers::NONE));
         assert!(notes(&app).contains("ended already"), "{}", notes(&app));

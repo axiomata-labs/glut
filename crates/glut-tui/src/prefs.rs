@@ -41,6 +41,13 @@ pub struct Prefs {
     /// Whether the input is edited the vi way (TUI3c, `/vim`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vi: Option<bool>,
+    /// How the footer's segments are joined (T39, `/footer`); `None`: guessed from the terminal.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::footer::lenient"
+    )]
+    pub footer: Option<crate::footer::Separators>,
     /// The colours: `glut` or an app theme's name (TUI3c, `/theme`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
@@ -151,6 +158,17 @@ pub fn set_thinking(home: &Path, thinking: crate::transcript::Thinking) -> Resul
 pub fn set_vi(home: &Path, on: bool) -> Result<(), String> {
     let mut prefs = Prefs::read(home)?;
     prefs.vi = Some(on);
+    prefs.save(home)
+}
+
+/// Keeps how the footer's segments are joined (`/footer`).
+///
+/// # Errors
+///
+/// A message when the file cannot be read (it is not written over) or written.
+pub fn set_footer(home: &Path, separators: crate::footer::Separators) -> Result<(), String> {
+    let mut prefs = Prefs::read(home)?;
+    prefs.footer = Some(separators);
     prefs.save(home)
 }
 

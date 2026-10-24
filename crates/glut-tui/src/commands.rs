@@ -73,7 +73,7 @@ const fn command(
 }
 
 /// Every command, grouped by topic in [`Topic::ALL`]'s order, the most used first inside a topic.
-pub const COMMANDS: [Command; 27] = [
+pub const COMMANDS: [Command; 28] = [
     command(Topic::Session, "clear", "", "start a new session"),
     command(
         Topic::Session,
@@ -128,19 +128,19 @@ pub const COMMANDS: [Command; 27] = [
         Topic::View,
         "panel",
         "",
-        "the side panel on the plan, or hide it (Ctrl+B; Ctrl+G the gate)",
+        "the side panel on the plan, or hide it (⌃B; ⌃G the gate)",
     ),
     command(
         Topic::View,
         "meter",
         "",
-        "context, tokens and cost per turn and tool, lean's savings (Ctrl+N)",
+        "context, tokens and cost per turn and tool, lean's savings (⌃N)",
     ),
     command(
         Topic::View,
         "agents",
         "",
-        "the session's subagents: open one's own stream (a click on its tile does too; Ctrl+A: the Agents tab)",
+        "the session's subagents: open one's own stream (a click on its tile does too; ⌃A: the Agents tab)",
     ),
     command(
         Topic::View,
@@ -158,7 +158,7 @@ pub const COMMANDS: [Command; 27] = [
         Topic::Changes,
         "diff",
         "[session]",
-        "review what the last turn changed, hunk by hunk; /diff session (Ctrl+R)",
+        "review what the last turn changed, hunk by hunk; /diff session (⌃R)",
     ),
     command(
         Topic::Changes,
@@ -170,13 +170,13 @@ pub const COMMANDS: [Command; 27] = [
         Topic::Project,
         "todo",
         "[text|open|clean]",
-        "the project's TODO.md (Ctrl+Y): /todo <text> adds one, /todo open edits it, /todo clean drops the done",
+        "the project's TODO.md (⌃Y): /todo <text> adds one, /todo open edits it, /todo clean drops the done",
     ),
     command(
         Topic::Project,
         "memory",
         "[open]",
-        "what the project's memory keeps: Enter shows a fact; /memory open edits its index",
+        "what the project's memory keeps: ⏎ shows a fact; /memory open edits its index",
     ),
     command(
         Topic::Project,
@@ -194,7 +194,7 @@ pub const COMMANDS: [Command; 27] = [
         Topic::Settings,
         "gate",
         "",
-        "the rules in force; take an \"always\" back (Ctrl+G: the gate, live)",
+        "the rules in force; take an \"always\" back (⌃G: the gate, live)",
     ),
     command(
         Topic::Settings,
@@ -207,6 +207,12 @@ pub const COMMANDS: [Command; 27] = [
         "editor",
         "[command]",
         "pick your editor, or /editor <command>",
+    ),
+    command(
+        Topic::Settings,
+        "footer",
+        "powerline|plain",
+        "the footer's joins: Powerline's arrows or plain blocks (guessed from the terminal)",
     ),
     command(
         Topic::Settings,
@@ -242,64 +248,54 @@ const fn key(topic: Topic, key: &'static str, what: &'static str, command: &'sta
 pub const KEYS: [Key; 25] = [
     key(
         Topic::Session,
-        "Shift+Tab",
+        "⇧⇥",
         "the next mode: plan → ask → build → auto",
         "",
     ),
-    key(Topic::Session, "Esc", "stop Glut", ""),
+    key(Topic::Session, "⎋", "stop Glut", ""),
     key(
         Topic::Session,
-        "Enter",
+        "⏎",
         "while Glut works: steer it, taken in before its next step",
         "",
     ),
     key(
         Topic::Session,
-        "Tab",
+        "⇥",
         "while Glut works: queue the message for after",
         "",
     ),
     key(
         Topic::Session,
-        "Alt+↑",
+        "⌥↑",
         "take the last waiting message back",
         "",
     ),
-    key(Topic::Session, "Ctrl+C twice", "quit", "/quit"),
-    key(Topic::View, "Ctrl+F", "search the stream", ""),
+    key(Topic::Session, "⌃C ⌃C", "quit", "/quit"),
+    key(Topic::View, "⌃F", "search the stream", ""),
+    key(Topic::View, "⌃O", "unfold or fold every tool result", ""),
+    key(Topic::View, "⌃T", "open or fold every thought", "/thinking"),
     key(
         Topic::View,
-        "Ctrl+O",
-        "unfold or fold every tool result",
-        "",
-    ),
-    key(
-        Topic::View,
-        "Ctrl+T",
-        "open or fold every thought",
-        "/thinking",
-    ),
-    key(
-        Topic::View,
-        "Ctrl+B",
+        "⌃B",
         "the side panel on the plan, or hide it",
         "/panel",
     ),
     key(
         Topic::View,
-        "Ctrl+G",
+        "⌃G",
         "the gate, live: every judgement, the hosts, the refusals",
         "/gate",
     ),
     key(
         Topic::View,
-        "Ctrl+N",
+        "⌃N",
         "the meter: context, tokens and cost per turn and tool",
         "/meter",
     ),
     key(
         Topic::View,
-        "Ctrl+A",
+        "⌃A",
         "the Agents tab: every subagent, live",
         "/agents",
     ),
@@ -318,38 +314,33 @@ pub const KEYS: [Key; 25] = [
     ),
     key(
         Topic::Changes,
-        "Ctrl+R",
+        "⌃R",
         "review what the last turn changed, hunk by hunk",
         "/diff",
     ),
     key(
         Topic::Changes,
-        "Esc Esc",
+        "⎋⎋",
         "rewind or fork to before a message of yours",
         "",
     ),
     key(
         Topic::Project,
-        "Ctrl+Y",
+        "⌃Y",
         "the To-dos tab: Space ticks, a adds",
         "/todo",
     ),
     key(Topic::Input, "/", "the commands", ""),
     key(Topic::Input, "@", "mention a file", ""),
     key(Topic::Input, "↑", "the messages sent before", ""),
+    key(Topic::Input, "⇧⏎", "a new line (⌥⏎ too)", ""),
     key(
         Topic::Input,
-        "Shift+Enter",
-        "a new line (Alt+Enter too)",
-        "",
-    ),
-    key(
-        Topic::Input,
-        "Ctrl+X E",
+        "⌃X E",
         "edit the input in your editor",
         "/editor",
     ),
-    key(Topic::Help, "Ctrl+K", "this sheet of keys", "/help"),
+    key(Topic::Help, "⌃K", "this sheet of keys", "/help"),
 ];
 
 /// The commands a typed `/` part fits: with nothing typed every one, by topic; else those whose name starts with it,
@@ -395,7 +386,7 @@ pub fn help() -> String {
             rows.push(format!("  {}: {}", topic.label(), names.join(" · ")));
         }
     }
-    rows.push("Keys (Ctrl+K keeps them in the side panel)".to_owned());
+    rows.push(format!("Keys ({LEGEND}; ⌃K keeps them in the side panel)"));
     for topic in Topic::ALL {
         let keys: Vec<String> = KEYS
             .iter()
@@ -412,12 +403,16 @@ pub fn help() -> String {
             .to_owned(),
     );
     rows.push(
-        "/vim on: Esc to Normal mode (h j k l w b e 0 ^ $ gg G · x r ~ J D C s S · d c y with a motion or doubled · \
-         counts · p P · u Ctrl+R), i a I A o O to Insert; Esc in Normal mode stops Glut"
+        "/vim on: ⎋ to Normal mode (h j k l w b e 0 ^ $ gg G · x r ~ J D C s S · d c y with a motion or doubled · \
+         counts · p P · u ⌃R), i a I A o O to Insert; ⎋ in Normal mode stops Glut"
             .to_owned(),
     );
     rows.join("\n")
 }
+
+/// What the key symbols stand for (T39), atop the Keys sheet and in `/help`: read once, then the short forms are
+/// plain.
+pub const LEGEND: &str = "⌃ Ctrl · ⇧ Shift · ⌥ Alt · ⏎ Enter · ⇥ Tab · ⎋ Esc";
 
 /// The panel width from which a key's row also names its `/` command.
 pub const SHEET_WITH_COMMANDS: usize = 46;
@@ -428,7 +423,10 @@ pub fn sheet(width: usize) -> Vec<Line<'static>> {
     let key_width = KEYS.iter().map(|key| key.key.width()).max().unwrap_or(0) + 2;
     let what_width = width.saturating_sub(key_width + 1).max(8);
     let commands = width >= SHEET_WITH_COMMANDS;
-    let mut lines = Vec::new();
+    let mut lines: Vec<Line<'static>> = wrap(LEGEND, width.saturating_sub(1).max(8))
+        .into_iter()
+        .map(|row| Line::from(Span::styled(format!(" {row}"), theme::quiet())))
+        .collect();
     for topic in Topic::ALL {
         let keys: Vec<&Key> = KEYS.iter().filter(|key| key.topic == topic).collect();
         if keys.is_empty() {

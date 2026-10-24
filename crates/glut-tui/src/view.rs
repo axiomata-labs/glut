@@ -113,7 +113,13 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         draw_ask(frame, app, ask, rows);
     }
     draw_input(frame, app, input, &rows, cursor);
-    draw_keys(frame, app, keys);
+    let cwd = app.parts.config.cwd.clone();
+    // One row: a line break in a hostile HEAD would part the width counted from the width drawn.
+    let branch = app
+        .branch
+        .name(&cwd)
+        .map(|name| crate::transcript::clean(name).replace('\n', " "));
+    draw_keys(frame, app, keys, branch);
     if app.picker.is_some() {
         draw_picker(frame, app, stream);
     } else if app.keys_sheet.is_some() {
@@ -244,38 +250,21 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
     } else {
         Style::default().fg(theme::c().ember)
     };
-    let left = vec![
+    // The status lives in the footer (T39): the header names Glut and the folder.
+    let mut spans = vec![
         Span::styled(
             format!(" {} ", glimm::spark(app.working(), app.frame)),
             spark_style,
         ),
         Span::styled("Glut", theme::strong()),
-        Span::raw("  "),
-        Span::raw(format!(
-            "{} · {}",
-            app.engine.provider,
-            app.engine.model_name()
-        )),
     ];
-    let mut left = left;
-    if let Some(effort) = app.engine.endpoint.effort {
-        left.push(Span::styled(format!(" · {effort}"), theme::quiet()));
-    }
-    // The meter before the folder: on a narrow screen the folder is cut, the numbers stay.
-    let width = usize::from(area.width);
-    let meter = header_meter(app, width.saturating_sub(left_width(&left) + 2));
-    let room = width.saturating_sub(left_width(&left) + meter.width() + 1);
+    let room = usize::from(area.width).saturating_sub(left_width(&spans) + 2);
     if room > 4 {
-        left.push(Span::styled(
+        spans.push(Span::styled(
             crate::transcript::cut(&format!("  {}", app.folder), room),
             theme::quiet(),
         ));
     }
-    let used = left_width(&left);
-    let gap = usize::from(area.width).saturating_sub(used + meter.width());
-    let mut spans = left;
-    spans.push(Span::raw(" ".repeat(gap)));
-    spans.push(Span::styled(meter, theme::quiet()));
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
@@ -303,7 +292,7 @@ fn waiting_lines(app: &App, width: usize) -> Vec<Line<'static>> {
             let (mark, word) = match (steer, working) {
                 (true, _) => (Span::styled("↪ ", theme::glow()), "before its next step"),
                 (false, true) => (Span::styled("⏭ ", theme::quiet()), "after this turn"),
-                (false, false) => (Span::styled("⏭ ", theme::quiet()), "Enter sends it"),
+                (false, false) => (Span::styled("⏭ ", theme::quiet()), "⏎ sends it"),
             };
             Line::from(vec![
                 mark,
@@ -324,58 +313,6 @@ fn waiting_lines(app: &App, width: usize) -> Vec<Line<'static>> {
 /// How many cells `spans` take.
 fn left_width(spans: &[Span]) -> usize {
     spans.iter().map(|span| span.content.width()).sum()
-}
-
-/// The header's meter (T16), as much of it as `room` holds — the context first, then the cost, the tokens out, in
-/// and the cached share: `ctx 34k/200k ▸160k · in 120k (80% cached) · out 8k · $0.0123`.
-fn header_meter(app: &App, room: usize) -> String {
-    let window = app.meter_window();
-    let usage = app.usage;
-    let context = match window.window {
-        Some((size, _)) => {
-            let mut context = format!("ctx {}/{}", tokens(window.used), tokens(u64::from(size)));
-            if let Some(at) = window.compacts_at {
-                context.push_str(&format!(" ▸{}", tokens(at)));
-            }
-            context
-        }
-        None => format!("ctx {}", tokens(window.used)),
-    };
-    let cached = if usage.cached_input_tokens > 0 {
-        format!(
-            " ({}% cached)",
-            usage.cached_input_tokens * 100 / usage.input_tokens.max(1)
-        )
-    } else {
-        String::new()
-    };
-    // From the most to the least wanted; each fits or is left out.
-    let parts = [
-        Some(context),
-        app.cost.map(|cost| format!("${cost:.4}")),
-        Some(format!("out {}", tokens(usage.output_tokens))),
-        Some(format!("in {}{cached}", tokens(usage.input_tokens))),
-    ];
-    let mut kept: Vec<(usize, String)> = Vec::new();
-    let mut used = 1;
-    for (at, part) in parts.into_iter().enumerate() {
-        let Some(part) = part else { continue };
-        let needs = part.width() + if kept.is_empty() { 0 } else { 3 };
-        if used + needs <= room {
-            used += needs;
-            kept.push((at, part));
-        }
-    }
-    // Shown in reading order: context, in, out, cost.
-    let order = [0, 3, 2, 1];
-    kept.sort_by_key(|(at, _)| order.iter().position(|place| place == at));
-    let meter: Vec<String> = kept.into_iter().map(|(_, part)| part).collect();
-    format!("{} ", meter.join(" · "))
-}
-
-/// A token count as people read it: 840, 12.3k, 1.2M.
-fn tokens(count: u64) -> String {
-    crate::meter::tokens(count)
 }
 
 fn draw_welcome(frame: &mut Frame, app: &mut App, area: Rect) {
@@ -681,21 +618,58 @@ fn draw_input(frame: &mut Frame, app: &App, area: Rect, rows: &[String], cursor:
     }
 }
 
-fn draw_keys(frame: &mut Frame, app: &App, area: Rect) {
+/// The footer's hints while Glut works, and while it waits for the next message.
+const WORKING_HINTS: &str =
+    "Glut works · ⏎ steers it · ⇥ queues for after · ⌥↑ takes back · ⎋ stops";
+const USUAL_HINTS: &str =
+    "⏎ send · ⇧⏎ new line · ⇧⇥ mode · ⌃K keys · @ file · !cmd · ⌃F search · ⌃C quit";
+
+/// The footer (T39): the status as segments — the vi state, the mode, the model, the context, the cost, the branch —
+/// and the key hints, the moment's or the usual ones.
+fn draw_keys(frame: &mut Frame, app: &App, area: Rect, branch: Option<String>) {
+    use crate::footer::Segment;
     let mode = app.mode();
+    let mut segments = Vec::new();
     // The vi mode's state first, where a vi user looks for it.
-    let vi = app.vi.as_ref().map(|vi| match vi.mode {
-        crate::vi::Mode::Normal => {
-            Span::styled(" NORMAL ", theme::glow().add_modifier(Modifier::BOLD))
-        }
-        crate::vi::Mode::Insert => Span::styled(" INSERT ", theme::quiet()),
-    });
+    if let Some(vi) = &app.vi {
+        segments.push(match vi.mode {
+            crate::vi::Mode::Normal => Segment::marked("NORMAL", theme::c().glow, 0),
+            crate::vi::Mode::Insert => Segment::calm("INSERT", 0),
+        });
+    }
     // The mode is where the owner looks before sending: auto glows, it does the most without asking.
-    let mode_style = match mode {
-        glut::permissions::Mode::Auto => theme::glow().add_modifier(Modifier::BOLD),
-        glut::permissions::Mode::Plan => Style::default().fg(theme::c().owner),
-        _ => theme::quiet(),
-    };
+    segments.push(match mode {
+        glut::permissions::Mode::Auto => {
+            Segment::marked(session::mode_label(mode), theme::c().glow, 0)
+        }
+        glut::permissions::Mode::Plan => {
+            Segment::marked(session::mode_label(mode), theme::c().owner, 0)
+        }
+        _ => Segment::calm(session::mode_label(mode), 0),
+    });
+    let mut model = format!("{} · {}", app.engine.provider, app.engine.model_name());
+    if let Some(effort) = app.engine.endpoint.effort {
+        model.push_str(&format!(" · {effort}"));
+    }
+    segments.push(Segment::calm(
+        crate::transcript::clean(&model).replace('\n', " "),
+        1,
+    ));
+    let window = app.meter_window();
+    segments.push(crate::footer::context(
+        window.used,
+        window.window.map(|(size, _)| size),
+        window.compacts_at,
+    ));
+    if let Some(cost) = app.cost {
+        segments.push(Segment::calm(format!("${cost:.4}"), 2));
+    }
+    if let Some(branch) = branch {
+        segments.push(Segment::calm(
+            format!("{} {branch}", app.separators.branch_sign()),
+            3,
+        ));
+    }
     let scopes = app
         .ask
         .as_ref()
@@ -705,46 +679,43 @@ fn draw_keys(frame: &mut Frame, app: &App, area: Rect) {
         toast.to_owned()
     } else if let Some((alone, _)) = crate::app::owners_command(&app.input.text()) {
         if alone {
-            "Enter runs this in your shell, for you alone (!!)".to_owned()
+            "⏎ runs this in your shell, for you alone (!!)".to_owned()
         } else {
-            "Enter runs this in your shell and shows Glut its output (!)".to_owned()
+            "⏎ runs this in your shell and shows Glut its output (!)".to_owned()
         }
     } else if app.search.is_some() {
-        "Enter or ↑ the match above · Shift+Enter or ↓ the one below · Esc close".to_owned()
+        "⏎ or ↑ the match above · ⇧⏎ or ↓ the one below · ⎋ close".to_owned()
     } else if app.plan_asks() {
-        "Glut waits for your word on its plan · Ctrl+C refuse and clear".to_owned()
+        "Glut waits for your word on its plan · ⌃C refuse and clear".to_owned()
     } else if app.ask.is_some() && scopes > 0 {
         let keys = if scopes == 1 {
             "1".to_owned()
         } else {
             format!("1–{scopes}")
         };
-        format!("y once · {keys} for this session · n refuse · Ctrl+C refuse and clear")
+        format!("y once · {keys} for this session · n refuse · ⌃C refuse and clear")
     } else if app.ask.is_some() {
-        "y once · n refuse · Ctrl+C refuse and clear".to_owned()
+        "y once · n refuse · ⌃C refuse and clear".to_owned()
     } else if app.plan_view.is_some() || app.keys_sheet.is_some() {
-        "↑↓ PgUp PgDn scroll · Esc closes".to_owned()
+        "↑↓ PgUp PgDn scroll · ⎋ closes".to_owned()
     } else if app.agent_view.is_some() {
-        "a subagent's own stream · ↑↓ scroll · a number opens its subagent · Esc back".to_owned()
+        "a subagent's own stream · ↑↓ scroll · a number opens its subagent · ⎋ back".to_owned()
     } else if app.picker.is_some() {
-        "type to filter · ↑↓ choose · Enter take · Esc close".to_owned()
+        "type to filter · ↑↓ choose · ⏎ take · ⎋ close".to_owned()
     } else if app.working() {
-        "Glut works · Enter steers it · Tab queues for after · Alt+↑ takes back · Esc stops"
-            .to_owned()
+        WORKING_HINTS.to_owned()
     } else {
-        concat!(
-            "Enter send · Shift+Enter new line · Shift+Tab mode · Ctrl+K keys · @ file · !cmd · ",
-            "Ctrl+F search · Ctrl+C quit"
-        )
-        .to_owned()
+        USUAL_HINTS.to_owned()
     };
-    let mut spans: Vec<Span> = vi.into_iter().collect();
-    spans.push(Span::styled(
-        format!(" {} ", session::mode_label(mode)),
-        mode_style,
-    ));
-    spans.push(Span::styled(format!(" {hints}"), theme::quiet()));
-    let line = Line::from(spans);
+    // Any other hint is the moment's: it goes after the segments that may.
+    let moment = hints != WORKING_HINTS && hints != USUAL_HINTS;
+    let line = crate::footer::line(
+        segments,
+        &hints,
+        usize::from(area.width),
+        app.separators,
+        moment,
+    );
     frame.render_widget(Paragraph::new(line), area);
 }
 
@@ -831,7 +802,8 @@ fn draw_panel(frame: &mut Frame, app: &mut App, area: Rect) {
         lines.push(Line::default());
         let keys = panel_keys(app, width);
         let sheet = crate::commands::sheet(width + 2);
-        let room = usize::from(area.height).saturating_sub(lines.len() + keys.len() + 1);
+        // The tab names' row and the gap above the keys come off too.
+        let room = usize::from(area.height).saturating_sub(lines.len() + keys.len() + 2);
         // Scrolled no further than its end: the wheel past it does not leave rows to scroll back first.
         app.keys_scroll = app.keys_scroll.min(sheet.len().saturating_sub(room));
         lines.extend(sheet.into_iter().skip(app.keys_scroll).take(room));
@@ -978,18 +950,17 @@ fn tab_titles(
 fn panel_keys(app: &App, width: usize) -> Vec<Line<'static>> {
     use crate::app::Tab;
     let text = if app.tab == Tab::Agents && app.agents_list.is_some() {
-        "↑↓ choose · Enter opens · x stops it · Esc back to the input · Ctrl+A hides".to_owned()
+        "↑↓ choose · ⏎ opens · x stops it · ⎋ back to the input · ⌃A hides".to_owned()
     } else if app.tab == Tab::Todos && app.project_todos.keys {
-        "↑↓ choose · Space ticks · a adds · o editor · Esc back to the input · Ctrl+Y hides"
-            .to_owned()
+        "↑↓ choose · Space ticks · a adds · o editor · ⎋ back to the input · ⌃Y hides".to_owned()
     } else {
         [
-            (Tab::Plan, "Ctrl+B", "plan"),
-            (Tab::Gate, "Ctrl+G", "gate"),
-            (Tab::Meter, "Ctrl+N", "meter"),
-            (Tab::Agents, "Ctrl+A", "agents"),
-            (Tab::Todos, "Ctrl+Y", "to-dos"),
-            (Tab::Keys, "Ctrl+K", "keys"),
+            (Tab::Plan, "⌃B", "plan"),
+            (Tab::Gate, "⌃G", "gate"),
+            (Tab::Meter, "⌃N", "meter"),
+            (Tab::Agents, "⌃A", "agents"),
+            (Tab::Todos, "⌃Y", "to-dos"),
+            (Tab::Keys, "⌃K", "keys"),
         ]
         .iter()
         .map(|(tab, key, name)| {
@@ -1083,7 +1054,7 @@ fn draw_suggestions(frame: &mut Frame, app: &App, area: Rect) {
         .borders(Borders::ALL)
         .border_style(theme::glow())
         .title(Span::styled(
-            " Commands · Tab completes · Enter runs ",
+            " Commands · ⇥ completes · ⏎ runs ",
             theme::glow(),
         ));
     frame.render_widget(Clear, place);
@@ -1102,7 +1073,7 @@ fn draw_keys_sheet(frame: &mut Frame, app: &mut App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(theme::quiet())
-        .title(Span::styled(" Keys · Esc closes ", theme::quiet()));
+        .title(Span::styled(" Keys · ⎋ closes ", theme::quiet()));
     let inner = block.inner(place);
     let rows = usize::from(inner.height);
     app.overlay_rows = rows;
@@ -1139,10 +1110,7 @@ fn draw_picker(frame: &mut Frame, app: &App, area: Rect) {
                 ""
             };
             block.title_bottom(Span::styled(
-                format!(
-                    " sorted by {}{free} · Ctrl+S sort · Ctrl+F free ",
-                    sort.label()
-                ),
+                format!(" sorted by {}{free} · ⌃S sort · ⌃F free ", sort.label()),
                 theme::quiet(),
             ))
         }
@@ -1187,7 +1155,8 @@ fn draw_picker(frame: &mut Frame, app: &App, area: Rect) {
 
 #[cfg(test)]
 mod tests {
-    use super::{asked_rows, header_meter, panel_width, tab_titles, tokens};
+    use super::{asked_rows, panel_width, tab_titles};
+    use crate::meter::tokens;
     use unicode_width::UnicodeWidthStr;
 
     #[test]
@@ -1214,33 +1183,6 @@ mod tests {
         for width in [31, 40, 60] {
             assert!(text(width).width() <= width);
         }
-    }
-
-    #[test]
-    fn the_header_meter_keeps_the_context_first_and_reads_in_order() {
-        let (parts, mut engine) = crate::session::for_tests();
-        engine.window = Some((200_000, "settings"));
-        let (send, _reports) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = crate::app::App::new(std::sync::Arc::new(parts), engine, send);
-        app.context_used = 34_000;
-        app.usage = glut::Usage {
-            input_tokens: 120_000,
-            cached_input_tokens: 96_000,
-            output_tokens: 8_000,
-        };
-        app.cost = Some(0.0123);
-        let full = header_meter(&app, 200);
-        assert!(
-            full.starts_with("ctx 34.0k/200.0k ▸")
-                && full.contains("· in 120.0k (80% cached) · out 8.0k · $0.0123"),
-            "{full:?}"
-        );
-        let narrow = header_meter(&app, 30);
-        assert!(
-            narrow.starts_with("ctx ") && narrow.len() <= 31,
-            "{narrow:?}"
-        );
-        let _ = std::fs::remove_dir_all(&app.parts.home);
     }
 
     #[test]

@@ -4,8 +4,10 @@
 
 mod agents;
 mod app;
+mod branch;
 mod commands;
 mod follow;
+mod footer;
 mod glimm;
 mod guides;
 mod highlight;

@@ -137,12 +137,9 @@ fn footer(agent: &Agent, width: usize) -> Line<'static> {
         })
         .collect();
     let keys = if nested.is_empty() {
-        "↑↓ PgUp PgDn scroll · Esc back".to_owned()
+        "↑↓ PgUp PgDn scroll · ⎋ back".to_owned()
     } else {
-        format!(
-            "{} · number opens · ↑↓ scroll · Esc back",
-            nested.join(" · ")
-        )
+        format!("{} · number opens · ↑↓ scroll · ⎋ back", nested.join(" · "))
     };
     Line::from(Span::styled(cut(&keys, width), theme::quiet()))
 }

@@ -447,6 +447,18 @@ pub fn c() -> Palette {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+/// `a` moved toward `b` by `share` (0 is `a`, 1 is `b`): the footer's calm backgrounds. A colour that is no RGB
+/// (a terminal's own) stays `a`.
+pub fn mix(a: Color, b: Color, share: f32) -> Color {
+    let (Color::Rgb(ar, ag, ab), Color::Rgb(br, bg, bb)) = (a, b) else {
+        return a;
+    };
+    let part = |from: u8, to: u8| {
+        (f32::from(from) + (f32::from(to) - f32::from(from)) * share).round() as u8
+    };
+    Color::Rgb(part(ar, br), part(ag, bg), part(ab, bb))
+}
+
 /// The palette named `name` (Glut's own or an app theme's), if there is one.
 pub fn named(name: &str) -> Option<Palette> {
     std::iter::once(GLUT)

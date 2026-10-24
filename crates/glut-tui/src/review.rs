@@ -635,15 +635,15 @@ impl Review {
         let fit = |text: String| crate::transcript::cut(&crate::transcript::clean(&text), width);
         let line = match &self.typing {
             Some(Typing::Why(text)) => Line::from(vec![
-                Span::styled(" why (Enter rejects, may stay empty) › ", theme::glow()),
+                Span::styled(" why (⏎ rejects, may stay empty) › ", theme::glow()),
                 Span::raw(fit(format!("{text}▏"))),
             ]),
             Some(Typing::Comment(text)) => Line::from(vec![
-                Span::styled(" comment (Enter sends it with your next message) › ", theme::glow()),
+                Span::styled(" comment (⏎ sends it with your next message) › ", theme::glow()),
                 Span::raw(fit(format!("{text}▏"))),
             ]),
             None => Line::from(Span::styled(
-                fit(" ↑↓ hunk · ←→ file · a accept · r reject · c comment · v reviewed · s turn/session · Esc".into()),
+                fit(" ↑↓ hunk · ←→ file · a accept · r reject · c comment · v reviewed · s turn/session · ⎋".into()),
                 theme::quiet(),
             )),
         };

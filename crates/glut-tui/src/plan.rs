@@ -166,7 +166,7 @@ pub fn lines(
         foot.push(Line::default());
         if let Some(note) = &dialog.note {
             for row in wrap(
-                "Why it goes back — Glut reads it with the plan's answer (Enter sends, Esc returns):",
+                "Why it goes back — Glut reads it with the plan's answer (⏎ sends, ⎋ returns):",
                 width,
             ) {
                 foot.push(Line::from(Span::styled(row, theme::quiet())));
@@ -178,7 +178,7 @@ pub fn lines(
                 Span::styled("▍", theme::glow()),
             ]));
         } else {
-            let mut choices = vec![("Enter".to_owned(), "approve".to_owned())];
+            let mut choices = vec![("⏎".to_owned(), "approve".to_owned())];
             for (at, mode) in modes.iter().enumerate().take(9) {
                 let label = if mode == "auto" && auto_unsandboxed {
                     format!("{mode} (no sandbox!)")
@@ -188,7 +188,7 @@ pub fn lines(
                 choices.push(((at + 1).to_string(), label));
             }
             choices.push(("n".to_owned(), "send back with a note".to_owned()));
-            choices.push(("Esc".to_owned(), "send back".to_owned()));
+            choices.push(("⎋".to_owned(), "send back".to_owned()));
             foot.extend(flow(&choices, width));
             if let Some(first) = modes.first() {
                 foot.push(Line::from(Span::styled(
@@ -208,7 +208,7 @@ pub fn lines(
         foot.push(Line::default());
         foot.push(Line::from(vec![
             Span::styled(cut(&state, width.saturating_sub(24)), style),
-            Span::styled(" · ↑↓ scroll · Esc closes", theme::quiet()),
+            Span::styled(" · ↑↓ scroll · ⎋ closes", theme::quiet()),
         ]));
     }
     let room = height.saturating_sub(foot.len()).max(1);
@@ -372,7 +372,7 @@ mod tests {
         let shown = lines(&plan, &[], &mut dialog, &modes, true, 50, 14);
         let text: Vec<String> = shown.iter().map(|line| line.to_string()).collect();
         assert!(text.iter().all(|row| row.width() <= 50), "{text:#?}");
-        assert!(text.iter().any(|row| row.contains("Esc send back")));
+        assert!(text.iter().any(|row| row.contains("⎋ send back")));
         assert!(
             text.iter()
                 .any(|row| row.contains("n send back with a note"))
