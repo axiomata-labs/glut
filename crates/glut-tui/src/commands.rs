@@ -330,7 +330,7 @@ pub const KEYS: [Key; 29] = [
     key(
         Topic::Panes,
         "⌃P",
-        "the other pane (⌃] too on a US layout)",
+        "the other pane (⌃] too: ⌃6 on a German layout)",
         "",
     ),
     key(

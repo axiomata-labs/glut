@@ -838,6 +838,13 @@ mod tests {
         assert_eq!(panes.active, 1, "the legacy encoding too");
         press(&mut panes, KeyCode::Char('p'), KeyModifiers::CONTROL);
         assert_eq!(panes.active, 0, "⌃P on any layout");
+        press(
+            &mut panes,
+            KeyCode::Char('6'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
+        );
+        assert_eq!(panes.active, 1, "⌃] on a German layout: ⌃⌥6");
+        press(&mut panes, KeyCode::Char('6'), KeyModifiers::CONTROL);
         press(&mut panes, KeyCode::Char('p'), KeyModifiers::CONTROL);
         press(&mut panes, KeyCode::Char('x'), KeyModifiers::NONE);
         assert_eq!(

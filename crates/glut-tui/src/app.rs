@@ -1092,10 +1092,10 @@ impl App {
             return self.interrupt();
         }
         // ⌃P or ⌃] the other pane (T36a) — whatever this one shows: it is how the owner reaches the other's question.
-        // ⌃P is a letter, the same key on every layout (`]` is ⌥6 on a German Mac: ⌃] never arrives as such there);
-        // a terminal without the keyboard protocol sends ⌃] as ⌃5.
+        // ⌃P is a letter, the same key on every layout; `]` is ⌥6 on a German Mac, where ⌃] arrives as ⌃(⌥)6 — taken
+        // too, as the owner reaches it with one finger; a terminal without the keyboard protocol sends ⌃] as ⌃5.
         if ctrl
-            && matches!(key.code, KeyCode::Char('p' | 'P' | ']' | '5'))
+            && matches!(key.code, KeyCode::Char('p' | 'P' | ']' | '5' | '6'))
             && key.kind != KeyEventKind::Repeat
         {
             self.chord = false;
