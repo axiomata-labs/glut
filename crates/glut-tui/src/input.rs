@@ -377,6 +377,11 @@ impl Input {
         self.col = 0;
     }
 
+    /// Whether the cursor stands after the last character.
+    pub fn at_end(&self) -> bool {
+        self.row + 1 == self.lines.len() && self.col == self.len(self.row)
+    }
+
     pub fn end(&mut self) {
         self.col = self.len(self.row);
     }

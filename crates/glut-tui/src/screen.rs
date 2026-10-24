@@ -275,6 +275,7 @@ async fn run_loop(
         execute!(io::stdout(), EndSynchronizedUpdate)?;
         drawn?;
         linked?;
+        panes.links = spots;
         if panes.quitting() {
             // How the window stood, for the next `glut -c` (TUI9e).
             panes.keep_layout();

@@ -476,6 +476,43 @@ pub const KEYS: [Key; 39] = [
     key(Topic::Help, "⌃K", "this sheet of keys", "/help"),
 ];
 
+/// The words a command takes when they are a fixed few (`on|off`, `full|calm|off`); `None` for anything freer.
+fn choices(args: &str) -> Option<Vec<&str>> {
+    let words: Vec<&str> = args.split('|').collect();
+    (words.len() > 1
+        && words.iter().all(|word| {
+            !word.is_empty() && word.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        }))
+    .then_some(words)
+}
+
+/// What a typed command still takes, shown faintly after the cursor (TUI9): after `/name ` its arguments as `/help`
+/// writes them, and after the start of one of its fixed words the rest of that word.
+pub fn ghost(text: &str) -> Option<String> {
+    let (name, rest) = text.strip_prefix('/')?.split_once(' ')?;
+    let command = COMMANDS.iter().find(|command| command.name == name)?;
+    if command.args.is_empty() || text.contains('\n') {
+        return None;
+    }
+    if rest.is_empty() {
+        return Some(command.args.to_owned());
+    }
+    completion(text)
+}
+
+/// The rest of the fixed word a typed command's argument begins (`/motion c` → `alm`), what ⇥ adds.
+pub fn completion(text: &str) -> Option<String> {
+    let (name, rest) = text.strip_prefix('/')?.split_once(' ')?;
+    if rest.is_empty() || rest.contains(char::is_whitespace) {
+        return None;
+    }
+    let command = COMMANDS.iter().find(|command| command.name == name)?;
+    choices(command.args)?
+        .into_iter()
+        .find(|word| word.starts_with(rest) && *word != rest)
+        .map(|word| word[rest.len()..].to_owned())
+}
+
 /// The commands a typed `/` part fits: with nothing typed every one, by topic; else those whose name starts with it,
 /// then — from three characters on, so `to` or `or` match no filler — those with a word in what they do starting with
 /// it (`/hook` finds `/skill`).
@@ -606,6 +643,23 @@ mod tests {
 
     fn names(commands: &[&Command]) -> Vec<&'static str> {
         commands.iter().map(|command| command.name).collect()
+    }
+
+    #[test]
+    fn a_typed_command_shows_what_it_takes_and_tab_completes_a_fixed_word() {
+        assert_eq!(ghost("/motion ").as_deref(), Some("full|calm|off"));
+        assert_eq!(ghost("/motion c").as_deref(), Some("alm"));
+        assert_eq!(completion("/motion c").as_deref(), Some("alm"));
+        assert_eq!(ghost("/motion calm"), None, "the word is whole");
+        assert_eq!(ghost("/motion x"), None);
+        assert_eq!(
+            ghost("/bg ").as_deref(),
+            Some("[name] [as <role>] [here|tree]")
+        );
+        assert_eq!(completion("/bg h"), None, "free words are not completed");
+        assert_eq!(ghost("/motion"), None, "the name still typed");
+        assert_eq!(ghost("/clear "), None, "nothing to take");
+        assert_eq!(ghost("hello /motion "), None);
     }
 
     #[test]

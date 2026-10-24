@@ -857,6 +857,18 @@ fn draw_input(
             Line::from(vec![mark, Span::raw(row.clone())])
         })
         .collect();
+    let mut lines = lines;
+    // What a typed command still takes, faint after the cursor: its arguments, or the rest of the word begun.
+    if rows.len() == 1
+        && app.input.at_end()
+        && let Some(ghost) = crate::commands::ghost(&app.input.text())
+        && let Some(line) = lines.last_mut()
+    {
+        line.spans.push(Span::styled(
+            ghost,
+            theme::quiet().add_modifier(Modifier::DIM),
+        ));
+    }
     frame.render_widget(Paragraph::new(lines), text);
     if active && app.ask.is_none() && app.picker.is_none() {
         frame.set_cursor_position(Position {

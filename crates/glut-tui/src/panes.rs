@@ -508,6 +508,9 @@ pub struct Panes {
     restore_next: Option<String>,
     /// A kept layout was offered (`glut -c`): a window ending with one pane forgets it.
     offered: bool,
+    /// The links of the last frame, where they stand: a click on one opens it (the screen holds the mouse, so the
+    /// terminal never sees that click).
+    pub links: Vec<crate::links::Spot>,
 }
 
 /// A kept layout coming back: the panes still to build, and each kept pane's session id once it stands.
@@ -546,6 +549,7 @@ impl Panes {
             restoring: None,
             restore_next: None,
             offered: false,
+            links: Vec::new(),
             list: vec![Pane {
                 id: 1,
                 number: 1,
@@ -853,6 +857,17 @@ impl Panes {
                 self.list[at].app.on_terminal(event);
             }
             return;
+        }
+        // A click on a link opens it (TUI9d): the screen holds the mouse, the terminal never gets to.
+        if let TermEvent::Mouse(mouse) = &event
+            && mouse.kind == MouseEventKind::Down(MouseButton::Left)
+            && let Some(url) = crate::links::under(&self.links, mouse.column, mouse.row)
+        {
+            let said = match crate::links::open(url) {
+                Ok(()) => format!("opening {}", crate::links::host_of(url)),
+                Err(reason) => reason,
+            };
+            return self.active().say(said);
         }
         if let TermEvent::Mouse(mouse) = &event
             && self.split()

@@ -230,6 +230,53 @@ pub fn write(out: &mut impl Write, spots: &[Spot]) -> io::Result<()> {
     out.flush()
 }
 
+/// The URL of the link drawn at `column`, `row` in the last frame, if any.
+pub fn under(spots: &[Spot], column: u16, row: u16) -> Option<&str> {
+    spots
+        .iter()
+        .find(|spot| {
+            let width: usize = spot
+                .cells
+                .iter()
+                .map(|(symbol, _)| unicode_width::UnicodeWidthStr::width(symbol.as_str()).max(1))
+                .sum();
+            spot.y == row && column >= spot.x && usize::from(column - spot.x) < width
+        })
+        .map(|spot| spot.url.as_str())
+}
+
+/// Opens `url` in the owner's browser (a click on a link, which the screen's mouse never hands the terminal): the
+/// web only, as a link is made.
+///
+/// # Errors
+///
+/// A message when it is no link Glut makes or the opener cannot start.
+pub fn open(url: &str) -> Result<(), String> {
+    if !safe(url) {
+        return Err("only a web link opens".into());
+    }
+    let opener = if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    let mut child = std::process::Command::new(opener)
+        .arg(url)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|err| format!("{opener}: {err}"))?;
+    // Waited for beside the screen: no process left behind, no frame held up.
+    std::thread::spawn(move || child.wait());
+    Ok(())
+}
+
+/// The host a link opens, for saying so.
+pub fn host_of(url: &str) -> &str {
+    host(url).unwrap_or(url)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -263,6 +310,26 @@ mod tests {
         assert_eq!(after("https://x.example", "https://x.example"), "");
         assert_eq!(after(" ", "https://x.example/a"), " (https://x.example/a)");
         assert_eq!(host("https://a.example:8080/p?q"), Some("a.example:8080"));
+    }
+
+    #[test]
+    fn a_click_finds_the_link_under_it() {
+        let spot = Spot {
+            x: 4,
+            y: 2,
+            number: 0,
+            cells: "here"
+                .chars()
+                .map(|c| (c.to_string(), Style::default()))
+                .collect(),
+            url: "https://glut.test/under".into(),
+        };
+        let spots = [spot];
+        assert_eq!(under(&spots, 4, 2), Some("https://glut.test/under"));
+        assert_eq!(under(&spots, 7, 2), Some("https://glut.test/under"));
+        assert_eq!(under(&spots, 8, 2), None);
+        assert_eq!(under(&spots, 5, 3), None);
+        assert!(open("file:///etc/passwd").is_err());
     }
 
     #[test]

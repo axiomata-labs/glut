@@ -271,6 +271,9 @@ pub struct App {
     pub(crate) held_since: Option<Instant>,
     /// Glut's very first start (TUI9c): the welcome shows the first keys until a message or a command goes.
     pub first_start: bool,
+    /// How long the stream was after the last note of a mode gone round (`⇧⇥`): the next one replaces it while it is
+    /// still the last block.
+    mode_note: Option<usize>,
     /// Since when Glut works (TUI9b): what the footer counts while the screen holds still.
     pub busy_since: Option<Instant>,
     /// The state last seen (TUI9b): the reader mode says each change in a line of its own.
@@ -451,6 +454,7 @@ impl App {
             cache_seen: false,
             held_since: None,
             busy_since: None,
+            mode_note: None,
             first_start,
             seen_state: None,
             seen_turns: 0,
@@ -1575,6 +1579,14 @@ impl App {
             KeyCode::PageDown => self.scroll_by(-self.page()),
             // Tab while Glut works queues the message for after the turn (T10; Alt+Enter is a new line in many
             // terminals); idle, it is a space.
+            // A command's word half typed: ⇥ completes it (`/motion c` → `/motion calm`).
+            KeyCode::Tab if self.input.at_end() => {
+                match crate::commands::completion(&self.input.text()) {
+                    Some(rest) => self.input.insert_text(&rest),
+                    None if self.working() => self.queue_next(),
+                    None => self.input.insert(' '),
+                }
+            }
             KeyCode::Tab if self.working() => self.queue_next(),
             KeyCode::Tab => self.input.insert(' '),
             KeyCode::Char(c) if !ctrl => {
@@ -1842,7 +1854,19 @@ impl App {
         } else {
             Tone::Quiet
         };
+        self.say_mode(what, tone);
+    }
+
+    /// The mode reached, said: modes gone round one after another leave one line — not a wall of them.
+    fn say_mode(&mut self, what: String, tone: Tone) {
+        if self.mode_note == Some(self.transcript.blocks.len())
+            && let Some(last) = self.transcript.blocks.last()
+            && matches!(last.kind, crate::transcript::Kind::Note { .. })
+        {
+            self.transcript.blocks.pop();
+        }
         self.transcript.note(what, tone);
+        self.mode_note = Some(self.transcript.blocks.len());
     }
 
     /// One of the session's own commands (`/model`, `/context` …).
@@ -6223,6 +6247,38 @@ mod tests {
             "the search without a felt pause"
         );
         assert!(memory < 500, "under 500 MB");
+    }
+
+    #[test]
+    fn modes_gone_round_one_after_another_leave_one_line() {
+        let (mut app, _reports) = app();
+        let notes = |app: &App| {
+            app.transcript
+                .blocks
+                .iter()
+                .filter(|block| matches!(block.kind, crate::transcript::Kind::Note { .. }))
+                .count()
+        };
+        let before = notes(&app);
+        for mode in ["plan", "ask", "build", "auto", "plan", "ask"] {
+            app.say_mode(format!("{mode}: …"), Tone::Quiet);
+        }
+        assert_eq!(notes(&app), before + 1);
+        app.transcript.note("something else", Tone::Quiet);
+        app.say_mode("build: …".into(), Tone::Quiet);
+        assert_eq!(
+            notes(&app),
+            before + 3,
+            "a mode note after another note stands on its own"
+        );
+    }
+
+    #[test]
+    fn tab_completes_a_commands_word_begun() {
+        let (mut app, _reports) = app();
+        type_text(&mut app, "/motion c");
+        app.on_terminal(key(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(app.input.text(), "/motion calm");
     }
 
     #[test]
