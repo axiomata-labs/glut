@@ -418,7 +418,8 @@ pub const LEGEND: &str = "⌃ Ctrl · ⇧ Shift · ⌥ Alt · ⏎ Enter · ⇥ T
 pub const SHEET_WITH_COMMANDS: usize = 46;
 
 /// The Keys sheet `width` cells wide: each topic's heading, then its keys — each key a cap in the footer's look (T39:
-/// the calm backgrounds taking turns, light and darker, Powerline's arrow after it where the footer has them), what it
+/// the calm backgrounds taking turns, light and darker, round on the left and Powerline's arrow on the right where
+/// the footer has them), what it
 /// does wrapped beside it, the `/` command after it where the sheet is wide enough.
 pub fn sheet(width: usize, separators: crate::footer::Separators) -> Vec<Line<'static>> {
     let cap_width = KEYS.iter().map(|key| key.key.width()).max().unwrap_or(0);
@@ -458,8 +459,15 @@ pub fn sheet(width: usize, separators: crate::footer::Separators) -> Vec<Line<'s
                     }
                     crate::footer::Separators::Plain => Span::raw(" "),
                 };
+                // Round on the outside, pointed toward what it does — as the footer's bars.
+                let start = match separators {
+                    crate::footer::Separators::Powerline => {
+                        Span::styled(crate::footer::ROUND_LEFT, Style::default().fg(bg))
+                    }
+                    crate::footer::Separators::Plain => Span::raw(" "),
+                };
                 lines.push(Line::from(vec![
-                    Span::raw(" "),
+                    start,
                     Span::styled(
                         format!(" {head}{} ", " ".repeat(pad)),
                         Style::default().bg(bg).add_modifier(Modifier::BOLD),

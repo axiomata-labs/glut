@@ -11,6 +11,12 @@ use crate::theme;
 
 /// Powerline's arrow after a segment (U+E0B0, a private-use glyph only patched fonts and some terminals draw).
 pub const ARROW: &str = "\u{e0b0}";
+/// The arrow pointing the other way (U+E0B2), where the hints' bar starts.
+const ARROW_LEFT: &str = "\u{e0b2}";
+/// The rounded ends (U+E0B6 facing left, U+E0B4 facing right): a bar is round on the outside, pointed toward the
+/// middle of the line (the owner's look, after Powerlevel10k).
+pub const ROUND_LEFT: &str = "\u{e0b6}";
+const ROUND_RIGHT: &str = "\u{e0b4}";
 /// Powerline's branch glyph (U+E0A0); the plain footer has Unicode's own branch sign.
 const BRANCH_POWERLINE: &str = "\u{e0a0}";
 const BRANCH_PLAIN: &str = "⎇";
@@ -146,8 +152,9 @@ fn segments_width(segments: &[&Segment], separators: Separators) -> usize {
         .map(|segment| segment.text.width() + 2)
         .sum();
     let joints = match separators {
-        // An arrow after each, the last one included: it closes the bar.
-        Separators::Powerline => segments.len(),
+        // The round start, and an arrow after each, the last one included: it closes the bar.
+        Separators::Powerline if segments.is_empty() => 0,
+        Separators::Powerline => segments.len() + 1,
         Separators::Plain => segments.len().saturating_sub(1),
     };
     texts + joints
@@ -165,7 +172,16 @@ pub fn line(
     moment: bool,
 ) -> Line<'static> {
     let mut kept: Vec<&Segment> = segments.iter().collect();
-    let hints_room = if moment { hints.width() + 1 } else { 0 };
+    // The hints' bar has its arrow, its round end and a space on either side in Powerline's look.
+    let hints_frame = match separators {
+        Separators::Powerline => 4,
+        Separators::Plain => 0,
+    };
+    let hints_room = if moment {
+        hints.width() + hints_frame + 1
+    } else {
+        0
+    };
     while segments_width(&kept, separators) + hints_room > width {
         let Some(most) = kept
             .iter()
@@ -194,6 +210,12 @@ pub fn line(
         })
         .collect();
     let mut spans: Vec<Span<'static>> = Vec::new();
+    if let (Separators::Powerline, Some(first)) = (separators, styles.first()) {
+        spans.push(Span::styled(
+            ROUND_LEFT,
+            Style::default().fg(first.bg.unwrap_or(Color::Reset)),
+        ));
+    }
     for (at, segment) in kept.iter().enumerate() {
         spans.push(Span::styled(format!(" {} ", segment.text), styles[at]));
         match separators {
@@ -210,12 +232,24 @@ pub fn line(
         }
     }
     let used = segments_width(&kept, separators);
-    let room = width.saturating_sub(used + 1);
+    let room = width.saturating_sub(used + 1 + hints_frame);
     let shown = fitted_hints(hints, room);
     if !shown.is_empty() {
-        let gap = width.saturating_sub(used + shown.width());
+        let gap = width.saturating_sub(used + shown.width() + hints_frame);
         spans.push(Span::raw(" ".repeat(gap)));
-        spans.push(Span::styled(shown, theme::quiet()));
+        match separators {
+            // The mirror of the segments' bar: pointed toward the middle, round at the edge.
+            Separators::Powerline => {
+                let bg = backgrounds[0];
+                spans.push(Span::styled(ARROW_LEFT, Style::default().fg(bg)));
+                spans.push(Span::styled(
+                    format!(" {shown} "),
+                    Style::default().bg(bg).fg(Color::Reset),
+                ));
+                spans.push(Span::styled(ROUND_RIGHT, Style::default().fg(bg)));
+            }
+            Separators::Plain => spans.push(Span::styled(shown, theme::quiet())),
+        }
     }
     Line::from(spans)
 }
@@ -317,13 +351,18 @@ mod tests {
     #[test]
     fn the_moments_hints_go_before_the_segments_that_may() {
         let hints = "y once · 1–3 for this session · n refuse";
-        let shown = text(&line(status(), hints, 70, Separators::Powerline, true));
-        assert!(shown.ends_with("n refuse"), "{shown:?}");
+        let shown = text(&line(status(), hints, 76, Separators::Powerline, true));
+        assert!(
+            shown.ends_with(&format!("n refuse {ROUND_RIGHT}")),
+            "{shown:?}"
+        );
         assert!(!shown.contains("main"), "{shown:?}");
+        assert!(shown.width() <= 76, "{shown:?}");
     }
 
     #[test]
-    fn powerline_closes_every_segment_with_its_arrow_and_plain_puts_a_space_between() {
+    fn powerline_bars_are_round_outside_and_pointed_toward_the_middle_and_plain_puts_a_space_between()
+     {
         let segments = vec![Segment::calm("a", 0), Segment::calm("b", 0)];
         assert_eq!(
             text(&line(
@@ -333,7 +372,20 @@ mod tests {
                 Separators::Powerline,
                 false
             )),
-            format!(" a {ARROW} b {ARROW}")
+            format!("{ROUND_LEFT} a {ARROW} b {ARROW}")
+        );
+        assert_eq!(
+            text(&line(
+                vec![Segment::calm("a", 0)],
+                "keys",
+                20,
+                Separators::Powerline,
+                false
+            )),
+            format!(
+                "{ROUND_LEFT} a {ARROW}{}{ARROW_LEFT} keys {ROUND_RIGHT}",
+                " ".repeat(6)
+            )
         );
         assert_eq!(
             text(&line(segments, "", 40, Separators::Plain, false)),
