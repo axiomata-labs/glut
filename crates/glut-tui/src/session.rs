@@ -194,6 +194,8 @@ pub struct Engine {
     pub prices: Option<Prices>,
     /// The window Glut counts with, and where it comes from (`set in Glut`, `settings`, `the provider's list`).
     pub window: Option<(u32, &'static str)>,
+    /// Whether the model sees images, as the provider's list says (T45); `None`: unknown.
+    pub images: Option<bool>,
 }
 
 impl Engine {
@@ -208,6 +210,9 @@ impl Engine {
         if let Some((tokens, _)) = self.window {
             config.compaction.context_window = Some(tokens);
         }
+        // T45: a tool's images kept in the owner's home, and not sent to a model its list says sees none.
+        config.images_home = Some(parts.home.clone());
+        config.sees_images = self.images;
         config
     }
 }
@@ -431,6 +436,7 @@ pub async fn build(
                 .map(|tokens| (*tokens, "settings.json"))
                 .or(window),
             endpoint,
+            images: None,
         },
     };
     Ok((parts, engine))
@@ -511,6 +517,7 @@ pub async fn engine(
             model: Arc::new(model),
             prices,
             window,
+            images: listed.as_ref().and_then(|info| info.images),
         },
         notes,
     ))
@@ -655,7 +662,7 @@ pub fn turn(
     let kept = conversation.clone();
     let host = Arc::clone(&parts.host);
     let asked = match &input {
-        TurnInput::Message(prompt) => prompt.clone(),
+        TurnInput::Message(prompt, _) => prompt.clone(),
         TurnInput::Resume(_) => String::new(),
     };
     let run = tokio::spawn(async move {
@@ -682,7 +689,7 @@ pub fn turn(
         parts.host.state(State::Working);
         // The host's word first (its budget, its stop): a refused turn sends nothing and leaves the conversation.
         let kind = match input {
-            TurnInput::Message(_) => Turn::Message,
+            TurnInput::Message(..) => Turn::Message,
             TurnInput::Resume(_) => Turn::Resumed,
         };
         match until_cancelled(parts.host.before_turn(&mut config, kind), &cancel).await {
@@ -691,7 +698,8 @@ pub fn turn(
             None => return Ended::Refused("stopped before the turn began".to_owned()),
         }
         let (outcome, after) = match input {
-            TurnInput::Message(prompt) => {
+            TurnInput::Message(prompt, images) => {
+                config.prompt_images = images;
                 glut::run_continuing(
                     &config,
                     engine.model.as_ref(),
@@ -750,8 +758,8 @@ pub fn turn(
 
 /// What a turn starts from.
 pub enum TurnInput {
-    /// The owner's message.
-    Message(String),
+    /// The owner's message, and the images it carries (T45).
+    Message(String, Vec<glut::images::Image>),
     /// The lost run of this name, from its journal.
     Resume(String),
 }
@@ -1196,6 +1204,7 @@ pub fn for_tests() -> (Parts, Engine) {
         endpoint,
         prices: None,
         window: Some((32_768, "settings.json")),
+        images: None,
     };
     (parts, engine)
 }

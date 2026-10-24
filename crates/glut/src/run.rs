@@ -359,6 +359,7 @@ async fn run_inner<M: ChatModel>(
         snapshots: SnapshotState::Unopened,
         diagnostics: None,
         chain: None,
+        shown: std::collections::HashMap::new(),
         refusals: Ledger::new(config.refusals),
         refused_now: Vec::new(),
         subagent_refusals: 0,
@@ -495,8 +496,56 @@ fn opening_messages(
         message.forget_reasoning();
         message
     }));
-    messages.push(Message::user(prompt));
+    let mut asked = Message::user(prompt);
+    // The owner's images go with the owner's prompt — a subagent's prompt is its parent's words alone.
+    if depth == 0 {
+        asked.images.clone_from(&config.prompt_images);
+    }
+    messages.push(asked);
     messages
+}
+
+/// The most bytes of images one request carries (T45), as base64 grows them: the newest first, the older ones said
+/// by their line. Anthropic takes at most 32 MB a request, and every image goes with every step.
+const MOST_SENT_IMAGE_BYTES: u64 = 16 * 1024 * 1024;
+/// The most images one request carries, the newest.
+const MOST_SENT_IMAGES: usize = 8;
+
+/// The conversation as it is sent (T45): to a model that sees no images, none — each said by its line —; to any
+/// other, the newest images within [`MOST_SENT_IMAGES`] and [`MOST_SENT_IMAGE_BYTES`], the older by their line.
+fn sendable(messages: &[Message], sees: Option<bool>) -> std::borrow::Cow<'_, [Message]> {
+    if !messages.iter().any(|message| !message.images.is_empty()) {
+        return std::borrow::Cow::Borrowed(messages);
+    }
+    let mut room = if sees == Some(false) {
+        0
+    } else {
+        MOST_SENT_IMAGES
+    };
+    let mut bytes = 0u64;
+    let mut sent = messages.to_vec();
+    for message in sent.iter_mut().rev() {
+        let mut kept = Vec::new();
+        let mut said = Vec::new();
+        for image in message.images.drain(..).rev() {
+            let base64 = image.bytes.div_ceil(3) * 4;
+            if room > 0 && bytes + base64 <= MOST_SENT_IMAGE_BYTES {
+                room -= 1;
+                bytes += base64;
+                kept.push(image);
+            } else {
+                said.push(image.label());
+            }
+        }
+        kept.reverse();
+        message.images = kept;
+        if !said.is_empty() {
+            said.reverse();
+            let text = message.content.get_or_insert_with(String::new);
+            text.push_str(&format!("\n{} (not sent again)", said.join(" ")));
+        }
+    }
+    std::borrow::Cow::Owned(sent)
 }
 
 /// How the model's answer turned out once the Stop hooks had their say (HS7, D3).
@@ -548,6 +597,8 @@ struct Loop<'a, M: ChatModel> {
     /// Glut lean, N7: the last chain's answer as the tool gave it and where its parts lie — taken by that call's
     /// [`Self::run_call`], and only while its answer is still that text (a hook may have replaced it).
     chain: Option<ChainAnswer>,
+    /// The images a call's answer shows (T45), by the call's id, until its answer joins the conversation.
+    shown: std::collections::HashMap<String, Vec<Vec<u8>>>,
     /// #112: what the run had refused, and when that ends it.
     refusals: Ledger,
     /// The current call's refusals judged outside [`Self::perform`] (the `task` judgement), taken by it.
@@ -957,8 +1008,9 @@ impl<M: ChatModel> Loop<'_, M> {
                 tools: specs.to_vec(),
             });
         }
+        let sent = sendable(&self.messages, self.config.sees_images);
         let completion = self.model.complete_streaming(
-            &self.messages,
+            &sent,
             specs,
             self.config.max_output_tokens,
             &mut on_text,
@@ -1394,6 +1446,46 @@ impl<M: ChatModel> Loop<'_, M> {
         self.answer_with(call, output, sink)
     }
 
+    /// A tool's answer with the images it shows (T45): kept and numbered on through the conversation — or, where the
+    /// model sees none or the run keeps none, said in the answer instead.
+    fn with_images(&self, mut message: Message, images: Vec<Vec<u8>>) -> Message {
+        if images.is_empty() {
+            return message;
+        }
+        // The model asked for it, not the owner: shown only to a model its list says sees images.
+        let said = match (&self.config.images_home, self.config.sees_images) {
+            (_, Some(false)) => Some("this model sees no images".to_owned()),
+            (_, None) => {
+                Some("whether this model sees images is not known: it is not shown".to_owned())
+            }
+            (None, _) => Some("images are not shown in this run".to_owned()),
+            (Some(home), Some(true)) => {
+                // The prompt's images are in the conversation already: the numbers go on from every one there.
+                let mut number = self
+                    .messages
+                    .iter()
+                    .flat_map(|message| &message.images)
+                    .map(|image| image.number)
+                    .max()
+                    .unwrap_or(0);
+                let mut faults = Vec::new();
+                for bytes in &images {
+                    number += 1;
+                    match crate::images::keep(home, bytes, number) {
+                        Ok(image) => message.images.push(image),
+                        Err(reason) => faults.push(reason),
+                    }
+                }
+                (!faults.is_empty()).then(|| faults.join("; "))
+            }
+        };
+        if let Some(said) = said {
+            let text = message.content.get_or_insert_with(String::new);
+            text.push_str(&format!(" — {said}"));
+        }
+        message
+    }
+
     /// What [`Self::run_call`] does with a call's text: Glut lean's savings, the bound, the message the model gets —
     /// and the run's end when refusals reached their limit with it.
     fn answer_with(
@@ -1442,7 +1534,14 @@ impl<M: ChatModel> Loop<'_, M> {
             }
             bounded
         };
-        self.messages.push(Message::tool(call.id, output));
+        // A call that failed — or whose answer a hook replaced (hooks veto) — shows no image.
+        let images = self
+            .shown
+            .remove(&call.id)
+            .filter(|_| !output.starts_with("error: "))
+            .unwrap_or_default();
+        let message = self.with_images(Message::tool(call.id, output), images);
+        self.messages.push(message);
         // #112, R3: the call that reached a limit still has its answer above — the conversation stays whole for the
         // journal — and the run ends here instead of at the step limit.
         if let Some(message) = self.refusals.ended() {
@@ -1798,6 +1897,10 @@ impl<M: ChatModel> Loop<'_, M> {
                 path.display()
             ));
         }
+        if !called.images.is_empty() {
+            self.shown
+                .insert(call.id.clone(), std::mem::take(&mut called.images));
+        }
         if let Some(parts) = called.parts {
             self.chain = Some(ChainAnswer {
                 call: call.id.clone(),
@@ -2111,7 +2214,11 @@ impl<M: ChatModel> Loop<'_, M> {
             kind: "function".into(),
             function: crate::model::FunctionCall { name, arguments },
         };
-        let text = self.perform(&call, sink).await?;
+        let mut text = self.perform(&call, sink).await?;
+        // A script gets text: an image a call of it read is not shown to the model (T45).
+        if self.shown.remove(&call.id).is_some() {
+            text.push_str(" — not shown from a script: read it with read_file to see it");
+        }
         // A tool's failure is text that starts with `error: ` (the toolbox's convention); the script gets a rejection.
         Ok(match text.strip_prefix("error: ") {
             Some(reason) => (false, reason.to_owned()),
@@ -2898,6 +3005,54 @@ mod tests {
     /// E4: a turn that goes on from earlier ones starts without their reasoning — it is never sent again, so it is
     /// not carried into the chat's file or the journal either.
     #[test]
+    fn a_request_carries_the_newest_images_and_none_to_a_model_that_sees_none() {
+        let image = |number: u32, bytes: u64| crate::images::Image {
+            number,
+            path: std::path::PathBuf::from(format!("/h/.glut/images/{number}.png")),
+            media: "image/png".into(),
+            width: 1,
+            height: 1,
+            bytes,
+        };
+        let mut messages: Vec<Message> = (1..=10)
+            .map(|number| {
+                let mut message = Message::user(format!("look {number}"));
+                message.images = vec![image(number, 100)];
+                message
+            })
+            .collect();
+        let sent = sendable(&messages, Some(true));
+        let carried: Vec<u32> = sent
+            .iter()
+            .flat_map(|m| &m.images)
+            .map(|i| i.number)
+            .collect();
+        assert_eq!(carried, (3..=10).collect::<Vec<_>>(), "the newest eight");
+        assert!(
+            sent[0]
+                .content
+                .as_deref()
+                .unwrap()
+                .contains("[image #1 · 1×1 · 1 kB] (not sent again)")
+        );
+        let none = sendable(&messages, Some(false));
+        assert!(none.iter().all(|message| message.images.is_empty()));
+        // Within the bytes: one image as large as the budget leaves no room for an older one.
+        messages[9].images = vec![image(10, MOST_SENT_IMAGE_BYTES * 3 / 4)];
+        let sent = sendable(&messages, None);
+        let carried: Vec<u32> = sent
+            .iter()
+            .flat_map(|m| &m.images)
+            .map(|i| i.number)
+            .collect();
+        assert_eq!(carried, [10]);
+        assert!(matches!(
+            sendable(&[Message::user("hi")], None),
+            std::borrow::Cow::Borrowed(_)
+        ));
+    }
+
+    #[test]
     fn a_new_turn_starts_without_the_earlier_turns_reasoning() {
         let thought = Message {
             reasoning: Some("old thinking".into()),
@@ -2988,6 +3143,7 @@ mod tests {
                 reasoning: None,
                 reasoning_content: None,
                 reasoning_details: Vec::new(),
+                images: Vec::new(),
             },
             usage: Usage {
                 input_tokens: 10,
@@ -3017,6 +3173,7 @@ mod tests {
                 reasoning: None,
                 reasoning_content: None,
                 reasoning_details: Vec::new(),
+                images: Vec::new(),
             },
             usage: Usage {
                 input_tokens: 7,
@@ -3179,6 +3336,7 @@ mod tests {
             reasoning: None,
             reasoning_content: None,
             reasoning_details: Vec::new(),
+            images: Vec::new(),
         });
         messages.push(Message::tool("r1", text));
         let again = read("r2", r#"{"path":"./src/a.rs"}"#);

@@ -192,6 +192,10 @@ pub struct RunArgs {
     #[arg(long)]
     #[serde(default)]
     project: bool,
+    /// An image the prompt carries (T45: PNG, JPEG, GIF or WebP, scaled before it is sent); repeatable.
+    #[arg(long)]
+    #[serde(default)]
+    image: Vec<PathBuf>,
     /// The prompt — extra text beside `--skill`, or a slash command (`/review src/`), read from
     /// `~/.glut/commands/` and, in a trusted folder, the project's `.glut/commands/` (HS4). Without `--skill` a
     /// prompt is required; with one it defaults to "Run the skill.".
@@ -538,6 +542,7 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
         skill_dir,
         mcp_config,
         project,
+        image,
         prompt,
     } = args;
 
@@ -599,6 +604,25 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
     config.savings = savings_file();
     // The folders the run reads skills from, beside the owner's and the project's (HS6, K2).
     config.skill_dirs = skill_dir;
+    // T45: images are kept in the owner's `~/.glut/images` — the prompt's, and those `read_file` shows the model.
+    match crate::permissions::settings::home_dir() {
+        Ok(home) => {
+            for (at, path) in image.iter().enumerate() {
+                let number = u32::try_from(at + 1).unwrap_or(u32::MAX);
+                match crate::images::read_file(path)
+                    .and_then(|bytes| crate::images::keep(&home, &bytes, number))
+                {
+                    Ok(kept) => config.prompt_images.push(kept),
+                    Err(reason) => return fail(format!("--image {}: {reason}", path.display())),
+                }
+            }
+            config.images_home = Some(home);
+        }
+        Err(err) if !image.is_empty() => {
+            return fail(format!("--image: no home to keep images in ({err})"));
+        }
+        Err(_) => {}
+    }
     if let Some(path) = instructions_file {
         match std::fs::read_to_string(&path) {
             Ok(text) => config.instructions = Some(text),

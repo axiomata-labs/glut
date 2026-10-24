@@ -38,6 +38,8 @@ pub enum Pick {
     TakeBack(Vec<String>),
     /// An entry only to be read (a rule of the settings in `/gate`): picking it closes the list.
     Shown,
+    /// `/resume`'s ⌫, asked once (T45): the kept session of this id deleted, its images no session needs with it.
+    DeleteSession(String),
     /// `/memory` (T35): a fact to show, by its name.
     MemoryFact(String),
     /// `/todo clean` (T41): the owner's yes to dropping the done items.

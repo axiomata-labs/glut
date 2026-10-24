@@ -175,6 +175,7 @@ fn summary_pair(summary: &str) -> Vec<Message> {
             reasoning: None,
             reasoning_content: None,
             reasoning_details: Vec::new(),
+            images: Vec::new(),
         },
     ]
 }
@@ -231,6 +232,10 @@ fn transcript(messages: &[&Message], fence: &str) -> String {
         let mut text = message.content.clone().unwrap_or_default();
         if message.role == Role::Tool {
             text = format!("{fence}\n{}\n{fence}", head(&text, MAX_RESULT_CHARS));
+        }
+        // An image is summarised by its line (T45): the summary keeps that one was there, not its data.
+        for image in &message.images {
+            text.push_str(&format!("\n{}", image.label()));
         }
         for call in &message.tool_calls {
             text.push_str(&format!(
@@ -292,6 +297,7 @@ mod tests {
                     reasoning: None,
                     reasoning_content: None,
                     reasoning_details: Vec::new(),
+                    images: Vec::new(),
                 },
                 usage: Usage {
                     input_tokens: 50,
@@ -322,6 +328,7 @@ mod tests {
             reasoning: None,
             reasoning_content: None,
             reasoning_details: Vec::new(),
+            images: Vec::new(),
         }
     }
 

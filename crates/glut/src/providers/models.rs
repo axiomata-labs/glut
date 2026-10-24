@@ -118,6 +118,10 @@ pub struct ModelInfo {
     /// The API the model speaks, for a gateway's model; `None` for every other provider's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api: Option<Api>,
+    /// Whether the model sees images (T45): OpenRouter's `architecture.input_modalities`, models.dev's
+    /// `modalities.input`; `None`: unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub images: Option<bool>,
 }
 
 impl ModelInfo {
@@ -429,6 +433,11 @@ fn described_model(id: &str, entry: &Value) -> Option<ModelInfo> {
         .get("provider")
         .and_then(|provider| provider.get("npm"))
         .and_then(Value::as_str);
+    let images = entry
+        .get("modalities")
+        .and_then(|modalities| modalities.get("input"))
+        .and_then(Value::as_array)
+        .map(|kinds| kinds.iter().any(|kind| kind.as_str() == Some("image")));
     Some(ModelInfo {
         id: id.to_owned(),
         name: entry
@@ -450,6 +459,7 @@ fn described_model(id: &str, entry: &Value) -> Option<ModelInfo> {
         reasoning: entry.get("reasoning").and_then(Value::as_bool),
         created,
         api: Some(Api::of_package(package)),
+        images,
     })
 }
 
@@ -595,6 +605,11 @@ fn model(entry: &Value) -> Option<ModelInfo> {
         reasoning,
         created: entry.get("created").and_then(Value::as_i64),
         api: None,
+        images: entry
+            .get("architecture")
+            .and_then(|architecture| architecture.get("input_modalities"))
+            .and_then(Value::as_array)
+            .map(|kinds| kinds.iter().any(|kind| kind.as_str() == Some("image"))),
     })
 }
 
@@ -622,6 +637,21 @@ fn prices(pricing: &Value) -> Option<Prices> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_model_seeing_images_is_read_from_either_list() {
+        let routed =
+            model(&json!({"id": "a/b", "architecture": {"input_modalities": ["text", "image"]}}))
+                .unwrap();
+        assert_eq!(routed.images, Some(true));
+        let text_only =
+            model(&json!({"id": "a/c", "architecture": {"input_modalities": ["text"]}})).unwrap();
+        assert_eq!(text_only.images, Some(false));
+        assert_eq!(model(&json!({"id": "a/d"})).unwrap().images, None);
+        let described =
+            described_model("x", &json!({"modalities": {"input": ["text", "image"]}})).unwrap();
+        assert_eq!(described.images, Some(true));
+    }
 
     #[test]
     fn models_dev_says_what_a_gateway_model_speaks_and_costs() {
@@ -727,6 +757,7 @@ mod tests {
             reasoning: None,
             created: None,
             api: None,
+            images: None,
         };
         assert!(free.free());
         assert!(!flash.free());
@@ -754,6 +785,7 @@ mod tests {
                 reasoning: None,
                 created: Some(1_700_000_000),
                 api: None,
+                images: None,
             }],
             allowed: Some(vec!["a/b".into()]),
         };

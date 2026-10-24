@@ -381,16 +381,31 @@ fn to_api(messages: &[Message]) -> (Vec<Value>, Vec<Value>) {
                 }
                 continue;
             }
-            Role::User => ("user", text_blocks(text)),
-            Role::Tool => (
-                "user",
-                vec![json!({
-                    "type": "tool_result",
-                    "tool_use_id": message.tool_call_id.as_deref().unwrap_or(""),
-                    // An empty result is still an answer the call is owed.
-                    "content": if text.is_empty() { "(no output)" } else { text },
-                })],
-            ),
+            // The owner's images before their words, as Anthropic advises (T45).
+            Role::User => {
+                let mut blocks = image_blocks(&message.images);
+                blocks.extend(text_blocks(text));
+                ("user", blocks)
+            }
+            Role::Tool => {
+                // An empty result is still an answer the call is owed.
+                let said = if text.is_empty() { "(no output)" } else { text };
+                let content = if message.images.is_empty() {
+                    json!(said)
+                } else {
+                    let mut content = vec![json!({ "type": "text", "text": said })];
+                    content.extend(image_blocks(&message.images));
+                    Value::Array(content)
+                };
+                (
+                    "user",
+                    vec![json!({
+                        "type": "tool_result",
+                        "tool_use_id": message.tool_call_id.as_deref().unwrap_or(""),
+                        "content": content,
+                    })],
+                )
+            }
             Role::Assistant => {
                 let mut blocks = Vec::new();
                 if at > latest_prompt {
@@ -528,6 +543,24 @@ fn path_segment(text: &str) -> String {
                 (byte as char).to_string()
             }
             _ => format!("%{byte:02X}"),
+        })
+        .collect()
+}
+
+/// A message's images as Anthropic's image blocks, each after its line (`[image #2 · …]`) so the model can name it;
+/// one that cannot be read is said in text.
+fn image_blocks(images: &[crate::images::Image]) -> Vec<Value> {
+    images
+        .iter()
+        .flat_map(|image| {
+            let block = match crate::images::base64_of(image) {
+                Ok((media, data)) => json!({
+                    "type": "image",
+                    "source": { "type": "base64", "media_type": media, "data": data },
+                }),
+                Err(reason) => json!({ "type": "text", "text": format!("[{reason}]") }),
+            };
+            [json!({ "type": "text", "text": image.label() }), block]
         })
         .collect()
 }
@@ -781,6 +814,7 @@ impl Answer {
             reasoning: (!thought.is_empty()).then_some(thought),
             reasoning_content: None,
             reasoning_details: details,
+            images: Vec::new(),
         };
         message.bound_reasoning();
         Ok(Reply { message, usage })
@@ -888,6 +922,8 @@ pub(crate) fn models_of(list: &Value) -> Option<Vec<crate::providers::models::Mo
                         .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
                         .map(|at| at.timestamp()),
                     api: None,
+                    // Every Claude model Anthropic lists sees images.
+                    images: Some(true),
                 })
             })
             .collect(),
@@ -968,6 +1004,43 @@ mod tests {
             json!({"type": "message_delta", "delta": {"stop_reason": "tool_use"}, "usage": {"output_tokens": 42}}),
             json!({"type": "message_stop"}),
         ]
+    }
+
+    #[test]
+    fn images_go_as_base64_blocks_before_the_words_and_inside_a_tool_result() {
+        let (home, image) = crate::images::kept_for_tests("anthropic");
+        let mut prompt = Message::user("what is this?");
+        prompt.images = vec![image.clone()];
+        let (_, turns) = to_api(&[prompt]);
+        let blocks = &turns[0]["content"];
+        assert!(
+            blocks[0]["text"]
+                .as_str()
+                .unwrap()
+                .starts_with("[image #1 · ")
+        );
+        assert_eq!(blocks[1]["type"], "image");
+        assert_eq!(blocks[1]["source"]["media_type"], "image/png");
+        assert_eq!(blocks[2]["text"], "what is this?");
+        let mut call = Message::user("");
+        call.role = Role::Assistant;
+        call.content = None;
+        call.tool_calls = vec![crate::model::ToolCall {
+            id: "a".into(),
+            kind: "function".into(),
+            function: crate::model::FunctionCall {
+                name: "read_file".into(),
+                arguments: "{}".into(),
+            },
+        }];
+        let mut seen = Message::tool("a", "an image, 4×3");
+        seen.images = vec![image];
+        let (_, turns) = to_api(&[Message::user("look"), call, seen]);
+        let result = &turns[2]["content"][0];
+        assert_eq!(result["type"], "tool_result");
+        assert_eq!(result["content"][0]["text"], "an image, 4×3");
+        assert_eq!(result["content"][2]["type"], "image");
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[tokio::test]

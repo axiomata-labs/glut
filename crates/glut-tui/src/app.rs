@@ -274,6 +274,10 @@ pub struct App {
     /// How long the stream was after the last note of a mode gone round (`⇧⇥`): the next one replaces it while it is
     /// still the last block.
     mode_note: Option<usize>,
+    /// The highest image number given in this window (T45), for the input's marks until the message is sent.
+    images_given: u32,
+    /// The highest image number sent: a message's images are numbered on from it when it goes.
+    images_sent: u32,
     /// Since when Glut works (TUI9b): what the footer counts while the screen holds still.
     pub busy_since: Option<Instant>,
     /// The state last seen (TUI9b): the reader mode says each change in a line of its own.
@@ -454,6 +458,8 @@ impl App {
             cache_seen: false,
             held_since: None,
             busy_since: None,
+            images_given: 0,
+            images_sent: 0,
             mode_note: None,
             first_start,
             seen_state: None,
@@ -695,6 +701,11 @@ impl App {
 
     /// Sends `prompt` as the next turn.
     pub fn send(&mut self, prompt: String) {
+        self.send_with(prompt, Vec::new());
+    }
+
+    /// [`App::send`] with the images the message carries (T45).
+    fn send_with(&mut self, prompt: String, images: Vec<glut::images::Image>) {
         if prompt.trim().is_empty() || self.working() {
             return;
         }
@@ -708,8 +719,13 @@ impl App {
             self.transcript.note(shown, Tone::Heed);
         } else {
             self.owner_spoke = true;
-            self.transcript
-                .push(crate::transcript::Kind::Owner(prompt.clone()));
+            // The images stand under the words, each a line: what was sent, and how large.
+            let mut shown = prompt.clone();
+            for image in &images {
+                shown.push('\n');
+                shown.push_str(&image.label());
+            }
+            self.transcript.push(crate::transcript::Kind::Owner(shown));
         }
         // The session is named by the owner's first own message, not by a handoff read in front of it, nor by
         // another pane's model.
@@ -735,7 +751,7 @@ impl App {
             Arc::clone(&self.parts),
             self.engine.clone(),
             std::mem::take(&mut self.conversation),
-            session::TurnInput::Message(prompt),
+            session::TurnInput::Message(prompt, images),
             cancel,
             inbox,
             self.reports.clone(),
@@ -1255,7 +1271,14 @@ impl App {
                         search.query.push_str(&text.replace(['\n', '\r'], " "));
                         search.fresh = true;
                     }
-                    None => self.input.paste(&text),
+                    None => {
+                        // A paste — a drop — of image files is the images (T45).
+                        let home = self.parts.home.clone();
+                        match crate::pictures::pasted_paths(&text, Some(&home)) {
+                            Some(paths) => paths.iter().for_each(|path| self.attach_file(path)),
+                            None => self.input.paste(&text),
+                        }
+                    }
                 }
             }
             TermEvent::Mouse(mouse) => match mouse.kind {
@@ -1501,6 +1524,8 @@ impl App {
         match key.code {
             KeyCode::Char('x') if ctrl => self.chord = true,
             KeyCode::Char('a') if ctrl => self.input.home(),
+            // ⌃V: the clipboard's image into the message (T45) — the terminal's ⌘V pastes text alone.
+            KeyCode::Char('v') if ctrl => self.attach_clipboard(),
             KeyCode::Char('y') if ctrl => self.show_todos(),
             KeyCode::Char('b') if ctrl => self.show_tab(Tab::Plan),
             KeyCode::Char('g') if ctrl => self.show_tab(Tab::Gate),
@@ -1659,6 +1684,35 @@ impl App {
             let command = owners_command(&expanded).map_or(command, |(_, command)| command);
             return self.shell(command, !alone);
         }
+        // A message with images (T45) goes as a turn of its own, to a model that sees them.
+        let images = self.input.images();
+        if !images.is_empty() {
+            if self.engine.images == Some(false) {
+                return self.transcript.note(
+                    format!(
+                        "{} sees no images, says its provider's list — /model picks one that does; the message waits",
+                        self.engine.model_name()
+                    ),
+                    Tone::Fault,
+                );
+            }
+            if self.working() {
+                return self
+                    .say("a message with images goes once Glut is done — it waits in the input");
+            }
+            // Numbered now, on from the whole conversation.
+            let first = self.first_to_send();
+            self.input.renumber(first);
+            let images = self.input.images();
+            self.images_sent = images
+                .iter()
+                .map(|image| image.number)
+                .max()
+                .unwrap_or(0)
+                .max(self.images_sent);
+            let prompt = self.input.take();
+            return self.send_with(prompt, images);
+        }
         if self.working() {
             // While a turn runs, Enter steers it: the message joins before its next step. While Glut compacts or
             // switches, it waits as the next message.
@@ -1705,6 +1759,11 @@ impl App {
     fn queue_next(&mut self) {
         if self.input.is_empty() {
             return;
+        }
+        // A queued message is text: one with images waits in the input until the turn is done (T45).
+        if !self.input.images().is_empty() {
+            return self
+                .say("a message with images goes once Glut is done — it waits in the input");
         }
         let text = self.input.take();
         self.queue.push(text);
@@ -2976,6 +3035,18 @@ impl App {
     }
 
     /// The owner's message at `at` (or after it), to put back in the input.
+    /// The images of the owner's message at or after `at`, to give back with its text.
+    fn images_at(&self, at: usize) -> Vec<glut::images::Image> {
+        self.conversation
+            .get(at..)
+            .and_then(|rest| {
+                rest.iter()
+                    .find(|message| message.role == glut::model::Role::User)
+            })
+            .map(|message| message.images.clone())
+            .unwrap_or_default()
+    }
+
     fn message_at(&self, at: usize) -> String {
         self.conversation
             .get(at..)
@@ -3029,6 +3100,7 @@ impl App {
             return;
         };
         let message = self.message_at(at);
+        let images = self.images_at(at);
         self.conversation.truncate(at);
         self.session.marks.truncate(mark);
         self.session.conversation.clone_from(&self.conversation);
@@ -3049,6 +3121,7 @@ impl App {
         self.keep();
         if self.input.is_empty() {
             self.input.insert_text(&message);
+            self.input.adopt(images);
         } else {
             self.transcript.note(
                 "the input held text: your earlier message is not put back",
@@ -3096,10 +3169,12 @@ impl App {
         fork.conversation = self.conversation[..at].to_vec();
         fork.marks = self.session.marks[..mark].to_vec();
         let message = self.message_at(at);
+        let images = self.images_at(at);
         self.open(fork);
         self.keep();
         if self.input.is_empty() {
             self.input.insert_text(&message);
+            self.input.adopt(images);
         }
         self.transcript.note(
             "forked: a new session from before this message; the one you left is in /resume",
@@ -3569,9 +3644,69 @@ impl App {
         let title = if others == 0 {
             "Sessions (no other kept for this folder yet)"
         } else {
-            "Sessions of this folder — ⑂ a fork, ● this one"
+            "Sessions of this folder — ⑂ a fork, ● this one, ⌫ deletes"
         };
         Picker::new(title, items, Some(&Pick::Session(own)))
+    }
+
+    /// `/resume`'s ⌫: the session named, how many images go with it, a yes asked for — not for a session open in a
+    /// pane of this window; one forks came from says so.
+    fn ask_delete_session(&mut self, id: &str) {
+        if self.session.id == id || self.others_open.iter().any(|open| open == id) {
+            return self.say("that session is open in a pane — it cannot be deleted");
+        }
+        let Ok(session) = Session::load(&self.parts.home, id) else {
+            return self.say("that session is gone already");
+        };
+        let images = session.images().count();
+        let forks = Session::all(&self.parts.home)
+            .iter()
+            .filter(|other| other.parent.as_deref() == Some(id))
+            .count();
+        let title = match crate::transcript::clean(&session.title) {
+            title if title.trim().is_empty() => "(no message)".to_owned(),
+            title => title,
+        };
+        let mut detail = match images {
+            0 => "its conversation goes for good".to_owned(),
+            1 => "its conversation goes for good, and its image no other session holds".to_owned(),
+            many => format!(
+                "its conversation goes for good, and of its {many} images those no other session holds"
+            ),
+        };
+        if forks > 0 {
+            detail.push_str(&format!(
+                " — {forks} sessions forked from it stay, as sessions of their own"
+            ));
+        }
+        let items = vec![
+            Item::plain(
+                format!("yes, delete “{title}”"),
+                detail,
+                Pick::DeleteSession(id.to_owned()),
+            ),
+            Item::plain("no, keep it", "", Pick::Shown),
+        ];
+        self.picker = Some(Picker::new("Delete this session?", items, None).guarded());
+    }
+
+    /// The session `id` deleted with its images no one holds any more; the list again, without it.
+    fn delete_session(&mut self, id: &str) {
+        // The images this window still holds stay: the open conversation's, the input's.
+        let keep: Vec<std::path::PathBuf> = self
+            .conversation
+            .iter()
+            .flat_map(|message| &message.images)
+            .chain(&self.input.images())
+            .map(|image| image.path.clone())
+            .collect();
+        match Session::delete(&self.parts.home, id, &keep) {
+            Ok(0) => self.say("the session is deleted"),
+            Ok(1) => self.say("the session is deleted, with its image"),
+            Ok(images) => self.say(format!("the session is deleted, with {images} images")),
+            Err(reason) => return self.transcript.note(reason, Tone::Fault),
+        }
+        self.picker = Some(self.session_picker());
     }
 
     fn provider_picker(&self) -> Picker {
@@ -3636,6 +3771,14 @@ impl App {
             KeyCode::Char('f') if ctrl => picker.toggle_free(),
             KeyCode::Up => picker.up(),
             KeyCode::Down | KeyCode::Tab => picker.down(),
+            // `/resume`'s ⌫ on a list not filtered: the chosen session deleted, asked once (T45).
+            KeyCode::Backspace
+                if picker.query.is_empty() && matches!(picker.chosen(), Some(Pick::Session(_))) =>
+            {
+                if let Some(Pick::Session(id)) = picker.chosen() {
+                    self.ask_delete_session(&id);
+                }
+            }
             KeyCode::Backspace => picker.backspace(),
             KeyCode::Enter => {
                 let chosen = picker.chosen();
@@ -3684,6 +3827,7 @@ impl App {
                         self.agent_view = Some(crate::agents::View::new(path));
                     }
                     Some(Pick::Shown) => {}
+                    Some(Pick::DeleteSession(id)) => self.delete_session(&id),
                     Some(Pick::Pane(request)) => self.pane_request = Some(request),
                     // A draft in the input stays: the command then runs as proposed, renamed later by hand if wanted.
                     Some(Pick::Input(text)) if !self.input.is_empty() => {
@@ -4538,17 +4682,116 @@ impl App {
                     .iter()
                     .find(|(at, _, line)| *at == row && *line == press.line)
                 {
-                    // A subagent's tile opens its own stream; any other block folds or unfolds.
+                    // A subagent's tile opens its own stream, a message with an image the image; any other block
+                    // folds or unfolds.
                     if matches!(
                         self.transcript.blocks.get(block).map(|b| &b.kind),
                         Some(crate::transcript::Kind::Agent(_))
                     ) {
                         self.agent_view = Some(crate::agents::View::new(vec![block]));
+                    } else if let Some(number) = self.image_of(block) {
+                        self.open_image(number);
                     } else {
                         self.transcript.toggle(block);
                     }
                 }
             }
+        }
+    }
+
+    /// The number the next image gets: on from every image the session and the input hold.
+    fn next_image(&self) -> u32 {
+        self.first_to_send()
+            .max(self.input.most_image() + 1)
+            .max(self.images_given + 1)
+    }
+
+    /// The number the first image of the next message sent gets: on from every image the conversation holds and
+    /// every one sent before.
+    fn first_to_send(&self) -> u32 {
+        self.conversation
+            .iter()
+            .flat_map(|message| &message.images)
+            .map(|image| image.number)
+            .max()
+            .unwrap_or(0)
+            .max(self.images_sent)
+            + 1
+    }
+
+    /// `⌃V` (T45): the clipboard's image kept and into the message.
+    fn attach_clipboard(&mut self) {
+        match crate::pictures::from_clipboard() {
+            Ok(bytes) => self.attach_bytes(&bytes),
+            Err(reason) => self.say(reason),
+        }
+    }
+
+    /// An image file pasted or dropped (T45), kept and into the message.
+    fn attach_file(&mut self, path: &std::path::Path) {
+        match glut::images::read_file(path) {
+            Ok(bytes) => {
+                self.attach_bytes(&bytes);
+                let name = path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                self.say(format!(
+                    "{} into the message as an image",
+                    crate::transcript::clean(&name)
+                ));
+            }
+            Err(reason) => self.transcript.note(reason, Tone::Fault),
+        }
+    }
+
+    fn attach_bytes(&mut self, bytes: &[u8]) {
+        let number = self.next_image();
+        match glut::images::keep(&self.parts.home, bytes, number) {
+            Ok(image) => {
+                self.images_given = number;
+                let said = image.label();
+                self.input.attach(image);
+                if self.engine.images == Some(false) {
+                    self.transcript.note(
+                        format!(
+                            "{said}: {} sees no images, says its provider's list — /model picks one that does",
+                            self.engine.model_name()
+                        ),
+                        Tone::Heed,
+                    );
+                } else {
+                    self.say(format!("{said} into the message"));
+                }
+            }
+            Err(reason) => self.transcript.note(reason, Tone::Fault),
+        }
+    }
+
+    /// The image a block of the stream names, if it is a message of the owner's with one (T45).
+    fn image_of(&self, block: usize) -> Option<u32> {
+        match &self.transcript.blocks.get(block)?.kind {
+            crate::transcript::Kind::Owner(text) => crate::pictures::first_number(text),
+            _ => None,
+        }
+    }
+
+    /// The kept image `number` of this session's conversation, for a look.
+    fn open_image(&mut self, number: u32) {
+        let found = self
+            .conversation
+            .iter()
+            .flat_map(|message| &message.images)
+            .find(|image| image.number == number)
+            .map(|image| image.path.clone());
+        // Only a file Glut keeps opens, whatever a session file says.
+        let found = found.filter(|path| glut::images::kept_media(path).is_some());
+        let said = match found {
+            Some(path) => crate::pictures::open(&path).map(|()| format!("image #{number} opens")),
+            None => Err(format!("image #{number} is no longer in this conversation")),
+        };
+        match said {
+            Ok(said) | Err(said) => self.say(said),
         }
     }
 
@@ -4680,6 +4923,9 @@ impl App {
                     crate::transcript::Kind::Agent(_)
                 ) {
                     self.agent_view = Some(crate::agents::View::new(vec![chosen]));
+                } else if let Some(number) = self.image_of(chosen) {
+                    // A message of the owner's with an image: the image opens (T45).
+                    self.open_image(number);
                 } else {
                     self.transcript.toggle(chosen);
                     if let Some(reading) = &mut self.reading {
@@ -6279,6 +6525,58 @@ mod tests {
         type_text(&mut app, "/motion c");
         app.on_terminal(key(KeyCode::Tab, KeyModifiers::NONE));
         assert_eq!(app.input.text(), "/motion calm");
+    }
+
+    /// A PNG of 2 × 1 pixels, red and blue.
+    const TINY_PNG: [u8; 70] = [
+        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 2, 0, 0, 0, 1, 8, 2,
+        0, 0, 0, 123, 64, 232, 221, 0, 0, 0, 13, 73, 68, 65, 84, 120, 156, 99, 248, 207, 0, 4, 255,
+        1, 7, 0, 1, 255, 226, 35, 158, 89, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+    ];
+
+    #[tokio::test]
+    async fn a_dropped_image_file_goes_with_the_message_numbered_on_through_the_session() {
+        let (mut app, _reports) = app();
+        let dir = app.parts.home.join("drop");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("a shot.png");
+        std::fs::write(&file, TINY_PNG).unwrap();
+        type_text(&mut app, "what is");
+        app.on_terminal(TermEvent::Paste(
+            file.display().to_string().replace(' ', "\\ "),
+        ));
+        assert_eq!(app.input.text(), "what is [image #1] ");
+        assert_eq!(app.input.images().len(), 1);
+        // A model its list says sees none: the message waits, said why.
+        app.engine.images = Some(false);
+        app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(!app.input.is_empty() && !app.working());
+        app.engine.images = None;
+        app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
+        let shown = app
+            .transcript
+            .blocks
+            .iter()
+            .find_map(|block| match &block.kind {
+                crate::transcript::Kind::Owner(text) => Some(text.clone()),
+                _ => None,
+            });
+        assert!(shown.unwrap().ends_with("[image #1 · 2×1 · 1 kB]"));
+        // The next image numbers on, and a mark deleted takes its image out.
+        let mut sent = glut::Message::user("earlier");
+        sent.images = vec![glut::images::keep(&app.parts.home, &TINY_PNG, 1).unwrap()];
+        app.conversation = vec![sent];
+        app.input.clear();
+        app.on_terminal(TermEvent::Paste(
+            file.display().to_string().replace(' ', "\\ "),
+        ));
+        assert_eq!(app.input.text(), "[image #2] ");
+        app.on_terminal(key(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        assert!(app.input.images().is_empty());
+        // A paste naming anything else is text.
+        app.on_terminal(TermEvent::Paste(format!("see {}", file.display())));
+        assert!(app.input.text().starts_with("see "));
+        let _ = std::fs::remove_dir_all(&app.parts.home);
     }
 
     #[test]

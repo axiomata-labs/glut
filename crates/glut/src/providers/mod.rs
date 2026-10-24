@@ -595,6 +595,7 @@ mod tests {
                 reasoning: None,
                 created: None,
                 api: Some(models::Api::Anthropic),
+                images: None,
             }],
             allowed: None,
         };

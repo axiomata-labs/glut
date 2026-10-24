@@ -433,13 +433,15 @@ impl Tool for FileTool {
     }
 
     fn call(&self, arguments: Value, context: CallContext) -> ToolFuture<'_> {
-        let CallContext { stop, gate, .. } = context;
+        let CallContext {
+            stop, gate, report, ..
+        } = context;
         let root = self.root.clone();
         let skills = self.skills.clone();
         let kind = self.kind;
         Box::pin(async move {
             tokio::task::spawn_blocking(move || match kind {
-                Kind::Read => read(&root, &skills, parse(arguments)?),
+                Kind::Read => read(&root, &skills, parse(arguments)?, &report),
                 Kind::Write => write(&root, parse(arguments)?),
                 Kind::Edit => edit(&root, parse(arguments)?),
                 Kind::List => list(&root, &skills, parse(arguments)?),
@@ -477,7 +479,12 @@ struct ReadArgs {
     outline: bool,
 }
 
-fn read(working: &Root, skills: &SkillRoots, args: ReadArgs) -> Result<String, String> {
+fn read(
+    working: &Root,
+    skills: &SkillRoots,
+    args: ReadArgs,
+    report: &super::Report,
+) -> Result<String, String> {
     // K4: a skill's folder is a read-only root beside the working folder.
     let (root, path) = match skill_path(rel(&args.path)) {
         Some((name, inside)) => {
@@ -491,6 +498,21 @@ fn read(working: &Root, skills: &SkillRoots, args: ReadArgs) -> Result<String, S
             (working, path)
         }
     };
+    // T45: an image is shown to the model — its bytes beside the answer, the answer only what it is.
+    if crate::images::is_image_name(path) {
+        let read = axiomata_files::read_image(root, path, crate::images::MOST_FILE_BYTES)
+            .map_err(describe)?;
+        let bytes =
+            crate::images::from_base64(&read.base64).ok_or("the image could not be read")?;
+        if !crate::images::is_image(&bytes) {
+            return Err(format!(
+                "{path} is no image Glut reads (PNG, JPEG, GIF, WebP)"
+            ));
+        }
+        let (width, height) = crate::images::dimensions(&bytes).unwrap_or((0, 0));
+        report.image(bytes);
+        return Ok(format!("an image, {width}×{height}: {path}"));
+    }
     let file = read_text(root, path, MAX_READ_BYTES).map_err(describe)?;
     if args.outline {
         return super::outline::of(std::path::Path::new(&args.path), &file.content);
@@ -860,6 +882,32 @@ mod tests {
             ),
             "News/"
         );
+    }
+
+    #[tokio::test]
+    async fn read_shows_an_image_beside_its_answer_never_in_its_text() {
+        let (dir, tools) = setup();
+        // A PNG of 2 × 1 pixels.
+        let png: [u8; 70] = [
+            137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 2, 0, 0, 0, 1,
+            8, 2, 0, 0, 0, 123, 64, 232, 221, 0, 0, 0, 13, 73, 68, 65, 84, 120, 156, 99, 248, 207,
+            0, 4, 255, 1, 7, 0, 1, 255, 226, 35, 158, 89, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96,
+            130,
+        ];
+        std::fs::write(dir.join("shot.png"), png).unwrap();
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let called = tools
+            .call_reporting("read_file", r#"{"path":"shot.png"}"#, &stop)
+            .await;
+        assert!(called.ok, "{}", called.text);
+        assert_eq!(called.text, "an image, 2×1: shot.png");
+        assert_eq!(called.images, vec![png.to_vec()]);
+        // Text that only calls itself an image stays text.
+        std::fs::write(dir.join("fake.png"), "not an image").unwrap();
+        let called = tools
+            .call_reporting("read_file", r#"{"path":"fake.png"}"#, &stop)
+            .await;
+        assert!(!called.ok && called.images.is_empty());
     }
 
     #[tokio::test]

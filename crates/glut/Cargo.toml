@@ -31,6 +31,8 @@ tracing-subscriber.workspace = true
 sha2.workspace = true
 # Code mode (Glut 2, G2): the QuickJS runtime a script runs in.
 rquickjs.workspace = true
+# Images (T45): the owner's and `read_file`'s, scaled before they go to a model.
+image.workspace = true
 
 # The macOS Keychain, where a provider's key waits between runs (docs/plans/glut-providers.md, P4).
 [target.'cfg(target_os = "macos")'.dependencies]

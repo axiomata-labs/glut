@@ -348,6 +348,13 @@ pub struct RunConfig {
     /// Whether the run offers [`PANE_TOOLS`] (TUI T36c): the screen around it is split into panes of sessions that
     /// may write to each other. Never to a subagent.
     pub pane_tools: bool,
+    /// The images the run's prompt carries (T45): the owner's, pasted or `glut run --image`. Never a subagent's.
+    pub prompt_images: Vec<crate::images::Image>,
+    /// Where a tool's images are kept (T45: the owner's home, `~/.glut/images` below it); `None`: a tool's image is
+    /// said in its answer and not shown.
+    pub images_home: Option<PathBuf>,
+    /// Whether the model sees images, as its provider's list says; `Some(false)`: a tool's image is not sent.
+    pub sees_images: Option<bool>,
     /// Whether the run offers `codemode` and keeps its MCP tools behind it (Glut 2, A + E, G3/G8): the model then sees
     /// the core tools and `codemode`, and reaches the MCP tools from a script. On by default.
     pub codemode: bool,
@@ -446,6 +453,9 @@ impl RunConfig {
             models: None,
             glut_files: false,
             pane_tools: false,
+            prompt_images: Vec::new(),
+            images_home: None,
+            sees_images: None,
             codemode: true,
             mcp_behind_code: true,
             todos: true,

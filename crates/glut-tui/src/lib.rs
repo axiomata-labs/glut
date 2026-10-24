@@ -22,6 +22,7 @@ mod meter;
 pub mod motion;
 mod panes;
 mod picker;
+mod pictures;
 mod plan;
 mod prefs;
 mod review;

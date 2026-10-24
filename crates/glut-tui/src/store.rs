@@ -140,6 +140,70 @@ impl Session {
         sessions
     }
 
+    /// Every kept session, of every folder.
+    pub fn all(home: &Path) -> Vec<Session> {
+        let Ok(entries) = std::fs::read_dir(Self::dir(home)) else {
+            return Vec::new();
+        };
+        entries
+            .flatten()
+            .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
+            .filter_map(|entry| read(&entry.path()).ok())
+            .collect()
+    }
+
+    /// The images this session's conversation holds.
+    pub fn images(&self) -> impl Iterator<Item = &glut::images::Image> {
+        self.conversation.iter().flat_map(|message| &message.images)
+    }
+
+    /// Deletes the kept session `id` (T45, `/resume`'s ⌫), and of its images those `keep` does not name — the ones no
+    /// other session, nor the screen, still holds. Returns how many images went.
+    ///
+    /// # Errors
+    ///
+    /// A message when there is no such session or its file cannot be removed.
+    pub fn delete(home: &Path, id: &str, keep: &[PathBuf]) -> Result<usize, String> {
+        let session = Self::load(home, id)?;
+        let path = Self::dir(home).join(format!("{id}.json"));
+        std::fs::remove_file(&path).map_err(|err| format!("{}: {err}", path.display()))?;
+        // A session that cannot be read may hold any image: then none goes.
+        let files = std::fs::read_dir(Self::dir(home))
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
+                    .count()
+            })
+            .unwrap_or(0);
+        let others: Vec<Session> = Self::all(home);
+        if others.len() != files {
+            return Ok(0);
+        }
+        let held: Vec<PathBuf> = others
+            .iter()
+            .flat_map(Session::images)
+            .map(|image| image.path.clone())
+            .chain(keep.iter().cloned())
+            .collect();
+        let mut gone = 0;
+        let mut seen = Vec::new();
+        for image in session.images() {
+            if held.contains(&image.path) || seen.contains(&image.path) {
+                continue;
+            }
+            seen.push(image.path.clone());
+            // Only a file Glut keeps goes: one its references name in the images folder.
+            if image.path.parent() == Some(glut::images::dir(home).as_path())
+                && glut::images::kept_media(&image.path).is_some()
+                && std::fs::remove_file(&image.path).is_ok()
+            {
+                gone += 1;
+            }
+        }
+        Ok(gone)
+    }
+
     /// `sessions` as a tree: each session followed by its forks, indented by how deep they are; roots (and forks
     /// whose parent is not among them) newest first.
     pub fn as_tree(sessions: Vec<Session>) -> Vec<(usize, Session)> {
@@ -184,7 +248,13 @@ impl Session {
             match message.role {
                 Role::User => {
                     if let Some(text) = &message.content {
-                        transcript.push(Kind::Owner(text.clone()));
+                        // Its images under the words, as they stood when it was sent (T45).
+                        let mut shown = text.clone();
+                        for image in &message.images {
+                            shown.push('\n');
+                            shown.push_str(&image.label());
+                        }
+                        transcript.push(Kind::Owner(shown));
                     }
                 }
                 Role::Assistant => {
@@ -269,6 +339,43 @@ pub fn title_of(text: &str) -> String {
 mod tests {
     use super::*;
     use crate::transcript::ToolState;
+
+    #[test]
+    fn a_deleted_session_takes_the_images_no_one_else_holds() {
+        let home = std::env::temp_dir().join(format!("glut-store-delete-{}", std::process::id()));
+        let png: [u8; 70] = [
+            137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 2, 0, 0, 0, 1,
+            8, 2, 0, 0, 0, 123, 64, 232, 221, 0, 0, 0, 13, 73, 68, 65, 84, 120, 156, 99, 248, 207,
+            0, 4, 255, 1, 7, 0, 1, 255, 226, 35, 158, 89, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96,
+            130,
+        ];
+        let shared = glut::images::keep(&home, &png, 1).unwrap();
+        let mut other = png;
+        other[17] = 3; // three pixels wide: another picture
+        let own = glut::images::keep(&home, &other, 2);
+        let with = |images: Vec<glut::images::Image>| {
+            let mut session = Session::new(Path::new("/w"), "p", "m");
+            let mut message = glut::Message::user("look");
+            message.images = images;
+            session.conversation = vec![message];
+            session.save(&home).unwrap();
+            session
+        };
+        let mut images = vec![shared.clone()];
+        if let Ok(own) = &own {
+            images.push(own.clone());
+        }
+        let gone = with(images);
+        let _keeps = with(vec![shared.clone()]);
+        let deleted = Session::delete(&home, &gone.id, &[]).unwrap();
+        assert!(Session::load(&home, &gone.id).is_err());
+        assert!(shared.path.is_file(), "another session holds it");
+        if let Ok(own) = own {
+            assert_eq!(deleted, 1);
+            assert!(!own.path.exists());
+        }
+        let _ = std::fs::remove_dir_all(&home);
+    }
 
     #[test]
     fn forks_hang_under_their_session_and_an_orphan_is_a_root() {

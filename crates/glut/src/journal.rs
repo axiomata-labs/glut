@@ -477,6 +477,7 @@ mod tests {
             reasoning: None,
             reasoning_content: None,
             reasoning_details: Vec::new(),
+            images: Vec::new(),
         }
     }
 

@@ -19,6 +19,7 @@ type Snapshot = (Vec<String>, usize, usize, Vec<(String, String)>);
 struct Entry {
     text: String,
     pastes: Vec<(String, String)>,
+    images: Vec<(String, glut::images::Image)>,
 }
 
 #[derive(Debug, Default)]
@@ -39,6 +40,8 @@ pub struct Input {
     draft: Option<Entry>,
     /// The large pastes standing in the input as `[pasted 240 lines #1]`: each mark and the text it stands for.
     pastes: Vec<(String, String)>,
+    /// The images standing in the input as `[image #3]` (T45): each mark and the image it stands for.
+    images: Vec<(String, glut::images::Image)>,
 }
 
 impl Input {
@@ -73,6 +76,7 @@ impl Input {
         self.browsing = None;
         self.draft = None;
         self.pastes.clear();
+        self.images.clear();
         self.undo.clear();
         self.redo.clear();
     }
@@ -117,12 +121,88 @@ impl Input {
         Entry {
             text: self.text(),
             pastes: self.pastes.clone(),
+            images: self.images.clone(),
         }
     }
 
     fn restore(&mut self, entry: &Entry) {
         self.set(&entry.text);
         self.pastes.clone_from(&entry.pastes);
+        self.images.clone_from(&entry.images);
+    }
+
+    /// An image into the message (T45): its mark `[image #3]` where the cursor is, a space before it where a word ends.
+    pub fn attach(&mut self, image: glut::images::Image) {
+        let mark = format!("[image #{}]", image.number);
+        let before = self.lines[self.row].chars().nth(self.col.wrapping_sub(1));
+        if before.is_some_and(|c| !c.is_whitespace()) {
+            self.insert(' ');
+        }
+        self.insert_text(&mark);
+        self.insert(' ');
+        self.images.push((mark, image));
+    }
+
+    /// The images whose marks still stand in the input: a mark deleted takes its image out of the message.
+    pub fn images(&self) -> Vec<glut::images::Image> {
+        let text = self.text();
+        self.images
+            .iter()
+            .filter(|(mark, _)| text.contains(mark.as_str()))
+            .map(|(_, image)| image.clone())
+            .collect()
+    }
+
+    /// The images of a message given back to the input (a rewind, a fork): each whose mark its text holds.
+    pub fn adopt(&mut self, images: Vec<glut::images::Image>) {
+        let text = self.text();
+        for image in images {
+            let mark = format!("[image #{}]", image.number);
+            if text.contains(&mark) && !self.images.iter().any(|(kept, _)| *kept == mark) {
+                self.images.push((mark, image));
+            }
+        }
+    }
+
+    /// The images numbered anew from `first` on, in the order their marks stand, the marks in the text with them —
+    /// at sending, when the conversation's numbers are known (one attached while a turn ran could not know them).
+    pub fn renumber(&mut self, first: u32) {
+        let text = self.text();
+        let mut standing: Vec<(usize, usize)> = self
+            .images
+            .iter()
+            .enumerate()
+            .filter_map(|(at, (mark, _))| text.find(mark.as_str()).map(|found| (found, at)))
+            .collect();
+        standing.sort_unstable();
+        // Through a placeholder each, so `#1` becoming `#2` never meets a `#2` still to become `#3`.
+        let mut renamed = text.clone();
+        for (order, (_, at)) in standing.iter().enumerate() {
+            let placeholder = format!("\u{0}{order}\u{0}");
+            renamed = renamed.replacen(self.images[*at].0.as_str(), &placeholder, 1);
+        }
+        for (order, (_, at)) in standing.iter().enumerate() {
+            let number = first + u32::try_from(order).unwrap_or(u32::MAX - first);
+            let mark = format!("[image #{number}]");
+            renamed = renamed.replacen(&format!("\u{0}{order}\u{0}"), &mark, 1);
+            self.images[*at].1.number = number;
+            self.images[*at].0 = mark;
+        }
+        if renamed != text {
+            let (row, col) = (self.row, self.col);
+            self.set(&renamed);
+            self.row = row.min(self.lines.len() - 1);
+            self.col = col.min(self.len(self.row));
+        }
+    }
+
+    /// The highest image number the input holds.
+    pub fn most_image(&self) -> u32 {
+        self.images
+            .iter()
+            .map(|(_, image)| image.number)
+            .max()
+            .unwrap_or(0)
     }
 
     /// A paste: a large one stands in the input as one mark, the text kept until it is sent; a small one is typed.
@@ -470,6 +550,35 @@ mod tests {
         let mut input = Input::new();
         input.insert_text(text);
         input
+    }
+
+    fn image(number: u32) -> glut::images::Image {
+        glut::images::Image {
+            number,
+            path: std::path::PathBuf::from(format!("/h/.glut/images/{number}.png")),
+            media: "image/png".into(),
+            width: 1,
+            height: 1,
+            bytes: 1,
+        }
+    }
+
+    #[test]
+    fn images_are_numbered_anew_in_the_order_their_marks_stand() {
+        let mut input = Input::new();
+        input.insert_text("first ");
+        input.attach(image(2));
+        input.insert_text("then ");
+        input.attach(image(1));
+        input.renumber(7);
+        assert_eq!(input.text(), "first [image #7] then [image #8] ");
+        let numbers: Vec<u32> = input.images().iter().map(|image| image.number).collect();
+        assert_eq!(numbers, [7, 8], "numbered by where their marks stand");
+        // A message given back adopts the images its marks name.
+        let mut back = Input::new();
+        back.insert_text("again [image #3]");
+        back.adopt(vec![image(3), image(4)]);
+        assert_eq!(back.images().len(), 1);
     }
 
     #[test]

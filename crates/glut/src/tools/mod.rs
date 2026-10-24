@@ -59,19 +59,38 @@ pub struct Part {
 
 /// What a tool tells the loop beside its answer: shared with the toolbox, filled at most once a call.
 #[derive(Debug, Clone, Default)]
-pub struct Report(Arc<Mutex<Option<Vec<Part>>>>);
+pub struct Report(Arc<Mutex<Said>>);
+
+/// What a [`Report`] holds.
+#[derive(Debug, Default)]
+struct Said {
+    parts: Option<Vec<Part>>,
+    /// Images the answer shows (T45, `read_file`): the file's bytes, which the loop keeps and the model is sent —
+    /// never in the answer's text, which a file could forge.
+    images: Vec<Vec<u8>>,
+}
 
 impl Report {
     /// Says where the parts of the answer lie.
     pub fn parts(&self, parts: Vec<Part>) {
-        *self.0.lock().unwrap_or_else(|poison| poison.into_inner()) = Some(parts);
-    }
-
-    fn take(&self) -> Option<Vec<Part>> {
         self.0
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
-            .take()
+            .parts = Some(parts);
+    }
+
+    /// An image the answer shows.
+    pub fn image(&self, bytes: Vec<u8>) {
+        self.0
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .images
+            .push(bytes);
+    }
+
+    fn take(&self) -> (Option<Vec<Part>>, Vec<Vec<u8>>) {
+        let mut said = self.0.lock().unwrap_or_else(|poison| poison.into_inner());
+        (said.parts.take(), std::mem::take(&mut said.images))
     }
 }
 
@@ -85,6 +104,8 @@ pub struct Called {
     pub text: String,
     /// For a `bash` chain, where the output of each part that ran lies in `text`.
     pub parts: Option<Vec<Part>>,
+    /// The images the answer shows (T45), as the files' bytes.
+    pub images: Vec<Vec<u8>>,
 }
 
 /// A tool the model can call.
@@ -229,6 +250,7 @@ impl Toolbox {
             ok: false,
             text,
             parts: None,
+            images: Vec::new(),
         };
         if stop.load(Ordering::SeqCst) {
             return refused("error: the run was stopped".into());
@@ -272,7 +294,8 @@ impl Toolbox {
             Err(text) => (false, format!("{ERROR}{text}"), ERROR.len()),
         };
         // The parts lie in the tool's own text; an error's prefix moves them along.
-        let parts = report.take().map(|parts| {
+        let (parts, images) = report.take();
+        let parts = parts.map(|parts| {
             parts
                 .into_iter()
                 .map(|part| Part {
@@ -281,7 +304,12 @@ impl Toolbox {
                 })
                 .collect()
         });
-        Called { ok, text, parts }
+        Called {
+            ok,
+            text,
+            parts,
+            images,
+        }
     }
 }
 

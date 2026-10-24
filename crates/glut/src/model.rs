@@ -90,6 +90,10 @@ pub struct Message {
         deserialize_with = "null_as_empty"
     )]
     pub reasoning_details: Vec<Value>,
+    /// Images the message carries (T45), by reference: the owner's in a prompt, `read_file`'s in a tool's answer.
+    /// Kept with the conversation; the model client reads them as it sends.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<crate::images::Image>,
 }
 
 /// A message's text as the APIs send it: a string, `null`, or a list of parts of which the `text` ones count (some
@@ -144,6 +148,7 @@ impl Message {
             reasoning: None,
             reasoning_content: None,
             reasoning_details: Vec::new(),
+            images: Vec::new(),
         }
     }
 
@@ -186,31 +191,82 @@ fn api_messages(messages: &[Message]) -> Vec<Value> {
         .iter()
         .rposition(|message| message.role == Role::User)
         .unwrap_or(0);
-    messages
-        .iter()
-        .enumerate()
-        .map(|(at, message)| {
-            let mut value = serde_json::to_value(message).unwrap_or(Value::Null);
-            if let Some(fields) = value.as_object_mut()
-                && message.has_reasoning()
-            {
-                if at < latest_prompt {
-                    fields.remove("reasoning");
-                    fields.remove("reasoning_content");
-                    fields.remove("reasoning_details");
-                } else if !message.reasoning_details.is_empty() {
-                    fields.remove("reasoning");
-                    fields.remove("reasoning_content");
-                } else if message.reasoning.is_some()
-                    && message.reasoning == message.reasoning_content
-                {
-                    // A provider that sends both names (vLLM) gets the thinking back once.
-                    fields.remove("reasoning_content");
+    let mut out = Vec::with_capacity(messages.len());
+    // The images of tool answers (T45): a tool's message carries text alone in this API, so they follow the run of
+    // answers as one message of the owner's side — never between a call's answers.
+    let mut shown: Vec<Value> = Vec::new();
+    for (at, message) in messages.iter().enumerate() {
+        if message.role != Role::Tool && !shown.is_empty() {
+            out.push(json!({ "role": "user", "content": std::mem::take(&mut shown) }));
+        }
+        let mut value = serde_json::to_value(message).unwrap_or(Value::Null);
+        if let Some(fields) = value.as_object_mut() {
+            fields.remove("images");
+            if !message.images.is_empty() {
+                let parts = image_parts(&message.images);
+                if message.role == Role::Tool {
+                    if shown.is_empty() {
+                        shown.push(json!({ "type": "text", "text": "The images the tools above returned:" }));
+                    }
+                    shown.extend(parts);
+                } else {
+                    let mut content = Vec::new();
+                    if let Some(text) = message
+                        .content
+                        .as_deref()
+                        .filter(|text| !text.trim().is_empty())
+                    {
+                        content.push(json!({ "type": "text", "text": text }));
+                    }
+                    content.extend(parts);
+                    fields.insert("content".into(), Value::Array(content));
                 }
             }
-            value
+        }
+        out.push(reasoned(value, message, at, latest_prompt));
+    }
+    if !shown.is_empty() {
+        out.push(json!({ "role": "user", "content": shown }));
+    }
+    out
+}
+
+/// A message's images as the OpenAI-compatible API takes them: data URLs; one that cannot be read is said in text.
+fn image_parts(images: &[crate::images::Image]) -> Vec<Value> {
+    images
+        .iter()
+        .flat_map(|image| {
+            let part = match crate::images::base64_of(image) {
+                Ok((media, data)) => json!({
+                    "type": "image_url",
+                    "image_url": { "url": format!("data:{media};base64,{data}") },
+                }),
+                Err(reason) => json!({ "type": "text", "text": format!("[{reason}]") }),
+            };
+            // Each after its line, so the model can name it (`image #2`).
+            [json!({ "type": "text", "text": image.label() }), part]
         })
         .collect()
+}
+
+/// A message's reasoning as [`api_messages`] sends it back.
+fn reasoned(mut value: Value, message: &Message, at: usize, latest_prompt: usize) -> Value {
+    if let Some(fields) = value.as_object_mut()
+        && message.has_reasoning()
+    {
+        if at < latest_prompt {
+            fields.remove("reasoning");
+            fields.remove("reasoning_content");
+            fields.remove("reasoning_details");
+        } else if !message.reasoning_details.is_empty() {
+            fields.remove("reasoning");
+            fields.remove("reasoning_content");
+        } else if message.reasoning.is_some() && message.reasoning == message.reasoning_content {
+            // A provider that sends both names (vLLM) gets the thinking back once.
+            fields.remove("reasoning_content");
+        }
+    }
+    value
 }
 
 /// Whether `base_url` is OpenRouter's, which takes the effort as `reasoning.effort` (E3); everyone else is sent the
@@ -1108,6 +1164,7 @@ impl Stream {
             reasoning: some(self.reasoning),
             reasoning_content: some(self.reasoning_content),
             reasoning_details: self.reasoning_details,
+            images: Vec::new(),
         };
         message.bound_reasoning();
         Ok(Reply {
@@ -1320,6 +1377,63 @@ pub(crate) mod fake {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn images_go_as_data_urls_and_a_tools_follow_the_run_of_answers() {
+        let (home, image) = crate::images::kept_for_tests("openai");
+        let mut prompt = Message::user("what is this?");
+        prompt.images = vec![image.clone()];
+        let mut call = Message::user("");
+        call.role = Role::Assistant;
+        call.content = None;
+        call.tool_calls = vec![
+            ToolCall {
+                id: "a".into(),
+                kind: "function".into(),
+                function: FunctionCall {
+                    name: "read_file".into(),
+                    arguments: "{}".into(),
+                },
+            },
+            ToolCall {
+                id: "b".into(),
+                kind: "function".into(),
+                function: FunctionCall {
+                    name: "read_file".into(),
+                    arguments: "{}".into(),
+                },
+            },
+        ];
+        let mut seen = Message::tool("a", "an image, 4×3");
+        seen.images = vec![image];
+        let sent = api_messages(&[prompt, call, seen, Message::tool("b", "text")]);
+        assert_eq!(
+            sent[0]["content"][0],
+            json!({"type": "text", "text": "what is this?"})
+        );
+        assert!(
+            sent[0]["content"][1]["text"]
+                .as_str()
+                .unwrap()
+                .starts_with("[image #1 · ")
+        );
+        assert!(
+            sent[0]["content"][2]["image_url"]["url"]
+                .as_str()
+                .unwrap()
+                .starts_with("data:image/png;base64,iVBOR")
+        );
+        assert!(
+            sent.iter().all(|message| message.get("images").is_none()),
+            "the reference is not sent"
+        );
+        // The tool's text stays a string; its image follows both answers, as the owner's side.
+        assert_eq!(sent[2]["content"], "an image, 4×3");
+        assert_eq!(sent[3]["role"], "tool");
+        assert_eq!(sent[4]["role"], "user");
+        assert_eq!(sent[4]["content"][2]["type"], "image_url");
+        let _ = std::fs::remove_dir_all(&home);
+    }
 
     #[test]
     fn a_too_long_prompt_is_recognised_in_the_providers_words() {

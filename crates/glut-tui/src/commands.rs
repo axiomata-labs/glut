@@ -324,7 +324,7 @@ const fn key(topic: Topic, key: &'static str, what: &'static str, command: &'sta
 }
 
 /// Every key Glut has, grouped as [`COMMANDS`] are; a topic without keys shows no heading.
-pub const KEYS: [Key; 39] = [
+pub const KEYS: [Key; 40] = [
     key(
         Topic::Session,
         "⇧⇥",
@@ -444,6 +444,12 @@ pub const KEYS: [Key; 39] = [
     ),
     key(Topic::Input, "/", "the commands", ""),
     key(Topic::Input, "@", "mention a file", ""),
+    key(
+        Topic::Input,
+        "⌃V",
+        "the clipboard's image into the message (a dropped image file too)",
+        "",
+    ),
     key(Topic::Input, "↑", "the messages sent before", ""),
     key(Topic::Input, "⇧⏎", "a new line (⌥⏎ too)", ""),
     key(

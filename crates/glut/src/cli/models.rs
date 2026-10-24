@@ -184,6 +184,7 @@ mod tests {
             reasoning: Some(true),
             created: None,
             api: None,
+            images: None,
         };
         assert_eq!(
             (window(1_048_576), window(2_000_000), window(131_072)),
