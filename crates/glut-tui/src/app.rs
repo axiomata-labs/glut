@@ -1212,12 +1212,14 @@ impl App {
                     self.pane_request = Some(crate::panes::Request::Split {
                         side: crate::panes::Side::Right,
                         resume: false,
+                        place: crate::panes::Place::Ask,
                     })
                 }
                 KeyCode::Char('3') => {
                     self.pane_request = Some(crate::panes::Request::Split {
                         side: crate::panes::Side::Down,
                         resume: false,
+                        place: crate::panes::Place::Ask,
                     })
                 }
                 KeyCode::Char('0') => self.pane_request = Some(crate::panes::Request::Close),
@@ -1713,23 +1715,10 @@ impl App {
                     .transcript
                     .note(format!("/footer {other}: powerline or plain"), Tone::Fault),
             },
-            "split" => {
-                let mut side = crate::panes::Side::Right;
-                let mut resume = false;
-                for word in rest.split_whitespace() {
-                    match (word, crate::panes::Side::parse(word)) {
-                        (_, Some(given)) => side = given,
-                        ("resume", None) => resume = true,
-                        (other, None) => {
-                            return self.transcript.note(
-                                format!("/split {other}: l, r, u or d, and resume"),
-                                Tone::Fault,
-                            );
-                        }
-                    }
-                }
-                self.pane_request = Some(crate::panes::Request::Split { side, resume });
-            }
+            "split" => match crate::panes::parse_split(rest) {
+                Ok(request) => self.pane_request = Some(request),
+                Err(reason) => self.transcript.note(reason, Tone::Fault),
+            },
             "close" => self.pane_request = Some(crate::panes::Request::Close),
             "steps" => self.picker = Some(self.steps_picker()),
             "theme" if rest.is_empty() => self.picker = Some(theme_picker()),
@@ -3189,6 +3178,18 @@ impl App {
         {
             return;
         }
+        // T36a: a merge or a discard is not picked by a key typed for something else, nor narrowed by typing.
+        let guarded = self.picker.as_ref().is_some_and(|picker| picker.guarded);
+        if guarded
+            && (self
+                .picker
+                .as_ref()
+                .is_some_and(|picker| picker.opened.elapsed() < ASK_SETTLE)
+                || key.kind == KeyEventKind::Repeat
+                || matches!(key.code, KeyCode::Char(_) | KeyCode::Backspace))
+        {
+            return;
+        }
         let Some(picker) = &mut self.picker else {
             return;
         };
@@ -3253,6 +3254,18 @@ impl App {
                         self.agent_view = Some(crate::agents::View::new(path));
                     }
                     Some(Pick::Shown) => {}
+                    Some(Pick::Pane(request)) => self.pane_request = Some(request),
+                    // A draft in the input stays: the command then runs as proposed, renamed later by hand if wanted.
+                    Some(Pick::Input(text)) if !self.input.is_empty() => {
+                        match text.strip_prefix("/split ").map(crate::panes::parse_split) {
+                            Some(Ok(request)) => self.pane_request = Some(request),
+                            _ => self.transcript.note(
+                                format!("{text} — your draft stays in the input; run it after"),
+                                Tone::Quiet,
+                            ),
+                        }
+                    }
+                    Some(Pick::Input(text)) => self.input.insert_text(&text),
                     Some(Pick::RewindTo(mark)) => self.picker = Some(self.rewind_how(mark)),
                     Some(Pick::Fork(mark)) => self.fork(mark),
                     Some(Pick::Init(migrate)) => self.init_with(migrate),
@@ -3486,6 +3499,9 @@ impl App {
             open.opened = Instant::now();
         }
         self.model_pick_opened = Instant::now();
+        if let Some(picker) = &mut self.picker {
+            picker.opened = Instant::now();
+        }
     }
 
     /// Whether this session waits for the owner's word: the gate's question, the plan's, or the model list a

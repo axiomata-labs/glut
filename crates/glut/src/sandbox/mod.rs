@@ -79,8 +79,9 @@ const HOME_SECRETS: [&str; 38] = [
 ];
 
 /// Names in the working folder no command writes (the same configuration the file tools protect; the git folder is
-/// handled on its own: commits may write it).
-const PROTECTED_IN_ROOT: [&str; 11] = [
+/// handled on its own: commits may write it). Public for what else must not bring them in: a pane's worktree merged
+/// back (T36a) would put them in the owner's folder.
+pub const PROTECTED_IN_ROOT: [&str; 11] = [
     ".glut",
     ".axiomata",
     ".claude",
@@ -94,11 +95,19 @@ const PROTECTED_IN_ROOT: [&str; 11] = [
     ".hg",
 ];
 
-/// The parts of a git folder that make the owner's git run code: never written by a command.
-const GIT_RUNS: [&str; 4] = ["config", "config.worktree", "hooks", "info"];
+/// The parts of a git folder that make the owner's git run code: never written by a command. `commondir` and
+/// `gitdir` point git at another git folder — with a config of the command's making (security audit, 2026-10-24).
+const GIT_RUNS: [&str; 6] = [
+    "config",
+    "config.worktree",
+    "hooks",
+    "info",
+    "commondir",
+    "gitdir",
+];
 
 /// [`GIT_RUNS`] as a regex alternation, for git folders found anywhere (submodules, worktrees, a nested repository).
-const GIT_RUNS_PATTERN: &str = "(config|config\\.worktree|hooks|info)(/.*)?";
+const GIT_RUNS_PATTERN: &str = "(config|config\\.worktree|hooks|info|commondir|gitdir)(/.*)?";
 
 /// The git folders below a git folder (`/modules/a`, `/modules/a/modules/b`, `/worktrees/x`) and the folders holding
 /// them, as a regex suffix: none of them may be created, moved or removed — moving a prepared folder into place would
@@ -530,7 +539,12 @@ mod tests {
             "echo a > f && git add f && git -c user.name=t -c user.email=t@t commit -qm m && echo COMMITTED",
         );
         assert!(out.contains("COMMITTED"), "{out}");
-        for script in ["echo x >> .git/config", "echo x > .git/hooks/pre-commit"] {
+        // `commondir` would point the owner's git at a config of the command's making.
+        for script in [
+            "echo x >> .git/config",
+            "echo x > .git/hooks/pre-commit",
+            "echo /tmp/elsewhere > .git/commondir",
+        ] {
             let out = sandboxed(&policy, &format!("{script} || echo REFUSED"));
             assert!(out.contains("REFUSED"), "{script}: {out}");
         }

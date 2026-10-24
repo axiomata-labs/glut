@@ -35,6 +35,7 @@ mod transcript;
 mod vi;
 mod view;
 mod watch;
+mod worktree;
 
 pub use follow::{resolve as watched_log, watch};
 pub use host::{

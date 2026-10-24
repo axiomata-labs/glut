@@ -162,8 +162,8 @@ pub const COMMANDS: [Command; 30] = [
     command(
         Topic::Panes,
         "split",
-        "[l|r|u|d] [resume]",
-        "a second session beside this one, right unless told; /split d below, /split r resume an earlier one",
+        "[l|r|u|d] [resume] [here|tree [branch]]",
+        "a second session beside this one, right unless told; in a git repository here or in a worktree of its own",
     ),
     command(
         Topic::Panes,

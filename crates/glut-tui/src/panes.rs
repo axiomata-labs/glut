@@ -54,15 +54,80 @@ impl Side {
     }
 }
 
-/// What a pane asks of the screen: its keys (`⌃]`, `⌃X 2`, `⌃X 3`, `⌃X 0`) and commands (`/split`, `/close`).
+/// Where a new pane works.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Place {
+    /// Asked in a git repository; this folder elsewhere.
+    Ask,
+    /// The active pane's folder.
+    Here,
+    /// A new worktree on this new branch.
+    Tree(String),
+}
+
+/// How a worktree's pane ends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Leaving {
+    /// Worktree and branch stay.
+    Keep,
+    /// The branch merged into the repository folder's, then worktree and branch removed.
+    TakeOver,
+    /// Worktree and branch removed — asked again when that loses work.
+    Discard,
+    /// Removed though it loses work: the owner's second yes.
+    DiscardSure,
+}
+
+/// What a pane asks of the screen: its keys (`⌃]`, `⌃X 2`, `⌃X 3`, `⌃X 0`), commands (`/split`, `/close`) and picks.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Request {
-    /// A new pane at `side`; `resume`: an earlier session in it, picked from the list.
-    Split { side: Side, resume: bool },
+    /// A new pane at `side` working at `place`; `resume`: an earlier session in it, picked from the list.
+    Split {
+        side: Side,
+        resume: bool,
+        place: Place,
+    },
     /// Close the asking pane.
     Close,
+    /// Close the asking pane, its worktree ending so.
+    CloseAs(Leaving),
     /// The keys to the other pane.
     Toggle,
+}
+
+/// `/split`'s words: a side (`l r u d`), `resume`, and where — `here`, or `tree` with an optional branch name.
+///
+/// # Errors
+///
+/// What `/split` takes, for a word it does not.
+pub fn parse_split(rest: &str) -> Result<Request, String> {
+    let mut side = Side::Right;
+    let mut resume = false;
+    let mut place = Place::Ask;
+    let mut words = rest.split_whitespace().peekable();
+    while let Some(word) = words.next() {
+        match (word, Side::parse(word)) {
+            (_, Some(given)) => side = given,
+            ("resume", None) => resume = true,
+            ("here", None) => place = Place::Here,
+            ("tree", None) => {
+                let branch = words.next_if(|next| {
+                    Side::parse(next).is_none() && !matches!(*next, "resume" | "here" | "tree")
+                });
+                place = Place::Tree(branch.unwrap_or_default().to_owned());
+            }
+            (other, None) => {
+                return Err(format!(
+                    "/split {other}: l, r, u or d; resume; here or tree [branch]"
+                ));
+            }
+        }
+    }
+    Ok(Request::Split {
+        side,
+        resume,
+        place,
+    })
 }
 
 /// One pane: its number and its session.
@@ -75,6 +140,8 @@ pub struct Pane {
     pub app: App,
     /// Where it was drawn last: the mouse finds it there.
     pub area: Rect,
+    /// The worktree it works in, made when it opened; `None` in the repository's own folder.
+    pub tree: Option<crate::worktree::Tree>,
 }
 
 /// A pane whose session is still being built.
@@ -83,6 +150,7 @@ struct Building {
     number: u8,
     side: Side,
     resume: bool,
+    tree: Option<crate::worktree::Tree>,
     reports: mpsc::UnboundedSender<Report>,
 }
 
@@ -140,6 +208,7 @@ impl Panes {
                 number: 1,
                 app,
                 area: Rect::default(),
+                tree: None,
             }],
             active: 0,
             stacked: false,
@@ -244,7 +313,12 @@ impl Panes {
                 }
                 Request::Toggle => self.focus((self.active + 1) % self.list.len()),
                 Request::Close => self.close(),
-                Request::Split { side, resume } => self.start(side, resume, host),
+                Request::CloseAs(leaving) => self.leave(leaving),
+                Request::Split {
+                    side,
+                    resume,
+                    place,
+                } => self.start(side, resume, place, host),
             }
         }
     }
@@ -296,7 +370,65 @@ impl Panes {
                 .say("this pane works — /close again stops it and closes the pane");
         }
         self.close_armed = None;
+        if let Some(tree) = self.list[self.active].tree.clone() {
+            // Git goes over the worktree only once nothing writes there any more.
+            if self.active().working() {
+                self.active().stop_turn();
+                return self
+                    .active()
+                    .say("its turn is stopping — /close again once it has stopped, to say how the worktree ends");
+            }
+            let picker = leaving_picker(&tree, crate::worktree::standing(&tree));
+            self.active().picker = Some(picker);
+            return;
+        }
+        self.remove_active();
+    }
+
+    /// How the active worktree's pane ends, picked: kept, taken over or discarded — the pane stays open where that
+    /// does not go through, saying why.
+    fn leave(&mut self, leaving: Leaving) {
+        let Some(tree) = self.list[self.active].tree.clone() else {
+            return self.remove_active();
+        };
+        if self.active().working() {
+            return self
+                .active()
+                .say("this pane works again — /close once it is done");
+        }
+        let standing = crate::worktree::standing(&tree);
+        // What cannot be read is taken as work a discard would lose.
+        let loses_work = standing
+            .as_ref()
+            .map_or(true, |standing| standing.loses_work());
+        let done = match leaving {
+            Leaving::Keep => Ok(format!(
+                "its worktree {} stays on {} — glut there goes on with /resume",
+                tree.place.display(),
+                tree.branch
+            )),
+            Leaving::TakeOver => crate::worktree::take_over(&tree),
+            Leaving::Discard if loses_work => {
+                let picker = discard_picker(&tree, &standing);
+                self.active().picker = Some(picker);
+                return;
+            }
+            Leaving::Discard | Leaving::DiscardSure => crate::worktree::remove(&tree, true)
+                .map(|()| format!("{} and its worktree are gone", tree.branch)),
+        };
+        match done {
+            Ok(said) => {
+                self.remove_active();
+                self.active().say(said);
+            }
+            Err(reason) => self.active().transcript.note(reason, Tone::Fault),
+        }
+    }
+
+    /// Takes the active pane away; a turn under way is stopped.
+    fn remove_active(&mut self) {
         let mut pane = self.list.remove(self.active);
+        let number = pane.number;
         let stopped = pane.app.working();
         pane.app.stop_turn();
         self.focus(self.active.min(self.list.len() - 1));
@@ -305,17 +437,18 @@ impl Panes {
             let home = self.active().parts.home.clone();
             self.active().panel = crate::prefs::Prefs::load(&home).panel;
         }
-        let kept = if stopped {
-            "its turn was stopped; /resume finds the session as it was before that turn"
-        } else {
-            "/resume finds its session"
+        // A worktree's session is found from its own folder; the leaving said where.
+        let kept = match (stopped, &pane.tree) {
+            (true, _) => "its turn was stopped; the session is kept as it was before that turn",
+            (false, Some(_)) => "its session is kept",
+            (false, None) => "/resume finds its session",
         };
         self.active().say(format!("pane {number} closed — {kept}"));
     }
 
     /// Starts a new pane beside the active one: a session in the same folder, on the active pane's provider and
     /// model, in build — built beside the screen.
-    fn start(&mut self, side: Side, resume: bool, host: &Arc<dyn Host>) {
+    fn start(&mut self, side: Side, resume: bool, place: Place, host: &Arc<dyn Host>) {
         if !self.may_split {
             return self
                 .active()
@@ -330,11 +463,51 @@ impl Panes {
         let number = (1..=u8::MAX)
             .find(|number| self.list.iter().all(|pane| pane.number != *number))
             .unwrap_or(u8::MAX);
+        let cwd = self.active().parts.config.cwd.clone();
+        let repo = match &place {
+            Place::Here => Ok(None),
+            _ => crate::worktree::repo_of(&cwd),
+        };
+        let tree = match (place, repo) {
+            (Place::Here, _) | (Place::Ask, Ok(None)) => None,
+            (Place::Ask, Err(reason)) => {
+                self.active().say(format!("no worktree offered: {reason}"));
+                None
+            }
+            (Place::Ask, Ok(Some(repo))) => {
+                let picker = where_picker(side, resume, &repo, number);
+                self.active().picker = Some(picker);
+                return;
+            }
+            (Place::Tree(_), Err(reason)) => {
+                return self.active().transcript.note(reason, Tone::Fault);
+            }
+            (Place::Tree(_), Ok(None)) => {
+                return self
+                    .active()
+                    .say("this folder is in no git repository: /split here");
+            }
+            (Place::Tree(branch), Ok(Some(repo))) => {
+                let branch = if branch.is_empty() {
+                    crate::worktree::proposed_branch(&repo, number)
+                } else {
+                    branch
+                };
+                let home = self.active().parts.home.clone();
+                match crate::worktree::add(&home, &repo, &branch) {
+                    Ok(tree) => Some(tree),
+                    Err(reason) => return self.active().transcript.note(reason, Tone::Fault),
+                }
+            }
+        };
         let id = self.next_id;
         self.next_id += 1;
         let servers = self.servers.clone();
         let app = self.active();
-        let launch = launch_beside(app, servers);
+        let mut launch = launch_beside(app, servers);
+        if let Some(tree) = &tree {
+            launch.cwd = tree.place.clone();
+        }
         app.say(format!("pane {number} starts…"));
         let (reports, inlet) = mpsc::unbounded_channel();
         forward(id, inlet, self.reports.clone());
@@ -343,6 +516,7 @@ impl Panes {
             number,
             side,
             resume,
+            tree,
             reports: reports.clone(),
         });
         let built = self.built.clone();
@@ -363,8 +537,18 @@ impl Panes {
         let (parts, engine) = match result {
             Ok(built) => built,
             Err(reason) => {
+                // A worktree made for it holds nothing yet: it goes with the pane that never came.
+                let gone = match &building.tree {
+                    Some(tree) => match crate::worktree::remove(tree, true) {
+                        Ok(()) => format!("; its worktree {} is gone again", tree.branch),
+                        Err(left) => {
+                            format!("; its worktree stays at {} ({left})", tree.place.display())
+                        }
+                    },
+                    None => String::new(),
+                };
                 return self.active().transcript.note(
-                    format!("pane {} could not start: {reason}", building.number),
+                    format!("pane {} could not start: {reason}{gone}", building.number),
                     Tone::Fault,
                 );
             }
@@ -392,6 +576,7 @@ impl Panes {
                 number: building.number,
                 app,
                 area: Rect::default(),
+                tree: building.tree,
             },
         );
         if busy_here {
@@ -448,6 +633,96 @@ impl Panes {
                 .collect()
         }
     }
+}
+
+/// Where a new pane in a git repository works: this folder, or a worktree whose branch the owner may rename first
+/// (the command goes into the input).
+fn where_picker(
+    side: Side,
+    resume: bool,
+    repo: &crate::worktree::Repo,
+    number: u8,
+) -> crate::picker::Picker {
+    use crate::picker::{Item, Pick, Picker};
+    let branch = crate::worktree::proposed_branch(repo, number);
+    let letter = match side {
+        Side::Left => "l",
+        Side::Right => "r",
+        Side::Up => "u",
+        Side::Down => "d",
+    };
+    let resume_word = if resume { " resume" } else { "" };
+    let items = vec![
+        Item::plain(
+            "this folder",
+            "both panes change the same files",
+            Pick::Pane(Request::Split {
+                side,
+                resume,
+                place: Place::Here,
+            }),
+        ),
+        Item::plain(
+            "a new worktree",
+            format!("on the branch {branch} — ⏎ puts it in the input to rename first"),
+            Pick::Input(format!("/split {letter}{resume_word} tree {branch}")),
+        ),
+    ];
+    Picker::new(format!("Pane {number}: where does it work?"), items, None).guarded()
+}
+
+/// How a worktree's pane ends, with what it holds said.
+fn leaving_picker(
+    tree: &crate::worktree::Tree,
+    standing: Result<crate::worktree::Standing, String>,
+) -> crate::picker::Picker {
+    use crate::picker::{Item, Pick, Picker};
+    let held = match &standing {
+        Ok(standing) => standing.said(),
+        Err(_) => "what it holds cannot be read".to_owned(),
+    };
+    let into = tree
+        .into
+        .as_deref()
+        .unwrap_or("no branch: merge it by hand");
+    let items = vec![
+        Item::plain(
+            "keep",
+            format!("the worktree and {} stay ({held})", tree.branch),
+            Pick::Pane(Request::CloseAs(Leaving::Keep)),
+        ),
+        Item::plain(
+            "take over",
+            format!("merge {} ({held}) into {into}", tree.branch),
+            Pick::Pane(Request::CloseAs(Leaving::TakeOver)),
+        ),
+        Item::plain(
+            "discard",
+            format!("remove the worktree and {} ({held})", tree.branch),
+            Pick::Pane(Request::CloseAs(Leaving::Discard)),
+        ),
+    ];
+    Picker::new("Closing this worktree's pane", items, None).guarded()
+}
+
+/// The second question before work goes.
+fn discard_picker(
+    tree: &crate::worktree::Tree,
+    standing: &Result<crate::worktree::Standing, String>,
+) -> crate::picker::Picker {
+    use crate::picker::{Item, Pick, Picker};
+    let items = vec![
+        Item::plain("no", "keep it — the pane stays open", Pick::Shown),
+        Item::plain(
+            "yes, discard",
+            match standing {
+                Ok(standing) => format!("{} is lost: {}", tree.branch, standing.said()),
+                Err(reason) => format!("{} goes, whatever it holds ({reason})", tree.branch),
+            },
+            Pick::Pane(Request::CloseAs(Leaving::DiscardSure)),
+        ),
+    ];
+    Picker::new(format!("Discard {}?", tree.branch), items, None).guarded()
 }
 
 /// The new pane's session: the owner's, in the active pane's folder, on its provider and model, with the first
@@ -512,6 +787,7 @@ mod tests {
             number: 2,
             side,
             resume: false,
+            tree: None,
             reports: sender,
         });
         panes.on_built(Ok(session::for_tests()));
@@ -619,6 +895,7 @@ mod tests {
             number: 2,
             side: Side::Right,
             resume: false,
+            tree: None,
             reports: sender,
         });
         panes.on_built(Ok(session::for_tests()));
@@ -643,6 +920,7 @@ mod tests {
             number: 2,
             side: Side::Left,
             resume: false,
+            tree: None,
             reports: sender,
         });
         panes.on_built(Ok(session::for_tests()));
@@ -651,6 +929,118 @@ mod tests {
             (vec![2, 1], 1),
             "pane 1 keeps the keys"
         );
+    }
+
+    #[test]
+    fn split_reads_its_side_resume_and_where() {
+        assert_eq!(
+            parse_split("").unwrap(),
+            Request::Split {
+                side: Side::Right,
+                resume: false,
+                place: Place::Ask
+            }
+        );
+        assert_eq!(
+            parse_split("d resume here").unwrap(),
+            Request::Split {
+                side: Side::Down,
+                resume: true,
+                place: Place::Here
+            }
+        );
+        assert_eq!(
+            parse_split("tree glut/plan r").unwrap(),
+            Request::Split {
+                side: Side::Right,
+                resume: false,
+                place: Place::Tree("glut/plan".into())
+            }
+        );
+        assert_eq!(
+            parse_split("l tree").unwrap(),
+            Request::Split {
+                side: Side::Left,
+                resume: false,
+                place: Place::Tree(String::new())
+            }
+        );
+        assert!(parse_split("sideways").is_err());
+    }
+
+    #[tokio::test]
+    async fn in_a_repository_split_asks_where_and_a_worktree_goes_into_the_input_to_rename() {
+        let (_home, repo) = crate::worktree::testing::repo("panes-ask");
+        let (mut parts, engine) = session::for_tests();
+        parts.config.cwd = repo.clone();
+        let (send, reports) = mpsc::unbounded_channel();
+        let (mut panes, _inlets) = Panes::new(
+            App::new(Arc::new(parts), engine, send),
+            reports,
+            true,
+            Servers::Owner,
+        );
+        press(&mut panes, KeyCode::Char('x'), KeyModifiers::CONTROL);
+        press(&mut panes, KeyCode::Char('3'), KeyModifiers::NONE);
+        let picker = panes.active().picker.as_ref().expect("asked where");
+        assert_eq!(picker.title, "Pane 2: where does it work?");
+        assert!(panes.building.is_none(), "nothing starts before the answer");
+        press(&mut panes, KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(
+            panes.active().picker.as_ref().unwrap().selected,
+            0,
+            "no key before it showed"
+        );
+        press(&mut panes, KeyCode::Char('a'), KeyModifiers::NONE);
+        assert!(
+            panes.active().picker.as_ref().unwrap().query.is_empty(),
+            "typing does not filter it"
+        );
+        if let Some(picker) = &mut panes.active().picker {
+            picker.opened = Instant::now() - Duration::from_secs(1);
+        }
+        press(&mut panes, KeyCode::Down, KeyModifiers::NONE);
+        press(&mut panes, KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(panes.active().input.text(), "/split d tree glut/pane-2");
+        let _ = std::fs::remove_dir_all(repo.parent().unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_worktrees_pane_ends_as_picked_and_discarding_work_is_asked_twice() {
+        let (home, repo) = crate::worktree::testing::repo("panes-leave");
+        let repo = crate::worktree::repo_of(&repo).unwrap().unwrap();
+        let tree = crate::worktree::add(&home, &repo, "glut/pane-2").unwrap();
+        crate::worktree::testing::commit(&tree.place, "b.txt", "two\n");
+        let (mut panes, _inlets) = split(Side::Right);
+        panes.list[1].tree = Some(tree.clone());
+        press(&mut panes, KeyCode::Char('x'), KeyModifiers::CONTROL);
+        press(&mut panes, KeyCode::Char('0'), KeyModifiers::NONE);
+        assert_eq!(
+            panes
+                .active()
+                .picker
+                .as_ref()
+                .map(|picker| picker.title.clone()),
+            Some("Closing this worktree's pane".to_owned())
+        );
+        panes.active().picker = None;
+        panes.active().pane_request = Some(Request::CloseAs(Leaving::Discard));
+        panes.settle(&(Arc::new(crate::Standalone) as Arc<dyn Host>));
+        assert_eq!(
+            panes
+                .active()
+                .picker
+                .as_ref()
+                .map(|picker| picker.title.clone()),
+            Some("Discard glut/pane-2?".to_owned()),
+            "a commit would be lost: asked again"
+        );
+        assert!(tree.place.exists() && panes.list.len() == 2);
+        panes.active().picker = None;
+        panes.active().pane_request = Some(Request::CloseAs(Leaving::DiscardSure));
+        panes.settle(&(Arc::new(crate::Standalone) as Arc<dyn Host>));
+        assert!(!tree.place.exists() && panes.list.len() == 1);
+        let _ = std::fs::remove_dir_all(repo.top.parent().unwrap());
     }
 
     #[tokio::test]

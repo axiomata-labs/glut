@@ -52,6 +52,10 @@ pub enum Pick {
     },
     /// `/init` (T35): whether `CLAUDE.md` moves into `AGENTS.md` (`true`) or stays the guide (`false`).
     Init(bool),
+    /// What a pane asks of the screen, picked (T36a): where a new pane works, how a worktree's pane ends.
+    Pane(crate::panes::Request),
+    /// A command put into the input for the owner to change before Enter (a new worktree's branch name).
+    Input(String),
     /// `/agents`: a subagent's view, by its path through the streams.
     Agent(Vec<usize>),
     /// Rewind: how far — the conversation, the files, or both.
@@ -136,6 +140,11 @@ pub struct Picker {
     pub free_only: bool,
     /// The list `glut_file`'s `pick_model` opened (T37c): its own, even with no entry to show.
     pub asks_model: bool,
+    /// A list Glut opened by itself whose pick does something hard to take back (T36a: a merge, a discard): no key
+    /// typed before it showed picks, a held key picks nothing, and typing does not filter it.
+    pub guarded: bool,
+    /// When it came up — or came into view again with its pane.
+    pub opened: std::time::Instant,
 }
 
 impl Picker {
@@ -149,9 +158,17 @@ impl Picker {
             sort: None,
             free_only: false,
             asks_model: false,
+            guarded: false,
+            opened: std::time::Instant::now(),
         };
         picker.select(current);
         picker
+    }
+
+    /// A picker of Glut's own whose pick is hard to take back: see [`Picker::guarded`]'s field.
+    pub fn guarded(mut self) -> Self {
+        self.guarded = true;
+        self
     }
 
     /// A picker that sorts and filters its models.
