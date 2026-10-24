@@ -39,7 +39,7 @@ pub enum Report {
     ChooseModel(String),
     /// `glut_file`'s `pick_model` (T37c): the owner picks a provider and a model from Glut's lists; `None`: none.
     PickModel(oneshot::Sender<Option<(String, String)>>),
-    /// `tell` (T36c): the model's message to pane `to` (the other one when `None`); the reply says what became of it.
+    /// `tell` (T36c): the model's message to pane `to` (the only other one when `None`); the reply says what became of it.
     Tell {
         to: Option<u8>,
         text: String,

@@ -67,14 +67,9 @@ pub fn draw_panes(frame: &mut Frame, panes: &mut crate::panes::Panes) {
         Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(frame.area());
     let active = panes.active;
     draw_header(frame, &panes.list[active].app, header);
-    // The panel beside two panes only where each pane keeps a readable width.
     let panel = panel_width(body.width);
-    // Stacked panes share the width, so one pane's minimum is enough beside the panel.
-    let beside = if panes.stacked {
-        SPLIT_PANE_MIN
-    } else {
-        SPLIT_PANE_MIN * 2 + 1
-    };
+    // The panel only where every pane keeps its minimum beside it.
+    let beside = panes.needs(SPLIT_PANE_MIN);
     let room = body.width >= beside + panel;
     let shows_panel = room && panes.list[active].app.panel == Some(true);
     let body = if shows_panel {
@@ -88,7 +83,7 @@ pub fn draw_panes(frame: &mut Frame, panes: &mut crate::panes::Panes) {
     } else {
         body
     };
-    let areas = panes.areas(body);
+    let (areas, lines) = panes.areas(body);
     let asking: Vec<u8> = panes
         .list
         .iter()
@@ -119,15 +114,12 @@ pub fn draw_panes(frame: &mut Frame, panes: &mut crate::panes::Panes) {
         pane.app.panel_fits = room;
     }
     // A quiet line parts panes side by side.
-    if !panes.stacked {
-        for area in areas.iter().skip(1) {
-            let x = area.x.saturating_sub(1);
-            for y in body.y..body.y + body.height {
-                frame.render_widget(
-                    Paragraph::new(Span::styled("│", theme::quiet())),
-                    Rect::new(x, y, 1, 1),
-                );
-            }
+    for line in lines {
+        for y in line.y..line.y + line.height {
+            frame.render_widget(
+                Paragraph::new(Span::styled("│", theme::quiet())),
+                Rect::new(line.x, y, 1, 1),
+            );
         }
     }
 }
@@ -301,7 +293,8 @@ fn draw_plan(frame: &mut Frame, app: &mut App, area: Rect) {
     app.overlay_rows = usize::from(inner.height);
     let modes = app.plan_modes();
     let auto_unsandboxed = !session::sandboxed(&app.parts);
-    let others = app.others.first().copied();
+    // `b` hands the plan over only where there is no question to which pane.
+    let others = (app.others.len() == 1).then(|| app.others[0]);
     let (Some(plan), Some(view)) = (&app.plan, &mut app.plan_view) else {
         return;
     };

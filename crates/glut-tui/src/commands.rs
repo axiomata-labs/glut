@@ -163,7 +163,7 @@ pub const COMMANDS: [Command; 32] = [
         Topic::Panes,
         "split",
         "[l|r|u|d] [resume] [as <role>] [here|tree [branch]]",
-        "a second session beside this one, right unless told; in a git repository here or in a worktree of its own",
+        "a new session beside this one (up to four), right unless told; in a git repository here or in a worktree",
     ),
     command(
         Topic::Panes,
@@ -175,7 +175,7 @@ pub const COMMANDS: [Command; 32] = [
         Topic::Panes,
         "send",
         "[n] <text>|plan",
-        "a message to the other pane, taken there as if typed; /send plan hands it your plan to build",
+        "a message to another pane (its number first, with three or more), taken there as if typed; /send plan hands it your plan to build",
     ),
     command(
         Topic::Panes,
@@ -342,16 +342,11 @@ pub const KEYS: [Key; 29] = [
     key(
         Topic::Panes,
         "⌃P",
-        "the other pane (⌃] too: ⌃6 on a German layout)",
+        "the next pane, round in reading order (⌃] too: ⌃6 on a German layout)",
         "",
     ),
-    key(
-        Topic::Panes,
-        "⌃X 2",
-        "a second pane, to the right",
-        "/split",
-    ),
-    key(Topic::Panes, "⌃X 3", "a second pane, below", "/split d"),
+    key(Topic::Panes, "⌃X 2", "a new pane, to the right", "/split"),
+    key(Topic::Panes, "⌃X 3", "a new pane, below", "/split d"),
     key(Topic::Panes, "⌃X 0", "close this pane", "/close"),
     key(
         Topic::Changes,

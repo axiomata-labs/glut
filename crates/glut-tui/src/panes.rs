@@ -15,8 +15,8 @@ use crate::host::{Host, Launch, Servers};
 use crate::session::{self, Report};
 use crate::transcript::Tone;
 
-/// The most panes for now (T36a): two side by side, or one above the other.
-pub const MOST: usize = 2;
+/// The most panes (T36d): four, each split again as the owner likes.
+pub const MOST: usize = 4;
 /// How many messages models send each other without the owner's word before the next waits for it (T36c).
 pub const MOST_CHAIN: u32 = 6;
 /// How many messages one session's model may send to other panes (T36c).
@@ -55,6 +55,151 @@ impl Side {
 
     fn before(self) -> bool {
         matches!(self, Side::Left | Side::Up)
+    }
+}
+
+/// How the panes stand (T36d): a pane, or a split of panes side by side or one above the other — a pane split again
+/// in the other direction becomes a split of its own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Node {
+    /// A pane, by its session's id.
+    Pane(u64),
+    Split {
+        /// One above the other rather than side by side.
+        stacked: bool,
+        /// Two or more, in reading order.
+        parts: Vec<Node>,
+    },
+}
+
+impl Node {
+    /// Puts pane `new` at `side` of pane `at`: beside it in a split that already runs that way, else in a split of
+    /// their own where `at` stood. `false` when `at` is nowhere.
+    fn split(&mut self, at: u64, new: u64, side: Side) -> bool {
+        match self {
+            Node::Pane(id) if *id == at => {
+                let (first, second) = if side.before() { (new, at) } else { (at, new) };
+                *self = Node::Split {
+                    stacked: side.stacked(),
+                    parts: vec![Node::Pane(first), Node::Pane(second)],
+                };
+                true
+            }
+            Node::Pane(_) => false,
+            Node::Split { stacked, parts } => {
+                if *stacked == side.stacked()
+                    && let Some(place) = parts.iter().position(|part| *part == Node::Pane(at))
+                {
+                    let place = if side.before() { place } else { place + 1 };
+                    parts.insert(place, Node::Pane(new));
+                    return true;
+                }
+                parts.iter_mut().any(|part| part.split(at, new, side))
+            }
+        }
+    }
+
+    /// Takes pane `id` out; a split left with one part becomes that part, and a part that becomes a split running
+    /// the way its parent's does gives its parts to the parent — the room is shared evenly again.
+    fn remove(&mut self, id: u64) {
+        if let Node::Split { stacked, parts } = self {
+            parts.retain(|part| *part != Node::Pane(id));
+            for part in parts.iter_mut() {
+                part.remove(id);
+            }
+            let direction = *stacked;
+            *parts = std::mem::take(parts)
+                .into_iter()
+                .flat_map(|part| match part {
+                    Node::Split { stacked, parts } if stacked == direction => parts,
+                    other => vec![other],
+                })
+                .collect();
+            if parts.len() == 1 {
+                *self = parts.remove(0);
+            }
+        }
+    }
+
+    /// The panes in reading order: left to right, top to bottom.
+    fn order(&self, out: &mut Vec<u64>) {
+        match self {
+            Node::Pane(id) => out.push(*id),
+            Node::Split { parts, .. } => parts.iter().for_each(|part| part.order(out)),
+        }
+    }
+
+    /// The narrowest this keeps every pane at least `least` columns wide: side by side the room is shared evenly,
+    /// so it takes as many times the widest part's need, with a column between each two.
+    fn needs(&self, least: u16) -> u16 {
+        match self {
+            Node::Pane(_) => least,
+            Node::Split {
+                stacked: true,
+                parts,
+            } => parts
+                .iter()
+                .map(|part| part.needs(least))
+                .max()
+                .unwrap_or(least),
+            Node::Split {
+                stacked: false,
+                parts,
+            } => {
+                let count = parts.len() as u16;
+                let widest = parts
+                    .iter()
+                    .map(|part| part.needs(least))
+                    .max()
+                    .unwrap_or(least);
+                widest
+                    .saturating_mul(count)
+                    .saturating_add(count.saturating_sub(1))
+            }
+        }
+    }
+
+    /// Each pane's area in `area`, and the columns parting panes side by side.
+    fn place(&self, area: Rect, areas: &mut Vec<(u64, Rect)>, lines: &mut Vec<Rect>) {
+        match self {
+            Node::Pane(id) => areas.push((*id, area)),
+            Node::Split { stacked, parts } => {
+                let count = parts.len() as u16;
+                for (at, part) in parts.iter().enumerate() {
+                    let at = at as u16;
+                    let last = at + 1 == count;
+                    let part_area = if *stacked {
+                        let height = area.height / count;
+                        Rect {
+                            y: area.y + at * height,
+                            height: if last {
+                                area.height - at * height
+                            } else {
+                                height
+                            },
+                            ..area
+                        }
+                    } else {
+                        // One column between each two panes for the line that parts them.
+                        let width = area.width.saturating_sub(count - 1) / count;
+                        let x = area.x + at * (width + 1);
+                        if at > 0 {
+                            lines.push(Rect::new(x - 1, area.y, 1, area.height));
+                        }
+                        Rect {
+                            x,
+                            width: if last {
+                                area.width.saturating_sub(at * (width + 1))
+                            } else {
+                                width
+                            },
+                            ..area
+                        }
+                    };
+                    part.place(part_area, areas, lines);
+                }
+            }
+        }
     }
 }
 
@@ -209,8 +354,8 @@ pub struct Panes {
     pub list: Vec<Pane>,
     /// The pane the keys go to, as a place in `list`.
     pub active: usize,
-    /// One above the other rather than side by side.
-    pub stacked: bool,
+    /// How the panes stand.
+    layout: Node,
     /// Whether this screen may split at all: a host's session (a card of Axiomata's studio) is its pane alone.
     may_split: bool,
     /// The first session's servers, which a new pane starts too — never more (`--strict-mcp-config` stays strict).
@@ -259,7 +404,7 @@ impl Panes {
                 tree: None,
             }],
             active: 0,
-            stacked: false,
+            layout: Node::Pane(1),
             may_split,
             servers,
             reports,
@@ -364,7 +509,7 @@ impl Panes {
         }
     }
 
-    /// Session `id`'s model writes to pane `to` (the other one): delivered as a message of the other model, never the
+    /// Session `id`'s model writes to pane `to` (the other one, when there is one): delivered as a message of the other model, never the
     /// owner's — held for the owner's Enter once the models have written [`MOST_CHAIN`] times without the owner's word,
     /// refused past [`MOST_TELLS`]. What it became, for the model.
     fn tell(&mut self, id: u64, to: Option<u8>, text: String) -> Result<String, String> {
@@ -602,10 +747,13 @@ impl Panes {
     /// Takes the active pane away; a turn under way is stopped.
     fn remove_active(&mut self) {
         let mut pane = self.list.remove(self.active);
+        self.layout.remove(pane.id);
         let number = pane.number;
         let stopped = pane.app.working();
         pane.app.stop_turn();
-        self.focus(self.active.min(self.list.len() - 1));
+        let next = self.list[self.active.min(self.list.len() - 1)].id;
+        self.reorder();
+        self.focus(self.at(next));
         // Alone again: the side panel comes back as the owner keeps it.
         if !self.split() {
             let home = self.active().parts.home.clone();
@@ -752,33 +900,27 @@ impl Panes {
         if let Err(reason) = app.set_role(building.role.as_deref()) {
             app.transcript.note(reason, Tone::Fault);
         }
-        // Two panes leave little room beside them: the side panel starts hidden (⌃B brings it, where there is room).
+        // Panes leave little room beside them: the side panel starts hidden (⌃B brings it, where there is room).
         app.panel = Some(false);
         let current = &mut self.list[self.active].app;
         current.panel = Some(false);
         let busy_here =
             !current.input.is_empty() || current.waits_for_owner() || current.picker.is_some();
-        let at = if building.side.before() {
-            self.active
-        } else {
-            self.active + 1
-        };
-        self.stacked = building.side.stacked();
-        self.list.insert(
-            at,
-            Pane {
-                id: building.id,
-                number: building.number,
-                app,
-                area: Rect::default(),
-                tree: building.tree,
-            },
-        );
+        let active_id = self.list[self.active].id;
+        let placed = self.layout.split(active_id, building.id, building.side);
+        debug_assert!(placed, "the active pane is always in the layout");
+        self.list.push(Pane {
+            id: building.id,
+            number: building.number,
+            app,
+            area: Rect::default(),
+            tree: building.tree,
+        });
+        self.reorder();
+        let at = self.at(building.id);
         if busy_here {
-            // The active pane moved one place on when the new one went before it.
-            if at <= self.active {
-                self.active += 1;
-            }
+            // The keys stay where they were, wherever that pane stands now.
+            self.active = self.at(active_id);
             let number = building.number;
             self.active()
                 .tell(format!("pane {number} is ready — ⌃P goes there"));
@@ -787,7 +929,7 @@ impl Panes {
         }
     }
 
-    /// Sends the active pane's `text` — or its plan, with `None` — to pane `to` (the other one): taken there as if
+    /// Sends the active pane's `text` — or its plan, with `None` — to pane `to` (the other one, when there is one): taken there as if
     /// the owner typed it, the keys staying here.
     fn send(&mut self, to: Option<u8>, text: Option<String>) {
         let from = self.list[self.active].number;
@@ -851,40 +993,47 @@ impl Panes {
         self.active().shown_again();
     }
 
-    /// The panes' areas in `area`: side by side with a column between them, or one above the other.
-    pub fn areas(&self, area: Rect) -> Vec<Rect> {
-        let count = self.list.len() as u16;
-        if count <= 1 {
-            return vec![area];
+    /// The list in the layout's reading order, so `⌃P` goes round as the panes stand.
+    fn reorder(&mut self) {
+        let mut order = Vec::new();
+        self.layout.order(&mut order);
+        self.list.sort_by_key(|pane| {
+            order
+                .iter()
+                .position(|id| *id == pane.id)
+                .unwrap_or(usize::MAX)
+        });
+    }
+
+    /// Where the pane of session `id` stands in the list (it is there: every caller just put it or kept it).
+    fn at(&self, id: u64) -> usize {
+        self.list.iter().position(|pane| pane.id == id).unwrap_or(0)
+    }
+
+    /// The narrowest the panes may share and keep each at least `least` columns wide.
+    pub fn needs(&self, least: u16) -> u16 {
+        self.layout.needs(least)
+    }
+
+    /// Each pane's area in `area`, in the list's order, and the columns that part panes side by side.
+    pub fn areas(&self, area: Rect) -> (Vec<Rect>, Vec<Rect>) {
+        if !self.split() {
+            return (vec![area], Vec::new());
         }
-        if self.stacked {
-            let height = area.height / count;
-            (0..count)
-                .map(|at| Rect {
-                    y: area.y + at * height,
-                    height: if at + 1 == count {
-                        area.height - at * height
-                    } else {
-                        height
-                    },
-                    ..area
-                })
-                .collect()
-        } else {
-            // One column between each two panes for the line that parts them.
-            let width = (area.width.saturating_sub(count - 1)) / count;
-            (0..count)
-                .map(|at| Rect {
-                    x: area.x + at * (width + 1),
-                    width: if at + 1 == count {
-                        area.width.saturating_sub(at * (width + 1))
-                    } else {
-                        width
-                    },
-                    ..area
-                })
-                .collect()
-        }
+        let mut placed = Vec::new();
+        let mut lines = Vec::new();
+        self.layout.place(area, &mut placed, &mut lines);
+        let areas = self
+            .list
+            .iter()
+            .map(|pane| {
+                placed
+                    .iter()
+                    .find(|(id, _)| *id == pane.id)
+                    .map_or(Rect::default(), |(_, area)| *area)
+            })
+            .collect();
+        (areas, lines)
     }
 }
 
@@ -1067,8 +1216,8 @@ mod tests {
     async fn a_new_pane_takes_the_next_number_where_it_was_asked_for_and_the_keys() {
         let (panes, _inlets) = split(Side::Right);
         assert_eq!(
-            (numbers_of(&panes), panes.active, panes.stacked),
-            (vec![1, 2], 1, false)
+            (numbers_of(&panes), panes.active, panes.needs(60)),
+            (vec![1, 2], 1, 121)
         );
         let (panes, _inlets) = split(Side::Left);
         assert_eq!(
@@ -1077,15 +1226,68 @@ mod tests {
             "2 stands left"
         );
         let (panes, _inlets) = split(Side::Down);
-        assert!(panes.stacked);
-        let areas = panes.areas(Rect::new(0, 0, 100, 41));
+        assert_eq!(panes.needs(60), 60, "one above the other share the width");
+        let (areas, lines) = panes.areas(Rect::new(0, 0, 100, 41));
         assert_eq!((areas[0].height, areas[1].y, areas[1].height), (20, 20, 21));
+        assert!(lines.is_empty(), "one above the other: no column between");
         let (panes, _inlets) = split(Side::Right);
-        let areas = panes.areas(Rect::new(0, 0, 101, 40));
+        let (areas, lines) = panes.areas(Rect::new(0, 0, 101, 40));
         assert_eq!(
             (areas[0].width, areas[1].x, areas[1].width),
             (50, 51, 50),
             "a column parts them"
+        );
+        assert_eq!(lines, [Rect::new(50, 0, 1, 40)]);
+    }
+
+    /// Pane `number` built at `side` of the active one, as `on_built` makes it.
+    fn add(panes: &mut Panes, number: u8, side: Side) {
+        let (sender, _) = mpsc::unbounded_channel();
+        panes.building = Some(Building {
+            id: u64::from(number),
+            number,
+            side,
+            resume: false,
+            tree: None,
+            role: None,
+            reports: sender,
+        });
+        panes.on_built(Ok(session::for_tests()));
+    }
+
+    #[tokio::test]
+    async fn a_pane_split_again_stands_where_asked_and_closing_one_closes_the_gap() {
+        let (mut panes, _inlets) = split(Side::Right);
+        // Pane 2 on the right, split below: 1 | (2 over 3).
+        add(&mut panes, 3, Side::Down);
+        assert_eq!(numbers_of(&panes), vec![1, 2, 3]);
+        assert_eq!(panes.needs(60), 121);
+        let (areas, lines) = panes.areas(Rect::new(0, 0, 101, 40));
+        assert_eq!(areas[0], Rect::new(0, 0, 50, 40));
+        assert_eq!(
+            (areas[1], areas[2]),
+            (Rect::new(51, 0, 50, 20), Rect::new(51, 20, 50, 20))
+        );
+        assert_eq!(lines.len(), 1);
+        // Back to pane 1, split below too: (1 over 4) | (2 over 3); ⌃P goes round in reading order.
+        panes.focus(0);
+        add(&mut panes, 4, Side::Down);
+        assert_eq!(numbers_of(&panes), vec![1, 4, 2, 3]);
+        let (areas, _) = panes.areas(Rect::new(0, 0, 101, 40));
+        assert_eq!(areas[1], Rect::new(0, 20, 50, 20));
+        press(&mut panes, KeyCode::Char('x'), KeyModifiers::CONTROL);
+        press(&mut panes, KeyCode::Char('2'), KeyModifiers::NONE);
+        assert!(panes.building.is_none(), "at most four");
+        // Closing pane 2: pane 3 takes its whole column.
+        panes.focus(2);
+        press(&mut panes, KeyCode::Char('x'), KeyModifiers::CONTROL);
+        press(&mut panes, KeyCode::Char('0'), KeyModifiers::NONE);
+        assert_eq!(numbers_of(&panes), vec![1, 4, 3]);
+        let (areas, _) = panes.areas(Rect::new(0, 0, 101, 40));
+        assert_eq!(areas[2], Rect::new(51, 0, 50, 40));
+        assert_eq!(
+            panes.list[panes.active].number, 3,
+            "the keys go to a neighbour"
         );
     }
 
@@ -1697,6 +1899,29 @@ mod tests {
         assert_eq!(row(10, 80, 81), "│");
         let cursor = terminal.get_cursor_position().unwrap();
         assert!(cursor.x > 80, "the active pane's cursor: {cursor:?}");
+    }
+
+    #[test]
+    fn closing_a_pane_shares_its_room_evenly_again() {
+        // 1 | (2 over (3 | 4)): the inner pair takes a quarter each, so all four need 4 × 60 and three columns.
+        let mut layout = Node::Pane(1);
+        assert!(layout.split(1, 2, Side::Right));
+        assert!(layout.split(2, 3, Side::Down));
+        assert!(layout.split(3, 4, Side::Right));
+        assert_eq!(layout.needs(60), 243);
+        layout.remove(2);
+        assert_eq!(
+            layout,
+            Node::Split {
+                stacked: false,
+                parts: vec![Node::Pane(1), Node::Pane(3), Node::Pane(4)],
+            },
+            "one row of three, not a pair inside a pair"
+        );
+        assert_eq!(layout.needs(60), 182);
+        layout.remove(3);
+        layout.remove(4);
+        assert_eq!(layout, Node::Pane(1));
     }
 
     #[test]

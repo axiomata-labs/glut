@@ -3916,7 +3916,8 @@ impl App {
             return;
         };
         let page = self.overlay_rows.saturating_sub(4);
-        view.elsewhere = self.others.first().copied();
+        // `b` hands the plan over only where there is no question to which pane.
+        view.elsewhere = (self.others.len() == 1).then(|| self.others[0]);
         let choice = view.key(key, modes.len(), page);
         use crate::plan::{Choice, State};
         match choice {

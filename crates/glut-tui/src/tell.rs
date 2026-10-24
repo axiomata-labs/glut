@@ -118,7 +118,7 @@ impl Tell {
     }
 }
 
-/// A `tell` call's arguments: the pane (none — the other one, with two) and the text.
+/// A `tell` call's arguments: the pane (none — the other one, where there is only one) and the text.
 fn parsed(value: &Value) -> Result<(Option<u8>, String), String> {
     let text = value
         .get("text")
@@ -185,7 +185,9 @@ impl Tool for Tell {
         // Known to the rules by its name; the ask shows to whom, how long, and the head and the tail.
         let what = match parsed(arguments) {
             Ok((to, text)) => {
-                let to = to.map_or("the other pane".to_owned(), |pane| format!("pane {pane}"));
+                let to = to.map_or("the only other pane".to_owned(), |pane| {
+                    format!("pane {pane}")
+                });
                 let text = glut::permissions::printable(&text);
                 let count = text.chars().count();
                 let said = if count <= ASKED_HEAD + ASKED_TAIL {
