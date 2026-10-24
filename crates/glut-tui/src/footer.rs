@@ -16,7 +16,7 @@ const ARROW_LEFT: &str = "\u{e0b2}";
 /// The rounded ends (U+E0B6 facing left, U+E0B4 facing right): a bar is round on the outside, pointed toward the
 /// middle of the line (the owner's look, after Powerlevel10k).
 pub const ROUND_LEFT: &str = "\u{e0b6}";
-const ROUND_RIGHT: &str = "\u{e0b4}";
+pub const ROUND_RIGHT: &str = "\u{e0b4}";
 /// Powerline's branch glyph (U+E0A0); the plain footer has Unicode's own branch sign.
 const BRANCH_POWERLINE: &str = "\u{e0a0}";
 const BRANCH_PLAIN: &str = "⎇";

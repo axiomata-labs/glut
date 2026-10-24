@@ -2,7 +2,7 @@
 //! sheet (Ctrl+K, a tab of the side panel) and `/help`, kept here once — each entry carries its topic, and the topics
 //! follow [`Topic::ALL`].
 
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
 
@@ -417,16 +417,20 @@ pub const LEGEND: &str = "⌃ Ctrl · ⇧ Shift · ⌥ Alt · ⏎ Enter · ⇥ T
 /// The panel width from which a key's row also names its `/` command.
 pub const SHEET_WITH_COMMANDS: usize = 46;
 
-/// The Keys sheet `width` cells wide: each topic's heading, then its keys — each key a cap in the footer's look (T39:
-/// the calm backgrounds taking turns, light and darker, round on the left and Powerline's arrow on the right where
-/// the footer has them), what it
-/// does wrapped beside it, the `/` command after it where the sheet is wide enough.
+/// How far the Keys sheet's two row colours are mixed from the theme's ink toward its quiet grey: further apart
+/// than the footer's calm pair, so the rows read as stripes (the owner, after the build).
+const ROW_SHADES: [f32; 2] = [0.12, 0.38];
+
+/// The Keys sheet `width` cells wide: each topic's heading, then its keys, one stripe each — the whole row on a
+/// background lighter and darker by turns, a wrapped row keeping its key's, round at both ends where the footer has
+/// Powerline's look —, the key bold, what it does beside it, the `/` command after it where the sheet is wide enough.
 pub fn sheet(width: usize, separators: crate::footer::Separators) -> Vec<Line<'static>> {
     let cap_width = KEYS.iter().map(|key| key.key.width()).max().unwrap_or(0);
-    // The gap in front, the cap with a space on either side, its joint and the gap after it.
+    // Both ends, the key with a space before and two after it.
     let what_width = width.saturating_sub(cap_width + 5).max(8);
     let commands = width >= SHEET_WITH_COMMANDS;
-    let backgrounds = crate::footer::calm_backgrounds();
+    let palette = theme::c();
+    let shades = ROW_SHADES.map(|share| theme::mix(palette.ink, palette.quiet, share));
     let mut lines: Vec<Line<'static>> = wrap(LEGEND, width.saturating_sub(1).max(8))
         .into_iter()
         .map(|row| Line::from(Span::styled(format!(" {row}"), theme::quiet())))
@@ -444,37 +448,33 @@ pub fn sheet(width: usize, separators: crate::footer::Separators) -> Vec<Line<'s
             theme::glow().add_modifier(Modifier::BOLD),
         )));
         for (turn, key) in keys.into_iter().enumerate() {
-            let bg = backgrounds[turn % 2];
+            let bg = shades[turn % 2];
+            let stripe = Style::default().bg(bg).fg(Color::Reset);
             let what = match key.command {
                 command if commands && !command.is_empty() => format!("{} · {command}", key.what),
                 _ => key.what.to_owned(),
             };
-            // A wrapped row keeps the cap's colour, empty: the key and all it does read as one.
+            let (start, end) = match separators {
+                crate::footer::Separators::Powerline => (
+                    Span::styled(crate::footer::ROUND_LEFT, Style::default().fg(bg)),
+                    Span::styled(crate::footer::ROUND_RIGHT, Style::default().fg(bg)),
+                ),
+                crate::footer::Separators::Plain => {
+                    (Span::styled(" ", stripe), Span::styled(" ", stripe))
+                }
+            };
             for (at, row) in wrap(&what, what_width).into_iter().enumerate() {
                 let head = if at == 0 { key.key } else { "" };
                 let pad = cap_width - head.width();
-                let joint = match separators {
-                    crate::footer::Separators::Powerline => {
-                        Span::styled(crate::footer::ARROW, Style::default().fg(bg))
-                    }
-                    crate::footer::Separators::Plain => Span::raw(" "),
-                };
-                // Round on the outside, pointed toward what it does — as the footer's bars.
-                let start = match separators {
-                    crate::footer::Separators::Powerline => {
-                        Span::styled(crate::footer::ROUND_LEFT, Style::default().fg(bg))
-                    }
-                    crate::footer::Separators::Plain => Span::raw(" "),
-                };
+                let fill = what_width.saturating_sub(row.width());
                 lines.push(Line::from(vec![
-                    start,
+                    start.clone(),
                     Span::styled(
-                        format!(" {head}{} ", " ".repeat(pad)),
-                        Style::default().bg(bg).add_modifier(Modifier::BOLD),
+                        format!(" {head}{}  ", " ".repeat(pad)),
+                        stripe.add_modifier(Modifier::BOLD),
                     ),
-                    joint,
-                    Span::raw(" "),
-                    Span::styled(row, theme::quiet()),
+                    Span::styled(format!("{row}{}", " ".repeat(fill)), stripe),
+                    end.clone(),
                 ]));
             }
         }
@@ -565,5 +565,19 @@ mod tests {
         assert!(narrow.lines().all(|row| row.width() <= 28), "{narrow}");
         let wide = text(sheet(60, crate::footer::Separators::Powerline));
         assert!(wide.contains("· /gate"));
+        assert!(wide.lines().all(|row| row.width() <= 60), "{wide}");
+        let striped = sheet(60, crate::footer::Separators::Plain);
+        let keyed: Vec<&Line> = striped
+            .iter()
+            .filter(|line| line.spans.len() == 4)
+            .collect();
+        assert!(
+            keyed.iter().all(|line| line.width() == 60),
+            "a stripe spans the sheet"
+        );
+        assert_ne!(
+            keyed[0].spans[1].style.bg, keyed[1].spans[1].style.bg,
+            "lighter and darker by turns"
+        );
     }
 }
