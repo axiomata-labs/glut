@@ -55,6 +55,12 @@ pub struct Prefs {
         deserialize_with = "crate::warm::lenient"
     )]
     pub cache: Option<crate::warm::CacheMode>,
+    /// How much the screen moves (TUI9b, `/motion`); `None`: fully.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub motion: Option<crate::motion::Motion>,
+    /// Whether the reader mode is on (TUI9b, `/reader`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reader: Option<bool>,
     /// The colours: `glut` or an app theme's name (TUI3c, `/theme`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
@@ -187,6 +193,28 @@ pub fn set_cache(home: &Path, mode: crate::warm::CacheMode) -> Result<(), String
 pub fn set_footer(home: &Path, separators: crate::footer::Separators) -> Result<(), String> {
     let mut prefs = Prefs::read(home)?;
     prefs.footer = Some(separators);
+    prefs.save(home)
+}
+
+/// Keeps how much the screen moves (`/motion`).
+///
+/// # Errors
+///
+/// A message when the file cannot be read (it is not written over) or written.
+pub fn set_motion(home: &Path, motion: crate::motion::Motion) -> Result<(), String> {
+    let mut prefs = Prefs::read(home)?;
+    prefs.motion = Some(motion);
+    prefs.save(home)
+}
+
+/// Keeps whether the reader mode is on (`/reader`).
+///
+/// # Errors
+///
+/// A message when the file cannot be read (it is not written over) or written.
+pub fn set_reader(home: &Path, on: bool) -> Result<(), String> {
+    let mut prefs = Prefs::read(home)?;
+    prefs.reader = Some(on);
     prefs.save(home)
 }
 

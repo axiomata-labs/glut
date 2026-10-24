@@ -35,6 +35,9 @@ struct Cli {
     /// The servers of `--mcp-config` alone, none of the owner's nor the project's — `glut run --mcp-config`'s meaning.
     #[arg(long, requires = "mcp_config")]
     strict_mcp_config: bool,
+    /// The reader mode for this run, for a screen reader: keys in words, a plain screen, nothing moving.
+    #[arg(long)]
+    reader: bool,
     /// Pick an earlier session of the folder to go on with.
     #[arg(short = 'r', long)]
     resume: bool,
@@ -60,7 +63,12 @@ async fn main() -> std::process::ExitCode {
     match cli.command.take() {
         Some(Command::Watch { what }) => watch(&cli.cwd, what.as_deref()).await,
         Some(Command::Headless(command)) => glut::cli::dispatch(command).await,
-        None => glut_tui::standalone(launch(&cli), open(cli)).await,
+        None => {
+            if cli.reader {
+                glut_tui::motion::force_reader();
+            }
+            glut_tui::standalone(launch(&cli), open(cli)).await
+        }
     }
 }
 

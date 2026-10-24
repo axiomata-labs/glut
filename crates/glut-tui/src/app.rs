@@ -112,6 +112,14 @@ enum Busy {
     HandingOff,
 }
 
+/// What a session is about, as the reader mode says it (TUI9b).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum State {
+    Works,
+    Asks,
+    Rests,
+}
+
 pub struct App {
     pub parts: Arc<Parts>,
     pub engine: Engine,
@@ -261,6 +269,12 @@ pub struct App {
     pub held: Vec<String>,
     /// When the last of them came: an Enter right after it (meant for something else) lets none go.
     pub(crate) held_since: Option<Instant>,
+    /// Since when Glut works (TUI9b): what the footer counts while the screen holds still.
+    pub busy_since: Option<Instant>,
+    /// The state last seen (TUI9b): the reader mode says each change in a line of its own.
+    seen_state: Option<State>,
+    /// How many turns had started when the state was last seen: a queued message's turn begins with no rest between.
+    seen_turns: usize,
     /// Messages of another pane's model for after the turn under way, with what their sender could do (T36c).
     waiting_models: Vec<(String, Sender)>,
     /// The folder's branch for the footer (T39).
@@ -301,6 +315,10 @@ impl App {
         let panel = prefs.panel;
         let vi = prefs.vi.unwrap_or(false);
         let cache_mode = prefs.cache.unwrap_or_default();
+        crate::motion::set(
+            prefs.motion.unwrap_or_default(),
+            prefs.reader.unwrap_or(false),
+        );
         engine
             .model
             .set_cache_hour(cache_mode == crate::warm::CacheMode::Hour);
@@ -426,6 +444,9 @@ impl App {
             warm_until: None,
             cache_seen: false,
             held_since: None,
+            busy_since: None,
+            seen_state: None,
+            seen_turns: 0,
             waiting_models: Vec::new(),
             separators,
             separators_from,
@@ -511,6 +532,70 @@ impl App {
         self.context_used = 0;
         self.scroll = 0;
         self.session = session;
+    }
+
+    /// Once per frame (TUI9b): when Glut began to work, and — in the reader mode — a line for each change of state,
+    /// as a screen reader reads what is new.
+    pub fn track_state(&mut self) {
+        self.track_state_saying(crate::motion::reader());
+    }
+
+    /// [`App::track_state`], the lines said when `saying`.
+    fn track_state_saying(&mut self, saying: bool) {
+        let now = if self.waits_for_owner() {
+            State::Asks
+        } else if self.working() {
+            State::Works
+        } else {
+            State::Rests
+        };
+        let turns = self.meter.turns.len();
+        let next_turn = std::mem::replace(&mut self.seen_turns, turns) != turns
+            && now == State::Works
+            && self.seen_state == Some(State::Works);
+        let before = self.seen_state.replace(now);
+        if before == Some(now) && !next_turn {
+            return;
+        }
+        match now {
+            // A question in a turn keeps the time it has; the next turn, or work after a rest, starts it anew.
+            State::Works if before == Some(State::Asks) && self.busy_since.is_some() => {}
+            State::Works => self.busy_since = Some(Instant::now()),
+            State::Rests => self.busy_since = None,
+            State::Asks => {}
+        }
+        if next_turn && saying {
+            return self
+                .transcript
+                .note("Glut is done — Glut works on the next message", Tone::Quiet);
+        }
+        if !saying || before.is_none() {
+            return;
+        }
+        let said = match now {
+            State::Works if before == Some(State::Asks) => "Glut works on",
+            State::Works => "Glut works",
+            State::Asks => match &self.ask {
+                Some(open) => {
+                    let said = format!(
+                        "Glut asks: {} {} — y once, n refuse",
+                        open.request.tool,
+                        crate::transcript::cut(
+                            &glut::permissions::printable(&open.request.target),
+                            120
+                        )
+                    );
+                    return self.transcript.note(said, Tone::Heed);
+                }
+                None => "Glut asks you to choose",
+            },
+            State::Rests => match self.last_turn {
+                Some(true) => "Glut is done",
+                Some(false) => "Glut stopped: something failed",
+                None => "Glut stopped",
+            },
+        };
+        self.transcript.note(said, Tone::Quiet);
     }
 
     /// Whether Glut works on something: a turn, a summary, a switch of model.
@@ -1940,6 +2025,29 @@ impl App {
                 Err(reason) => self.transcript.note(reason, Tone::Fault),
             },
             "steps" => self.picker = Some(self.steps_picker()),
+            "motion" => match crate::motion::Motion::parse(rest) {
+                Some(motion) => self.set_motion(motion),
+                None => {
+                    let now = Prefs::load(&self.parts.home).motion.unwrap_or_default();
+                    let still = if crate::motion::still() && now == crate::motion::Motion::Full {
+                        " (held still: the reader mode or the system's Reduce motion)"
+                    } else {
+                        ""
+                    };
+                    self.tell(format!(
+                        "motion: {}{still} — /motion full, calm or off",
+                        now.label()
+                    ));
+                }
+            },
+            "reader" => match rest {
+                "on" => self.set_reader(true),
+                "off" => self.set_reader(false),
+                _ => self.tell(format!(
+                    "reader: {} — /reader on or off",
+                    if crate::motion::reader() { "on" } else { "off" }
+                )),
+            },
             "theme" if rest.is_empty() => self.picker = Some(theme_picker()),
             "theme" => self.set_theme(rest),
             "thinking" => match rest {
@@ -3153,6 +3261,38 @@ impl App {
             Ok(()) => self
                 .transcript
                 .note(format!("footer: {}", separators.label()), Tone::Quiet),
+            Err(reason) => self.transcript.note(reason, Tone::Fault),
+        }
+    }
+
+    /// Uses and keeps how much the screen moves.
+    fn set_motion(&mut self, motion: crate::motion::Motion) {
+        let prefs = Prefs::load(&self.parts.home);
+        crate::motion::set(motion, prefs.reader.unwrap_or(false));
+        match prefs::set_motion(&self.parts.home, motion) {
+            Ok(()) if motion == crate::motion::Motion::Full && crate::motion::still() => self.transcript.note(
+                "motion: full — held still all the same by the reader mode or the system's Reduce motion",
+                Tone::Quiet,
+            ),
+            Ok(()) => self.say(format!("motion: {}", motion.label())),
+            Err(reason) => self.transcript.note(reason, Tone::Fault),
+        }
+    }
+
+    /// Turns the reader mode on or off and keeps it.
+    fn set_reader(&mut self, on: bool) {
+        let prefs = Prefs::load(&self.parts.home);
+        crate::motion::set(prefs.motion.unwrap_or_default(), on);
+        match prefs::set_reader(&self.parts.home, on) {
+            Ok(()) if !on && crate::motion::reader_forced() => self.transcript.note(
+                "reader mode off from the next start — glut --reader holds it on for this run",
+                Tone::Quiet,
+            ),
+            Ok(()) if on => self.transcript.note(
+                "reader mode on: keys in words, a plain screen, nothing moving, a line at each change of state",
+                Tone::Quiet,
+            ),
+            Ok(()) => self.say("reader mode off"),
             Err(reason) => self.transcript.note(reason, Tone::Fault),
         }
     }
@@ -5841,6 +5981,69 @@ mod tests {
             .draw(|frame| crate::view::draw(frame, app))
             .unwrap();
         format!("{:?}", terminal.backend().buffer())
+    }
+
+    #[test]
+    fn each_change_of_state_is_a_line_for_the_reader_and_the_work_is_timed() {
+        let (mut app, _reports) = app();
+        let notes = |app: &App| -> Vec<String> {
+            app.transcript
+                .blocks
+                .iter()
+                .filter_map(|block| match &block.kind {
+                    crate::transcript::Kind::Note { text, .. } => Some(text.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+        app.track_state_saying(true);
+        let before = notes(&app).len();
+        assert!(
+            app.busy_since.is_none(),
+            "the first look says nothing and times nothing"
+        );
+        app.working_for_tests();
+        app.track_state_saying(true);
+        assert!(app.busy_since.is_some());
+        let (reply, _answer) = oneshot::channel();
+        app.on_report(Report::Ask(
+            AskRequest {
+                tool: "bash".into(),
+                target: "ls".into(),
+                scopes: Vec::new(),
+                from: None,
+            },
+            reply,
+        ));
+        let since = app.busy_since;
+        app.track_state_saying(true);
+        app.track_state_saying(true);
+        assert_eq!(app.busy_since, since, "a question keeps the time running");
+        app.ask = None;
+        app.track_state_saying(true);
+        app.busy = None;
+        app.last_turn = Some(true);
+        app.track_state_saying(true);
+        assert!(app.busy_since.is_none());
+        let said = notes(&app)[before..].to_vec();
+        assert_eq!(said.len(), 4, "{said:?}");
+        assert!(said[0] == "Glut works" && said[1].starts_with("Glut asks: bash ls"));
+        assert!(said[2] == "Glut works on" && said[3] == "Glut is done");
+        // The next turn of a queued message, with no rest between, is said and timed anew.
+        app.working_for_tests();
+        app.track_state_saying(true);
+        let first = app.busy_since;
+        app.meter.turns.push(Default::default());
+        app.track_state_saying(true);
+        assert!(app.busy_since >= first);
+        assert!(notes(&app).last().unwrap().contains("next message"));
+        app.busy = None;
+        app.track_state_saying(false);
+        let before = notes(&app).len() - 4;
+        // Without the reader mode the times run all the same, and nothing is said.
+        app.working_for_tests();
+        app.track_state_saying(false);
+        assert!(app.busy_since.is_some() && notes(&app).len() == before + 4);
     }
 
     #[test]

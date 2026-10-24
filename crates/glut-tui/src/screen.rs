@@ -217,6 +217,9 @@ async fn run_loop(
     let mut tick = tokio::time::interval(TICK);
     // Ticks missed while Glut waited are not made up in a burst when it starts working again.
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // Held still (TUI9b), a frame a second: the seconds of "working" go on, nothing else moves.
+    let mut second = tokio::time::interval(Duration::from_secs(1));
+    second.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut terminate = signal(SignalKind::terminate())?;
     let mut hangup = signal(SignalKind::hangup())?;
     // Raw mode sends no SIGINT; at the scrollback's prompt (cooked mode) Ctrl+C would end Glut mid-turn: it goes
@@ -248,7 +251,11 @@ async fn run_loop(
         // Every frame inside synchronized output (DEC 2026): the terminal shows it whole or not at all — and the end
         // is sent even when the frame failed, or the terminal would hold every later one back.
         execute!(io::stdout(), BeginSynchronizedUpdate)?;
-        let drawn = terminal.draw(|frame| view::draw_panes(frame, panes));
+        let drawn = terminal.draw(|frame| {
+            view::draw_panes(frame, panes);
+            // The reader mode's frames, marks and Powerline's glyphs in plain ASCII, one cell for one (TUI9b).
+            crate::motion::plain_cells(frame.buffer_mut());
+        });
         execute!(io::stdout(), EndSynchronizedUpdate)?;
         drawn?;
         if panes.quitting() {
@@ -354,7 +361,14 @@ async fn run_loop(
             block_cursor = false;
             continue;
         }
-        let animated = panes.list.iter().any(|pane| pane.app.animated());
+        let still = crate::motion::still();
+        let animated = !still && panes.list.iter().any(|pane| pane.app.animated());
+        // Held still, a second's frame is enough for what changes on its own: the seconds, a toast going.
+        let counting = still
+            && panes
+                .list
+                .iter()
+                .any(|pane| pane.app.working() || pane.app.toast().is_some());
         tokio::select! {
             // A closed window or a kill ends the session cleanly: the turn stopped, the terminal given back.
             _ = terminate.recv() => panes.list.iter_mut().for_each(|pane| pane.app.abandon()),
@@ -383,6 +397,7 @@ async fn run_loop(
                     pane.app.frame = pane.app.frame.wrapping_add(1);
                 }
             }
+            _ = second.tick(), if counting => {}
         }
         // What a pane asked for — a split, a close, the other pane — once its key or command is through.
         panes.settle(host);

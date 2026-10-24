@@ -81,7 +81,7 @@ const fn command(
 }
 
 /// Every command, grouped by topic in [`Topic::ALL`]'s order, the most used first inside a topic.
-pub const COMMANDS: [Command; 37] = [
+pub const COMMANDS: [Command; 39] = [
     command(Topic::Session, "clear", "", "start a new session"),
     command(
         Topic::Session,
@@ -252,6 +252,18 @@ pub const COMMANDS: [Command; 37] = [
         "gate",
         "",
         "the rules in force; take an \"always\" back (⌃G: the gate, live)",
+    ),
+    command(
+        Topic::Settings,
+        "motion",
+        "full|calm|off",
+        "how much the screen moves; calm and off hold Glimm still (macOS Reduce motion counts as off)",
+    ),
+    command(
+        Topic::Settings,
+        "reader",
+        "on|off",
+        "for a screen reader: keys in words, a plain screen, nothing moving, a line at each change of state",
     ),
     command(
         Topic::Settings,
@@ -535,7 +547,12 @@ pub const SHEET_WITH_COMMANDS: usize = 46;
 /// The Keys sheet `width` cells wide: each topic's heading, then its keys — the key in a column of its own, what it
 /// does wrapped beside it, the `/` command after it where the sheet is wide enough.
 pub fn sheet(width: usize) -> Vec<Line<'static>> {
-    let key_width = KEYS.iter().map(|key| key.key.width()).max().unwrap_or(0) + 2;
+    let key_width = KEYS
+        .iter()
+        .map(|key| crate::motion::spoken(key.key).width())
+        .max()
+        .unwrap_or(0)
+        + 2;
     let what_width = width.saturating_sub(key_width + 1).max(8);
     let commands = width >= SHEET_WITH_COMMANDS;
     let mut lines: Vec<Line<'static>> = wrap(LEGEND, width.saturating_sub(1).max(8))
@@ -559,8 +576,13 @@ pub fn sheet(width: usize) -> Vec<Line<'static>> {
                 command if commands && !command.is_empty() => format!("{} · {command}", key.what),
                 _ => key.what.to_owned(),
             };
-            for (at, row) in wrap(&what, what_width).into_iter().enumerate() {
-                let head = if at == 0 { key.key } else { "" };
+            // The reader mode says the keys in words (TUI9b): the column takes the longest.
+            let spoken = crate::motion::spoken(key.key);
+            for (at, row) in wrap(&crate::motion::spoken(&what), what_width)
+                .into_iter()
+                .enumerate()
+            {
+                let head: &str = if at == 0 { &spoken } else { "" };
                 let pad = key_width - head.width();
                 lines.push(Line::from(vec![
                     Span::styled(format!(" {head}{}", " ".repeat(pad)), theme::strong()),

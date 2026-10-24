@@ -814,12 +814,17 @@ fn render(kind: &Kind, width: u16, thinking: Thinking, frame: usize) -> Vec<Line
                     crate::glimm::Mood::Working,
                     frame,
                 );
-                let lower = glimm.pop().unwrap_or_default();
-                let mut upper = glimm.pop().unwrap_or_default();
-                upper.spans.push(Span::raw(" "));
-                upper.spans.extend(header);
-                lines.push(upper);
-                lines.push(lower);
+                // The reader mode has no flame: the thought's one row.
+                if glimm.is_empty() {
+                    lines.push(Line::from(header));
+                } else {
+                    let lower = glimm.pop().unwrap_or_default();
+                    let mut upper = glimm.pop().unwrap_or_default();
+                    upper.spans.push(Span::raw(" "));
+                    upper.spans.extend(header);
+                    lines.push(upper);
+                    lines.push(lower);
+                }
             } else {
                 lines.push(Line::from(header));
             }
@@ -838,7 +843,8 @@ fn render(kind: &Kind, width: u16, thinking: Thinking, frame: usize) -> Vec<Line
                 Tone::Fine => Style::default().fg(theme::c().fine),
                 Tone::Heed => theme::glow(),
             };
-            for row in wrap(text, width - 2) {
+            // A note may name keys: the reader mode says them in words (TUI9b).
+            for row in wrap(&crate::motion::spoken_keys(text), width - 2) {
                 lines.push(Line::from(vec![
                     Span::styled("· ", theme::quiet()),
                     Span::styled(row, style),

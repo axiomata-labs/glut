@@ -741,7 +741,8 @@ const ASK_GLIMM_MIN_SCREEN: u16 = 60;
 
 /// How many columns the waiting Glimm takes in an ask box on a screen `width` wide: itself and a gap, or none.
 fn ask_glimm_width(width: u16) -> u16 {
-    if width >= ASK_GLIMM_MIN_SCREEN {
+    // The reader mode has no Glimm: the question takes every column.
+    if width >= ASK_GLIMM_MIN_SCREEN && !crate::motion::reader() {
         glimm::cells(glimm::Size::Small).0 + 2
     } else {
         0
@@ -846,6 +847,12 @@ const USUAL_HINTS: &str =
 /// and the key hints, the moment's or the usual ones.
 fn draw_keys(frame: &mut Frame, app: &App, area: Rect, branch: Option<String>, chrome: &Chrome) {
     use crate::footer::Segment;
+    // The reader mode's footer is plain: Powerline's glyphs say nothing to a screen reader (TUI9b).
+    let separators = if crate::motion::reader() {
+        crate::footer::Separators::Plain
+    } else {
+        app.separators
+    };
     let mode = app.mode();
     let mut segments = Vec::new();
     let asks = app.waits_for_owner();
@@ -908,12 +915,26 @@ fn draw_keys(frame: &mut Frame, app: &App, area: Rect, branch: Option<String>, c
         context.text.push_str(if warm { " ●" } else { " ○" });
     }
     segments.push(context);
+    // Held still (TUI9b), "working" counts its seconds where the flame would flicker.
+    if crate::motion::still()
+        && let Some(since) = app.busy_since.filter(|_| app.working())
+    {
+        // After a pane's number, before everything else.
+        segments.insert(
+            usize::from(chrome.number.is_some()),
+            Segment::marked(
+                format!("working {}s", since.elapsed().as_secs()),
+                theme::c().glow,
+                0,
+            ),
+        );
+    }
     if let Some(cost) = app.cost {
         segments.push(Segment::calm(format!("${cost:.4}"), 2));
     }
     if let Some(branch) = branch {
         segments.push(Segment::calm(
-            format!("{} {branch}", app.separators.branch_sign()),
+            format!("{} {branch}", separators.branch_sign()),
             3,
         ));
     }
@@ -972,9 +993,9 @@ fn draw_keys(frame: &mut Frame, app: &App, area: Rect, branch: Option<String>, c
     let moment = hints != WORKING_HINTS && hints != USUAL_HINTS;
     let line = crate::footer::line(
         segments,
-        &hints,
+        &crate::motion::spoken(&hints),
         usize::from(area.width),
-        app.separators,
+        separators,
         moment,
     );
     frame.render_widget(Paragraph::new(line), area);
@@ -1290,7 +1311,7 @@ fn panel_keys(app: &App, width: usize) -> Vec<Line<'static>> {
         .collect::<Vec<_>>()
         .join(" · ")
     };
-    wrap(&text, width)
+    wrap(&crate::motion::spoken(&text), width)
         .into_iter()
         .map(|row| Line::from(Span::styled(format!(" {row}"), theme::quiet())))
         .collect()

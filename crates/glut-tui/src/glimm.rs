@@ -166,6 +166,9 @@ fn lean(grid: &mut [Vec<char>], rows: usize, by: isize) {
     }
 }
 
+/// The step Glimm stands at while the screen holds still (TUI9b): one past a blink, its eyes open.
+const STILL_TICK: usize = BLINK_TICKS;
+
 /// Glimm's pixels in `mood` at animation step `tick`: rows of letters for [`color`], and whether it has gone out.
 fn pixels(size: Size, mood: Mood, tick: usize) -> (Vec<Vec<char>>, bool) {
     let design = match size {
@@ -203,7 +206,8 @@ fn pixels(size: Size, mood: Mood, tick: usize) -> (Vec<Vec<char>>, bool) {
             for &(row, col) in design.eyes {
                 set(&mut grid, row, col, 'e');
             }
-            if !design.sparks.is_empty() {
+            // Sparks rise only where the screen moves.
+            if !design.sparks.is_empty() && !crate::motion::still() {
                 let (row, col) = design.sparks[tick % design.sparks.len()];
                 set_free(&mut grid, row, col, 'y');
                 let (row, col) = design.sparks[(tick + 2) % design.sparks.len()];
@@ -267,6 +271,15 @@ fn pixels(size: Size, mood: Mood, tick: usize) -> (Vec<Vec<char>>, bool) {
 /// Glimm as lines of half blocks: two pixel rows to a terminal row, the upper one the `▀`'s colour, the lower one its
 /// background — where only one of them is there, the other half stays the terminal's own.
 pub fn lines(size: Size, mood: Mood, tick: usize) -> Vec<Line<'static>> {
+    // The reader mode has no pictures (TUI9b); held still, Glimm stands at a step with its eyes open.
+    if crate::motion::reader() {
+        return Vec::new();
+    }
+    let tick = if crate::motion::still() {
+        STILL_TICK
+    } else {
+        tick
+    };
     let (grid, ash) = pixels(size, mood, tick);
     grid.chunks(2)
         .map(|pair| {
@@ -306,7 +319,7 @@ pub fn cells(size: Size) -> (u16, u16) {
 /// A one-cell flame for the header, flickering while Glut works.
 pub fn spark(working: bool, frame: usize) -> &'static str {
     const SPARKS: [&str; 4] = ["▴", "▵", "▲", "▵"];
-    if working {
+    if working && !crate::motion::still() {
         SPARKS[frame % SPARKS.len()]
     } else {
         "▲"

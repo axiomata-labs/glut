@@ -424,6 +424,8 @@ type Built = Result<(session::Parts, session::Engine), String>;
 
 /// The panes on the screen.
 pub struct Panes {
+    /// The look's count of changes the panes were laid out for (TUI9b, `motion::look`).
+    look: usize,
     /// The panes in the order they stand: left to right, or top to bottom.
     pub list: Vec<Pane>,
     /// The pane the keys go to, as a place in `list`.
@@ -494,6 +496,7 @@ impl Panes {
             redraw: false,
             chain: 0,
             peek: None,
+            look: crate::motion::look(),
         };
         (
             panes,
@@ -565,6 +568,15 @@ impl Panes {
     /// Once per frame: answered questions go, and what the panes share is told to each — the terminal's mouse (the
     /// active pane's word is the screen's) and the sessions the others hold.
     pub fn sync(&mut self) {
+        // The look changed (`/motion`, `/reader`): every pane's blocks are laid out anew, its pictures from their
+        // first frame (TUI9b).
+        let look = crate::motion::look();
+        if std::mem::replace(&mut self.look, look) != look {
+            for pane in &mut self.list {
+                pane.app.frame = 0;
+                pane.app.transcript.touch_all();
+            }
+        }
         let held = self.list[self.active].app.mouse_held;
         let numbers: Vec<u8> = self.list.iter().map(|pane| pane.number).collect();
         // Only a pane on the screen is "the other pane" a plan is built in (T36e).
@@ -645,6 +657,7 @@ impl Panes {
         }
         for (at, pane) in self.list.iter_mut().enumerate() {
             pane.app.drop_answered_ask();
+            pane.app.track_state();
             pane.app.background = background.clone();
             pane.app.parts.pane_link.set(
                 pane.number,
