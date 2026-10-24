@@ -583,8 +583,6 @@ fn draw_stream(frame: &mut Frame, app: &mut App, area: Rect) {
     }
     let texts = app.search.is_some();
     let chosen = app.reading.map(|reading| reading.block);
-    // Only what can be on the screen is laid out: blocks from the end until the screen and the scroll are covered —
-    // all of them while the search or the reading mode is open, which may scroll to any of them.
     // The reading mode's block is scrolled into view first: whole where it fits, else its head at the top. Only the
     // blocks' lengths are needed for that (each laid out once and kept), not their lines.
     if let Some(reading) = &mut app.reading
@@ -605,35 +603,41 @@ fn draw_stream(frame: &mut Frame, app: &mut App, area: Rect) {
             app.scroll = after;
         }
     }
-    let wanted = if texts {
-        usize::MAX
-    } else {
-        height + app.scroll
-    };
-    let mut taken: Vec<(usize, Line<'static>)> = Vec::new();
-    let mut all: Vec<String> = Vec::new();
-    let mut total = 0;
+    // Each block's lines are made once and kept: their count is cheap, their text kept beside them (T47).
     let thinking = app.transcript.thinking;
-    for at in (0..app.transcript.blocks.len()).rev() {
-        let lines = app.transcript.blocks[at].lines(width, thinking, app.frame);
-        total += lines.len();
-        if texts {
-            all.extend(lines.iter().rev().map(select::text_of));
-        }
-        if taken.len() < wanted {
-            for line in lines.iter().rev() {
-                taken.push((at, line.clone()));
+    let total: usize = app
+        .transcript
+        .blocks
+        .iter_mut()
+        .map(|block| block.lines(width, thinking, app.frame).len())
+        .sum();
+    // The search finds its matches when its query or the stream changed — not at every frame — and scrolls to the
+    // one shown before the screen's lines are taken.
+    if texts {
+        app.search_texts = true;
+        let layouts = crate::transcript::layouts();
+        let changed = app.search.as_ref().is_some_and(|search| {
+            search.fresh || search.searched.as_ref() != Some(&(search.query.clone(), layouts))
+        });
+        if changed {
+            let mut all: Vec<String> = Vec::with_capacity(total);
+            for block in &mut app.transcript.blocks {
+                all.extend_from_slice(block.texts(width, thinking, app.frame));
+            }
+            if let Some(search) = &mut app.search {
+                search.matches = select::matches(&search.query, &all);
+                search.searched = Some((search.query.clone(), layouts));
             }
         }
     }
-    taken.reverse();
-    all.reverse();
-    app.stream_lines = total;
-    app.stream_height = height;
-    app.stream_x = area.x;
-    app.stream_layout = width;
+    // A search closed gives its texts up: kept, they would double what a long stream holds.
+    if !texts && std::mem::take(&mut app.search_texts) {
+        app.transcript
+            .blocks
+            .iter_mut()
+            .for_each(crate::transcript::Block::forget_texts);
+    }
     if let Some(search) = &mut app.search {
-        search.matches = select::matches(&search.query, &all);
         if search.fresh {
             search.fresh = false;
             search.current = search.matches.len().checked_sub(1);
@@ -647,6 +651,23 @@ fn draw_stream(frame: &mut Frame, app: &mut App, area: Rect) {
             app.scroll = total.saturating_sub(line + 1 + height / 2);
         }
     }
+    // Only what can be on the screen is taken: lines from the end until the screen and the scroll are covered.
+    let wanted = height + app.scroll.min(total.saturating_sub(height));
+    let mut taken: Vec<(usize, Line<'static>)> = Vec::new();
+    for at in (0..app.transcript.blocks.len()).rev() {
+        if taken.len() >= wanted {
+            break;
+        }
+        let lines = app.transcript.blocks[at].lines(width, thinking, app.frame);
+        for line in lines.iter().rev() {
+            taken.push((at, line.clone()));
+        }
+    }
+    taken.reverse();
+    app.stream_lines = total;
+    app.stream_height = height;
+    app.stream_x = area.x;
+    app.stream_layout = width;
     // A stream that shrank (tool lines folded) cannot stay scrolled further than it is long.
     app.scroll = app.scroll.min(total.saturating_sub(height));
     let end = taken.len().saturating_sub(app.scroll.min(taken.len()));

@@ -242,14 +242,15 @@ impl Screen {
                 Protocol::Iterm => !self.data.contains_key(&number),
             };
             if needs_data {
-                let Ok(png) = glut::images::png_within(
-                    &picture.image,
-                    u32::from(picture.columns) * CELL_PIXELS.0,
-                    u32::from(picture.rows) * CELL_PIXELS.1,
-                ) else {
-                    continue;
+                let data = match data_of(picture) {
+                    Data::Ready(data) => data,
+                    Data::Unreadable => continue,
+                    // Placed once it is ready: the next frame finds it among the changed.
+                    Data::Wait => {
+                        self.standing.remove(&number);
+                        continue;
+                    }
                 };
-                let data = glut::images::to_base64(&png);
                 match protocol {
                     Protocol::Kitty => {
                         send_kitty(out, number, &data)?;
@@ -289,6 +290,79 @@ impl Screen {
         queue!(out, cursor::RestorePosition)?;
         out.flush()?;
         Ok(false)
+    }
+}
+
+/// A picture's data for the terminal (T47): ready, none where its image cannot be read, or still made beside the
+/// screen.
+enum Data {
+    Ready(String),
+    Unreadable,
+    Wait,
+}
+
+/// A picture's data as made beside the screen: still making, or made (`None` where it cannot be read).
+enum Making {
+    Under,
+    Made(Option<String>),
+}
+
+/// The data of the pictures made beside the screen, by their number, until a frame takes it.
+static MADE: Mutex<Vec<(u16, Making)>> = Mutex::new(Vec::new());
+/// The most made data waiting for a frame: a picture scrolled away before its data came is made again when it is
+/// next shown, its data not kept meanwhile.
+const MOST_MADE: usize = 8;
+
+/// `picture`'s data as a PNG in base64, made beside the screen where it listens.
+fn data_of(picture: &Placed) -> Data {
+    let number = picture.number;
+    {
+        let mut made = MADE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match made.iter().position(|(kept, _)| *kept == number) {
+            Some(at) if matches!(made[at].1, Making::Under) => return Data::Wait,
+            Some(at) => {
+                let (_, Making::Made(data)) = made.remove(at) else {
+                    return Data::Wait;
+                };
+                return data.map_or(Data::Unreadable, Data::Ready);
+            }
+            None => made.push((number, Making::Under)),
+        }
+    }
+    let (image, columns, rows) = (picture.image.clone(), picture.columns, picture.rows);
+    let make = move || {
+        let data = glut::images::png_within(
+            &image,
+            u32::from(columns) * CELL_PIXELS.0,
+            u32::from(rows) * CELL_PIXELS.1,
+        )
+        .ok()
+        .map(|png| glut::images::to_base64(&png));
+        let mut made = MADE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        made.retain(|(kept, _)| *kept != number);
+        made.push((number, Making::Made(data)));
+        if made
+            .iter()
+            .filter(|(_, making)| matches!(making, Making::Made(_)))
+            .count()
+            > MOST_MADE
+            && let Some(at) = made
+                .iter()
+                .position(|(_, making)| matches!(making, Making::Made(_)))
+        {
+            made.remove(at);
+        }
+    };
+    match crate::pictures::beside(make) {
+        Ok(()) => Data::Wait,
+        Err(make) => {
+            make();
+            data_of(picture)
+        }
     }
 }
 

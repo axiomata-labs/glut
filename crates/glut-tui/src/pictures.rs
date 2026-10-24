@@ -4,6 +4,11 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{Mutex, PoisonError};
+
+use ratatui::style::{Color, Style};
+use ratatui::text::{Line, Span};
+use tokio::sync::mpsc::UnboundedSender;
 
 /// The image in the clipboard, as the system gives it: macOS through `osascript` (its PNG), Linux through
 /// `wl-paste` under Wayland, else `xclip`.
@@ -240,8 +245,6 @@ pub fn lines(
     columns: u16,
     rows: u16,
 ) -> Option<Vec<ratatui::text::Line<'static>>> {
-    use ratatui::style::Style;
-    use ratatui::text::{Line, Span};
     // An image that cannot be read is no picture: its line stands alone.
     if !image.path.is_file() {
         return None;
@@ -265,66 +268,235 @@ pub fn lines(
     half_blocks(image, columns, rows)
 }
 
+/// Where the screen hears that a picture made beside it is ready (T47); unset — the tests, the scrollback — a picture
+/// is made at once.
+static READY: Mutex<Option<UnboundedSender<()>>> = Mutex::new(None);
+
+/// While it lives, pictures are made beside the screen: decoding an image takes longer than a frame may wait. Each
+/// one ready is said on the screen's channel, for it to draw anew; once it is dropped (the screen's loop ended),
+/// pictures are made at once again.
+pub struct Beside;
+
+impl Beside {
+    /// Pictures made beside the screen, each one ready said on `ready`.
+    pub fn begin(ready: UnboundedSender<()>) -> Beside {
+        *READY.lock().unwrap_or_else(PoisonError::into_inner) = Some(ready);
+        Beside
+    }
+}
+
+impl Drop for Beside {
+    fn drop(&mut self) {
+        *READY.lock().unwrap_or_else(PoisonError::into_inner) = None;
+    }
+}
+
+/// A picture's work for the worker, and whom to tell once it is done.
+type Job = (Box<dyn FnOnce() + Send>, UnboundedSender<()>);
+
+/// The one thread pictures are made on, started with the first: one at a time, however many a resumed session holds.
+static WORKER: Mutex<Option<std::sync::mpsc::Sender<Job>>> = Mutex::new(None);
+
+/// `work` on the pictures' thread, the screen told once it is done; given back where pictures are made at once.
+///
+/// # Errors
+///
+/// `work` itself, unrun, where nothing listens for a picture made beside the screen.
+pub fn beside<F: FnOnce() + Send + 'static>(work: F) -> Result<(), F> {
+    beside_on(ready(), work)
+}
+
+/// Where the screen hears of a picture made beside it, if it listens.
+fn ready() -> Option<UnboundedSender<()>> {
+    READY.lock().unwrap_or_else(PoisonError::into_inner).clone()
+}
+
+/// [`beside`], told on `ready`.
+fn beside_on<F: FnOnce() + Send + 'static>(
+    ready: Option<UnboundedSender<()>>,
+    work: F,
+) -> Result<(), F> {
+    let Some(ready) = ready else {
+        return Err(work);
+    };
+    let mut worker = WORKER.lock().unwrap_or_else(PoisonError::into_inner);
+    let jobs = worker.get_or_insert_with(|| {
+        let (jobs, taken) = std::sync::mpsc::channel::<Job>();
+        std::thread::spawn(move || {
+            for (work, ready) in taken {
+                // A decoder that panics fails its picture alone, never the thread — and the screen is told anyway.
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work));
+                let _ = ready.send(());
+            }
+        });
+        jobs
+    });
+    // The worker never ends (it catches what panics), so its channel stays open.
+    let _ = jobs.send((Box::new(work), ready));
+    Ok(())
+}
+
 /// A picture laid out in half blocks: its file and its size in cells.
-type DrawnKey = (std::path::PathBuf, u16, u16);
+type DrawnKey = (PathBuf, u16, u16);
+
+/// A picture in half blocks: still made beside the screen, or made — `None` where it cannot be read.
+enum Laid {
+    Making,
+    Made(Option<Vec<Line<'static>>>),
+}
+
+/// The pictures laid out, the newest last: the overlay draws every frame, the stream at every new width.
+static DRAWN: Mutex<Vec<(DrawnKey, Laid)>> = Mutex::new(Vec::new());
+/// The most pictures kept laid out (at most some 50 kB each): more than a stream shows at once, so the blocks laid out
+/// anew when one is ready find theirs.
+const KEPT: usize = 128;
+/// The files of the pictures made beside the screen since the screen last asked.
+static FRESH: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+/// `laid` kept for `key`, in place of what was.
+fn keep_laid(key: DrawnKey, laid: Laid) {
+    let mut drawn = DRAWN.lock().unwrap_or_else(PoisonError::into_inner);
+    drawn.retain(|(kept, _)| *kept != key);
+    // The oldest made one goes — never one still making, whose block waits for it.
+    if drawn.len() >= KEPT
+        && let Some(at) = drawn
+            .iter()
+            .position(|(_, laid)| matches!(laid, Laid::Made(_)))
+    {
+        drawn.remove(at);
+    }
+    drawn.push((key, laid));
+}
+
+/// The files of the pictures made beside the screen since the last call: their blocks are laid out anew.
+pub fn fresh() -> Vec<PathBuf> {
+    std::mem::take(&mut *FRESH.lock().unwrap_or_else(PoisonError::into_inner))
+}
 
 /// `image` as `columns` × `rows` cells of half blocks (`▀`, the upper pixel its colour, the lower its background);
-/// `None` where it cannot be read.
+/// `None` where it cannot be read. Made beside the screen where it listens: blank cells of the same size until then.
 pub fn half_blocks(
     image: &glut::images::Image,
     columns: u16,
     rows: u16,
-) -> Option<Vec<ratatui::text::Line<'static>>> {
-    use ratatui::style::{Color, Style};
-    use ratatui::text::{Line, Span};
-    // Laid out once for each picture and size: the overlay draws every frame, the stream at every new width.
-    static DRAWN: std::sync::Mutex<Vec<(DrawnKey, Vec<Line<'static>>)>> =
-        std::sync::Mutex::new(Vec::new());
-    const KEPT: usize = 32;
+) -> Option<Vec<Line<'static>>> {
+    half_blocks_on(image, columns, rows, ready())
+}
+
+/// [`half_blocks`], made beside the screen where `ready` listens.
+fn half_blocks_on(
+    image: &glut::images::Image,
+    columns: u16,
+    rows: u16,
+    ready: Option<UnboundedSender<()>>,
+) -> Option<Vec<Line<'static>>> {
     let key = (image.path.clone(), columns, rows);
-    if let Some((_, lines)) = DRAWN
+    let blank = || {
+        Some(vec![
+            Line::from(" ".repeat(usize::from(columns)));
+            usize::from(rows)
+        ])
+    };
+    if let Some((_, laid)) = DRAWN
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .unwrap_or_else(PoisonError::into_inner)
         .iter()
         .find(|(kept, _)| *kept == key)
     {
-        return Some(lines.clone());
+        return match laid {
+            Laid::Making => blank(),
+            Laid::Made(lines) => lines.clone(),
+        };
     }
-    let pixels = glut::images::thumbnail(image, u32::from(columns), u32::from(rows) * 2).ok()?;
-    let lines: Vec<Line<'static>> = pixels
-        .chunks(2)
-        .map(|pair| {
-            let upper = &pair[0];
-            let lower = pair.get(1).unwrap_or(upper);
-            Line::from(
-                upper
-                    .iter()
-                    .zip(lower)
-                    .map(|(up, down)| {
-                        Span::styled(
-                            "▀",
-                            Style::default()
-                                .fg(Color::Rgb(up[0], up[1], up[2]))
-                                .bg(Color::Rgb(down[0], down[1], down[2])),
-                        )
-                    })
-                    .collect::<Vec<_>>(),
-            )
-        })
-        .collect();
-    let mut drawn = DRAWN
+    keep_laid(key.clone(), Laid::Making);
+    let made = {
+        let (image, key) = (image.clone(), key.clone());
+        move || {
+            // A decoder that panics leaves a picture that cannot be read, never one making for good.
+            let lines = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                laid_out(&image, columns, rows)
+            }))
+            .unwrap_or(None);
+            keep_laid(key, Laid::Made(lines));
+        }
+    };
+    let path = image.path.clone();
+    let told = move || {
+        made();
+        FRESH
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(path);
+    };
+    match beside_on(ready, told) {
+        Ok(()) => blank(),
+        Err(_) => {
+            keep_laid(key.clone(), Laid::Made(laid_out(image, columns, rows)));
+            laid_out_kept(&key)
+        }
+    }
+}
+
+/// What is kept laid out for `key`.
+fn laid_out_kept(key: &DrawnKey) -> Option<Vec<Line<'static>>> {
+    DRAWN
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if drawn.len() >= KEPT {
-        drawn.remove(0);
-    }
-    drawn.push((key, lines.clone()));
-    Some(lines)
+        .unwrap_or_else(PoisonError::into_inner)
+        .iter()
+        .find_map(|(kept, laid)| match laid {
+            Laid::Made(lines) if kept == key => lines.clone(),
+            _ => None,
+        })
+}
+
+/// `image` decoded and laid out in half blocks.
+fn laid_out(image: &glut::images::Image, columns: u16, rows: u16) -> Option<Vec<Line<'static>>> {
+    let pixels = glut::images::thumbnail(image, u32::from(columns), u32::from(rows) * 2).ok()?;
+    Some(
+        pixels
+            .chunks(2)
+            .map(|pair| {
+                let upper = &pair[0];
+                let lower = pair.get(1).unwrap_or(upper);
+                Line::from(
+                    upper
+                        .iter()
+                        .zip(lower)
+                        .map(|(up, down)| {
+                            Span::styled(
+                                "▀",
+                                Style::default()
+                                    .fg(Color::Rgb(up[0], up[1], up[2]))
+                                    .bg(Color::Rgb(down[0], down[1], down[2])),
+                            )
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect(),
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_picture_is_made_beside_the_screen_blank_until_it_is_ready() {
+        let home = std::env::temp_dir().join(format!("glut-beside-{}", std::process::id()));
+        let image = glut::images::keep(&home, &crate::app::tests::TINY_PNG, 1).unwrap();
+        let (ready, mut told) = tokio::sync::mpsc::unbounded_channel();
+        let blank = half_blocks_on(&image, 2, 1, Some(ready.clone())).unwrap();
+        assert_eq!(blank.len(), 1);
+        assert_eq!(blank[0].to_string(), "  ");
+        told.recv().await.unwrap();
+        assert!(fresh().contains(&image.path));
+        // Made once: no second thread, the half blocks at once.
+        let made = half_blocks_on(&image, 2, 1, Some(ready)).unwrap();
+        assert_eq!(made[0].to_string(), "▀▀");
+        assert!(told.try_recv().is_err());
+        let _ = std::fs::remove_dir_all(&home);
+    }
 
     #[test]
     fn applescripts_data_is_read_as_bytes() {

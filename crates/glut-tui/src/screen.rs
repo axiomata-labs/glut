@@ -236,6 +236,9 @@ async fn run_loop(
     let mut block_cursor = false;
     // The pictures the terminal draws itself (T46b): what it was sent and where each stands.
     let mut graphics = crate::graphics::Screen::default();
+    // Pictures are decoded beside the screen (T47): each one ready has the frame drawn anew.
+    let (picture_ready, mut pictures_ready) = mpsc::unbounded_channel();
+    let _beside = crate::pictures::Beside::begin(picture_ready);
     loop {
         // A session built beside the screen may have written to the terminal: drawn anew from blank.
         if std::mem::take(&mut panes.redraw) {
@@ -430,6 +433,13 @@ async fn run_loop(
                 // A stream of small pieces is drawn once, not once per piece.
                 while let Ok((session, report)) = inlets.reports.try_recv() {
                     panes.on_report(session, report);
+                }
+            }
+            Some(()) = pictures_ready.recv() => {
+                while pictures_ready.try_recv().is_ok() {}
+                let fresh = crate::pictures::fresh();
+                for pane in &mut panes.list {
+                    pane.app.transcript.touch_pictures(&fresh);
                 }
             }
             built = inlets.built.recv() => {

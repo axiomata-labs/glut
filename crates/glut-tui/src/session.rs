@@ -55,6 +55,12 @@ pub enum Report {
         ran: crate::shell::Ran,
         to_model: bool,
     },
+    /// An image read and kept beside the screen (T47) — the clipboard's (`name` `None`) or a dropped file's —, or
+    /// why not; numbered as it comes into the input.
+    Attached {
+        name: Option<String>,
+        kept: Result<glut::images::Image, String>,
+    },
     /// A step's change (`/steps`): its turn, and the diff or why there is none.
     Diff(u32, Result<String, String>),
     /// The review's change (T17): of which scope, since before which message, and the diff or why there is none.

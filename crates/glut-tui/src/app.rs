@@ -26,6 +26,13 @@ const QUIT_WINDOW: Duration = Duration::from_millis(1500);
 const WHEEL_LINES: usize = 3;
 /// How long a question is on the screen before a key answers it.
 const ASK_SETTLE: Duration = Duration::from_millis(400);
+/// How long a message waits for an image still read beside the screen (T47).
+const ATTACH_WAIT: Duration = Duration::from_secs(10);
+/// An image to read for the message: the dropped file's name (`None`: the clipboard's), and how to read it.
+type Read = (
+    Option<String>,
+    Box<dyn FnOnce() -> Result<Vec<u8>, String> + Send>,
+);
 
 /// `/init` in a folder without a guide (T35).
 const INIT_NEW: &str = "/init: write a short AGENTS.md for this folder, the guide every coding agent reads here. Look \
@@ -283,6 +290,12 @@ pub struct App {
     switch_note: Option<(Switch, usize)>,
     /// The highest image number given in this window (T45), for the input's marks until the message is sent.
     images_given: u32,
+    /// The images still read beside the screen (T47): a message waits for them.
+    attaching: usize,
+    /// Since when the oldest of them is read.
+    attaching_since: Option<Instant>,
+    /// Whether the blocks hold their texts for a search (T47): given up once it closes.
+    pub search_texts: bool,
     /// The highest image number sent: a message's images are numbered on from it when it goes.
     images_sent: u32,
     /// An image shown whole over the stream (T46), from a click or ⏎ on its picture.
@@ -469,6 +482,9 @@ impl App {
             held_since: None,
             busy_since: None,
             images_given: 0,
+            attaching: 0,
+            attaching_since: None,
+            search_texts: false,
             images_sent: 0,
             picture_view: None,
             switch_note: None,
@@ -1178,6 +1194,7 @@ impl App {
                     self.say("Glut reads this output with your next message");
                 }
             }
+            Report::Attached { name, kept } => self.attached(name, kept),
             Report::Diff(turn, change) => match change {
                 Ok(change) if change.trim().is_empty() => self
                     .transcript
@@ -1305,7 +1322,7 @@ impl App {
                         // A paste — a drop — of image files is the images (T45).
                         let home = self.parts.home.clone();
                         match crate::pictures::pasted_paths(&text, Some(&home)) {
-                            Some(paths) => paths.iter().for_each(|path| self.attach_file(path)),
+                            Some(paths) => self.attach_files(&paths),
                             None => self.input.paste(&text),
                         }
                     }
@@ -1683,6 +1700,16 @@ impl App {
                 "a paste lost its mark to an edit and is left out; ⌃U clears the line, paste it again",
                 Tone::Fault,
             );
+            return;
+        }
+        // A message waits for the images still read — a while, not for good: a clipboard program that hangs leaves
+        // the message free to go without its image.
+        if !text.trim_start().starts_with('/')
+            && self
+                .attaching_since
+                .is_some_and(|since| since.elapsed() < ATTACH_WAIT)
+        {
+            self.say("an image is still being read — ⏎ once it is in the input");
             return;
         }
         if let Some(command) = text.trim().strip_prefix('/') {
@@ -4770,50 +4797,83 @@ impl App {
 
     /// `⌃V` (T45): the clipboard's image kept and into the message.
     fn attach_clipboard(&mut self) {
-        match crate::pictures::from_clipboard() {
-            Ok(bytes) => self.attach_bytes(&bytes),
-            Err(reason) => self.say(reason),
-        }
+        self.attach_beside(vec![(None, Box::new(crate::pictures::from_clipboard))]);
     }
 
-    /// An image file pasted or dropped (T45), kept and into the message.
-    fn attach_file(&mut self, path: &std::path::Path) {
-        match glut::images::read_file(path) {
-            Ok(bytes) => {
-                self.attach_bytes(&bytes);
+    /// Image files pasted or dropped (T45), kept and into the message in the order they came.
+    fn attach_files(&mut self, paths: &[std::path::PathBuf]) {
+        let reads: Vec<Read> = paths
+            .iter()
+            .map(|path| {
                 let name = path
                     .file_name()
                     .map(|name| name.to_string_lossy().into_owned())
                     .unwrap_or_default();
-                self.say(format!(
-                    "{} into the message as an image",
-                    crate::transcript::clean(&name)
-                ));
-            }
-            Err(reason) => self.transcript.note(reason, Tone::Fault),
-        }
+                let path = path.clone();
+                let read: Box<dyn FnOnce() -> Result<Vec<u8>, String> + Send> =
+                    Box::new(move || glut::images::read_file(&path));
+                (Some(name), read)
+            })
+            .collect();
+        self.attach_beside(reads);
     }
 
-    fn attach_bytes(&mut self, bytes: &[u8]) {
-        let number = self.next_image();
-        match glut::images::keep(&self.parts.home, bytes, number) {
-            Ok(image) => {
-                self.images_given = number;
-                let said = image.label();
-                self.input.attach(image);
-                if self.engine.images == Some(false) {
-                    self.transcript.note(
-                        format!(
-                            "{said}: {} sees no images, says its provider's list — /model picks one that does",
-                            self.engine.model_name()
-                        ),
-                        Tone::Heed,
-                    );
-                } else {
-                    self.say(format!("{said} into the message"));
-                }
+    /// The images `reads` give, kept one after the other on a thread of their own (T47): the clipboard's program and
+    /// the decoder take longer than a frame may wait. Each is numbered as it comes into the input.
+    fn attach_beside(&mut self, reads: Vec<Read>) {
+        self.attaching += reads.len();
+        self.attaching_since.get_or_insert_with(Instant::now);
+        let home = self.parts.home.clone();
+        let reports = self.reports.clone();
+        std::thread::spawn(move || {
+            for (name, read) in reads {
+                // A decoder that panics fails its image, and the input is told all the same.
+                let kept = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    read().and_then(|bytes| glut::images::keep(&home, &bytes, 0))
+                }))
+                .unwrap_or_else(|_| {
+                    Err("the image cannot be read: its decoder gave up on it".into())
+                });
+                let _ = reports.send(Report::Attached { name, kept });
             }
-            Err(reason) => self.transcript.note(reason, Tone::Fault),
+        });
+    }
+
+    /// An image read beside the screen came: into the message, or why not.
+    fn attached(&mut self, name: Option<String>, kept: Result<glut::images::Image, String>) {
+        self.attaching = self.attaching.saturating_sub(1);
+        if self.attaching == 0 {
+            self.attaching_since = None;
+        }
+        let mut image = match kept {
+            Ok(image) => image,
+            Err(reason) => {
+                match name {
+                    None => self.say(reason),
+                    Some(_) => self.transcript.note(reason, Tone::Fault),
+                }
+                return;
+            }
+        };
+        image.number = self.next_image();
+        self.images_given = image.number;
+        let said = image.label();
+        self.input.attach(image);
+        if self.engine.images == Some(false) {
+            self.transcript.note(
+                format!(
+                    "{said}: {} sees no images, says its provider's list — /model picks one that does",
+                    self.engine.model_name()
+                ),
+                Tone::Heed,
+            );
+        } else if let Some(name) = name {
+            self.say(format!(
+                "{} into the message as {said}",
+                crate::transcript::clean(&name)
+            ));
+        } else {
+            self.say(format!("{said} into the message"));
         }
     }
 
@@ -5279,6 +5339,9 @@ pub struct Search {
     pub fresh: bool,
     /// The frame scrolls the shown match into view.
     pub jump: bool,
+    /// What the matches were found for: the query, and how many layouts of blocks there had been
+    /// ([`crate::transcript::layouts`]) — found again only when one of them changed (T47), not at every frame.
+    pub searched: Option<(String, u64)>,
 }
 
 impl Search {
@@ -5418,7 +5481,7 @@ fn reason(reason: FinishReason) -> &'static str {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use glut::RunOutcome;
 
@@ -6602,7 +6665,7 @@ mod tests {
     }
 
     /// A PNG of 2 × 1 pixels, red and blue.
-    const TINY_PNG: [u8; 70] = [
+    pub(crate) const TINY_PNG: [u8; 70] = [
         137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 2, 0, 0, 0, 1, 8, 2,
         0, 0, 0, 123, 64, 232, 221, 0, 0, 0, 13, 73, 68, 65, 84, 120, 156, 99, 248, 207, 0, 4, 255,
         1, 7, 0, 1, 255, 226, 35, 158, 89, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
@@ -6610,7 +6673,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_dropped_image_file_goes_with_the_message_numbered_on_through_the_session() {
-        let (mut app, _reports) = app();
+        let (mut app, mut reports) = app();
         let dir = app.parts.home.join("drop");
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("a shot.png");
@@ -6619,6 +6682,10 @@ mod tests {
         app.on_terminal(TermEvent::Paste(
             file.display().to_string().replace(' ', "\\ "),
         ));
+        // Read beside the screen (T47): a message waits until it is in.
+        app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(!app.working() && app.input.images().is_empty());
+        app.on_report(reports.recv().await.unwrap());
         assert_eq!(app.input.text(), "what is [image #1] ");
         assert_eq!(app.input.images().len(), 1);
         // A model its list says sees none: the message waits, said why.
@@ -6662,6 +6729,7 @@ mod tests {
         app.on_terminal(TermEvent::Paste(
             file.display().to_string().replace(' ', "\\ "),
         ));
+        app.on_report(reports.recv().await.unwrap());
         assert_eq!(app.input.text(), "[image #2] ");
         app.on_terminal(key(KeyCode::Char('u'), KeyModifiers::CONTROL));
         assert!(app.input.images().is_empty());
@@ -6669,6 +6737,31 @@ mod tests {
         app.on_terminal(TermEvent::Paste(format!("see {}", file.display())));
         assert!(app.input.text().starts_with("see "));
         let _ = std::fs::remove_dir_all(&app.parts.home);
+    }
+
+    #[test]
+    fn the_search_finds_what_an_answer_streams_onto_the_line_it_stands_on() {
+        let (mut app, _reports) = app();
+        let delta = |text: &str| {
+            Report::Event(Event::TextDelta {
+                turn: 1,
+                text: text.into(),
+            })
+        };
+        app.on_report(delta("alpha"));
+        wide_screen(&mut app);
+        app.on_terminal(key(KeyCode::Char('f'), KeyModifiers::CONTROL));
+        type_text(&mut app, "omega");
+        wide_screen(&mut app);
+        assert!(app.search.as_ref().unwrap().matches.is_empty());
+        // Same blocks, same lines: only the line grew (T47).
+        app.on_report(delta(" omega"));
+        wide_screen(&mut app);
+        assert_eq!(app.search.as_ref().unwrap().matches.len(), 1);
+        // Closed, the search gives its texts up.
+        app.on_terminal(key(KeyCode::Esc, KeyModifiers::NONE));
+        wide_screen(&mut app);
+        assert!(!app.search_texts);
     }
 
     #[test]

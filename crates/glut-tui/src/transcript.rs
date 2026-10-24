@@ -201,6 +201,8 @@ pub struct Block {
     pub kind: Kind,
     /// The lines made last, for the width, way of showing thinking and animation step they were made for.
     wrapped: Option<(u16, Thinking, usize, Vec<Line<'static>>)>,
+    /// Those lines as text, made once for them: what the search looks through (T47).
+    texts: Option<Vec<String>>,
 }
 
 impl Block {
@@ -208,12 +210,34 @@ impl Block {
         Block {
             kind,
             wrapped: None,
+            texts: None,
         }
     }
 
     /// The block changed: its lines are made again when next drawn.
     fn touch(&mut self) {
         self.wrapped = None;
+        self.texts = None;
+    }
+
+    /// Its lines' texts given up: the search that read them closed.
+    pub fn forget_texts(&mut self) {
+        self.texts = None;
+    }
+
+    /// The block's lines as text at `width`, made once for each making of its lines (T47: the search reads them at
+    /// every frame it is open).
+    pub fn texts(&mut self, width: u16, thinking: Thinking, frame: usize) -> &[String] {
+        self.lines(width, thinking, frame);
+        if self.texts.is_none() {
+            let made = self
+                .wrapped
+                .as_ref()
+                .map(|(_, _, _, lines)| lines.iter().map(crate::select::text_of).collect())
+                .unwrap_or_default();
+            self.texts = Some(made);
+        }
+        self.texts.as_deref().unwrap_or(&[])
     }
 
     /// The block's lines at `width`, made once per change, width and way of showing thinking — and, for a thought
@@ -232,12 +256,23 @@ impl Block {
         {
             let lines = render(&self.kind, width, thinking, step);
             self.wrapped = Some((width, thinking, step, lines));
+            self.texts = None;
+            LAYOUTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
         self.wrapped
             .as_ref()
             .map(|(_, _, _, lines)| lines.as_slice())
             .unwrap_or(&[])
     }
+}
+
+/// How many times a block's lines were made, in every stream: a search's matches stand while it has not changed — the
+/// block count and the line count alone miss a line that grows as the answer streams (T47).
+static LAYOUTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// How many times a block's lines were made so far.
+pub fn layouts() -> u64 {
+    LAYOUTS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// The whole stream.
@@ -256,16 +291,19 @@ impl Transcript {
         call: &str,
         images: &[glut::images::Image],
     ) -> Option<(usize, usize)> {
+        // Most results show none, and the call is near the end: a resumed session's thousands of results would
+        // each walk the whole stream otherwise (T47).
+        if images.is_empty() {
+            return None;
+        }
         let at = self
             .blocks
             .iter()
-            .position(|block| matches!(&block.kind, Kind::Tool { id, .. } if id == call))?;
-        if images.is_empty()
-            || matches!(
-                self.blocks.get(at + 1).map(|block| &block.kind),
-                Some(Kind::Picture(_))
-            )
-        {
+            .rposition(|block| matches!(&block.kind, Kind::Tool { id, .. } if id == call))?;
+        if matches!(
+            self.blocks.get(at + 1).map(|block| &block.kind),
+            Some(Kind::Picture(_))
+        ) {
             return None;
         }
         for (offset, image) in images.iter().enumerate() {
@@ -630,6 +668,20 @@ impl Transcript {
                 agent.stream.touch_all();
             }
             block.touch();
+        }
+    }
+
+    /// The pictures of `files` laid out anew: made beside the screen, they are ready now (T47).
+    pub fn touch_pictures(&mut self, files: &[std::path::PathBuf]) {
+        if files.is_empty() {
+            return;
+        }
+        for block in &mut self.blocks {
+            match &mut block.kind {
+                Kind::Agent(agent) => agent.stream.touch_pictures(files),
+                Kind::Picture(image) if files.contains(&image.path) => block.touch(),
+                _ => {}
+            }
         }
     }
 
