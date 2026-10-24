@@ -77,7 +77,7 @@ const fn command(
 }
 
 /// Every command, grouped by topic in [`Topic::ALL`]'s order, the most used first inside a topic.
-pub const COMMANDS: [Command; 31] = [
+pub const COMMANDS: [Command; 32] = [
     command(Topic::Session, "clear", "", "start a new session"),
     command(
         Topic::Session,
@@ -162,7 +162,7 @@ pub const COMMANDS: [Command; 31] = [
     command(
         Topic::Panes,
         "split",
-        "[l|r|u|d] [resume] [here|tree [branch]]",
+        "[l|r|u|d] [resume] [as <role>] [here|tree [branch]]",
         "a second session beside this one, right unless told; in a git repository here or in a worktree of its own",
     ),
     command(
@@ -176,6 +176,12 @@ pub const COMMANDS: [Command; 31] = [
         "send",
         "[n] <text>|plan",
         "a message to the other pane, taken there as if typed; /send plan hands it your plan to build",
+    ),
+    command(
+        Topic::Panes,
+        "role",
+        "[name|none]",
+        "the role this pane plays: a named agent's prompt and tools, not its model — reviewer, tester, docs or yours",
     ),
     command(
         Topic::Changes,

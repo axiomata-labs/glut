@@ -758,13 +758,19 @@ fn draw_keys(frame: &mut Frame, app: &App, area: Rect, branch: Option<String>, c
     let asks = app.waits_for_owner();
     // Among panes the number comes first (T36a): the active one glows, one that waits for the owner's word while
     // the keys are elsewhere is the fault colour, so it is seen from the other pane.
+    // The pane's role beside its number (T36c): "2 reviewer"; alone, a segment of its own after the mode.
+    let role = app.role.as_deref().map(crate::transcript::clean);
     if let Some(number) = chrome.number {
+        let label = match &role {
+            Some(role) => format!("{number} {role}"),
+            None => number.to_string(),
+        };
         segments.push(if chrome.active {
-            Segment::marked(number.to_string(), theme::c().glow, 0)
+            Segment::marked(label, theme::c().glow, 0)
         } else if asks {
-            Segment::marked(number.to_string(), theme::c().fault, 0)
+            Segment::marked(label, theme::c().fault, 0)
         } else {
-            Segment::calm(number.to_string(), 0)
+            Segment::calm(label, 0)
         });
     }
     // The vi mode's state first, where a vi user looks for it.
@@ -784,6 +790,9 @@ fn draw_keys(frame: &mut Frame, app: &App, area: Rect, branch: Option<String>, c
         }
         _ => Segment::calm(session::mode_label(mode), 0),
     });
+    if let (None, Some(role)) = (chrome.number, &role) {
+        segments.push(Segment::calm(role.clone(), 0));
+    }
     let mut model = format!("{} · {}", app.engine.provider, app.engine.model_name());
     if let Some(effort) = app.engine.endpoint.effort {
         model.push_str(&format!(" · {effort}"));

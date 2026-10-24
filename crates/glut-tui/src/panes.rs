@@ -85,11 +85,13 @@ pub enum Leaving {
 /// What a pane asks of the screen: its keys (`⌃]`, `⌃X 2`, `⌃X 3`, `⌃X 0`), commands (`/split`, `/close`) and picks.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Request {
-    /// A new pane at `side` working at `place`; `resume`: an earlier session in it, picked from the list.
+    /// A new pane at `side` working at `place`, playing `role` (T36c); `resume`: an earlier session in it, picked from
+    /// the list.
     Split {
         side: Side,
         resume: bool,
         place: Place,
+        role: Option<String>,
     },
     /// Close the asking pane.
     Close,
@@ -140,21 +142,27 @@ pub fn parse_split(rest: &str) -> Result<Request, String> {
     let mut side = Side::Right;
     let mut resume = false;
     let mut place = Place::Ask;
+    let mut role = None;
     let mut words = rest.split_whitespace().peekable();
     while let Some(word) = words.next() {
         match (word, Side::parse(word)) {
             (_, Some(given)) => side = given,
             ("resume", None) => resume = true,
             ("here", None) => place = Place::Here,
+            ("as", None) => match words.next() {
+                Some(name) => role = Some(name.to_owned()),
+                None => return Err("/split as <role>: a role's name (/role lists them)".to_owned()),
+            },
             ("tree", None) => {
                 let branch = words.next_if(|next| {
-                    Side::parse(next).is_none() && !matches!(*next, "resume" | "here" | "tree")
+                    Side::parse(next).is_none()
+                        && !matches!(*next, "resume" | "here" | "tree" | "as")
                 });
                 place = Place::Tree(branch.unwrap_or_default().to_owned());
             }
             (other, None) => {
                 return Err(format!(
-                    "/split {other}: l, r, u or d; resume; here or tree [branch]"
+                    "/split {other}: l, r, u or d; resume; here or tree [branch]; as <role>"
                 ));
             }
         }
@@ -163,6 +171,7 @@ pub fn parse_split(rest: &str) -> Result<Request, String> {
         side,
         resume,
         place,
+        role,
     })
 }
 
@@ -187,6 +196,7 @@ struct Building {
     side: Side,
     resume: bool,
     tree: Option<crate::worktree::Tree>,
+    role: Option<String>,
     reports: mpsc::UnboundedSender<Report>,
 }
 
@@ -301,8 +311,9 @@ impl Panes {
                 (
                     pane.number,
                     format!(
-                        "pane {}: all-rounder, {}, {mode} mode, in {}",
+                        "pane {}: {}, {}, {mode} mode, in {}",
                         pane.number,
+                        app.role.as_deref().unwrap_or("all-rounder"),
                         glut::permissions::printable(&model),
                         crate::transcript::cut(&glut::permissions::printable(&app.folder), 80)
                     ),
@@ -465,7 +476,8 @@ impl Panes {
                     side,
                     resume,
                     place,
-                } => self.start(side, resume, place, host),
+                    role,
+                } => self.start(side, resume, place, role, host),
                 Request::Send { to, text, whole } => {
                     // A number naming no other pane is the message's own first word.
                     let named = to.is_some_and(|number| {
@@ -610,7 +622,14 @@ impl Panes {
 
     /// Starts a new pane beside the active one: a session in the same folder, on the active pane's provider and
     /// model, in build — built beside the screen.
-    fn start(&mut self, side: Side, resume: bool, place: Place, host: &Arc<dyn Host>) {
+    fn start(
+        &mut self,
+        side: Side,
+        resume: bool,
+        place: Place,
+        role: Option<String>,
+        host: &Arc<dyn Host>,
+    ) {
         if !self.may_split {
             return self
                 .active()
@@ -621,6 +640,16 @@ impl Panes {
         }
         if self.building.is_some() {
             return self.active().tell("a pane is starting already");
+        }
+        // A role named wrong ends the split here, rather than open a pane with every tool.
+        if let Some(role) = &role
+            && self.active().parts.config.agents.get(role).is_none()
+        {
+            let known = self.active().parts.config.agents.known();
+            return self.active().transcript.note(
+                format!("no role {role}: {known} (/role lists them)"),
+                Tone::Fault,
+            );
         }
         let number = (1..=u8::MAX)
             .find(|number| self.list.iter().all(|pane| pane.number != *number))
@@ -637,7 +666,7 @@ impl Panes {
                 None
             }
             (Place::Ask, Ok(Some(repo))) => {
-                let picker = where_picker(side, resume, &repo, number);
+                let picker = where_picker(side, resume, role.as_deref(), &repo, number);
                 self.active().picker = Some(picker);
                 return;
             }
@@ -679,6 +708,7 @@ impl Panes {
             side,
             resume,
             tree,
+            role,
             reports: reports.clone(),
         });
         let built = self.built.clone();
@@ -718,6 +748,9 @@ impl Panes {
         let mut app = App::new(Arc::new(parts), engine, building.reports);
         if building.resume {
             app.picker = Some(app.session_picker());
+        }
+        if let Err(reason) = app.set_role(building.role.as_deref()) {
+            app.transcript.note(reason, Tone::Fault);
         }
         // Two panes leave little room beside them: the side panel starts hidden (⌃B brings it, where there is room).
         app.panel = Some(false);
@@ -860,6 +893,7 @@ impl Panes {
 fn where_picker(
     side: Side,
     resume: bool,
+    role: Option<&str>,
     repo: &crate::worktree::Repo,
     number: u8,
 ) -> crate::picker::Picker {
@@ -872,6 +906,7 @@ fn where_picker(
         Side::Down => "d",
     };
     let resume_word = if resume { " resume" } else { "" };
+    let role_words = role.map_or(String::new(), |role| format!(" as {role}"));
     let items = vec![
         Item::plain(
             "this folder",
@@ -880,12 +915,15 @@ fn where_picker(
                 side,
                 resume,
                 place: Place::Here,
+                role: role.map(str::to_owned),
             }),
         ),
         Item::plain(
             "a new worktree",
             format!("on the branch {branch} — ⏎ puts it in the input to rename first"),
-            Pick::Input(format!("/split {letter}{resume_word} tree {branch}")),
+            Pick::Input(format!(
+                "/split {letter}{resume_word}{role_words} tree {branch}"
+            )),
         ),
     ];
     Picker::new(format!("Pane {number}: where does it work?"), items, None).guarded()
@@ -1009,6 +1047,7 @@ mod tests {
             side,
             resume: false,
             tree: None,
+            role: None,
             reports: sender,
         });
         panes.on_built(Ok(session::for_tests()));
@@ -1136,6 +1175,7 @@ mod tests {
             side: Side::Right,
             resume: false,
             tree: None,
+            role: None,
             reports: sender,
         });
         panes.on_built(Ok(session::for_tests()));
@@ -1161,6 +1201,7 @@ mod tests {
             side: Side::Left,
             resume: false,
             tree: None,
+            role: None,
             reports: sender,
         });
         panes.on_built(Ok(session::for_tests()));
@@ -1178,7 +1219,8 @@ mod tests {
             Request::Split {
                 side: Side::Right,
                 resume: false,
-                place: Place::Ask
+                place: Place::Ask,
+                role: None,
             }
         );
         assert_eq!(
@@ -1186,7 +1228,8 @@ mod tests {
             Request::Split {
                 side: Side::Down,
                 resume: true,
-                place: Place::Here
+                place: Place::Here,
+                role: None,
             }
         );
         assert_eq!(
@@ -1194,7 +1237,8 @@ mod tests {
             Request::Split {
                 side: Side::Right,
                 resume: false,
-                place: Place::Tree("glut/plan".into())
+                place: Place::Tree("glut/plan".into()),
+                role: None,
             }
         );
         assert_eq!(
@@ -1202,9 +1246,20 @@ mod tests {
             Request::Split {
                 side: Side::Left,
                 resume: false,
-                place: Place::Tree(String::new())
+                place: Place::Tree(String::new()),
+                role: None,
             }
         );
+        assert_eq!(
+            parse_split("d as reviewer tree").unwrap(),
+            Request::Split {
+                side: Side::Down,
+                resume: false,
+                place: Place::Tree(String::new()),
+                role: Some("reviewer".into()),
+            }
+        );
+        assert!(parse_split("as").is_err());
         assert!(parse_split("sideways").is_err());
     }
 
@@ -1512,6 +1567,103 @@ mod tests {
         let held = told(&mut panes, 1, None, "change main.rs").unwrap();
         assert!(held.contains("its folder"), "{held}");
         assert!(!panes.list[1].app.working() && panes.list[1].app.held.len() == 1);
+    }
+
+    #[tokio::test]
+    async fn a_pane_plays_a_role_its_tools_narrowed_its_prompt_ready_and_the_others_told() {
+        use glut::permissions::{AnswerFuture, AskRequest, Asker, Mode};
+        struct Yes;
+        impl Asker for Yes {
+            fn ask<'a>(&'a self, _request: &'a AskRequest) -> AnswerFuture<'a> {
+                Box::pin(async { glut::permissions::Answer::Allow })
+            }
+        }
+        let (mut parts, engine) = session::for_tests();
+        let gate = Arc::new(glut::Gate::new(
+            glut::RuleSet::default(),
+            Mode::Auto,
+            Arc::new(Yes),
+        ));
+        parts.tools.set_gate(Arc::clone(&gate));
+        parts.config.agents = Arc::new(glut::agents::Catalog::default().with_glut_own());
+        let (send, reports) = mpsc::unbounded_channel();
+        let (mut panes, _inlets) = Panes::new(
+            App::new(Arc::new(parts), engine, send),
+            reports,
+            true,
+            Servers::Owner,
+        );
+        let edit = glut::Access::Edit {
+            path: "a.rs".into(),
+        };
+        assert!(gate.judge("edit_file", &edit).await.is_ok());
+        panes.active().play(Some("reviewer"));
+        assert_eq!(panes.active().role.as_deref(), Some("reviewer"));
+        assert!(
+            gate.judge("edit_file", &edit).await.is_err(),
+            "a reviewer changes nothing"
+        );
+        let (name, prompt) = panes.active().parts.pane_link.role().unwrap();
+        assert!(name == "reviewer" && prompt.contains("You are the reviewer"));
+        panes.active().play(Some("nobody"));
+        assert_eq!(
+            panes.active().role.as_deref(),
+            Some("reviewer"),
+            "an unknown role changes nothing"
+        );
+        panes.active().play(None);
+        assert!(gate.judge("edit_file", &edit).await.is_ok());
+        assert!(panes.active().parts.pane_link.role().is_none());
+    }
+
+    #[tokio::test]
+    async fn a_reviewer_does_not_drive_an_all_rounder_and_a_role_named_wrong_splits_nothing() {
+        use glut::permissions::{AnswerFuture, AskRequest, Asker, Mode};
+        struct Yes;
+        impl Asker for Yes {
+            fn ask<'a>(&'a self, _request: &'a AskRequest) -> AnswerFuture<'a> {
+                Box::pin(async { glut::permissions::Answer::Allow })
+            }
+        }
+        let gated = || {
+            let (mut parts, engine) = session::for_tests();
+            parts.tools.set_gate(Arc::new(glut::Gate::new(
+                glut::RuleSet::default(),
+                Mode::Auto,
+                Arc::new(Yes),
+            )));
+            parts.config.agents = Arc::new(glut::agents::Catalog::default().with_glut_own());
+            let (send, reports) = mpsc::unbounded_channel();
+            (App::new(Arc::new(parts), engine, send), reports)
+        };
+        let (first, first_reports) = gated();
+        let (mut panes, _inlets) = Panes::new(first, first_reports, true, Servers::Owner);
+        let (second, _second_reports) = gated();
+        panes.list.push(Pane {
+            id: 2,
+            number: 2,
+            app: second,
+            area: Rect::default(),
+            tree: None,
+        });
+        panes.active().play(Some("reviewer"));
+        panes.sync();
+        let held = told(&mut panes, 1, None, "fix it all now").unwrap();
+        assert!(held.starts_with("held"), "{held}");
+        assert!(!panes.list[1].app.working());
+        // Pane 2 telling the reviewer: a reviewer can do less, so it may start on it.
+        assert!(
+            told(&mut panes, 2, None, "please look")
+                .unwrap()
+                .starts_with("delivered")
+        );
+        panes.active = 1;
+        panes.active().pane_request = Some(parse_split("d as nobody here").unwrap());
+        panes.settle(&(Arc::new(crate::Standalone) as Arc<dyn Host>));
+        assert!(
+            panes.building.is_none(),
+            "no pane starts for a role that is not there"
+        );
     }
 
     #[tokio::test]

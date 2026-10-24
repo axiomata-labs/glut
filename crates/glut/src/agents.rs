@@ -146,6 +146,13 @@ struct Frontmatter {
     effort: Option<String>,
 }
 
+/// Glut's own agents, by name: written to be roles of a pane and subagents alike.
+const GLUT_OWN: [(&str, &str); 3] = [
+    ("docs", include_str!("roles/docs.md")),
+    ("reviewer", include_str!("roles/reviewer.md")),
+    ("tester", include_str!("roles/tester.md")),
+];
+
 /// The agents a run knows, by name.
 #[derive(Debug, Clone, Default)]
 pub struct Catalog {
@@ -177,6 +184,20 @@ impl Catalog {
         }
         catalog.agents.sort_by(|a, b| a.name.cmp(&b.name));
         catalog
+    }
+
+    /// Glut's own agents beside these (TUI T36c: the roles a pane can play — reviewer, tester, docs): an agent of the
+    /// owner's or the project's by the same name wins.
+    pub fn with_glut_own(mut self) -> Self {
+        for (name, raw) in GLUT_OWN {
+            if self.get(name).is_none()
+                && let Ok(agent) = Agent::parse(name, raw)
+            {
+                self.agents.push(agent);
+            }
+        }
+        self.agents.sort_by(|a, b| a.name.cmp(&b.name));
+        self
     }
 
     pub fn get(&self, name: &str) -> Option<&Agent> {
@@ -326,7 +347,30 @@ impl std::fmt::Debug for Models {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
+
+    #[test]
+    fn glut_brings_its_roles_and_an_agent_of_the_owners_name_wins() {
+        let own = Catalog::default().with_glut_own();
+        let names: Vec<&str> = own.list().iter().map(|agent| agent.name.as_str()).collect();
+        assert_eq!(names, ["docs", "reviewer", "tester"]);
+        let reviewer = own.get("reviewer").unwrap();
+        assert!(
+            reviewer.model.is_none()
+                && reviewer
+                    .tools
+                    .as_ref()
+                    .is_some_and(|tools| !tools.is_empty())
+        );
+        let mine = Agent::parse(
+            "reviewer",
+            "---\nname: reviewer\ndescription: mine\n---\nMy way.",
+        )
+        .unwrap();
+        let catalog = Catalog::of(vec![mine]).with_glut_own();
+        assert_eq!(catalog.get("reviewer").unwrap().description, "mine");
+    }
 
     const REVIEWER: &str = "---\nname: reviewer\ndescription: Reviews a diff for defects.\ntools: read_file, \
                             grep\nmodel: anthropic/claude-opus\nprovider: openrouter\neffort: high\n---\n\nYou \

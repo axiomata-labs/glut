@@ -61,6 +61,8 @@ pub const MOST_HELD: usize = 5;
 pub struct Sender {
     pub looseness: u8,
     pub granted: Vec<String>,
+    /// The rules of its pane's role; `None` without one.
+    pub role: Option<Vec<String>>,
 }
 
 /// When a message from another pane is taken (T36b).
@@ -237,6 +239,8 @@ pub struct App {
     pub owner_spoke: bool,
     /// How many messages this session's model sent to other panes (T36c: at most [`crate::panes::MOST_TELLS`]).
     pub tells_sent: u32,
+    /// The role this pane plays (T36c): a named agent's prompt and tools, never its model; `None` an all-rounder.
+    pub role: Option<String>,
     /// Messages of another pane's model that wait for the owner's Enter here (T36c): never sent by a turn's end.
     pub held: Vec<String>,
     /// When the last of them came: an Enter right after it (meant for something else) lets none go.
@@ -392,6 +396,7 @@ impl App {
             owner_spoke: false,
             tells_sent: 0,
             held: Vec::new(),
+            role: None,
             held_since: None,
             waiting_models: Vec::new(),
             separators,
@@ -1290,6 +1295,7 @@ impl App {
                         side: crate::panes::Side::Right,
                         resume: false,
                         place: crate::panes::Place::Ask,
+                        role: None,
                     })
                 }
                 KeyCode::Char('3') => {
@@ -1297,6 +1303,7 @@ impl App {
                         side: crate::panes::Side::Down,
                         resume: false,
                         place: crate::panes::Place::Ask,
+                        role: None,
                     })
                 }
                 KeyCode::Char('0') => self.pane_request = Some(crate::panes::Request::Close),
@@ -1812,6 +1819,11 @@ impl App {
                 Err(reason) => self.transcript.note(reason, Tone::Fault),
             },
             "close" => self.pane_request = Some(crate::panes::Request::Close),
+            "role" if rest.is_empty() => self.picker = Some(self.roles_picker()),
+            "role" => match rest {
+                "none" | "all-rounder" => self.play(None),
+                name => self.play(Some(name)),
+            },
             "send" => match crate::panes::parse_send(rest) {
                 Ok(request) => self.pane_request = Some(request),
                 Err(reason) => self.transcript.note(reason, Tone::Fault),
@@ -3363,6 +3375,7 @@ impl App {
                         }
                     }
                     Some(Pick::Input(text)) => self.input.insert_text(&text),
+                    Some(Pick::Role(name)) => self.play(name.as_deref()),
                     Some(Pick::RewindTo(mark)) => self.picker = Some(self.rewind_how(mark)),
                     Some(Pick::Fork(mark)) => self.fork(mark),
                     Some(Pick::Init(migrate)) => self.init_with(migrate),
@@ -3652,7 +3665,14 @@ impl App {
     /// Whether this pane can do no more than `sender` could: no looser mode, no "always" it lacked.
     pub fn no_wider_than(&self, sender: &Sender) -> bool {
         let mine = self.sender();
+        // A role narrows: a sender with one reaches only a pane whose role names nothing beyond it.
+        let within_role = match (&sender.role, &mine.role) {
+            (None, _) => true,
+            (Some(theirs), Some(ours)) => ours.iter().all(|rule| theirs.contains(rule)),
+            (Some(_), None) => false,
+        };
         mine.looseness <= sender.looseness
+            && within_role
             && mine
                 .granted
                 .iter()
@@ -3675,7 +3695,126 @@ impl App {
         Sender {
             looseness: self.mode().looseness(),
             granted,
+            role: self.parts.tools.gate().and_then(|gate| gate.role_rules()),
         }
+    }
+
+    /// Plays the role `name` from now on (T36c), said in the stream — or none, an all-rounder again.
+    pub fn play(&mut self, name: Option<&str>) {
+        match self.set_role(name) {
+            Ok(()) => {
+                let said = match name {
+                    Some(name) => format!(
+                        "this pane plays {name} ({}): its tools from now on, its prompt from the next turn",
+                        self.role_said(name)
+                    ),
+                    None => "this pane is an all-rounder again".to_owned(),
+                };
+                self.tell(said);
+            }
+            Err(reason) => self.transcript.note(reason, Tone::Fault),
+        }
+    }
+
+    /// Sets the role: the agent's prompt joins the system prompt and its `tools` narrow every run of this session
+    /// (its subagents' too); its model never counts — the pane keeps its own.
+    ///
+    /// # Errors
+    ///
+    /// No agent of that name.
+    pub fn set_role(&mut self, name: Option<&str>) -> Result<(), String> {
+        let gate = self.parts.tools.gate().cloned();
+        let Some(name) = name else {
+            if let Some(gate) = gate {
+                gate.set_role(None);
+            }
+            self.parts.pane_link.set_role(None);
+            self.role = None;
+            return Ok(());
+        };
+        let agent = self.parts.config.agents.get(name).cloned().ok_or_else(|| {
+            format!(
+                "no role {name}: {} (/role lists them)",
+                self.parts.config.agents.known()
+            )
+        })?;
+        match (gate, &agent.tools) {
+            (Some(gate), tools) => gate.set_role(
+                tools
+                    .clone()
+                    .map(|tools| (format!("the role {}", agent.name), tools)),
+            ),
+            // A role that narrows needs the gate that narrows: without one it is no role at all.
+            (None, Some(_)) => {
+                return Err(format!(
+                    "{name} narrows the tools, and this session has no gate"
+                ));
+            }
+            (None, None) => {}
+        }
+        self.parts
+            .pane_link
+            .set_role(Some((agent.name.clone(), agent.prompt.clone())));
+        self.role = Some(agent.name);
+        Ok(())
+    }
+
+    /// Where the role `name` comes from and what it lets the pane do, as the owner reads it: Glut's own, the owner's
+    /// or the project's file (a file of the same name wins over Glut's), and its tools — or none named, no narrowing.
+    pub fn role_said(&self, name: &str) -> String {
+        let file = format!("{name}.md");
+        let project = self
+            .parts
+            .config
+            .cwd
+            .join(".glut")
+            .join("agents")
+            .join(&file);
+        let owner = self.parts.home.join(".glut").join("agents").join(&file);
+        let source = if project.is_file() {
+            "the project's"
+        } else if owner.is_file() {
+            "yours"
+        } else {
+            "Glut's own"
+        };
+        let tools = match self
+            .parts
+            .config
+            .agents
+            .get(name)
+            .and_then(|agent| agent.tools.as_ref())
+        {
+            Some(tools) if tools.is_empty() => "no tool".to_owned(),
+            Some(tools) => {
+                let named: Vec<String> = tools.iter().map(|rule| rule.text().to_owned()).collect();
+                glut::permissions::printable(&named.join(", "))
+            }
+            None => "its file names no tools: every tool, nothing narrowed".to_owned(),
+        };
+        format!("{source}; tools: {tools}")
+    }
+
+    /// `/role`: the roles to play — Glut's, the owner's and the project's agents — and none.
+    fn roles_picker(&self) -> Picker {
+        let mut items = vec![Item::plain(
+            "all-rounder",
+            "no role: every tool the session has",
+            Pick::Role(None),
+        )];
+        items.extend(self.parts.config.agents.list().iter().map(|agent| {
+            let about: String = glut::permissions::printable(&agent.description)
+                .chars()
+                .take(120)
+                .collect();
+            Item::plain(
+                agent.name.clone(),
+                format!("{about} — {}", self.role_said(&agent.name)),
+                Pick::Role(Some(agent.name.clone())),
+            )
+        }));
+        let current = Pick::Role(self.role.clone());
+        Picker::new("Role of this pane", items, Some(&current))
     }
 
     /// Other models' messages go with the conversation they were shown in.

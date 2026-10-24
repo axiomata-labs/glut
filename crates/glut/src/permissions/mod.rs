@@ -1008,6 +1008,9 @@ pub struct Gate {
     /// Every one of them must name a call, so a second narrowing can only take away from the first, never give
     /// back what it left out. Added through [`Gate::narrow`].
     narrowings: Vec<Narrowing>,
+    /// A pane's role (TUI T36c): its agent's `tools`, narrowing every run of the session — its subagents' too, whose
+    /// own narrowing comes on top — and changed while the session runs ([`Gate::set_role`]).
+    role: Mutex<Option<Arc<Narrowing>>>,
 }
 
 /// One `allowed-tools` list and who declared it: only the calls these rules name are judged as usual, everything
@@ -1029,7 +1032,39 @@ impl Gate {
             log: Mutex::new(Vec::new()),
             granted: Mutex::new(Vec::new()),
             narrowings: Vec::new(),
+            role: Mutex::new(None),
         }
+    }
+
+    /// The role the session's pane plays now (TUI T36c): `by` names it in a refusal, `rules` are what it may call —
+    /// an empty list is no tool at all. `None`: no role, nothing narrowed beyond the run's own.
+    pub fn set_role(&self, role: Option<(String, Vec<Rule>)>) {
+        *self
+            .role
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) =
+            role.map(|(by, rules)| Arc::new(Narrowing { by, rules }));
+    }
+
+    /// The rules of the role the session's pane plays, as written; `None` without a role (an empty list: no tool).
+    pub fn role_rules(&self) -> Option<Vec<String>> {
+        self.role_narrowing()
+            .map(|role| role.rules.iter().map(|rule| rule.text.clone()).collect())
+    }
+
+    /// Whether a sandboxed command may have the network under the session's role (T36c): as for a named subagent,
+    /// only a role whose rules name a `Network` host has it.
+    pub fn role_reaches_network(&self) -> bool {
+        self.role_narrowing()
+            .is_none_or(|role| role.rules.iter().any(|rule| rule.kind == RuleKind::Network))
+    }
+
+    /// The role's narrowing, if the session has one.
+    fn role_narrowing(&self) -> Option<Arc<Narrowing>> {
+        self.role
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone()
     }
 
     /// What the owner's "always" answers allowed from then on, oldest first.
@@ -1109,11 +1144,13 @@ impl Gate {
             .iter()
             .any(|rule| rule.pattern.is_none() && rule.could_name(tool, sample));
         let agent = agent_narrowing();
+        let role = self.role_narrowing();
         !denied
             && self
                 .narrowings
                 .iter()
                 .chain(agent.as_deref())
+                .chain(role.as_deref())
                 .all(|narrowing| {
                     narrowing
                         .rules
@@ -1220,10 +1257,12 @@ impl Gate {
         // rule or mode is even asked; what all of them name goes on to the normal judgement below, where such a
         // rule never allows anything by itself.
         let agent = agent_narrowing();
+        let role = self.role_narrowing();
         if let Some(narrowing) = self
             .narrowings
             .iter()
             .chain(agent.as_deref())
+            .chain(role.as_deref())
             .find(|narrowing| !restrict_allows(&narrowing.rules, tool, access))
         {
             let rules = narrowing
@@ -1233,6 +1272,21 @@ impl Gate {
                 .collect::<Vec<_>>()
                 .join(", ");
             let reason = format!("{} allows only: {rules}", narrowing.by);
+            self.record(Judgement {
+                tool: tool.to_owned(),
+                target,
+                allowed: false,
+                reason: reason.clone(),
+            });
+            return Err(format!("not permitted: {reason}"));
+        }
+        // T36c: a role that may edit nothing runs only commands that only read — `git diff --output=…` is a write
+        // a prefix rule like `Bash(git diff:*)` would let through.
+        if let (Some(role), Access::Bash { command, .. }) = (&role, access)
+            && !role.rules.iter().any(|rule| rule.kind == RuleKind::Edit)
+            && !kinds::reads_only(&analyze(command))
+        {
+            let reason = format!("{} only reads: this command is no plain reading", role.by);
             self.record(Judgement {
                 tool: tool.to_owned(),
                 target,
@@ -1952,6 +2006,58 @@ mod tests {
         let asker = Arc::new(Always(Answer::Allow, Mutex::new(0)));
         let plan = Gate::new(RuleSet::default(), Mode::Plan, asker);
         assert!(plan.judge("glut_file", &change).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn a_panes_role_narrows_every_run_of_it_its_subagents_too_and_can_change() {
+        let asker = Arc::new(Always(Answer::Allow, Mutex::new(0)));
+        let gate = Gate::new(RuleSet::default(), Mode::Auto, asker);
+        let read = Access::Read {
+            path: "a.rs".into(),
+        };
+        let edit = Access::Edit {
+            path: "a.rs".into(),
+        };
+        gate.set_role(Some((
+            "the role reviewer".into(),
+            vec![Rule::parse("Read").unwrap()],
+        )));
+        assert!(gate.judge("read_file", &read).await.is_ok());
+        let refused = gate.judge("edit_file", &edit).await.unwrap_err();
+        assert!(
+            refused.contains("the role reviewer allows only: Read"),
+            "{refused}"
+        );
+        assert!(!gate.offers("edit_file", &edit));
+        // A subagent with no tools of its own is still the reviewer's.
+        let theirs = as_agent(
+            "t1".into(),
+            "look".into(),
+            None,
+            gate.judge("edit_file", &edit),
+        )
+        .await;
+        assert!(theirs.is_err());
+        // Without an Edit rule a role only reads: a prefix rule does not let a writing option through.
+        gate.set_role(Some((
+            "the role reviewer".into(),
+            vec![Rule::parse("Bash(git diff:*)").unwrap()],
+        )));
+        assert!(gate.judge("bash", &bash("git diff HEAD~1")).await.is_ok());
+        let wrote = gate
+            .judge("bash", &bash("git diff --output=src/lib.rs"))
+            .await
+            .unwrap_err();
+        assert!(wrote.contains("only reads"), "{wrote}");
+        assert!(!gate.role_reaches_network(), "no Network rule, no network");
+        assert_eq!(gate.role_rules(), Some(vec!["Bash(git diff:*)".to_owned()]));
+        gate.set_role(Some(("the role nothing".into(), Vec::new())));
+        assert!(
+            gate.judge("read_file", &read).await.is_err(),
+            "an empty list is no tool"
+        );
+        gate.set_role(None);
+        assert!(gate.judge("edit_file", &edit).await.is_ok());
     }
 
     #[tokio::test]

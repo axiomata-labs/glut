@@ -413,6 +413,11 @@ impl Session {
     ) -> Command {
         let snapshot = self.snapshot().await;
         let mut proxy_env = Vec::new();
+        // T36c: a pane's role without a `Network` rule keeps its commands offline, as a subagent's narrowing does.
+        let role_online = match &sandbox {
+            Sandboxing::On(gate) => gate.as_ref().is_none_or(|gate| gate.role_reaches_network()),
+            Sandboxing::Off => true,
+        };
         let sandbox = match sandbox {
             Sandboxing::On(gate) => self.sandbox(gate).await,
             Sandboxing::Off => None,
@@ -420,7 +425,7 @@ impl Session {
         let mut process = match sandbox {
             // The profile goes in as an argument: nothing on disk for a command to change between two calls.
             Some(sandbox) => {
-                let online = crate::permissions::agent_reaches_network();
+                let online = crate::permissions::agent_reaches_network() && role_online;
                 if online && let Some(proxy) = &sandbox.proxy {
                     proxy_env = proxy.environment();
                 }

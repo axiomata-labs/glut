@@ -57,6 +57,8 @@ struct LinkState {
     number: u8,
     /// One line per other pane: number, role, model, mode, folder.
     others: Vec<String>,
+    /// The role this pane plays (T36c): its name and its prompt, read before each turn.
+    role: Option<(String, String)>,
 }
 
 impl Link {
@@ -69,6 +71,23 @@ impl Link {
         state.split = !others.is_empty();
         state.number = number;
         state.others = others;
+    }
+
+    /// The role this pane plays from now on; `None`: an all-rounder.
+    pub fn set_role(&self, role: Option<(String, String)>) {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .role = role;
+    }
+
+    /// The role's name and prompt, if it has one.
+    pub fn role(&self) -> Option<(String, String)> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .role
+            .clone()
     }
 
     /// Whether `tell` is offered: another pane is open.

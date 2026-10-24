@@ -56,6 +56,8 @@ pub enum Pick {
     Pane(crate::panes::Request),
     /// A command put into the input for the owner to change before Enter (a new worktree's branch name).
     Input(String),
+    /// `/role` (T36c): the role this pane plays from now on; `None` an all-rounder.
+    Role(Option<String>),
     /// `/agents`: a subagent's view, by its path through the streams.
     Agent(Vec<usize>),
     /// Rewind: how far — the conversation, the files, or both.

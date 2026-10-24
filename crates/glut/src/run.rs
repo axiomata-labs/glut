@@ -653,7 +653,11 @@ impl Offer {
         if codemode {
             specs.push(codemode::spec(&direct, &behind));
         }
-        if depth == 0 && config.subagents {
+        // T36c: not to a role that names no `task` — every call would be refused.
+        let task_offered = tools
+            .gate()
+            .is_none_or(|gate| gate.offers(crate::task::NAME, &Access::Other));
+        if depth == 0 && config.subagents && task_offered {
             specs.push(crate::task::spec(&config.agents));
         }
         // Offered from the first turn on, so the tool list — and with it the prompt's cached head — stays put.
@@ -3091,6 +3095,31 @@ mod tests {
             "never to a subagent"
         );
         assert!(names(&config, 1).contains(&"echo".to_owned()));
+    }
+
+    #[test]
+    fn task_is_not_offered_to_a_role_that_names_it_not() {
+        let mut tools = Toolbox::new();
+        let gate = Arc::new(Gate::new(
+            crate::permissions::RuleSet::default(),
+            Mode::Default,
+            Arc::new(crate::permissions::Nobody),
+        ));
+        tools.set_gate(Arc::clone(&gate));
+        let mut config = RunConfig::new("/tmp");
+        config.codemode = false;
+        let offered = |tools: &Toolbox| -> bool {
+            Offer::of(&config, tools, 0, false)
+                .specs
+                .iter()
+                .any(|spec| spec.name == crate::task::NAME)
+        };
+        assert!(offered(&tools));
+        gate.set_role(Some((
+            "the role reviewer".into(),
+            vec![crate::permissions::Rule::parse("Read").unwrap()],
+        )));
+        assert!(!offered(&tools));
     }
 
     fn toolbox() -> Toolbox {

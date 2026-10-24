@@ -312,7 +312,8 @@ pub async fn build(
     // T37a: the named subagents, the owner's and — in a trusted folder — the project's.
     let (agents, agent_notes) = glut::agents::Catalog::load(&home, &cwd, trusted);
     notes.extend(agent_notes);
-    config.agents = Arc::new(agents);
+    // T36c: Glut's own agents beside them, which are also the roles a pane can play.
+    config.agents = Arc::new(agents.with_glut_own());
     let (catalog, skill_notes) = skills::Catalog::load(&home, &cwd, trusted, &config.skill_dirs);
     notes.extend(
         skill_notes
@@ -663,6 +664,13 @@ pub fn turn(
             ..engine.config(&parts)
         };
         config.pane_tools = parts.pane_link.split();
+        // T36c: the pane's role speaks after the guides, for every turn while it holds.
+        if let Some((name, prompt)) = parts.pane_link.role() {
+            let base = config.instructions.take().unwrap_or_default();
+            config.instructions = Some(format!(
+                "{base}\n\n## Your role in this pane: {name}\n\n{prompt}"
+            ));
+        }
         // A named agent's own model is built like the session's (T37a): the providers, their keys, the model list.
         config.models = Some(glut::agents::Models(Arc::new(SessionModels {
             parts: Arc::clone(&parts),
