@@ -845,13 +845,13 @@ fn draw_keys(frame: &mut Frame, app: &App, area: Rect, branch: Option<String>, c
     // A pane the keys are not in shows only what waits there; the active one says which other pane asks.
     let hints = if !chrome.active {
         if asks {
-            "asks — ⌃] answers".to_owned()
+            "asks — ⌃P answers".to_owned()
         } else {
             String::new()
         }
     } else if !chrome.others_ask.is_empty() {
         let numbers: Vec<String> = chrome.others_ask.iter().map(u8::to_string).collect();
-        format!("pane {} asks — ⌃] · {hints}", numbers.join(", "))
+        format!("pane {} asks — ⌃P · {hints}", numbers.join(", "))
     } else {
         hints
     };

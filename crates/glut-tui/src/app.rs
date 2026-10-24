@@ -1091,9 +1091,12 @@ impl App {
         if ctrl && matches!(key.code, KeyCode::Char('c' | 'C')) {
             return self.interrupt();
         }
-        // ⌃] the other pane (T36a) — whatever this one shows: it is how the owner reaches the other's question. A
-        // terminal without the keyboard protocol sends it as ⌃5.
-        if ctrl && matches!(key.code, KeyCode::Char(']' | '5')) && key.kind != KeyEventKind::Repeat
+        // ⌃P or ⌃] the other pane (T36a) — whatever this one shows: it is how the owner reaches the other's question.
+        // ⌃P is a letter, the same key on every layout (`]` is ⌥6 on a German Mac: ⌃] never arrives as such there);
+        // a terminal without the keyboard protocol sends ⌃] as ⌃5.
+        if ctrl
+            && matches!(key.code, KeyCode::Char('p' | 'P' | ']' | '5'))
+            && key.kind != KeyEventKind::Repeat
         {
             self.chord = false;
             self.pane_request = Some(crate::panes::Request::Toggle);
@@ -3235,7 +3238,7 @@ impl App {
                     // Two panes on one session file would write over each other's turns.
                     Some(Pick::Session(id)) if self.others_open.contains(&id) => {
                         self.transcript.note(
-                            "that session is open in the other pane — ⌃] goes there",
+                            "that session is open in the other pane — ⌃P goes there",
                             Tone::Quiet,
                         )
                     }

@@ -327,7 +327,12 @@ pub const KEYS: [Key; 29] = [
         "hand the mouse to the terminal and back",
         "",
     ),
-    key(Topic::Panes, "⌃]", "the other pane", ""),
+    key(
+        Topic::Panes,
+        "⌃P",
+        "the other pane (⌃] too on a US layout)",
+        "",
+    ),
     key(
         Topic::Panes,
         "⌃X 2",

@@ -586,7 +586,7 @@ impl Panes {
             }
             let number = building.number;
             self.active()
-                .say(format!("pane {number} is ready — ⌃] goes there"));
+                .say(format!("pane {number} is ready — ⌃P goes there"));
         } else {
             self.focus(at);
         }
@@ -836,6 +836,9 @@ mod tests {
         assert_eq!(panes.active, 0);
         press(&mut panes, KeyCode::Char('5'), KeyModifiers::CONTROL);
         assert_eq!(panes.active, 1, "the legacy encoding too");
+        press(&mut panes, KeyCode::Char('p'), KeyModifiers::CONTROL);
+        assert_eq!(panes.active, 0, "⌃P on any layout");
+        press(&mut panes, KeyCode::Char('p'), KeyModifiers::CONTROL);
         press(&mut panes, KeyCode::Char('x'), KeyModifiers::NONE);
         assert_eq!(
             panes.list[1].app.input.text(),
