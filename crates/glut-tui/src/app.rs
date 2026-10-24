@@ -112,6 +112,13 @@ enum Busy {
     HandingOff,
 }
 
+/// A switch the owner goes round with one key, its notes one line (`⇧⇥`, `⌃T`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Switch {
+    Mode,
+    Thinking,
+}
+
 /// What a session is about, as the reader mode says it (TUI9b).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum State {
@@ -271,9 +278,9 @@ pub struct App {
     pub(crate) held_since: Option<Instant>,
     /// Glut's very first start (TUI9c): the welcome shows the first keys until a message or a command goes.
     pub first_start: bool,
-    /// How long the stream was after the last note of a mode gone round (`⇧⇥`): the next one replaces it while it is
-    /// still the last block.
-    mode_note: Option<usize>,
+    /// The last note of a switch gone round (`⇧⇥` the mode, `⌃T` the thinking), and how long the stream was after it:
+    /// the next of the same switch replaces it while it is still the last block.
+    switch_note: Option<(Switch, usize)>,
     /// The highest image number given in this window (T45), for the input's marks until the message is sent.
     images_given: u32,
     /// The highest image number sent: a message's images are numbered on from it when it goes.
@@ -464,7 +471,7 @@ impl App {
             images_given: 0,
             images_sent: 0,
             turn_images: Vec::new(),
-            mode_note: None,
+            switch_note: None,
             first_start,
             seen_state: None,
             seen_turns: 0,
@@ -1920,19 +1927,20 @@ impl App {
         } else {
             Tone::Quiet
         };
-        self.say_mode(what, tone);
+        self.say_switch(Switch::Mode, what, tone);
     }
 
-    /// The mode reached, said: modes gone round one after another leave one line — not a wall of them.
-    fn say_mode(&mut self, what: String, tone: Tone) {
-        if self.mode_note == Some(self.transcript.blocks.len())
+    /// Where a switch went, said: one gone round again and again leaves one line, where it stands — not a wall of
+    /// them.
+    fn say_switch(&mut self, switch: Switch, what: impl Into<String>, tone: Tone) {
+        if self.switch_note == Some((switch, self.transcript.blocks.len()))
             && let Some(last) = self.transcript.blocks.last()
             && matches!(last.kind, crate::transcript::Kind::Note { .. })
         {
             self.transcript.blocks.pop();
         }
         self.transcript.note(what, tone);
-        self.mode_note = Some(self.transcript.blocks.len());
+        self.switch_note = Some((switch, self.transcript.blocks.len()));
     }
 
     /// One of the session's own commands (`/model`, `/context` …).
@@ -2922,7 +2930,7 @@ impl App {
             Thinking::Open => "thinking: open — a click folds one, ⌃T folds all",
         };
         match prefs::set_thinking(&self.parts.home, thinking) {
-            Ok(()) => self.transcript.note(said, Tone::Quiet),
+            Ok(()) => self.say_switch(Switch::Thinking, said, Tone::Quiet),
             Err(reason) => self.transcript.note(reason, Tone::Fault),
         }
     }
@@ -6504,7 +6512,7 @@ mod tests {
     }
 
     #[test]
-    fn modes_gone_round_one_after_another_leave_one_line() {
+    fn switches_gone_round_one_after_another_leave_one_line() {
         let (mut app, _reports) = app();
         let notes = |app: &App| {
             app.transcript
@@ -6515,16 +6523,22 @@ mod tests {
         };
         let before = notes(&app);
         for mode in ["plan", "ask", "build", "auto", "plan", "ask"] {
-            app.say_mode(format!("{mode}: …"), Tone::Quiet);
+            app.say_switch(Switch::Mode, format!("{mode}: …"), Tone::Quiet);
         }
         assert_eq!(notes(&app), before + 1);
         app.transcript.note("something else", Tone::Quiet);
-        app.say_mode("build: …".into(), Tone::Quiet);
+        app.say_switch(Switch::Mode, "build: …", Tone::Quiet);
         assert_eq!(
             notes(&app),
             before + 3,
             "a mode note after another note stands on its own"
         );
+        // ⌃T gone round leaves one line too, and never takes the mode's.
+        for _ in 0..4 {
+            app.on_terminal(key(KeyCode::Char('t'), KeyModifiers::CONTROL));
+        }
+        assert_eq!(notes(&app), before + 4);
+        let _ = std::fs::remove_dir_all(&app.parts.home);
     }
 
     #[test]
