@@ -561,6 +561,39 @@ fn draw_welcome(frame: &mut Frame, app: &mut App, area: Rect) {
             )));
         }
     }
+    // T44: started where no session was kept yet, the newest projects — `/projects` picks one, no key of its own.
+    let home = app.parts.home.clone();
+    let now = chrono::Utc::now();
+    let projects: Vec<Line> = app
+        .welcome_projects()
+        .iter()
+        .map(|project| {
+            let when = project
+                .last
+                .map_or_else(|| "pinned".into(), |last| crate::projects::ago(last, now));
+            Line::from(vec![
+                Span::styled(crate::transcript::clean(&project.name()), theme::strong()),
+                Span::styled(
+                    format!(
+                        "  {} · {when}",
+                        crate::transcript::clean(&crate::projects::shown_path(
+                            &project.folder,
+                            &home
+                        ))
+                    ),
+                    theme::quiet(),
+                ),
+            ])
+        })
+        .collect();
+    if !projects.is_empty() {
+        lines.push(Line::default());
+        lines.extend(projects);
+        lines.push(Line::from(Span::styled(
+            crate::motion::spoken("/projects picks one").into_owned(),
+            theme::glow(),
+        )));
+    }
     let height = lines.len() as u16;
     let top = area.y + area.height.saturating_sub(height) / 2;
     let place = Rect {

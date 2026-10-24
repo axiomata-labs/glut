@@ -175,6 +175,8 @@ pub struct Parts {
     pub mode_locked: bool,
     pub owner_shell: bool,
     pub keep_lost_turns: bool,
+    /// Whether `/projects` switches to another folder ([`Launch::projects`], on a host that may split).
+    pub projects: bool,
     /// The session's event log ([`Launch::log`]): the sink writes the steps, the screen the owner's messages.
     pub log: Arc<crate::log::EventLog>,
     /// How many characters the guides the session read hold: what they cost each turn (`/context`).
@@ -394,6 +396,7 @@ pub async fn build(
     .await
     .map_err(|err| err.to_string())?;
     tools.extend([Box::new(tell) as Box<dyn glut::Tool>]);
+    let projects = launch.projects && host.may_split();
     let parts = Parts {
         home,
         config,
@@ -409,6 +412,7 @@ pub async fn build(
         mode_locked: launch.mode_locked,
         owner_shell: launch.owner_shell,
         keep_lost_turns: launch.keep_lost_turns,
+        projects,
         log,
         guide_chars,
         guide_paths,
@@ -1193,6 +1197,7 @@ pub fn for_tests() -> (Parts, Engine) {
         mode_locked: false,
         owner_shell: true,
         keep_lost_turns: false,
+        projects: true,
         log: Arc::new(crate::log::EventLog::new(
             crate::log::Target::Off,
             PathBuf::new(),

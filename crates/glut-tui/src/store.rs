@@ -44,6 +44,13 @@ pub struct Session {
     pub parent: Option<String>,
 }
 
+/// Where and when a kept session worked, without what it said (T44).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Head {
+    pub cwd: PathBuf,
+    pub updated: DateTime<Utc>,
+}
+
 /// One of the owner's messages that started a turn: how long the conversation was before it, its first line, and the
 /// run it started — whose first snapshot is the folder as it was before the message.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -138,6 +145,26 @@ impl Session {
         sessions.sort_by_key(|session| std::cmp::Reverse(session.updated));
         sessions.truncate(LISTED);
         sessions
+    }
+
+    /// Where and when every kept session worked (T44, the projects), read from each file's head alone: a session is
+    /// written with its folder and its last save before its conversation, which can be megabytes.
+    pub fn heads(home: &Path) -> Vec<Head> {
+        let Ok(entries) = std::fs::read_dir(Self::dir(home)) else {
+            return Vec::new();
+        };
+        entries
+            .flatten()
+            .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
+            // A plain file only: a FIFO would hold the list up on its opening (the welcome draws from it).
+            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+            .filter_map(|entry| {
+                let file = glut::providers::open_no_follow(&entry.path()).ok()?;
+                let mut bytes = Vec::new();
+                file.take(HEAD_BYTES).read_to_end(&mut bytes).ok()?;
+                head_of(&String::from_utf8_lossy(&bytes))
+            })
+            .collect()
     }
 
     /// Every kept session, of every folder.
@@ -297,6 +324,26 @@ impl Session {
     }
 }
 
+/// How much of a session file holds its head: its id, folder, title and times come first, as [`Session`] lists them.
+const HEAD_BYTES: u64 = 8 * 1024;
+
+/// The folder and the last save the start of a session file names; `None` where it names them not.
+fn head_of(text: &str) -> Option<Head> {
+    // A key is found only as a key: inside a string (a title) its quotes are escaped.
+    let field = |name: &str| -> Option<String> {
+        let key = format!("\"{name}\":");
+        let at = text.find(&key)? + key.len();
+        serde_json::Deserializer::from_str(&text[at..])
+            .into_iter::<String>()
+            .next()?
+            .ok()
+    };
+    Some(Head {
+        cwd: PathBuf::from(field("cwd")?),
+        updated: field("updated")?.parse().ok()?,
+    })
+}
+
 fn read(path: &Path) -> Result<Session, String> {
     let file = glut::providers::open_no_follow(path).map_err(|err| match err.kind() {
         std::io::ErrorKind::NotFound => "no such session".to_owned(),
@@ -449,6 +496,25 @@ mod tests {
             0o600
         );
         assert!(Session::load(&home, "../../etc/passwd").is_err());
+    }
+
+    #[test]
+    fn a_sessions_head_is_read_from_its_start_whatever_its_title_says() {
+        let home = std::env::temp_dir().join(format!("glut-heads-{}", std::process::id()));
+        let mut session = Session::new(Path::new("/w/real"), "p", "m");
+        session.title =
+            r#"a title with "cwd":"/w/fake" and "updated":"2000-01-01T00:00:00Z" in it"#.into();
+        session.conversation = vec![Message::user("x".repeat(100_000))];
+        session.save(&home).unwrap();
+        assert_eq!(
+            Session::heads(&home),
+            [Head {
+                cwd: PathBuf::from("/w/real"),
+                updated: session.updated,
+            }]
+        );
+        assert_eq!(head_of("{\"id\":\"x\"}"), None);
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]

@@ -68,6 +68,8 @@ pub enum Pick {
         conversation: bool,
         files: bool,
     },
+    /// `/projects` (T44): the folder of a project to switch to.
+    Project(std::path::PathBuf),
 }
 
 /// What a model entry is sorted and filtered by.
@@ -149,6 +151,8 @@ pub struct Picker {
     pub guarded: bool,
     /// When it came up — or came into view again with its pane.
     pub opened: std::time::Instant,
+    /// A list whose letters are keys (`/projects`: `p` pins, `x` hides): typing does not filter it.
+    pub keyed: bool,
 }
 
 impl Picker {
@@ -164,6 +168,7 @@ impl Picker {
             asks_model: false,
             guarded: false,
             opened: std::time::Instant::now(),
+            keyed: false,
         };
         picker.select(current);
         picker
@@ -177,6 +182,12 @@ impl Picker {
     /// A picker of Glut's own whose pick is hard to take back: see [`Picker::guarded`]'s field.
     pub fn guarded(mut self) -> Self {
         self.guarded = true;
+        self
+    }
+
+    /// A picker whose letters are keys: see [`Picker::keyed`]'s field.
+    pub fn keyed(mut self) -> Self {
+        self.keyed = true;
         self
     }
 

@@ -57,18 +57,41 @@ enum Command {
     Headless(glut::cli::Command),
 }
 
-#[tokio::main]
-async fn main() -> std::process::ExitCode {
+/// How long the runtime's last tasks get to end before a switch starts Glut anew (T44).
+const SHUTDOWN: std::time::Duration = std::time::Duration::from_secs(3);
+
+fn main() -> std::process::ExitCode {
     let mut cli = Cli::parse();
-    match cli.command.take() {
-        Some(Command::Watch { what }) => watch(&cli.cwd, what.as_deref()).await,
-        Some(Command::Headless(command)) => glut::cli::dispatch(command).await,
-        None => {
-            if cli.reader {
-                glut_tui::motion::force_reader();
-            }
-            glut_tui::standalone(launch(&cli), open(cli)).await
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            eprintln!("glut: cannot start: {err}");
+            return std::process::ExitCode::from(1);
         }
+    };
+    let (code, switch) = runtime.block_on(async {
+        match cli.command.take() {
+            Some(Command::Watch { what }) => (watch(&cli.cwd, what.as_deref()).await, None),
+            Some(Command::Headless(command)) => (glut::cli::dispatch(command).await, None),
+            None => {
+                if cli.reader {
+                    glut_tui::motion::force_reader();
+                }
+                glut_tui::standalone_switching(launch(&cli), open(cli)).await
+            }
+        }
+    });
+    match switch {
+        // T44: the window's servers, shells and proxy end with the runtime — before Glut starts anew in the other
+        // folder, a hung one not holding the switch up.
+        Some(folder) => {
+            runtime.shutdown_timeout(SHUTDOWN);
+            glut_tui::restart_in(&folder)
+        }
+        None => code,
     }
 }
 
@@ -118,6 +141,16 @@ mod tests {
     use glut_tui::EngineChoice;
 
     use super::*;
+
+    #[test]
+    fn a_switch_s_restart_is_a_start_by_hand() {
+        // What `/projects` starts Glut anew with (`screen::restart_args`, T44): the owner's own session there.
+        let cli = Cli::parse_from(["glut", "--cwd", "/projects/other", "--continue", "--reader"]);
+        assert!(cli.continue_last && cli.reader && !cli.resume && cli.prompt.is_none());
+        assert_eq!(cli.cwd, std::path::Path::new("/projects/other"));
+        let launch = launch(&cli);
+        assert!(launch.owner_trust && launch.projects && matches!(launch.servers, Servers::Owner));
+    }
 
     #[test]
     fn mcp_config_adds_its_servers_and_strict_takes_them_alone() {

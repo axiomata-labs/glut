@@ -296,6 +296,10 @@ pub struct App {
     attaching_since: Option<Instant>,
     /// Whether the blocks hold their texts for a search (T47): given up once it closes.
     pub search_texts: bool,
+    /// The projects the welcome shows (T44), looked up once: the newest, where this folder has no session yet.
+    welcome_projects: Option<(String, Vec<crate::projects::Project>)>,
+    /// The window's project (T44): this pane's folder, or — in a worktree's pane — the folder it was split from.
+    pub project: std::path::PathBuf,
     /// The highest image number sent: a message's images are numbered on from it when it goes.
     images_sent: u32,
     /// An image shown whole over the stream (T46), from a click or ⏎ on its picture.
@@ -341,6 +345,7 @@ enum ThemeFrom {
 impl App {
     pub fn new(parts: Arc<Parts>, engine: Engine, reports: mpsc::UnboundedSender<Report>) -> Self {
         let folder = session::shown_folder(&parts.config.cwd);
+        let project = parts.config.cwd.clone();
         let session = Session::new(&parts.config.cwd, &engine.provider, engine.model_name());
         // Only a Glut that never kept a preference starts for the first time (TUI9c): an owner of long standing is
         // not welcomed afresh.
@@ -485,6 +490,8 @@ impl App {
             attaching: 0,
             attaching_since: None,
             search_texts: false,
+            welcome_projects: None,
+            project,
             images_sent: 0,
             picture_view: None,
             switch_note: None,
@@ -1656,7 +1663,14 @@ impl App {
             // terminals); idle, it is a space.
             // A command's word half typed: ⇥ completes it (`/motion c` → `/motion calm`).
             KeyCode::Tab if self.input.at_end() => {
-                match crate::commands::completion(&self.input.text()) {
+                let text = self.input.text();
+                let completed = match text.strip_prefix("/projects ") {
+                    Some(typed) if self.parts.projects && !typed.contains('\n') => {
+                        crate::projects::completion(typed, &self.parts.home, &self.parts.config.cwd)
+                    }
+                    _ => crate::commands::completion(&text),
+                };
+                match completed {
                     Some(rest) => self.input.insert_text(&rest),
                     None if self.working() => self.queue_next(),
                     None => self.input.insert(' '),
@@ -1681,7 +1695,11 @@ impl App {
         if typed.contains([' ', '\n', '/']) {
             return Vec::new();
         }
-        crate::commands::fitting(typed)
+        let mut fitting = crate::commands::fitting(typed);
+        if !self.parts.projects {
+            fitting.retain(|command| command.name != "projects");
+        }
+        fitting
     }
 
     /// Enter: a command when the input is one, else the next message. A command that has to wait while Glut works
@@ -2109,6 +2127,19 @@ impl App {
             },
             "editor" => self.set_editor(rest),
             "resume" => self.picker = Some(self.session_picker()),
+            // T44: the host picks the folder where it keeps Glut in its own pane.
+            "projects" if !self.parts.projects => {
+                self.tell("this window's folder is its host's to pick — no /projects here")
+            }
+            "projects" if rest.trim().is_empty() => self.picker = Some(self.projects_picker()),
+            "projects" => match crate::projects::folder_of(
+                rest,
+                &self.parts.home,
+                &self.parts.config.cwd,
+            ) {
+                Ok(folder) => self.switch_project(folder),
+                Err(reason) => self.tell(reason),
+            },
             "panel" => self.show_tab(Tab::Plan),
             "gate" => self.picker = Some(self.gate_picker()),
             "meter" => self.show_tab(Tab::Meter),
@@ -3658,6 +3689,146 @@ impl App {
         Picker::new(title, items, Some(&current)).sorting()
     }
 
+    /// `/projects` (T44): the folders Glut worked in, pinned first, then the newest — the first that is not this one
+    /// chosen — and a last entry to name another folder.
+    fn projects_picker(&self) -> Picker {
+        let (home, here) = (&self.parts.home, &self.project);
+        let now = chrono::Utc::now();
+        let projects = crate::projects::list(home);
+        let mut items: Vec<Item> = projects
+            .iter()
+            .map(|project| {
+                let mark = if &project.folder == here {
+                    "● "
+                } else if project.pinned {
+                    "★ "
+                } else {
+                    ""
+                };
+                let when = project
+                    .last
+                    .map(|last| crate::projects::ago(last, now))
+                    .unwrap_or_else(|| "no session yet".into());
+                let kept = match (&project.layout, project.sessions) {
+                    (Some(layout), _) => layout.clone(),
+                    (None, 1) => "1 session".into(),
+                    (None, sessions) => format!("{sessions} sessions"),
+                };
+                let note = if &project.folder == here {
+                    " · this one"
+                } else {
+                    ""
+                };
+                Item::plain(
+                    format!("{mark}{}", crate::transcript::clean(&project.name())),
+                    format!(
+                        "{} · {when} · {kept}{note}",
+                        crate::transcript::clean(&crate::projects::shown_path(
+                            &project.folder,
+                            home
+                        ))
+                    ),
+                    Pick::Project(project.folder.clone()),
+                )
+            })
+            .collect();
+        items.push(Item::plain(
+            "another folder…",
+            "/projects <path> — ⇥ completes a folder's name",
+            Pick::Input("/projects ".into()),
+        ));
+        let first = projects
+            .iter()
+            .find(|project| &project.folder != here)
+            .map(|project| Pick::Project(project.folder.clone()));
+        Picker::new(
+            "Projects — ★ pinned, ● this one · p pins, x hides",
+            items,
+            first.as_ref(),
+        )
+        .keyed()
+    }
+
+    /// `p` or `x` on a project of `/projects`: pinned (or no longer), or hidden — kept, and the list shown anew.
+    fn pick_project_key(&mut self, key: char, folder: &std::path::Path) {
+        let home = self.parts.home.clone();
+        if key == 'x' && folder == self.project {
+            return self.say("this project is open — x hides another");
+        }
+        // A file Glut cannot read is not written over: the pins and hides in it would be gone.
+        let mut picks = match crate::projects::Picks::read(&home) {
+            Ok(picks) => picks,
+            Err(reason) => return self.transcript.note(reason, Tone::Fault),
+        };
+        let name = crate::transcript::clean(&folder.file_name().map_or_else(
+            || folder.display().to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        ));
+        let said = if key == 'p' {
+            if picks.toggle_pin(folder) {
+                format!("{name} pinned")
+            } else {
+                format!("{name} no longer pinned")
+            }
+        } else {
+            picks.hide(folder, chrono::Utc::now());
+            format!("{name} hidden — until it is worked in again; /projects <path> opens it")
+        };
+        if let Err(reason) = picks.save(&home) {
+            return self.transcript.note(reason, Tone::Fault);
+        }
+        let selected = self.picker.as_ref().map_or(0, |picker| picker.selected);
+        let mut picker = self.projects_picker();
+        let chosen = Pick::Project(folder.to_path_buf());
+        // The same project stays chosen where it moved; a hidden one leaves the choice where it was.
+        picker.selected = picker
+            .shown()
+            .iter()
+            .position(|item| item.pick == chosen)
+            .unwrap_or_else(|| selected.min(picker.shown().len().saturating_sub(1)));
+        self.picker = Some(picker);
+        self.say(said);
+    }
+
+    /// The projects the welcome shows (T44): where switching is this window's to do, in the project's own pane, and
+    /// the folder has no session yet, the newest few others — looked up once for each session (`/clear` starts one).
+    pub fn welcome_projects(&mut self) -> &[crate::projects::Project] {
+        let fresh = self
+            .welcome_projects
+            .as_ref()
+            .is_some_and(|(session, _)| *session == self.session.id);
+        if !fresh {
+            let here = &self.parts.config.cwd;
+            let shown = if !self.parts.projects
+                || here != &self.project
+                || Session::heads(&self.parts.home)
+                    .iter()
+                    .any(|head| &head.cwd == here)
+            {
+                Vec::new()
+            } else {
+                crate::projects::list(&self.parts.home)
+                    .into_iter()
+                    .filter(|project| &project.folder != here)
+                    .take(crate::projects::WELCOMED)
+                    .collect()
+            };
+            self.welcome_projects = Some((self.session.id.clone(), shown));
+        }
+        self.welcome_projects
+            .as_ref()
+            .map_or(&[], |(_, shown)| shown.as_slice())
+    }
+
+    /// Glut goes on in `folder` (T44): asked of the screen, which keeps how this window stands and starts Glut anew
+    /// there — asking first while Glut works.
+    fn switch_project(&mut self, folder: std::path::PathBuf) {
+        if folder == self.project {
+            return self.tell("that is this project already");
+        }
+        self.pane_request = Some(crate::panes::Request::Switch(folder));
+    }
+
     /// The folder's sessions, newest first, each followed by its forks as a tree; this session among them, marked.
     pub fn session_picker(&self) -> Picker {
         let mut listed = Session::list(&self.parts.home, &self.parts.config.cwd);
@@ -3669,7 +3840,7 @@ impl App {
             listed.insert(0, self.session.clone());
         }
         let tree = Session::as_tree(listed);
-        let items: Vec<Item> = tree
+        let mut items: Vec<Item> = tree
             .iter()
             .enumerate()
             .map(|(at, (depth, session))| {
@@ -3721,6 +3892,20 @@ impl App {
         } else {
             "Sessions of this folder — ⑂ a fork, ● this one, ⌫ deletes"
         };
+        // T44: the panes kept at the last end, first — into a window of one pane, as `glut -c` offers them.
+        if self.parts.host.may_split()
+            && self.others_open.is_empty()
+            && let Some(layout) = crate::layout::load(&self.parts.home, &self.parts.config.cwd)
+        {
+            items.insert(
+                0,
+                Item::plain(
+                    format!("as it stood: {}", layout.summary()),
+                    layout.details(),
+                    Pick::Pane(crate::panes::Request::Restore),
+                ),
+            );
+        }
         Picker::new(title, items, Some(&Pick::Session(own)))
     }
 
@@ -3846,6 +4031,13 @@ impl App {
             KeyCode::Char('f') if ctrl => picker.toggle_free(),
             KeyCode::Up => picker.up(),
             KeyCode::Down | KeyCode::Tab => picker.down(),
+            // `/projects` (T44): `p` pins the chosen project, `x` hides it; no letter filters the list.
+            KeyCode::Char(c @ ('p' | 'x')) if picker.keyed && !ctrl => {
+                if let Some(Pick::Project(folder)) = picker.chosen() {
+                    self.pick_project_key(c, &folder);
+                }
+            }
+            KeyCode::Char(_) | KeyCode::Backspace if picker.keyed => {}
             // `/resume`'s ⌫ on a list not filtered: the chosen session deleted, asked once (T45).
             KeyCode::Backspace
                 if picker.query.is_empty() && matches!(picker.chosen(), Some(Pick::Session(_))) =>
@@ -3915,6 +4107,7 @@ impl App {
                         }
                     }
                     Some(Pick::Input(text)) => self.input.insert_text(&text),
+                    Some(Pick::Project(folder)) => self.switch_project(folder),
                     Some(Pick::Role(name)) => self.play(name.as_deref()),
                     Some(Pick::RewindTo(mark)) => self.picker = Some(self.rewind_how(mark)),
                     Some(Pick::Fork(mark)) => self.fork(mark),
@@ -6762,6 +6955,119 @@ pub(crate) mod tests {
         app.on_terminal(key(KeyCode::Esc, KeyModifiers::NONE));
         wide_screen(&mut app);
         assert!(!app.search_texts);
+    }
+
+    /// A session of `cwd` kept below `home`, saved `minutes_ago`, as `Session::save` writes it.
+    fn kept_session(home: &std::path::Path, cwd: &std::path::Path, id: &str, minutes_ago: i64) {
+        let mut session = Session::new(cwd, "p", "m");
+        session.id = id.into();
+        session.updated = chrono::Utc::now() - chrono::Duration::minutes(minutes_ago);
+        let dir = home.join(".glut/sessions");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(format!("{id}.json")),
+            serde_json::to_string(&session).unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn projects_lists_the_folders_worked_in_pins_one_and_switches_to_the_chosen() {
+        let (mut app, _reports) = app();
+        let home = app.parts.home.clone();
+        let (older, newer) = (home.join("older"), home.join("newer"));
+        std::fs::create_dir_all(&older).unwrap();
+        std::fs::create_dir_all(&newer).unwrap();
+        kept_session(&home, &older, "s1", 60);
+        kept_session(&home, &newer, "s2", 5);
+        // The welcome of a folder without sessions shows them, newest first, and says how to pick one.
+        let screen = wide_screen(&mut app);
+        assert!(
+            screen.find("~/newer").unwrap() < screen.find("~/older").unwrap()
+                && screen.contains("/projects picks one"),
+            "{screen}"
+        );
+        type_text(&mut app, "/projects");
+        app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
+        let picker = app.picker.as_ref().unwrap();
+        let labels: Vec<&str> = picker
+            .shown()
+            .iter()
+            .map(|item| item.label.as_str())
+            .collect();
+        assert_eq!(labels, ["newer", "older", "another folder…"]);
+        // Letters are keys here: `p` pins the chosen one, the list shown anew with it on top and still chosen.
+        app.on_terminal(key(KeyCode::Down, KeyModifiers::NONE));
+        app.on_terminal(key(KeyCode::Char('p'), KeyModifiers::NONE));
+        let picker = app.picker.as_ref().unwrap();
+        assert!(picker.query.is_empty());
+        assert_eq!(picker.shown()[0].label, "★ older");
+        assert_eq!(picker.chosen(), Some(Pick::Project(older.clone())));
+        // The open project is not hidden from itself.
+        app.project = older.clone();
+        app.on_terminal(key(KeyCode::Char('x'), KeyModifiers::NONE));
+        assert!(crate::projects::Picks::load(&home).hidden.is_empty());
+        app.project = app.parts.config.cwd.clone();
+        app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(
+            app.pane_request,
+            Some(crate::panes::Request::Switch(older.clone()))
+        );
+        // By its path, `~` the owner's home; ⇥ completes a folder's name.
+        app.pane_request = None;
+        type_text(&mut app, "/projects ~/ne");
+        app.on_terminal(key(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(app.input.text(), "/projects ~/newer/");
+        app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
+        // A typed path is the folder itself, links resolved — as a session's folder is.
+        assert_eq!(
+            app.pane_request,
+            Some(crate::panes::Request::Switch(newer.canonicalize().unwrap()))
+        );
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn a_host_that_picks_the_folder_offers_no_projects() {
+        let (mut parts, engine) = session::for_tests();
+        parts.projects = false;
+        let (send, _receive) = mpsc::unbounded_channel();
+        let mut app = App::new(Arc::new(parts), engine, send);
+        type_text(&mut app, "/proj");
+        assert!(
+            app.suggestions()
+                .iter()
+                .all(|command| command.name != "projects")
+        );
+        app.input.clear();
+        type_text(&mut app, "/projects ~");
+        app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.pane_request.is_none() && app.picker.is_none());
+    }
+
+    #[test]
+    fn resume_offers_the_panes_kept_at_the_last_end_first() {
+        let (app, _reports) = app();
+        let kept = |session: &str| crate::layout::Kept {
+            session: session.into(),
+            role: None,
+            agent: None,
+            branch: None,
+            into: None,
+        };
+        let layout = crate::layout::Layout {
+            panes: vec![kept("s1"), kept("s2")],
+            shape: crate::layout::Shape::Split {
+                stacked: false,
+                parts: vec![crate::layout::Shape::Pane(0), crate::layout::Shape::Pane(1)],
+            },
+        };
+        crate::layout::save(&app.parts.home, &app.parts.config.cwd, &layout).unwrap();
+        let picker = app.session_picker();
+        let first = &picker.shown()[0];
+        assert_eq!(first.label, "as it stood: 2 panes");
+        assert_eq!(first.pick, Pick::Pane(crate::panes::Request::Restore));
+        let _ = std::fs::remove_dir_all(&app.parts.home);
     }
 
     #[test]

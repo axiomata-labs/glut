@@ -81,13 +81,19 @@ const fn command(
 }
 
 /// Every command, grouped by topic in [`Topic::ALL`]'s order, the most used first inside a topic.
-pub const COMMANDS: [Command; 41] = [
+pub const COMMANDS: [Command; 42] = [
     command(Topic::Session, "clear", "", "start a new session"),
     command(
         Topic::Session,
         "resume",
         "",
         "open an earlier session of this folder — the forks under theirs",
+    ),
+    command(
+        Topic::Session,
+        "projects",
+        "[path]",
+        "go on in another project: the folders Glut worked in, or one by its path",
     ),
     command(
         Topic::Session,

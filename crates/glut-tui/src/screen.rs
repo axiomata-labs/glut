@@ -53,20 +53,52 @@ pub struct Open {
 /// no part of its own (Axiomata's master pane, TUI8c): the first start asks for a provider and a missing model is
 /// chosen before the screen comes up, then [`run`] with the [`Standalone`](crate::Standalone) host.
 pub async fn standalone(launch: Launch, open: Open) -> std::process::ExitCode {
+    standalone_switching(launch, open).await.0
+}
+
+/// [`standalone`], and the project the owner switched to (T44, `/projects`): the caller starts Glut anew there with
+/// [`restart_in`] — once its runtime is gone, which takes the servers and shells this one started down with it.
+pub async fn standalone_switching(
+    launch: Launch,
+    open: Open,
+) -> (std::process::ExitCode, Option<std::path::PathBuf>) {
     if let Ok(home) = glut::permissions::settings::home_dir() {
         if let Err(reason) = setup::first_provider(&home).await {
             eprintln!("glut: {reason}");
-            return std::process::ExitCode::from(1);
+            return (std::process::ExitCode::from(1), None);
         }
         if let EngineChoice::Providers { provider, model } = &launch.engine
             && let Err(reason) =
                 setup::missing_model(&home, provider.as_deref(), model.as_deref()).await
         {
             eprintln!("glut: {reason}");
-            return std::process::ExitCode::from(1);
+            return (std::process::ExitCode::from(1), None);
         }
     }
-    run(launch, Arc::new(crate::Standalone), open, |_| {}).await
+    run_switching(launch, Arc::new(crate::Standalone), open, |_| {}).await
+}
+
+/// Glut anew in `folder` (T44, `/projects`), as `glut -c` typed there: this process becomes it — its sandbox root,
+/// rules, guides, servers and trust those of a start by hand there. Called once the runtime that ran this window is
+/// gone: what it held — MCP servers, shells, the sandbox's proxy — ended with it, as at any end.
+pub fn restart_in(folder: &std::path::Path) -> std::process::ExitCode {
+    use std::os::unix::process::CommandExt as _;
+    let shown = crate::transcript::clean(&folder.display().to_string());
+    let program = match std::env::current_exe() {
+        Ok(program) => program,
+        Err(err) => {
+            eprintln!("glut: cannot start again in {shown}: {err}");
+            return std::process::ExitCode::from(1);
+        }
+    };
+    let mut command = std::process::Command::new(program);
+    command
+        .current_dir(folder)
+        .args(restart_args(folder, crate::motion::reader_forced()));
+    // Only comes back when it could not start.
+    let err = command.exec();
+    eprintln!("glut: cannot start again in {shown}: {err}");
+    std::process::ExitCode::from(1)
 }
 
 /// Runs one session on the terminal: built as `launch` says, with `host` taking part; `linked` gets the host's way
@@ -78,6 +110,16 @@ pub async fn run(
     open: Open,
     linked: impl FnOnce(HostLink),
 ) -> std::process::ExitCode {
+    run_switching(launch, host, open, linked).await.0
+}
+
+/// [`run`], and the project the owner switched to (T44), which Glut starts anew in.
+async fn run_switching(
+    launch: Launch,
+    host: Arc<dyn Host>,
+    open: Open,
+    linked: impl FnOnce(HostLink),
+) -> (std::process::ExitCode, Option<std::path::PathBuf>) {
     let (reports, from_session) = mpsc::unbounded_channel();
     // A pane split off later starts the same servers, never more (`--strict-mcp-config` stays strict).
     let servers = launch.servers.clone();
@@ -87,7 +129,7 @@ pub async fn run(
         Err(reason) => {
             eprintln!("glut: {reason}");
             host.state(State::Ended);
-            return std::process::ExitCode::from(1);
+            return (std::process::ExitCode::from(1), None);
         }
     };
     linked(HostLink(reports.clone()));
@@ -125,7 +167,12 @@ pub async fn run(
     }
     let outcome = screen(&mut panes, &mut inlets, &host).await;
     host.state(State::Ended);
-    outcome
+    // A terminal that failed is no place to start Glut anew in.
+    let switch = panes
+        .switch_to
+        .take()
+        .filter(|_| outcome == std::process::ExitCode::SUCCESS);
+    (outcome, switch)
 }
 
 /// The session on the terminal, from taking it to giving it back.
@@ -167,8 +214,10 @@ async fn screen(
     // The session stays where the terminal keeps it, above the shell's next prompt — settled first (a turn stopped
     // by the quit shows as stopped), its last lines only: a terminal keeps a few thousand anyway. Printed after an
     // error too: the alternate screen it was on is gone.
+    // A switch (T44) leaves no stream behind: Glut starts anew at once, in the other folder.
+    let switching = panes.switch_to.is_some();
     let app = panes.active();
-    if !app.welcoming() {
+    if !app.welcoming() && !switching {
         app.transcript.settle();
         let width = terminal::size().map_or(80, |(width, _)| width);
         let lines = app.stream_at(width);
@@ -176,6 +225,7 @@ async fn screen(
         let _ = scrollback::print(&mut io::stdout(), tail);
     }
     match outcome {
+        Ok(()) if switching => std::process::ExitCode::SUCCESS,
         Ok(()) => {
             // Written, not printed: a terminal that is gone (SIGHUP) must not turn the end into a panic. Among
             // panes, each session's own figures.
@@ -204,6 +254,17 @@ async fn screen(
             std::process::ExitCode::from(1)
         }
     }
+}
+
+/// What Glut is started with in `folder` (T44): the folder and `--continue` — nothing of this run's own flags (its
+/// provider, model or `--mcp-config` were for the folder it was started in) but the reader mode the owner holds on.
+fn restart_args(folder: &std::path::Path, reader: bool) -> Vec<std::ffi::OsString> {
+    let mut args: Vec<std::ffi::OsString> =
+        vec!["--cwd".into(), folder.into(), "--continue".into()];
+    if reader {
+        args.push("--reader".into());
+    }
+    args
 }
 
 /// The main loop: draws, then waits for a key, a step of the run or the next tick.
@@ -604,4 +665,20 @@ pub(crate) fn leave(enhanced: bool) {
     );
     let _ = terminal::disable_raw_mode();
     let _ = out.flush();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_switch_starts_glut_in_the_folder_as_glut_c_typed_there_and_keeps_only_the_reader_mode() {
+        let folder = std::path::Path::new("/projects/other");
+        assert_eq!(
+            restart_args(folder, false),
+            ["--cwd", "/projects/other", "--continue"]
+        );
+        // `main.rs` parses these very flags (its test `a_switch_s_restart_is_a_start_by_hand`).
+        assert_eq!(restart_args(folder, true).last().unwrap(), "--reader");
+    }
 }

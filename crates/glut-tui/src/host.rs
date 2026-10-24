@@ -57,6 +57,10 @@ pub struct Launch {
     /// Where the session's event log goes (TUI8d), which `glut watch` follows. [`Log::Sessions`] writes none when
     /// `keep_sessions` is false: a log beside a session that is never kept would stay behind alone.
     pub log: Log,
+    /// Whether the owner may switch to another project from the screen (T44, `/projects`): Glut starts anew in its
+    /// folder. A host that picks the folder itself (Axiomata's master) says no; a host that may not split never
+    /// offers it.
+    pub projects: bool,
 }
 
 impl Launch {
@@ -83,6 +87,7 @@ impl Launch {
             owner_shell: true,
             keep_lost_turns: false,
             log: Log::Sessions,
+            projects: true,
         }
     }
 }

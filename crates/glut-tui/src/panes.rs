@@ -316,6 +316,10 @@ pub enum Request {
     Peek(Option<String>),
     /// A background agent ended where it is, its turn stopped (`/close <name>`).
     End(String),
+    /// Glut goes on in another project's folder (T44, `/projects`): asked first while it works.
+    Switch(std::path::PathBuf),
+    /// The switch the owner said yes to: the window ends as at a `/quit`, and Glut starts anew in the folder.
+    SwitchNow(std::path::PathBuf),
 }
 
 /// `/send`'s words: maybe a pane first (a number, a name, a role — the screen knows which word names one), then the
@@ -511,6 +515,8 @@ pub struct Panes {
     /// The links of the last frame, where they stand: a click on one opens it (the screen holds the mouse, so the
     /// terminal never sees that click).
     pub links: Vec<crate::links::Spot>,
+    /// The project Glut goes on in once this window ended (T44): the screen's loop ends, the layout kept.
+    pub switch_to: Option<std::path::PathBuf>,
 }
 
 /// A kept layout coming back: the panes still to build, and each kept pane's session id once it stands.
@@ -549,6 +555,7 @@ impl Panes {
             restoring: None,
             restore_next: None,
             offered: false,
+            switch_to: None,
             links: Vec::new(),
             list: vec![Pane {
                 id: 1,
@@ -958,6 +965,8 @@ impl Panes {
                 Request::Peek(None) => self.close_peek(),
                 Request::End(name) => self.end_background(&name),
                 Request::Restore => self.restore(),
+                Request::Switch(folder) => self.switch(folder),
+                Request::SwitchNow(folder) => self.switch_to = Some(folder),
                 Request::Peek(Some(name)) => match self.resolve_background(&name) {
                     Some(at) => self.peek = Some(self.list[at].id),
                     _ => self.active().tell(format!(
@@ -972,6 +981,10 @@ impl Panes {
     /// Whether the screen ends: a closed window or a kill ends every pane; a `/quit` of any pane ends them all —
     /// said once more first while another works.
     pub fn quitting(&mut self) -> bool {
+        // A switch the owner chose (T44) ends the window as a `/quit` does.
+        if self.switch_to.is_some() {
+            return true;
+        }
         if self.list.iter().any(|pane| pane.app.abandoned) {
             self.list.iter_mut().for_each(|pane| pane.app.abandon());
             return true;
@@ -995,6 +1008,36 @@ impl Panes {
             listed(&working)
         ));
         false
+    }
+
+    /// Glut goes on in `folder` (T44): at once while nothing works; else the owner says so first — no the default, no
+    /// key typed before the question showed answering it — and every turn and agent stops as at a `/quit`, kept.
+    fn switch(&mut self, folder: std::path::PathBuf) {
+        if folder == self.cwd {
+            return self.active().tell("that is this project already");
+        }
+        let working: Vec<String> = (0..self.list.len())
+            .filter(|at| self.list[*at].app.working())
+            .map(|at| self.label(at))
+            .collect();
+        if working.is_empty() {
+            self.switch_to = Some(folder);
+            return;
+        }
+        let name = crate::transcript::clean(&folder.file_name().map_or_else(
+            || folder.display().to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        ));
+        let items = vec![
+            crate::picker::Item::plain("no, stay", "Glut goes on here", crate::picker::Pick::Shown),
+            crate::picker::Item::plain(
+                format!("yes: stop and go to {name}"),
+                "each turn and agent stops as at /quit — the sessions and this window's panes kept",
+                crate::picker::Pick::Pane(Request::SwitchNow(folder)),
+            ),
+        ];
+        let question = format!("{} still works — stop and switch?", listed(&working));
+        self.active().picker = Some(crate::picker::Picker::new(question, items, None).guarded());
     }
 
     /// Closes the active pane; a turn under way is stopped — said once first. The last pane is not closed.
@@ -1248,6 +1291,8 @@ impl Panes {
             }
         };
         let mut app = App::new(Arc::new(parts), engine, building.reports);
+        // A worktree's pane belongs to the window's project (T44): `/projects` there marks and leaves that one.
+        app.project = self.cwd.clone();
         if building.resume {
             app.picker = Some(app.session_picker());
         }
@@ -2116,6 +2161,41 @@ mod tests {
         press(&mut panes, KeyCode::Char('x'), KeyModifiers::CONTROL);
         press(&mut panes, KeyCode::Char('0'), KeyModifiers::NONE);
         assert_eq!(numbers_of(&panes), vec![2], "the last pane stays");
+    }
+
+    #[tokio::test]
+    async fn a_switch_goes_at_once_while_nothing_works_and_asks_first_while_a_pane_does() {
+        let host: Arc<dyn Host> = Arc::new(crate::Standalone);
+        let there = std::path::PathBuf::from("/elsewhere");
+        let (mut panes, _inlets) = split(Side::Right);
+        // The window's own folder — asked from any of its panes — is no switch.
+        let own = panes.cwd.clone();
+        panes.list[1].app.pane_request = Some(Request::Switch(own));
+        panes.settle(&host);
+        assert!(panes.switch_to.is_none());
+        panes.list[1].app.pane_request = Some(Request::Switch(there.clone()));
+        panes.settle(&host);
+        assert_eq!(panes.switch_to, Some(there.clone()));
+        assert!(panes.quitting(), "the window ends as at a /quit");
+        let (mut panes, _inlets) = split(Side::Right);
+        panes.list[0].app.working_for_tests();
+        panes.list[1].app.pane_request = Some(Request::Switch(there.clone()));
+        panes.settle(&host);
+        assert!(panes.switch_to.is_none() && !panes.quitting());
+        let picker = panes.active().picker.as_ref().unwrap();
+        assert!(
+            picker.guarded && picker.title.contains("still works"),
+            "{}",
+            picker.title
+        );
+        assert_eq!(
+            picker.chosen(),
+            Some(crate::picker::Pick::Shown),
+            "no is the default"
+        );
+        panes.active().pane_request = Some(Request::SwitchNow(there.clone()));
+        panes.settle(&host);
+        assert_eq!(panes.switch_to, Some(there));
     }
 
     #[tokio::test]

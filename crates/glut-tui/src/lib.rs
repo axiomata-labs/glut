@@ -26,6 +26,7 @@ mod picker;
 mod pictures;
 mod plan;
 mod prefs;
+mod projects;
 mod review;
 mod screen;
 mod scrollback;
@@ -49,4 +50,4 @@ pub use host::{
     EngineChoice, Host, HostFuture, HostLink, Instructions, Launch, Log, Search, Servers, Signal,
     Standalone, State, Turn,
 };
-pub use screen::{Open, run, standalone};
+pub use screen::{Open, restart_in, run, standalone, standalone_switching};
