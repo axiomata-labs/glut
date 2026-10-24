@@ -233,6 +233,41 @@ pub fn fitted(width: u32, height: u32, columns: u16, rows: u16) -> (u16, u16) {
     (fit_columns, fit_rows)
 }
 
+/// `image` in `columns` × `rows` cells as drawing goes now: blank cells marked for the terminal to draw it in where it
+/// draws images itself (T46b), half blocks elsewhere; `None` where it cannot be read.
+pub fn lines(
+    image: &glut::images::Image,
+    columns: u16,
+    rows: u16,
+) -> Option<Vec<ratatui::text::Line<'static>>> {
+    use ratatui::style::Style;
+    use ratatui::text::{Line, Span};
+    // An image that cannot be read is no picture: its line stands alone.
+    if !image.path.is_file() {
+        return None;
+    }
+    if drawing() == Drawing::Inline
+        && crate::graphics::protocol().is_some()
+        && let Some(mark) = crate::graphics::mark(image, columns, rows)
+    {
+        let blank = " ".repeat(usize::from(columns));
+        return Some(
+            (0..rows)
+                .map(|_| {
+                    Line::from(Span::styled(
+                        blank.clone(),
+                        Style::default().underline_color(mark),
+                    ))
+                })
+                .collect(),
+        );
+    }
+    half_blocks(image, columns, rows)
+}
+
+/// A picture laid out in half blocks: its file and its size in cells.
+type DrawnKey = (std::path::PathBuf, u16, u16);
+
 /// `image` as `columns` × `rows` cells of half blocks (`▀`, the upper pixel its colour, the lower its background);
 /// `None` where it cannot be read.
 pub fn half_blocks(
@@ -242,30 +277,49 @@ pub fn half_blocks(
 ) -> Option<Vec<ratatui::text::Line<'static>>> {
     use ratatui::style::{Color, Style};
     use ratatui::text::{Line, Span};
+    // Laid out once for each picture and size: the overlay draws every frame, the stream at every new width.
+    static DRAWN: std::sync::Mutex<Vec<(DrawnKey, Vec<Line<'static>>)>> =
+        std::sync::Mutex::new(Vec::new());
+    const KEPT: usize = 32;
+    let key = (image.path.clone(), columns, rows);
+    if let Some((_, lines)) = DRAWN
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .find(|(kept, _)| *kept == key)
+    {
+        return Some(lines.clone());
+    }
     let pixels = glut::images::thumbnail(image, u32::from(columns), u32::from(rows) * 2).ok()?;
-    Some(
-        pixels
-            .chunks(2)
-            .map(|pair| {
-                let upper = &pair[0];
-                let lower = pair.get(1).unwrap_or(upper);
-                Line::from(
-                    upper
-                        .iter()
-                        .zip(lower)
-                        .map(|(up, down)| {
-                            Span::styled(
-                                "▀",
-                                Style::default()
-                                    .fg(Color::Rgb(up[0], up[1], up[2]))
-                                    .bg(Color::Rgb(down[0], down[1], down[2])),
-                            )
-                        })
-                        .collect::<Vec<_>>(),
-                )
-            })
-            .collect(),
-    )
+    let lines: Vec<Line<'static>> = pixels
+        .chunks(2)
+        .map(|pair| {
+            let upper = &pair[0];
+            let lower = pair.get(1).unwrap_or(upper);
+            Line::from(
+                upper
+                    .iter()
+                    .zip(lower)
+                    .map(|(up, down)| {
+                        Span::styled(
+                            "▀",
+                            Style::default()
+                                .fg(Color::Rgb(up[0], up[1], up[2]))
+                                .bg(Color::Rgb(down[0], down[1], down[2])),
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect();
+    let mut drawn = DRAWN
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if drawn.len() >= KEPT {
+        drawn.remove(0);
+    }
+    drawn.push((key, lines.clone()));
+    Some(lines)
 }
 
 #[cfg(test)]

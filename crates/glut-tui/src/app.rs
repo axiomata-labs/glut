@@ -923,9 +923,20 @@ impl App {
                 // The images the turn's tools showed, under their calls (T46).
                 for message in &conversation {
                     if let Some(call) = &message.tool_call_id
-                        && !message.images.is_empty()
+                        && let Some((at, count)) =
+                            self.transcript.show_pictures(call, &message.images)
                     {
-                        self.transcript.show_pictures(call, &message.images);
+                        // What names a block by its place moves on with it.
+                        if let Some(reading) = &mut self.reading
+                            && reading.block >= at
+                        {
+                            reading.block += count;
+                        }
+                        if let Some(view) = &mut self.agent_view
+                            && view.path.first().is_some_and(|first| *first >= at)
+                        {
+                            view.path[0] += count;
+                        }
                     }
                 }
                 self.keep_warm(
@@ -5123,7 +5134,13 @@ impl App {
             .blocks
             .iter_mut()
             .fold(Vec::new(), |mut lines, block| {
-                lines.extend_from_slice(block.lines(width, thinking, 0));
+                // A picture in the terminal's scrollback is its line: neither blank cells nor half blocks (T46).
+                match &block.kind {
+                    crate::transcript::Kind::Picture(image) => {
+                        lines.push(ratatui::text::Line::from(format!("  {}", image.label())));
+                    }
+                    _ => lines.extend_from_slice(block.lines(width, thinking, 0)),
+                }
                 lines
             })
     }
@@ -5135,10 +5152,20 @@ impl App {
             .blocks
             .iter_mut()
             .flat_map(|block| {
-                block
-                    .lines(width, thinking, frame)
+                let picture = matches!(block.kind, crate::transcript::Kind::Picture(_));
+                let lines = block.lines(width, thinking, frame);
+                let last = lines.len().saturating_sub(1);
+                lines
                     .iter()
-                    .map(select::text_of)
+                    .enumerate()
+                    // A picture's rows copy as nothing, its line as itself (T46).
+                    .map(|(at, line)| {
+                        if picture && at < last {
+                            String::new()
+                        } else {
+                            select::text_of(line)
+                        }
+                    })
                     .collect::<Vec<_>>()
             })
             .collect()

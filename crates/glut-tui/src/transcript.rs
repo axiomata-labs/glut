@@ -249,25 +249,30 @@ pub struct Transcript {
 }
 
 impl Transcript {
-    /// The images a tool's answer showed (T46), under its call — once, when the turn's conversation is back.
-    pub fn show_pictures(&mut self, call: &str, images: &[glut::images::Image]) {
-        let Some(at) = self
+    /// The images a tool's answer showed (T46), under its call — once, when the turn's conversation is back. Returns
+    /// where they went in and how many: blocks after them moved on by that many.
+    pub fn show_pictures(
+        &mut self,
+        call: &str,
+        images: &[glut::images::Image],
+    ) -> Option<(usize, usize)> {
+        let at = self
             .blocks
             .iter()
-            .position(|block| matches!(&block.kind, Kind::Tool { id, .. } if id == call))
-        else {
-            return;
-        };
-        if matches!(
-            self.blocks.get(at + 1).map(|block| &block.kind),
-            Some(Kind::Picture(_))
-        ) {
-            return;
+            .position(|block| matches!(&block.kind, Kind::Tool { id, .. } if id == call))?;
+        if images.is_empty()
+            || matches!(
+                self.blocks.get(at + 1).map(|block| &block.kind),
+                Some(Kind::Picture(_))
+            )
+        {
+            return None;
         }
         for (offset, image) in images.iter().enumerate() {
             self.blocks
                 .insert(at + 1 + offset, Block::new(Kind::Picture(image.clone())));
         }
+        Some((at + 1, images.len()))
     }
 
     pub fn push(&mut self, kind: Kind) {
@@ -874,7 +879,7 @@ fn render(kind: &Kind, width: u16, thinking: Thinking, frame: usize) -> Vec<Line
                     room,
                     crate::pictures::MOST_ROWS,
                 );
-                if let Some(rows) = crate::pictures::half_blocks(image, columns, rows) {
+                if let Some(rows) = crate::pictures::lines(image, columns, rows) {
                     for mut row in rows {
                         row.spans.insert(0, Span::raw("  "));
                         lines.push(row);

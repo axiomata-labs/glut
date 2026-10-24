@@ -199,6 +199,49 @@ pub fn thumbnail(image: &Image, columns: u32, rows: u32) -> Result<Vec<Vec<[u8; 
     .unwrap_or_else(|_| Err("its decoder gave up on it".into()))
 }
 
+/// The kept image `image` as a PNG within `width` × `height` pixels, its proportions kept — what a terminal that
+/// draws images is sent (T46b). Only a file Glut keeps is read.
+///
+/// # Errors
+///
+/// A message when it is no kept image, is gone, or cannot be read.
+pub fn png_within(image: &Image, width: u32, height: u32) -> Result<Vec<u8>, String> {
+    kept_media(&image.path)
+        .ok_or_else(|| format!("image #{} is no image Glut keeps", image.number))?;
+    let bytes = read_file(&image.path).map_err(|_| format!("image #{} is gone", image.number))?;
+    std::panic::catch_unwind(|| {
+        let mut limits = image::Limits::default();
+        limits.max_image_width = Some(MOST_DECODED_SIDE);
+        limits.max_image_height = Some(MOST_DECODED_SIDE);
+        limits.max_alloc = Some(MOST_DECODED_BYTES);
+        let mut reader = image::ImageReader::new(Cursor::new(&bytes))
+            .with_guessed_format()
+            .map_err(|err| err.to_string())?;
+        reader.limits(limits);
+        let decoded = reader.decode().map_err(|err| err.to_string())?;
+        let small = if decoded.width() > width.max(1) || decoded.height() > height.max(1) {
+            decoded.resize(
+                width.max(1),
+                height.max(1),
+                image::imageops::FilterType::Triangle,
+            )
+        } else {
+            decoded
+        };
+        let mut png = Vec::new();
+        small
+            .write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
+            .map_err(|err| err.to_string())?;
+        Ok(png)
+    })
+    .unwrap_or_else(|_| Err("its decoder gave up on it".into()))
+}
+
+/// The bytes as base64, as a terminal's graphics protocol takes them.
+pub fn to_base64(bytes: &[u8]) -> String {
+    base64(bytes)
+}
+
 /// The image file at `path`, read in: no larger than [`MOST_FILE_BYTES`], through no link.
 ///
 /// # Errors

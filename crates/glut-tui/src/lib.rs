@@ -9,6 +9,7 @@ mod commands;
 mod follow;
 mod footer;
 mod glimm;
+mod graphics;
 mod guides;
 mod highlight;
 pub mod host;

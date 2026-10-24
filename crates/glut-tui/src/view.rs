@@ -409,7 +409,7 @@ fn draw_picture(frame: &mut Frame, app: &mut App, area: Rect) {
         width: columns,
         height: rows,
     };
-    match crate::pictures::half_blocks(&image, columns, rows) {
+    match crate::pictures::lines(&image, columns, rows) {
         Some(lines) => frame.render_widget(Paragraph::new(lines), place),
         None => frame.render_widget(
             Paragraph::new(Span::styled(

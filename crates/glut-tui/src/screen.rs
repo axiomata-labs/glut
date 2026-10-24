@@ -234,11 +234,14 @@ async fn run_loop(
     let mut interrupt = signal(SignalKind::interrupt())?;
     // The cursor's shape follows the vi mode: a block in Normal mode, the owner's own shape otherwise.
     let mut block_cursor = false;
+    // The pictures the terminal draws itself (T46b): what it was sent and where each stands.
+    let mut graphics = crate::graphics::Screen::default();
     loop {
         // A session built beside the screen may have written to the terminal: drawn anew from blank.
         if std::mem::take(&mut panes.redraw) {
             execute!(io::stdout(), Clear(ClearType::All))?;
             terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
+            graphics.cleared(&mut io::stdout())?;
         }
         let wanted = panes
             .active()
@@ -259,8 +262,11 @@ async fn run_loop(
         // is sent even when the frame failed, or the terminal would hold every later one back.
         execute!(io::stdout(), BeginSynchronizedUpdate)?;
         let mut spots = Vec::new();
+        let mut pictures = Vec::new();
         let drawn = terminal.draw(|frame| {
             view::draw_panes(frame, panes);
+            // The pictures' marks give up where they stand (T46b) — once the frame is drawn.
+            pictures = crate::graphics::take(frame.buffer_mut());
             // The reader mode's frames, marks and Powerline's glyphs in plain ASCII, one cell for one (TUI9b) — before
             // the links take their cells, which are written once more as they stand then.
             crate::motion::plain_cells(frame.buffer_mut());
@@ -272,11 +278,28 @@ async fn run_loop(
             Ok(_) => crate::links::write(&mut io::stdout(), &spots),
             Err(_) => Ok(()),
         };
+        // The pictures the terminal draws itself, where they stand whole — in the same synchronized frame.
+        let protocol = crate::graphics::protocol()
+            .filter(|_| crate::pictures::drawing() == crate::pictures::Drawing::Inline);
+        let shown = match (&drawn, protocol) {
+            (Ok(_), Some(protocol)) => graphics.show(&mut io::stdout(), protocol, &pictures),
+            // Drawn otherwise now (`/images`, the reader mode): what the terminal still draws is taken away.
+            (Ok(_), None) if graphics.holds_any() => {
+                graphics.cleared(&mut io::stdout()).map(|()| false)
+            }
+            _ => Ok(false),
+        };
         execute!(io::stdout(), EndSynchronizedUpdate)?;
         drawn?;
         linked?;
         panes.links = spots;
+        // iTerm2 keeps a picture in its cells: one moved or gone has the screen drawn anew, at once.
+        if shown? && !panes.quitting() {
+            panes.redraw = true;
+            continue;
+        }
         if panes.quitting() {
+            graphics.cleared(&mut io::stdout())?;
             // How the window stood, for the next `glut -c` (TUI9e).
             panes.keep_layout();
             for pane in &mut panes.list {
@@ -337,6 +360,7 @@ async fn run_loop(
             entered?;
             execute!(io::stdout(), Clear(ClearType::All))?;
             terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
+            graphics.cleared(&mut io::stdout())?;
             // `leave` gave the terminal its own cursor back: the vi mode's block is sent again.
             block_cursor = false;
             continue;
@@ -356,6 +380,7 @@ async fn run_loop(
             app.mouse_held = true;
             execute!(io::stdout(), Clear(ClearType::All))?;
             terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
+            graphics.cleared(&mut io::stdout())?;
             block_cursor = false;
             continue;
         }
@@ -377,6 +402,7 @@ async fn run_loop(
             app.mouse_held = true;
             execute!(io::stdout(), Clear(ClearType::All))?;
             terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
+            graphics.cleared(&mut io::stdout())?;
             // `leave` gave the terminal its own cursor back: the vi mode's block is sent again.
             block_cursor = false;
             continue;
