@@ -278,6 +278,9 @@ pub struct App {
     images_given: u32,
     /// The highest image number sent: a message's images are numbered on from it when it goes.
     images_sent: u32,
+    /// The images of the turn under way (T45): the conversation is the turn's while it runs, and they open all the
+    /// same.
+    turn_images: Vec<glut::images::Image>,
     /// Since when Glut works (TUI9b): what the footer counts while the screen holds still.
     pub busy_since: Option<Instant>,
     /// The state last seen (TUI9b): the reader mode says each change in a line of its own.
@@ -460,6 +463,7 @@ impl App {
             busy_since: None,
             images_given: 0,
             images_sent: 0,
+            turn_images: Vec::new(),
             mode_note: None,
             first_start,
             seen_state: None,
@@ -751,7 +755,10 @@ impl App {
             Arc::clone(&self.parts),
             self.engine.clone(),
             std::mem::take(&mut self.conversation),
-            session::TurnInput::Message(prompt, images),
+            {
+                self.turn_images.clone_from(&images);
+                session::TurnInput::Message(prompt, images)
+            },
             cancel,
             inbox,
             self.reports.clone(),
@@ -4782,6 +4789,7 @@ impl App {
             .conversation
             .iter()
             .flat_map(|message| &message.images)
+            .chain(&self.turn_images)
             .find(|image| image.number == number)
             .map(|image| image.path.clone());
         // Only a file Glut keeps opens, whatever a session file says.
@@ -6562,6 +6570,9 @@ mod tests {
                 _ => None,
             });
         assert!(shown.unwrap().ends_with("[image #1 · 2×1 · 1 kB]"));
+        // While its turn runs the conversation is the turn's: the image opens all the same.
+        assert!(app.working() && app.conversation.is_empty());
+        assert!(app.turn_images.iter().any(|image| image.number == 1));
         // The next image numbers on, and a mark deleted takes its image out.
         let mut sent = glut::Message::user("earlier");
         sent.images = vec![glut::images::keep(&app.parts.home, &TINY_PNG, 1).unwrap()];
