@@ -324,6 +324,7 @@ impl App {
             prefs.motion.unwrap_or_default(),
             prefs.reader.unwrap_or(false),
         );
+        crate::links::set(prefs.links);
         engine
             .model
             .set_cache_hour(cache_mode == crate::warm::CacheMode::Hour);
@@ -2052,6 +2053,23 @@ impl App {
                         now.label()
                     ));
                 }
+            },
+            "links" => match crate::links::Links::parse(rest) {
+                Some(links) => {
+                    crate::links::set(Some(links));
+                    crate::motion::relook();
+                    match prefs::set_links(&self.parts.home, links) {
+                        Ok(()) if links == crate::links::Links::Clickable => {
+                            self.say("links: clickable — the text is the link")
+                        }
+                        Ok(()) => self.say("links: plain — the URL after the text"),
+                        Err(reason) => self.transcript.note(reason, Tone::Fault),
+                    }
+                }
+                None => self.tell(format!(
+                    "links: {} — /links clickable or /links plain",
+                    if crate::links::clickable() { "clickable" } else { "plain" }
+                )),
             },
             "reader" => match rest {
                 "on" => self.set_reader(true),

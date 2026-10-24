@@ -251,13 +251,23 @@ async fn run_loop(
         // Every frame inside synchronized output (DEC 2026): the terminal shows it whole or not at all — and the end
         // is sent even when the frame failed, or the terminal would hold every later one back.
         execute!(io::stdout(), BeginSynchronizedUpdate)?;
+        let mut spots = Vec::new();
         let drawn = terminal.draw(|frame| {
             view::draw_panes(frame, panes);
-            // The reader mode's frames, marks and Powerline's glyphs in plain ASCII, one cell for one (TUI9b).
+            // The reader mode's frames, marks and Powerline's glyphs in plain ASCII, one cell for one (TUI9b) — before
+            // the links take their cells, which are written once more as they stand then.
             crate::motion::plain_cells(frame.buffer_mut());
+            // The links' marks give up where they stand before the frame goes out (TUI9d).
+            spots = crate::links::take_spots(frame.buffer_mut());
         });
+        // The links' cells once more, inside OSC 8 — in the same synchronized frame.
+        let linked = match &drawn {
+            Ok(_) => crate::links::write(&mut io::stdout(), &spots),
+            Err(_) => Ok(()),
+        };
         execute!(io::stdout(), EndSynchronizedUpdate)?;
         drawn?;
+        linked?;
         if panes.quitting() {
             for pane in &mut panes.list {
                 let app = &mut pane.app;

@@ -58,6 +58,9 @@ pub struct Prefs {
     /// Whether the first start's welcome was seen (TUI9c): it goes with the first message or command.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub welcomed: Option<bool>,
+    /// How links are shown (TUI9d, `/links`); `None`: clickable where the terminal speaks OSC 8.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub links: Option<crate::links::Links>,
     /// How much the screen moves (TUI9b, `/motion`); `None`: fully.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub motion: Option<crate::motion::Motion>,
@@ -212,6 +215,17 @@ pub fn set_footer(home: &Path, separators: crate::footer::Separators) -> Result<
 pub fn set_welcomed(home: &Path) -> Result<(), String> {
     let mut prefs = Prefs::read(home)?;
     prefs.welcomed = Some(true);
+    prefs.save(home)
+}
+
+/// Keeps how links are shown (`/links`).
+///
+/// # Errors
+///
+/// A message when the file cannot be read (it is not written over) or written.
+pub fn set_links(home: &Path, links: crate::links::Links) -> Result<(), String> {
+    let mut prefs = Prefs::read(home)?;
+    prefs.links = Some(links);
     prefs.save(home)
 }
 

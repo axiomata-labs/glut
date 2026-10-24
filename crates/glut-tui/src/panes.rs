@@ -572,6 +572,8 @@ impl Panes {
         // first frame (TUI9b).
         let look = crate::motion::look();
         if std::mem::replace(&mut self.look, look) != look {
+            // Drawn whole from blank: a cell that only lost its link (`/links plain`) is no change to ratatui.
+            self.redraw = true;
             for pane in &mut self.list {
                 pane.app.frame = 0;
                 pane.app.transcript.touch_all();

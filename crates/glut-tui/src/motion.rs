@@ -82,6 +82,11 @@ pub fn reader() -> bool {
     READER.load(Ordering::Relaxed)
 }
 
+/// The look changed in another way (`/links`): every pane lays its blocks out anew.
+pub fn relook() {
+    LOOK.fetch_add(1, Ordering::Relaxed);
+}
+
 /// The look's count of changes so far.
 pub fn look() -> usize {
     LOOK.load(Ordering::Relaxed)

@@ -13,6 +13,7 @@ mod guides;
 mod highlight;
 pub mod host;
 mod input;
+mod links;
 pub mod log;
 mod markdown;
 mod memory;

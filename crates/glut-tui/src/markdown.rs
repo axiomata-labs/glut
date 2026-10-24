@@ -130,8 +130,12 @@ impl Renderer {
         if matches!(self.heading, Some(HeadingLevel::H1)) {
             style = style.add_modifier(Modifier::UNDERLINED);
         }
-        if !self.links.is_empty() {
+        if let Some((url, _)) = self.links.last() {
             style = style.fg(theme::c().link).add_modifier(Modifier::UNDERLINED);
+            // Clickable (TUI9d): the text carries the link's mark, which the frame turns into the link.
+            if let Some(mark) = crate::links::mark(url) {
+                style = style.underline_color(mark);
+            }
         }
         style
     }
@@ -305,6 +309,17 @@ impl Renderer {
                     if matches!(tag, TagEnd::Image) {
                         let gap = if said.trim().is_empty() { "" } else { " → " };
                         self.push_text(&format!("{gap}{url}]"), theme::quiet());
+                    } else if let Some(after) = crate::links::after_text(&said, &url) {
+                        // Clickable (TUI9d): text with nothing to see is no link — no invisible place to click.
+                        if said.trim().is_empty() {
+                            let from = at.min(self.inline.len());
+                            for (_, style) in &mut self.inline[from..] {
+                                style.underline_color = None;
+                            }
+                        }
+                        if !after.is_empty() {
+                            self.push_text(&after, theme::quiet());
+                        }
                     } else if !url.is_empty() && said.trim() != url && !url.starts_with('#') {
                         self.push_text(&format!(" ({url})"), theme::quiet());
                     }

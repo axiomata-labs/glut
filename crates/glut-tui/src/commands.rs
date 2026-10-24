@@ -81,7 +81,7 @@ const fn command(
 }
 
 /// Every command, grouped by topic in [`Topic::ALL`]'s order, the most used first inside a topic.
-pub const COMMANDS: [Command; 39] = [
+pub const COMMANDS: [Command; 40] = [
     command(Topic::Session, "clear", "", "start a new session"),
     command(
         Topic::Session,
@@ -252,6 +252,12 @@ pub const COMMANDS: [Command; 39] = [
         "gate",
         "",
         "the rules in force; take an \"always\" back (⌃G: the gate, live)",
+    ),
+    command(
+        Topic::Settings,
+        "links",
+        "clickable|plain",
+        "a link's text is the link where the terminal speaks OSC 8, or the URL written after it",
     ),
     command(
         Topic::Settings,
