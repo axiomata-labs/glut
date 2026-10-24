@@ -22,11 +22,13 @@ pub enum Topic {
     Settings,
     /// Keys only: what the input does.
     Input,
+    /// Keys only: moving and deleting in the line typed, as in the shell (TUI9a).
+    Editing,
     Help,
 }
 
 impl Topic {
-    pub const ALL: [Topic; 9] = [
+    pub const ALL: [Topic; 10] = [
         Topic::Session,
         Topic::Model,
         Topic::View,
@@ -35,6 +37,7 @@ impl Topic {
         Topic::Project,
         Topic::Settings,
         Topic::Input,
+        Topic::Editing,
         Topic::Help,
     ];
 
@@ -48,6 +51,7 @@ impl Topic {
             Topic::Project => "Project",
             Topic::Settings => "Settings",
             Topic::Input => "Input",
+            Topic::Editing => "Editing the line",
             Topic::Help => "Help",
         }
     }
@@ -145,7 +149,7 @@ pub const COMMANDS: [Command; 37] = [
         Topic::View,
         "agents",
         "",
-        "the session's subagents: open one's own stream (a click on its tile does too; ⌃A: the Agents tab)",
+        "the session's subagents: open one's own stream (a click on its tile does too; ⌃X A: the Agents tab)",
     ),
     command(
         Topic::View,
@@ -302,7 +306,7 @@ const fn key(topic: Topic, key: &'static str, what: &'static str, command: &'sta
 }
 
 /// Every key Glut has, grouped as [`COMMANDS`] are; a topic without keys shows no heading.
-pub const KEYS: [Key; 31] = [
+pub const KEYS: [Key; 39] = [
     key(
         Topic::Session,
         "⇧⇥",
@@ -352,11 +356,28 @@ pub const KEYS: [Key; 31] = [
     ),
     key(
         Topic::View,
-        "⌃A",
-        "the Agents tab: every subagent, live",
+        "⌃X A",
+        "the Agents tab: every subagent and the agents in the background, live",
         "/agents",
     ),
-    key(Topic::View, "PgUp PgDn", "scroll the stream", ""),
+    key(
+        Topic::View,
+        "⌃X ↑",
+        "read the stream block by block: ⏎ folds, c copies, ⎋ back",
+        "",
+    ),
+    key(
+        Topic::View,
+        "⌃X ⇥",
+        "the side panel takes the keys: ←→ the tabs, ↑↓ within, ⎋ back",
+        "",
+    ),
+    key(
+        Topic::View,
+        "PgUp PgDn",
+        "scroll the stream (⇧↑ ⇧↓ a line)",
+        "",
+    ),
     key(
         Topic::View,
         "F3",
@@ -412,6 +433,27 @@ pub const KEYS: [Key; 31] = [
         "⌃X E",
         "edit the input in your editor",
         "/editor",
+    ),
+    key(
+        Topic::Editing,
+        "⌃A ⌃E",
+        "the line's start, its end (Home End too)",
+        "",
+    ),
+    key(
+        Topic::Editing,
+        "⌥B ⌥F",
+        "a word left, a word right (⌥← ⌥→ too)",
+        "",
+    ),
+    key(Topic::Editing, "⌃W", "delete the word before (⌥⌫ too)", ""),
+    key(Topic::Editing, "⌃U", "delete to the line's start", ""),
+    key(Topic::Editing, "⌃J", "a new line", ""),
+    key(
+        Topic::Editing,
+        "⌃D",
+        "quit, on an empty line while Glut rests",
+        "",
     ),
     key(Topic::Help, "⌃K", "this sheet of keys", "/help"),
 ];

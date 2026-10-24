@@ -520,8 +520,29 @@ fn draw_stream(frame: &mut Frame, app: &mut App, area: Rect) {
         app.selection = None;
     }
     let texts = app.search.is_some();
+    let chosen = app.reading.map(|reading| reading.block);
     // Only what can be on the screen is laid out: blocks from the end until the screen and the scroll are covered —
-    // all of them while the search is open, which may scroll to any of them.
+    // all of them while the search or the reading mode is open, which may scroll to any of them.
+    // The reading mode's block is scrolled into view first: whole where it fits, else its head at the top. Only the
+    // blocks' lengths are needed for that (each laid out once and kept), not their lines.
+    if let Some(reading) = &mut app.reading
+        && std::mem::take(&mut reading.jump)
+        && reading.block < app.transcript.blocks.len()
+    {
+        let after: usize = app.transcript.blocks[reading.block + 1..]
+            .iter_mut()
+            .map(|block| block.lines(width, app.transcript.thinking, app.frame).len())
+            .sum();
+        let length = app.transcript.blocks[reading.block]
+            .lines(width, app.transcript.thinking, app.frame)
+            .len();
+        let top = after + length;
+        if top > app.scroll + height || length > height {
+            app.scroll = top.saturating_sub(height);
+        } else if after < app.scroll {
+            app.scroll = after;
+        }
+    }
     let wanted = if texts {
         usize::MAX
     } else {
@@ -583,6 +604,20 @@ fn draw_stream(frame: &mut Frame, app: &mut App, area: Rect) {
     let place = Rect { width, ..area };
     frame.render_widget(Paragraph::new(lines), place);
     mark_stream(frame, app, place);
+    // The reading mode's block: a bar in the column the stream leaves free at its right.
+    if let Some(chosen) = chosen {
+        for (row, block, _) in &app.rows {
+            if *block == chosen {
+                let bar = Rect {
+                    x: area.x + width,
+                    y: *row,
+                    width: 1,
+                    height: 1,
+                };
+                frame.render_widget(Paragraph::new(Span::styled("▐", theme::glow())), bar);
+            }
+        }
+    }
     if app.scroll > 0 {
         let mark = format!(" ↓ {} more ", app.scroll);
         let place = Rect {
@@ -908,6 +943,8 @@ fn draw_keys(frame: &mut Frame, app: &App, area: Rect, branch: Option<String>, c
         format!("y once · {keys} for this session · n refuse · ⌃C refuse and clear")
     } else if app.ask.is_some() {
         "y once · n refuse · ⌃C refuse and clear".to_owned()
+    } else if app.reading.is_some() {
+        "↑↓ a block · ⏎ folds · c copies · g G the ends · / search · ⎋ back".to_owned()
     } else if app.plan_view.is_some() || app.keys_sheet.is_some() {
         "↑↓ PgUp PgDn scroll · ⎋ closes".to_owned()
     } else if app.agent_view.is_some() {
@@ -958,9 +995,15 @@ fn draw_panel(frame: &mut Frame, app: &mut App, area: Rect) {
     } else {
         "To-dos".to_owned()
     };
+    // The panel with the keys (TUI9a) shows it in its edge.
+    let edge = if app.panel_focus {
+        theme::glow()
+    } else {
+        theme::quiet()
+    };
     let block = Block::default()
         .borders(Borders::LEFT)
-        .border_style(theme::quiet())
+        .border_style(edge)
         .title(tab_titles(
             &[
                 (Tab::Plan, "Plan"),
@@ -990,7 +1033,10 @@ fn draw_panel(frame: &mut Frame, app: &mut App, area: Rect) {
             lines.push(Line::default());
         }
         let room = usize::from(area.height).saturating_sub(lines.len() + 2);
-        lines.extend(app.meter.lines(&app.meter_window(), width + 2, room));
+        let body = app
+            .meter
+            .lines(&app.meter_window(), width + 2, PANEL_BODY_MOST);
+        lines.extend(scrolled(body, &mut app.panel_scroll, room));
         lines.push(Line::default());
         lines.extend(panel_keys(app, width));
         frame.render_widget(Paragraph::new(lines).block(block), area);
@@ -1100,27 +1146,31 @@ fn draw_panel(frame: &mut Frame, app: &mut App, area: Rect) {
         };
         // The last row is the panel's hint.
         let room = usize::from(area.height).saturating_sub(lines.len() + 2);
-        lines.extend(app.watch.lines(&guard, width + 2, room));
+        let body = app.watch.lines(&guard, width + 2, PANEL_BODY_MOST);
+        lines.extend(scrolled(body, &mut app.panel_scroll, room));
         lines.push(Line::default());
         lines.extend(panel_keys(app, width));
         frame.render_widget(Paragraph::new(lines).block(block), area);
         return;
     }
+    // The plan and its task list scroll below Glimm, above the hint (TUI9a).
+    let header = lines.len();
+    let mut body: Vec<Line> = Vec::new();
     if let Some(plan) = &app.plan {
-        lines.push(Line::default());
+        body.push(Line::default());
         // The plan takes at most half of what is left; the task list and the hint keep the rest.
-        let most = usize::from(area.height).saturating_sub(lines.len() + 4) / 2;
-        lines.extend(crate::plan::head(plan, width + 2, most.max(2)));
+        let most = usize::from(area.height).saturating_sub(header + 4) / 2;
+        body.extend(crate::plan::head(plan, width + 2, most.max(2)));
     }
     if app.todos.is_empty() {
         // With a plan above, no hint for a list that may never come.
         if app.plan.is_none() {
-            lines.push(Line::default());
+            body.push(Line::default());
             for row in wrap(
                 "No plan yet. For work of several steps Glut writes its task list here, and ticks it off as it goes.",
                 width,
             ) {
-                lines.push(Line::from(Span::styled(format!(" {row}"), theme::quiet())));
+                body.push(Line::from(Span::styled(format!(" {row}"), theme::quiet())));
             }
         }
     } else {
@@ -1129,17 +1179,31 @@ fn draw_panel(frame: &mut Frame, app: &mut App, area: Rect) {
             .iter()
             .filter(|item| item.status == TodoStatus::Done)
             .count();
-        lines.push(Line::default());
-        lines.push(Line::from(Span::styled(
+        body.push(Line::default());
+        body.push(Line::from(Span::styled(
             format!(" {done} of {} done", app.todos.len()),
             theme::quiet(),
         )));
-        lines.push(Line::default());
-        lines.extend(crate::plan::todo_lines(&app.todos, width + 1));
+        body.push(Line::default());
+        body.extend(crate::plan::todo_lines(&app.todos, width + 1));
     }
+    let keys = panel_keys(app, width);
+    let room = usize::from(area.height).saturating_sub(header + keys.len() + 3);
+    lines.extend(scrolled(body, &mut app.panel_scroll, room));
     lines.push(Line::default());
-    lines.extend(panel_keys(app, width));
+    lines.extend(keys);
     frame.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+/// How many rows of the Gate or Meter tab are laid out to scroll through: all of them, sliced once (TUI9a) — asked
+/// for fewer, a tab that fills its rows in pairs would leave a scroll of one row nothing to move.
+const PANEL_BODY_MOST: usize = 2_000;
+
+/// `room` rows of `body` from `scroll` on — scrolled no further than its end, so the keys past it leave nothing to
+/// scroll back first.
+fn scrolled(body: Vec<Line<'static>>, scroll: &mut usize, room: usize) -> Vec<Line<'static>> {
+    *scroll = (*scroll).min(body.len().saturating_sub(room));
+    body.into_iter().skip(*scroll).take(room).collect()
 }
 
 /// The panel's tab names in `width` cells: each with room around it and a dot between where they fit; else the
@@ -1192,16 +1256,26 @@ fn tab_titles(
 /// has them.
 fn panel_keys(app: &App, width: usize) -> Vec<Line<'static>> {
     use crate::app::Tab;
+    // With the panel's focus, ←→ go round the tabs (TUI9a).
+    let tabs = if app.panel_focus {
+        "←→ tabs · "
+    } else {
+        ""
+    };
     let text = if app.tab == Tab::Agents && app.agents_list.is_some() {
-        "↑↓ choose · ⏎ opens · x stops it · ⎋ back to the input · ⌃A hides".to_owned()
+        format!("{tabs}↑↓ choose · ⏎ opens · x stops it · ⎋ back to the input · ⌃X A hides")
     } else if app.tab == Tab::Todos && app.project_todos.keys {
-        "↑↓ choose · Space ticks · a adds · o editor · ⎋ back to the input · ⌃Y hides".to_owned()
+        format!(
+            "{tabs}↑↓ choose · Space ticks · a adds · o editor · ⎋ back to the input · ⌃Y hides"
+        )
+    } else if app.panel_focus {
+        "←→ tabs · ↑↓ PgUp PgDn scroll · ⎋ back to the input".to_owned()
     } else {
         [
             (Tab::Plan, "⌃B", "plan"),
             (Tab::Gate, "⌃G", "gate"),
             (Tab::Meter, "⌃N", "meter"),
-            (Tab::Agents, "⌃A", "agents"),
+            (Tab::Agents, "⌃X A", "agents"),
             (Tab::Todos, "⌃Y", "to-dos"),
             (Tab::Keys, "⌃K", "keys"),
         ]

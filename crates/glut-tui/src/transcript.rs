@@ -65,6 +65,32 @@ pub enum Kind {
     },
 }
 
+impl Kind {
+    /// What the reading mode's `c` copies (TUI9a): the text as written — a tool's whole output, its call where it
+    /// has none.
+    pub fn copied(&self) -> String {
+        match self {
+            Kind::Owner(text)
+            | Kind::Answer { text, .. }
+            | Kind::Note { text, .. }
+            | Kind::Thinking { text, .. } => text.clone(),
+            Kind::Tool {
+                name,
+                target,
+                output,
+                ..
+            } => {
+                if output.is_empty() {
+                    format!("{name} {target}")
+                } else {
+                    output.clone()
+                }
+            }
+            Kind::Agent(agent) => agent.task.clone(),
+        }
+    }
+}
+
 /// A subagent the parent started with `task`: what the tile shows and the stream its view shows.
 #[derive(Debug, Clone)]
 pub struct Agent {

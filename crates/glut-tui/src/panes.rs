@@ -1277,7 +1277,7 @@ impl Panes {
     fn show(&mut self, name: &str) {
         let Some(at) = self.resolve_background(name) else {
             return self.active().tell(format!(
-                "no background agent {} — ⌃A lists them",
+                "no background agent {} — ⌃X A lists them",
                 crate::transcript::clean(name)
             ));
         };
@@ -1303,7 +1303,7 @@ impl Panes {
     fn end_background(&mut self, name: &str) {
         let Some(at) = self.resolve_background(name) else {
             return self.active().tell(format!(
-                "no background agent {} — ⌃A lists them",
+                "no background agent {} — ⌃X A lists them",
                 crate::transcript::clean(name)
             ));
         };
