@@ -1092,10 +1092,16 @@ impl App {
             return self.interrupt();
         }
         // ⌃P or ⌃] the other pane (T36a) — whatever this one shows: it is how the owner reaches the other's question.
-        // ⌃P is a letter, the same key on every layout; `]` is ⌥6 on a German Mac, where ⌃] arrives as ⌃(⌥)6 — taken
-        // too, as the owner reaches it with one finger; a terminal without the keyboard protocol sends ⌃] as ⌃5.
+        // ⌃P is a letter, the same key on every layout. Where `]` takes ⌥, ⌃] arrives as ⌃⌥ and the digit under it:
+        // ⌃⌥6 on a German Mac, ⌃⌥9 from the owner's Voyager (seen 2026-10-24) — both taken, as the owner reaches
+        // them with one finger; a terminal without the keyboard protocol sends ⌃] as ⌃5.
+        let bracket = match key.code {
+            KeyCode::Char(']' | '5' | '6') => true,
+            KeyCode::Char('9') => alt,
+            _ => false,
+        };
         if ctrl
-            && matches!(key.code, KeyCode::Char('p' | 'P' | ']' | '5' | '6'))
+            && (bracket || matches!(key.code, KeyCode::Char('p' | 'P')))
             && key.kind != KeyEventKind::Repeat
         {
             self.chord = false;

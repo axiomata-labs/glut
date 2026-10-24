@@ -844,6 +844,15 @@ mod tests {
             KeyModifiers::CONTROL | KeyModifiers::ALT,
         );
         assert_eq!(panes.active, 1, "⌃] on a German layout: ⌃⌥6");
+        press(
+            &mut panes,
+            KeyCode::Char('9'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
+        );
+        assert_eq!(panes.active, 0, "⌃] from the owner's Voyager: ⌃⌥9");
+        press(&mut panes, KeyCode::Char('9'), KeyModifiers::CONTROL);
+        assert_eq!(panes.active, 0, "⌃9 alone is no bracket");
+        press(&mut panes, KeyCode::Char('p'), KeyModifiers::CONTROL);
         press(&mut panes, KeyCode::Char('6'), KeyModifiers::CONTROL);
         press(&mut panes, KeyCode::Char('p'), KeyModifiers::CONTROL);
         press(&mut panes, KeyCode::Char('x'), KeyModifiers::NONE);
