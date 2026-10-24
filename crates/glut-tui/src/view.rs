@@ -33,8 +33,9 @@ pub struct Chrome {
     pub number: Option<u8>,
     /// The pane the keys go to: its footer glows, the cursor is its.
     pub active: bool,
-    /// The other panes waiting for the owner's word (the active pane's footer says so).
-    pub others_ask: Vec<u8>,
+    /// The other panes and background agents waiting for the owner's word, each said with how to reach it ("pane 2
+    /// asks — ⌃P", "reviewer asks — /show reviewer"): the active pane's footer says so.
+    pub others_ask: Vec<String>,
 }
 
 impl Chrome {
@@ -51,6 +52,8 @@ impl Chrome {
     }
 }
 
+/// One session alone on the whole screen — what the tests draw.
+#[cfg(test)]
 pub fn draw(frame: &mut Frame, app: &mut App) {
     draw_in(frame, app, frame.area(), &Chrome::whole());
 }
@@ -58,10 +61,43 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 /// The screen's panes (T36a): one is drawn as ever; several share the header, stand side by side or one above the
 /// other, each with its own footer, and the active one's side panel takes the right where there is room.
 pub fn draw_panes(frame: &mut Frame, panes: &mut crate::panes::Panes) {
+    // Who waits for the owner's word elsewhere, and how to get there (T36a, T36e).
+    let asking: Vec<(u64, String)> = panes
+        .list
+        .iter()
+        .filter(|pane| {
+            // A message held in a background agent waits for an Enter no screen shows (T36e).
+            pane.app.waits_for_owner() || (pane.background && !pane.app.held.is_empty())
+        })
+        .map(|pane| {
+            let said = match (&pane.name, pane.background) {
+                (Some(name), true) if !pane.app.waits_for_owner() => {
+                    format!("{name} holds a message — /show {name}")
+                }
+                (Some(name), true) => format!("{name} asks — /show {name}"),
+                _ => format!("pane {} asks — ⌃P", pane.number),
+            };
+            (pane.id, said)
+        })
+        .collect();
+    let others_ask = |key: u64| -> Vec<String> {
+        asking
+            .iter()
+            .filter(|(other, _)| *other != key)
+            .map(|(_, said)| said.clone())
+            .collect()
+    };
     if !panes.split() {
-        let pane = &mut panes.list[0];
-        pane.area = frame.area();
-        return draw(frame, &mut pane.app);
+        let active = panes.active;
+        let area = frame.area();
+        let pane = &mut panes.list[active];
+        pane.area = area;
+        let chrome = Chrome {
+            others_ask: others_ask(pane.id),
+            ..Chrome::whole()
+        };
+        draw_in(frame, &mut pane.app, area, &chrome);
+        return draw_peek(frame, panes, area);
     }
     let [header, body] =
         Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(frame.area());
@@ -84,14 +120,10 @@ pub fn draw_panes(frame: &mut Frame, panes: &mut crate::panes::Panes) {
         body
     };
     let (areas, lines) = panes.areas(body);
-    let asking: Vec<u8> = panes
-        .list
-        .iter()
-        .filter(|pane| pane.app.waits_for_owner())
-        .map(|pane| pane.number)
+    // The active pane last: its cursor is the one the terminal shows. Background agents stand nowhere.
+    let mut order: Vec<usize> = (0..panes.list.len())
+        .filter(|at| *at != active && !panes.list[*at].background)
         .collect();
-    // The active pane last: its cursor is the one the terminal shows.
-    let mut order: Vec<usize> = (0..panes.list.len()).filter(|at| *at != active).collect();
     order.push(active);
     for at in order {
         let pane = &mut panes.list[at];
@@ -100,11 +132,7 @@ pub fn draw_panes(frame: &mut Frame, panes: &mut crate::panes::Panes) {
             number: Some(pane.number),
             active: at == active,
             others_ask: if at == active {
-                asking
-                    .iter()
-                    .copied()
-                    .filter(|number| *number != pane.number)
-                    .collect()
+                others_ask(pane.id)
             } else {
                 Vec::new()
             },
@@ -122,6 +150,43 @@ pub fn draw_panes(frame: &mut Frame, panes: &mut crate::panes::Panes) {
             );
         }
     }
+    let area = panes.list[active].area;
+    draw_peek(frame, panes, area);
+}
+
+/// `/peek` (T36e): a background agent's stream over the active pane's area, only to read — its name and how to close
+/// it in the frame.
+fn draw_peek(frame: &mut Frame, panes: &mut crate::panes::Panes, area: Rect) {
+    let Some(id) = panes.peek else { return };
+    let Some(pane) = panes.list.iter_mut().find(|pane| pane.id == id) else {
+        panes.peek = None;
+        return;
+    };
+    if area.width < 20 || area.height < 6 {
+        // Too small to read: no peek swallowing the keys unseen.
+        panes.peek = None;
+        return;
+    }
+    let name = pane
+        .name
+        .clone()
+        .unwrap_or_else(|| format!("pane {}", pane.number));
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(theme::quiet())
+        .title(Span::styled(
+            format!(" {name} — in the background · ⎋ closes · /show {name} brings it forward "),
+            theme::quiet(),
+        ));
+    let inner = block.inner(area);
+    frame.render_widget(Clear, area);
+    frame.render_widget(block, area);
+    let chrome = Chrome {
+        number: None,
+        active: false,
+        others_ask: Vec::new(),
+    };
+    draw_in(frame, &mut pane.app, inner, &chrome);
 }
 
 /// The narrowest a pane beside another is let be before the side panel stays away.
@@ -862,8 +927,7 @@ fn draw_keys(frame: &mut Frame, app: &App, area: Rect, branch: Option<String>, c
             String::new()
         }
     } else if !chrome.others_ask.is_empty() {
-        let numbers: Vec<String> = chrome.others_ask.iter().map(u8::to_string).collect();
-        format!("pane {} asks — ⌃P · {hints}", numbers.join(", "))
+        format!("{} · {hints}", chrome.others_ask.join(" · "))
     } else {
         hints
     };
@@ -935,6 +999,25 @@ fn draw_panel(frame: &mut Frame, app: &mut App, area: Rect) {
     if app.tab == Tab::Agents {
         lines.push(Line::default());
         let keys = panel_keys(app, width);
+        // T36e: the agents in the background first — sessions of their own, reached by name.
+        if !app.background.is_empty() {
+            lines.push(Line::from(Span::styled(
+                " In the background",
+                theme::strong(),
+            )));
+            for agent in &app.background {
+                for row in wrap(agent, width) {
+                    lines.push(Line::from(Span::raw(format!(" {row}"))));
+                }
+            }
+            for row in wrap(
+                "/peek <name> reads one · /show <name> brings it forward · /send <name> …",
+                width,
+            ) {
+                lines.push(Line::from(Span::styled(format!(" {row}"), theme::quiet())));
+            }
+            lines.push(Line::default());
+        }
         let list = crate::agents::overview(&app.transcript);
         if list.is_empty() {
             for row in wrap(

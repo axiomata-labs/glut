@@ -458,7 +458,11 @@ pub fn proposed_branch(repo: &Repo, number: u8) -> String {
 /// Whether `branch` is a name Glut makes a worktree on: plain ASCII (no character that turns or hides text), and one
 /// git takes.
 fn plain_branch(repo: &Repo, branch: &str) -> Result<(), String> {
-    let plain = !branch.is_empty() && branch.chars().all(|c| c.is_ascii_graphic());
+    // A leading `-` would reach git as an option (`worktree add -b` passes it on without `--`).
+    let plain = !branch.is_empty()
+        && !branch.starts_with('-')
+        && branch != "@"
+        && branch.chars().all(|c| c.is_ascii_graphic());
     if !plain
         || git(
             &repo.pin(),
@@ -911,6 +915,8 @@ mod tests {
         remove(&tree, true).unwrap();
         assert!(!tree.place.exists());
         assert!(add(&home, &repo, "no..name").is_err());
+        // An option to git is no branch name.
+        assert!(add(&home, &repo, "-D").is_err() && add(&home, &repo, "@").is_err());
         assert!(
             add(&home, &repo, "glut/\u{202e}evil").is_err(),
             "no character that turns text"

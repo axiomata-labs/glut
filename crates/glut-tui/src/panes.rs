@@ -21,6 +21,8 @@ pub const MOST: usize = 4;
 pub const MOST_CHAIN: u32 = 6;
 /// How many messages one session's model may send to other panes (T36c).
 pub const MOST_TELLS: u32 = 30;
+/// The most background agents (T36e), beside the panes.
+pub const MOST_BACKGROUND: usize = 4;
 /// How long a first `/quit` or `/close` stays armed while a pane works: the second within it goes on.
 const ARMED: Duration = Duration::from_secs(10);
 
@@ -244,38 +246,104 @@ pub enum Request {
     CloseAs(Leaving),
     /// The keys to the other pane.
     Toggle,
-    /// A message to pane `to` (the other one when `None`), taken there as if the owner typed it (T36b); `whole` is
-    /// the text with the number, sent as it is when no pane has that number (`/send 3 files changed`).
+    /// A message to pane `to` — a number, a background agent's name or a role (T36e) — or to the only other one, taken
+    /// there as if the owner typed it (T36b); `whole` is the text with that first word, sent as it is when it names
+    /// no pane (`/send 3 files changed`).
     Send {
-        to: Option<u8>,
+        to: Option<String>,
         text: String,
         whole: String,
     },
     /// The asking pane's last plan with its task list, to be built in pane `to`.
-    SendPlan { to: Option<u8> },
+    SendPlan { to: Option<String> },
+    /// A background agent (T36e): a session with no room on the screen, named `name` or after its role.
+    Background {
+        name: Option<String>,
+        role: Option<String>,
+        place: Place,
+    },
+    /// A background agent brought forward as a pane.
+    Show(String),
+    /// The asking pane sent to the background.
+    Hide,
+    /// A background agent's stream shown over the asking pane, only to read; `None` closes it.
+    Peek(Option<String>),
+    /// A background agent ended where it is, its turn stopped (`/close <name>`).
+    End(String),
 }
 
-/// `/send`'s words: an optional pane number, then the text — or `plan`.
+/// `/send`'s words: maybe a pane first (a number, a name, a role — the screen knows which word names one), then the
+/// text — or `plan`.
 ///
 /// # Errors
 ///
 /// What `/send` takes, when nothing is to be sent.
 pub fn parse_send(rest: &str) -> Result<Request, String> {
     let rest = rest.trim();
-    let (to, text) = match rest.split_once(char::is_whitespace) {
-        Some((first, text)) if first.parse::<u8>().is_ok() => (first.parse().ok(), text.trim()),
-        _ if rest.parse::<u8>().is_ok() => (rest.parse().ok(), ""),
-        _ => (None, rest),
-    };
-    match text {
-        "" => Err("/send <text> — or /send plan; a number first picks the pane".to_owned()),
-        "plan" => Ok(Request::SendPlan { to }),
-        text => Ok(Request::Send {
-            to,
-            text: text.to_owned(),
+    let empty =
+        || Err("/send <text> — or /send plan; a pane's number or name first picks it".to_owned());
+    match rest.split_once(char::is_whitespace) {
+        Some((first, text)) if text.trim() == "plan" => Ok(Request::SendPlan {
+            to: Some(first.to_owned()),
+        }),
+        Some((first, text)) => Ok(Request::Send {
+            to: Some(first.to_owned()),
+            text: text.trim().to_owned(),
+            whole: rest.to_owned(),
+        }),
+        None if rest == "plan" => Ok(Request::SendPlan { to: None }),
+        None if rest.is_empty() || rest.parse::<u8>().is_ok() => empty(),
+        None => Ok(Request::Send {
+            to: None,
+            text: rest.to_owned(),
             whole: rest.to_owned(),
         }),
     }
+}
+
+/// `/bg`'s words: a name, `as <role>`, and where — `here`, or `tree` with an optional branch name.
+///
+/// # Errors
+///
+/// What `/bg` takes, for a word it does not.
+pub fn parse_background(rest: &str) -> Result<Request, String> {
+    let mut name = None;
+    let mut role = None;
+    let mut place = Place::Ask;
+    let mut words = rest.split_whitespace().peekable();
+    while let Some(word) = words.next() {
+        match word {
+            "here" => place = Place::Here,
+            "as" => match words.next() {
+                Some(given) => role = Some(given.to_owned()),
+                None => return Err("/bg as <role>: a role's name (/role lists them)".to_owned()),
+            },
+            "tree" => {
+                let branch = words.next_if(|next| !matches!(*next, "here" | "tree" | "as"));
+                place = Place::Tree(branch.unwrap_or_default().to_owned());
+            }
+            given if name.is_none() && is_name(given) => name = Some(given.to_owned()),
+            other => {
+                return Err(format!(
+                    "/bg {other}: a name (letters, digits, dashes), as <role>, here or tree [branch]"
+                ));
+            }
+        }
+    }
+    Ok(Request::Background { name, role, place })
+}
+
+/// Whether `word` can name a background agent: lower-case letters, digits and dashes, a letter first — never a pane's
+/// number.
+fn is_name(word: &str) -> bool {
+    // `/send` and `/bg` read these words as their own.
+    const RESERVED: [&str; 4] = ["plan", "here", "tree", "as"];
+    !RESERVED.contains(&word)
+        && word.chars().next().is_some_and(|c| c.is_ascii_lowercase())
+        && word.len() <= 32
+        && word
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
 /// `/split`'s words: a side (`l r u d`), `resume`, and where — `here`, or `tree` with an optional branch name.
@@ -324,9 +392,13 @@ pub fn parse_split(rest: &str) -> Result<Request, String> {
 pub struct Pane {
     /// Its session's own mark on the reports, never given twice — unlike the number a closed pane leaves free: a late
     /// report of a closed session must reach no pane.
-    id: u64,
+    pub(crate) id: u64,
     /// The number the owner sees: the lowest free one when it opened.
     pub number: u8,
+    /// A background agent's name (T36e); a pane sent to the background gets one, a pane brought forward keeps it.
+    pub name: Option<String>,
+    /// In the background: in no split, drawn nowhere, reached by its name.
+    pub background: bool,
     pub app: App,
     /// Where it was drawn last: the mouse finds it there.
     pub area: Rect,
@@ -342,6 +414,8 @@ struct Building {
     resume: bool,
     tree: Option<crate::worktree::Tree>,
     role: Option<String>,
+    /// The name of a background agent (T36e); `None` for a pane.
+    background: Option<String>,
     reports: mpsc::UnboundedSender<Report>,
 }
 
@@ -374,6 +448,8 @@ pub struct Panes {
     pub redraw: bool,
     /// Messages between models since the owner's last word in any pane (T36c).
     chain: u32,
+    /// A background agent's stream shown over the active pane, only to read (T36e, `/peek`), by its session's id.
+    pub peek: Option<u64>,
 }
 
 /// The other ends of [`Panes`]' channels, which the screen's loop waits on.
@@ -399,6 +475,8 @@ impl Panes {
             list: vec![Pane {
                 id: 1,
                 number: 1,
+                name: None,
+                background: false,
                 app,
                 area: Rect::default(),
                 tree: None,
@@ -415,6 +493,7 @@ impl Panes {
             close_armed: None,
             redraw: false,
             chain: 0,
+            peek: None,
         };
         (
             panes,
@@ -430,9 +509,57 @@ impl Panes {
         &mut self.list[self.active].app
     }
 
-    /// Whether more than one pane is open.
+    /// Whether more than one pane stands on the screen.
     pub fn split(&self) -> bool {
-        self.list.len() > 1
+        self.visible() > 1
+    }
+
+    /// How many panes stand on the screen (background agents apart).
+    pub fn visible(&self) -> usize {
+        self.list.iter().filter(|pane| !pane.background).count()
+    }
+
+    /// The pane a word names, other than `except`: its number, a background agent's name, or its role (T36e).
+    /// A name wins over a number and a number over a role; a role two panes play names neither.
+    fn resolve(&self, word: &str, except: usize) -> Option<usize> {
+        let others = || (0..self.list.len()).filter(move |at| *at != except);
+        if let Some(at) = others().find(|at| self.list[*at].name.as_deref() == Some(word)) {
+            return Some(at);
+        }
+        if let Ok(number) = word.parse::<u8>() {
+            return others().find(|at| self.list[*at].number == number);
+        }
+        let playing: Vec<usize> = others()
+            .filter(|at| self.list[*at].app.role.as_deref() == Some(word))
+            .collect();
+        (playing.len() == 1).then(|| playing[0])
+    }
+
+    /// The background agent a word names: its name, else the role only one of them plays.
+    fn resolve_background(&self, word: &str) -> Option<usize> {
+        let behind = || (0..self.list.len()).filter(|at| self.list[*at].background);
+        if let Some(at) = behind().find(|at| self.list[*at].name.as_deref() == Some(word)) {
+            return Some(at);
+        }
+        let playing: Vec<usize> = behind()
+            .filter(|at| self.list[*at].app.role.as_deref() == Some(word))
+            .collect();
+        (playing.len() == 1).then(|| playing[0])
+    }
+
+    /// How a pane is named to the owner and the models: "pane 2", or a background agent's name.
+    fn label(&self, at: usize) -> String {
+        let pane = &self.list[at];
+        match (&pane.name, pane.background) {
+            (Some(name), true) => name.clone(),
+            _ => format!("pane {}", pane.number),
+        }
+    }
+
+    /// The one other pane or agent when there is exactly one, for a message that names none.
+    fn only_other(&self, except: usize) -> Option<usize> {
+        let others: Vec<usize> = (0..self.list.len()).filter(|at| *at != except).collect();
+        (others.len() == 1).then(|| others[0])
     }
 
     /// Once per frame: answered questions go, and what the panes share is told to each — the terminal's mouse (the
@@ -440,6 +567,13 @@ impl Panes {
     pub fn sync(&mut self) {
         let held = self.list[self.active].app.mouse_held;
         let numbers: Vec<u8> = self.list.iter().map(|pane| pane.number).collect();
+        // Only a pane on the screen is "the other pane" a plan is built in (T36e).
+        let on_screen: Vec<u8> = self
+            .list
+            .iter()
+            .filter(|pane| !pane.background)
+            .map(|pane| pane.number)
+            .collect();
         let open: Vec<String> = self
             .list
             .iter()
@@ -456,12 +590,49 @@ impl Panes {
                 (
                     pane.number,
                     format!(
-                        "pane {}: {}, {}, {mode} mode, in {}",
-                        pane.number,
+                        "{}: {}, {}, {mode} mode, in {}",
+                        match (&pane.name, pane.background) {
+                            (Some(name), true) => {
+                                format!("{name} (pane {}, an agent in the background)", pane.number)
+                            }
+                            _ => format!("pane {}", pane.number),
+                        },
                         app.role.as_deref().unwrap_or("all-rounder"),
                         glut::permissions::printable(&model),
                         crate::transcript::cut(&glut::permissions::printable(&app.folder), 80)
                     ),
+                )
+            })
+            .collect();
+        // The Agents tab of every pane lists the agents in the background (T36e).
+        let background: Vec<String> = self
+            .list
+            .iter()
+            .filter(|pane| pane.background)
+            .map(|pane| {
+                let app = &pane.app;
+                let state = if app.waits_for_owner() {
+                    "asks"
+                } else if !app.held.is_empty() {
+                    "holds a message"
+                } else if app.working() {
+                    "works"
+                } else {
+                    "rests"
+                };
+                let cost = app
+                    .cost
+                    .map(|cost| format!(" · ${cost:.4}"))
+                    .unwrap_or_default();
+                let cache = match (app.cache_seen, app.warm_until) {
+                    (true, Some(until)) if until > Instant::now() => " · cache ●",
+                    (true, _) => " · cache ○",
+                    _ => "",
+                };
+                format!(
+                    "{} · {} · {state}{cost}{cache}",
+                    pane.name.as_deref().unwrap_or("agent"),
+                    app.role.as_deref().unwrap_or("all-rounder")
                 )
             })
             .collect();
@@ -474,6 +645,7 @@ impl Panes {
         }
         for (at, pane) in self.list.iter_mut().enumerate() {
             pane.app.drop_answered_ask();
+            pane.app.background = background.clone();
             pane.app.parts.pane_link.set(
                 pane.number,
                 described
@@ -486,7 +658,7 @@ impl Panes {
             pane.app.others = numbers
                 .iter()
                 .copied()
-                .filter(|number| *number != pane.number)
+                .filter(|number| *number != pane.number && on_screen.contains(number))
                 .collect();
             pane.app.others_open = open
                 .iter()
@@ -509,26 +681,27 @@ impl Panes {
         }
     }
 
-    /// Session `id`'s model writes to pane `to` (the other one, when there is one): delivered as a message of the other model, never the
-    /// owner's — held for the owner's Enter once the models have written [`MOST_CHAIN`] times without the owner's word,
-    /// refused past [`MOST_TELLS`]. What it became, for the model.
-    fn tell(&mut self, id: u64, to: Option<u8>, text: String) -> Result<String, String> {
+    /// Session `id`'s model writes to pane `to` (a number, a background agent's name, a role; the only other one when
+    /// none): delivered as a message of the other model, never the owner's — held for the owner's Enter once the models
+    /// have written [`MOST_CHAIN`] times without the owner's word, refused past [`MOST_TELLS`]. What it became, for the
+    /// model.
+    fn tell(&mut self, id: u64, to: Option<String>, text: String) -> Result<String, String> {
         let source = self
             .list
             .iter()
             .position(|pane| pane.id == id)
             .ok_or("this pane is closed")?;
         let from = self.list[source].number;
-        let others: Vec<usize> = (0..self.list.len()).filter(|at| *at != source).collect();
-        let target = match to {
-            Some(number) => others
-                .iter()
-                .copied()
-                .find(|at| self.list[*at].number == number)
-                .ok_or(format!("there is no pane {number}"))?,
-            None if others.len() == 1 => others[0],
-            None if others.is_empty() => return Err("there is no other pane".into()),
-            None => return Err("name the pane: there are several".into()),
+        let target = match &to {
+            Some(word) => self.resolve(word, source).ok_or(format!(
+                "there is no pane or agent {}",
+                crate::transcript::clean(word)
+            ))?,
+            None => match self.only_other(source) {
+                Some(at) => at,
+                None if self.list.len() == 1 => return Err("there is no other pane".into()),
+                None => return Err("name the pane or agent: there are several".into()),
+            },
         };
         if self.list[source].app.tells_sent >= MOST_TELLS {
             return Err(format!(
@@ -537,7 +710,7 @@ impl Panes {
         }
         self.list[source].app.tells_sent += 1;
         self.chain += 1;
-        let number = self.list[target].number;
+        let label = self.label(target);
         let message = crate::tell::wrapped(from, &text);
         // A model may start a turn only in a pane that can do no more than its own: no looser mode, no "always" it
         // lacks, and the same folder — a pane elsewhere (a worktree, the repository) writes where the sender cannot —
@@ -553,35 +726,54 @@ impl Panes {
             .app
             .deliver_model(message, from, may_start, sender)?;
         Ok(match delivered {
-            Delivered::Now => format!("delivered: pane {number} starts on it now"),
-            Delivered::AfterTurn => {
-                format!("delivered: pane {number} reads it after its current turn")
-            }
-            Delivered::WhenFree => format!("delivered: pane {number} reads it once it is free"),
+            Delivered::Now => format!("delivered: {label} starts on it now"),
+            Delivered::AfterTurn => format!("delivered: {label} reads it after its current turn"),
+            Delivered::WhenFree => format!("delivered: {label} reads it once it is free"),
             Delivered::OnEnter if wider => format!(
-                "held: pane {number} can do more than this pane (its mode, its rules or its folder), so it reads it \
-                 once the owner says so there"
+                "held: {label} can do more than this pane (its mode, its rules or its folder), so it reads it once the \
+                 owner says so there"
             ),
             Delivered::OnEnter if !may_start => format!(
-                "held: the panes have written to each other often without the owner — pane {number} reads it once \
-                 the owner says so"
+                "held: the panes have written to each other often without the owner — {label} reads it once the \
+                 owner says so"
             ),
-            Delivered::OnEnter => {
-                format!("held: pane {number} reads it once the owner goes on there")
-            }
+            Delivered::OnEnter => format!("held: {label} reads it once the owner goes on there"),
         })
     }
 
     /// A key, a paste or the mouse: the active pane's, but a click moves into the pane under it (the click itself
     /// goes nowhere) and the wheel goes to the pane under it.
     pub fn on_terminal(&mut self, event: TermEvent) {
+        // A background agent's stream over the pane is only to read: Esc (or ⌃C) closes it, nothing else goes through.
+        if self.peek.is_some() {
+            if let TermEvent::Key(key) = &event
+                && (key.code == crossterm::event::KeyCode::Esc
+                    || (key.code == crossterm::event::KeyCode::Char('c')
+                        && key
+                            .modifiers
+                            .contains(crossterm::event::KeyModifiers::CONTROL)))
+            {
+                self.close_peek();
+            }
+            // The wheel scrolls the stream read; it answers nothing.
+            if let TermEvent::Mouse(mouse) = &event
+                && matches!(
+                    mouse.kind,
+                    MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+                )
+                && let Some(at) = self.list.iter().position(|pane| Some(pane.id) == self.peek)
+            {
+                self.list[at].app.on_terminal(event);
+            }
+            return;
+        }
         if let TermEvent::Mouse(mouse) = &event
             && self.split()
         {
             let under = self
                 .list
                 .iter()
-                .position(|pane| contains(pane.area, mouse.column, mouse.row));
+                .position(|pane| !pane.background && contains(pane.area, mouse.column, mouse.row));
             match (mouse.kind, under) {
                 (MouseEventKind::Down(MouseButton::Left), Some(at)) if at != self.active => {
                     return self.focus(at);
@@ -607,6 +799,10 @@ impl Panes {
             let Some(request) = self.list[at].app.pane_request.take() else {
                 break;
             };
+            // Only a pane on the screen asks the screen for anything; the keys never go behind it.
+            if self.list[at].background {
+                continue;
+            }
             if at != self.active {
                 self.focus(at);
             }
@@ -614,7 +810,14 @@ impl Panes {
                 Request::Toggle if !self.split() => {
                     self.active().say("one pane — /split splits the window");
                 }
-                Request::Toggle => self.focus((self.active + 1) % self.list.len()),
+                Request::Toggle => {
+                    // Round the panes on the screen in reading order; background agents are not on it.
+                    let next = (1..self.list.len())
+                        .map(|step| (self.active + step) % self.list.len())
+                        .find(|at| !self.list[*at].background)
+                        .unwrap_or(self.active);
+                    self.focus(next);
+                }
                 Request::Close => self.close(),
                 Request::CloseAs(leaving) => self.leave(leaving),
                 Request::Split {
@@ -624,20 +827,37 @@ impl Panes {
                     role,
                 } => self.start(side, resume, place, role, host),
                 Request::Send { to, text, whole } => {
-                    // A number naming no other pane is the message's own first word.
-                    let named = to.is_some_and(|number| {
-                        self.list
-                            .iter()
-                            .enumerate()
-                            .any(|(at, pane)| at != self.active && pane.number == number)
-                    });
-                    if named || to.is_none() {
+                    // A first word naming no pane or agent is the message's own (`/send 3 files changed`).
+                    let named = to
+                        .as_deref()
+                        .is_some_and(|word| self.resolve(word, self.active).is_some());
+                    if named {
                         self.send(to, Some(text));
                     } else {
                         self.send(None, Some(whole));
                     }
                 }
+                // "update plan" is a message when "update" names no pane or agent.
+                Request::SendPlan { to: Some(word) }
+                    if self.resolve(&word, self.active).is_none() =>
+                {
+                    self.send(None, Some(format!("{word} plan")));
+                }
                 Request::SendPlan { to } => self.send(to, None),
+                Request::Background { name, role, place } => {
+                    self.start_background(name, role, place, host);
+                }
+                Request::Show(name) => self.show(&name),
+                Request::Hide => self.hide(),
+                Request::Peek(None) => self.close_peek(),
+                Request::End(name) => self.end_background(&name),
+                Request::Peek(Some(name)) => match self.resolve_background(&name) {
+                    Some(at) => self.peek = Some(self.list[at].id),
+                    _ => self.active().tell(format!(
+                        "no background agent {} — /peek <name>",
+                        crate::transcript::clean(&name)
+                    )),
+                },
             }
         }
     }
@@ -652,12 +872,9 @@ impl Panes {
         let Some(at) = self.list.iter().position(|pane| pane.app.quit) else {
             return false;
         };
-        let working: Vec<u8> = self
-            .list
-            .iter()
-            .enumerate()
-            .filter(|(other, pane)| *other != at && pane.app.working())
-            .map(|(_, pane)| pane.number)
+        let working: Vec<String> = (0..self.list.len())
+            .filter(|other| *other != at && self.list[*other].app.working())
+            .map(|other| self.label(other))
             .collect();
         let armed = self.quit_armed.is_some_and(|since| since.elapsed() < ARMED);
         if working.is_empty() || armed {
@@ -667,8 +884,8 @@ impl Panes {
         let app = &mut self.list[at].app;
         app.quit = false;
         app.tell(format!(
-            "pane {} still works — /quit again ends it too",
-            numbers(&working)
+            "{} still works — /quit again ends it too",
+            listed(&working)
         ));
         false
     }
@@ -751,7 +968,12 @@ impl Panes {
         let number = pane.number;
         let stopped = pane.app.working();
         pane.app.stop_turn();
-        let next = self.list[self.active.min(self.list.len() - 1)].id;
+        // The keys go to a pane on the screen, never to an agent in the background.
+        let near = self.active.min(self.list.len() - 1);
+        let next = (0..self.list.len())
+            .filter(|at| !self.list[*at].background)
+            .min_by_key(|at| at.abs_diff(near))
+            .map_or(self.list[near].id, |at| self.list[at].id);
         self.reorder();
         self.focus(self.at(next));
         // Alone again: the side panel comes back as the owner keeps it.
@@ -778,12 +1000,25 @@ impl Panes {
         role: Option<String>,
         host: &Arc<dyn Host>,
     ) {
+        self.start_as(side, resume, place, role, None, host);
+    }
+
+    /// [`Self::start`], or — with `background` a name — an agent in the background (T36e).
+    fn start_as(
+        &mut self,
+        side: Side,
+        resume: bool,
+        place: Place,
+        role: Option<String>,
+        background: Option<String>,
+        host: &Arc<dyn Host>,
+    ) {
         if !self.may_split {
             return self
                 .active()
                 .tell("this session's host keeps one pane: its studio splits its own windows");
         }
-        if self.list.len() >= MOST {
+        if background.is_none() && self.visible() >= MOST {
             return self.active().tell(format!("at most {MOST} panes for now"));
         }
         if self.building.is_some() {
@@ -813,6 +1048,8 @@ impl Panes {
                 self.active().tell(format!("no worktree offered: {reason}"));
                 None
             }
+            // A background agent works here unless told `tree`: it has no pane to ask in.
+            (Place::Ask, Ok(Some(_))) if background.is_some() => None,
             (Place::Ask, Ok(Some(repo))) => {
                 let picker = where_picker(side, resume, role.as_deref(), &repo, number);
                 self.active().picker = Some(picker);
@@ -857,6 +1094,7 @@ impl Panes {
             resume,
             tree,
             role,
+            background,
             reports: reports.clone(),
         });
         let built = self.built.clone();
@@ -900,6 +1138,23 @@ impl Panes {
         if let Err(reason) = app.set_role(building.role.as_deref()) {
             app.transcript.note(reason, Tone::Fault);
         }
+        // A background agent stands in no split: it waits for its first message, reached by its name.
+        if let Some(name) = building.background {
+            app.panel = Some(false);
+            self.list.push(Pane {
+                id: building.id,
+                number: building.number,
+                name: Some(name.clone()),
+                background: true,
+                app,
+                area: Rect::default(),
+                tree: building.tree,
+            });
+            self.reorder();
+            return self.active().tell(format!(
+                "{name} waits in the background — /send {name} …, /peek {name}, /show {name}"
+            ));
+        }
         // Panes leave little room beside them: the side panel starts hidden (⌃B brings it, where there is room).
         app.panel = Some(false);
         let current = &mut self.list[self.active].app;
@@ -912,6 +1167,8 @@ impl Panes {
         self.list.push(Pane {
             id: building.id,
             number: building.number,
+            name: None,
+            background: false,
             app,
             area: Rect::default(),
             tree: building.tree,
@@ -929,30 +1186,24 @@ impl Panes {
         }
     }
 
-    /// Sends the active pane's `text` — or its plan, with `None` — to pane `to` (the other one, when there is one): taken there as if
-    /// the owner typed it, the keys staying here.
-    fn send(&mut self, to: Option<u8>, text: Option<String>) {
+    /// Sends the active pane's `text` — or its plan, with `None` — to `to` (a pane, an agent; the only other one when
+    /// none): taken there as if the owner typed it, the keys staying here.
+    fn send(&mut self, to: Option<String>, text: Option<String>) {
         let from = self.list[self.active].number;
-        let others: Vec<usize> = (0..self.list.len())
-            .filter(|at| *at != self.active)
-            .collect();
-        let target = match to {
-            Some(number) => others
-                .iter()
-                .copied()
-                .find(|at| self.list[*at].number == number),
-            None if others.len() == 1 => others.first().copied(),
-            None => None,
+        let target = match &to {
+            Some(word) => self.resolve(word, self.active),
+            None => self.only_other(self.active),
         };
         let Some(target) = target else {
-            let said = match (to, others.len()) {
-                (_, 0) => "one pane — /split first".to_owned(),
-                (Some(number), _) => format!("no pane {number}"),
-                (None, _) => "which pane? /send <number> …".to_owned(),
+            let said = match (&to, self.list.len()) {
+                (_, 1) => "one pane — /split or /bg first".to_owned(),
+                (Some(word), _) => format!("no pane or agent {}", crate::transcript::clean(word)),
+                (None, _) => "which one? /send <number or name> …".to_owned(),
             };
             return self.active().tell(said);
         };
         let number = self.list[target].number;
+        let label = self.label(target);
         let plan = text.is_none();
         let text = match text {
             Some(text) => text,
@@ -983,13 +1234,175 @@ impl Panes {
                 "it waits there for Enter (a list was open or messages were waiting)"
             }
         };
-        self.active()
-            .tell(format!("sent to pane {number} — {when}"));
+        self.active().tell(format!("sent to {label} — {when}"));
+    }
+
+    /// `/bg`: a session with no room on the screen (T36e), named `name` or after its role (`reviewer`, a second
+    /// `reviewer-2`), built as a pane is — on the active pane's provider and model, in build.
+    fn start_background(
+        &mut self,
+        name: Option<String>,
+        role: Option<String>,
+        place: Place,
+        host: &Arc<dyn Host>,
+    ) {
+        let background = self.list.iter().filter(|pane| pane.background).count();
+        if background >= MOST_BACKGROUND {
+            return self.active().tell(format!(
+                "at most {MOST_BACKGROUND} agents in the background"
+            ));
+        }
+        let base = name
+            .or_else(|| role.clone())
+            .filter(|base| is_name(base))
+            .unwrap_or_else(|| "agent".to_owned());
+        let taken = |candidate: &str| {
+            self.list.iter().any(|pane| {
+                pane.name.as_deref() == Some(candidate)
+                    || pane.app.role.as_deref() == Some(candidate)
+            })
+        };
+        let name = if taken(&base) {
+            (2..)
+                .map(|n| format!("{base}-{n}"))
+                .find(|candidate| !taken(candidate))
+                .unwrap_or(base)
+        } else {
+            base
+        };
+        self.start_as(Side::Right, false, place, role, Some(name), host);
+    }
+
+    /// `/show <name>`: a background agent brought forward as a pane, to the right of the active one.
+    fn show(&mut self, name: &str) {
+        let Some(at) = self.resolve_background(name) else {
+            return self.active().tell(format!(
+                "no background agent {} — ⌃A lists them",
+                crate::transcript::clean(name)
+            ));
+        };
+        if self.visible() >= MOST {
+            return self
+                .active()
+                .tell(format!("at most {MOST} panes: /hide or /close one first"));
+        }
+        let id = self.list[at].id;
+        let beside = self.list[self.active].id;
+        // Panes leave little room beside them: the side panel goes, as when a pane is split off.
+        self.active().panel = Some(false);
+        self.layout.split(beside, id, Side::Right);
+        self.list[at].background = false;
+        self.peek = None;
+        self.reorder();
+        let at = self.at(id);
+        self.focus(at);
+    }
+
+    /// `/close <name>`: a background agent ended where it stands, its turn stopped — one in a worktree is shown
+    /// first, where how its worktree ends is asked.
+    fn end_background(&mut self, name: &str) {
+        let Some(at) = self.resolve_background(name) else {
+            return self.active().tell(format!(
+                "no background agent {} — ⌃A lists them",
+                crate::transcript::clean(name)
+            ));
+        };
+        let label = self.label(at);
+        if self.list[at].tree.is_some() {
+            return self.active().tell(format!(
+                "{label} works in a worktree: /show {label}, then /close there asks how it ends"
+            ));
+        }
+        let keys = self.list[self.active].id;
+        let mut pane = self.list.remove(at);
+        let stopped = pane.app.working();
+        pane.app.stop_turn();
+        if self.peek == Some(pane.id) {
+            self.peek = None;
+        }
+        self.active = self.at(keys);
+        let kept = if stopped {
+            "its turn was stopped; the session is kept as it was before that turn"
+        } else {
+            "/resume finds its session"
+        };
+        self.active().tell(format!("{label} ended — {kept}"));
+    }
+
+    /// `/hide`: the active pane goes to the background with its memory; it keeps a name to be reached by.
+    fn hide(&mut self) {
+        if self.visible() <= 1 {
+            return self
+                .active()
+                .tell("the last pane stays: /bg starts an agent in the background");
+        }
+        if self.list.iter().filter(|pane| pane.background).count() >= MOST_BACKGROUND {
+            return self.active().tell(format!(
+                "at most {MOST_BACKGROUND} agents in the background"
+            ));
+        }
+        let at = self.active;
+        let number = self.list[at].number;
+        if self.list[at].name.is_none() {
+            let name = self.list[at]
+                .app
+                .role
+                .clone()
+                .filter(|role| self.resolve(role, at).is_none())
+                .unwrap_or_else(|| format!("pane-{number}"));
+            // Another agent may carry that name already: the next free one.
+            let taken = |candidate: &str| {
+                self.list.iter().enumerate().any(|(other, pane)| {
+                    other != at
+                        && (pane.name.as_deref() == Some(candidate)
+                            || pane.app.role.as_deref() == Some(candidate))
+                })
+            };
+            let name = if taken(&name) {
+                (2..)
+                    .map(|n| format!("{name}-{n}"))
+                    .find(|candidate| !taken(candidate))
+                    .unwrap_or(name)
+            } else {
+                name
+            };
+            self.list[at].name = Some(name);
+        }
+        let id = self.list[at].id;
+        self.layout.remove(id);
+        self.list[at].background = true;
+        // Where it stood is another pane's now: the mouse must not find it there.
+        self.list[at].area = Rect::default();
+        let next = (0..self.list.len())
+            .find(|other| !self.list[*other].background)
+            .map(|other| self.list[other].id)
+            .unwrap_or(id);
+        self.reorder();
+        let label = self.label(self.at(id));
+        self.focus(self.at(next));
+        // Alone again: the side panel comes back as the owner keeps it.
+        if !self.split() {
+            let home = self.active().parts.home.clone();
+            self.active().panel = crate::prefs::Prefs::load(&home).panel;
+        }
+        self.active().tell(format!(
+            "{label} works on in the background — /send {label} …, /peek {label}, /show {label}"
+        ));
     }
 
     /// Moves the keys to pane `at`; what it asks counts as shown from now.
     fn focus(&mut self, at: usize) {
+        // The keys never go to a pane drawn nowhere.
+        if self.list[at].background {
+            return;
+        }
         self.active = at;
+        self.active().shown_again();
+    }
+
+    /// Closes a peek; a question that came up under it counts as shown only from now.
+    fn close_peek(&mut self) {
+        self.peek = None;
         self.active().shown_again();
     }
 
@@ -1165,8 +1578,14 @@ fn contains(area: Rect, column: u16, row: u16) -> bool {
 }
 
 /// `2` or `2 and 3`.
+#[cfg(test)]
 fn numbers(numbers: &[u8]) -> String {
     let words: Vec<String> = numbers.iter().map(u8::to_string).collect();
+    listed(&words)
+}
+
+/// Words read as a list: "a", "a and b", "a, b and c".
+fn listed(words: &[String]) -> String {
     match words.split_last() {
         Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
         _ => words.join(""),
@@ -1197,6 +1616,26 @@ mod tests {
             resume: false,
             tree: None,
             role: None,
+            background: None,
+            reports: sender,
+        });
+        panes.on_built(Ok(session::for_tests()));
+        (panes, inlets)
+    }
+
+    /// One pane and an agent in the background named `name`, built without starting a real session.
+    fn with_background(name: &str) -> (Panes, Inlets) {
+        let (first, reports) = app();
+        let (mut panes, inlets) = Panes::new(first, reports, true, Servers::Owner);
+        let (sender, _) = mpsc::unbounded_channel();
+        panes.building = Some(Building {
+            id: 2,
+            number: 2,
+            side: Side::Right,
+            resume: false,
+            tree: None,
+            role: None,
+            background: Some(name.to_owned()),
             reports: sender,
         });
         panes.on_built(Ok(session::for_tests()));
@@ -1250,6 +1689,7 @@ mod tests {
             resume: false,
             tree: None,
             role: None,
+            background: None,
             reports: sender,
         });
         panes.on_built(Ok(session::for_tests()));
@@ -1378,6 +1818,7 @@ mod tests {
             resume: false,
             tree: None,
             role: None,
+            background: None,
             reports: sender,
         });
         panes.on_built(Ok(session::for_tests()));
@@ -1404,6 +1845,7 @@ mod tests {
             resume: false,
             tree: None,
             role: None,
+            background: None,
             reports: sender,
         });
         panes.on_built(Ok(session::for_tests()));
@@ -1543,17 +1985,26 @@ mod tests {
     #[test]
     fn send_reads_a_pane_number_then_the_text_or_plan() {
         assert_eq!(
-            parse_send("look at a.rs").unwrap(),
+            parse_send("hello").unwrap(),
             Request::Send {
                 to: None,
-                text: "look at a.rs".into(),
+                text: "hello".into(),
+                whole: "hello".into()
+            }
+        );
+        assert_eq!(
+            parse_send("look at a.rs").unwrap(),
+            // The first word may name an agent; the screen decides when it settles.
+            Request::Send {
+                to: Some("look".to_owned()),
+                text: "at a.rs".into(),
                 whole: "look at a.rs".into()
             }
         );
         assert_eq!(
             parse_send("2 look").unwrap(),
             Request::Send {
-                to: Some(2),
+                to: Some("2".to_owned()),
                 text: "look".into(),
                 whole: "2 look".into()
             }
@@ -1561,7 +2012,9 @@ mod tests {
         assert_eq!(parse_send("plan").unwrap(), Request::SendPlan { to: None });
         assert_eq!(
             parse_send("2 plan").unwrap(),
-            Request::SendPlan { to: Some(2) }
+            Request::SendPlan {
+                to: Some("2".to_owned())
+            }
         );
         assert!(parse_send("").is_err() && parse_send("2").is_err());
     }
@@ -1617,12 +2070,12 @@ mod tests {
         assert_eq!(owners(&panes.list[1].app), ["From pane 1: 3 files changed"]);
     }
 
-    fn told(panes: &mut Panes, from: u64, to: Option<u8>, text: &str) -> Result<String, String> {
+    fn told(panes: &mut Panes, from: u64, to: Option<&str>, text: &str) -> Result<String, String> {
         let (reply, mut answer) = oneshot::channel();
         panes.on_report(
             from,
             Report::Tell {
-                to,
+                to: to.map(str::to_owned),
                 text: text.into(),
                 reply,
             },
@@ -1691,9 +2144,9 @@ mod tests {
                 .contains("no more")
         );
         assert!(
-            told(&mut panes, first, Some(9), "x")
+            told(&mut panes, first, Some("9"), "x")
                 .unwrap_err()
-                .contains("no pane 9")
+                .contains("no pane or agent 9")
         );
     }
 
@@ -1722,6 +2175,8 @@ mod tests {
         panes.list.push(Pane {
             id: 2,
             number: 2,
+            name: None,
+            background: false,
             app: second_app,
             area: Rect::default(),
             tree: None,
@@ -1761,6 +2216,8 @@ mod tests {
         panes.list.push(Pane {
             id: 2,
             number: 2,
+            name: None,
+            background: false,
             app: App::new(Arc::new(parts), engine, send),
             area: Rect::default(),
             tree: None,
@@ -1844,6 +2301,8 @@ mod tests {
         panes.list.push(Pane {
             id: 2,
             number: 2,
+            name: None,
+            background: false,
             app: second,
             area: Rect::default(),
             tree: None,
@@ -1866,6 +2325,210 @@ mod tests {
             panes.building.is_none(),
             "no pane starts for a role that is not there"
         );
+    }
+
+    #[test]
+    fn bg_reads_a_name_a_role_and_where() {
+        assert!(matches!(
+            parse_background("").unwrap(),
+            Request::Background {
+                name: None,
+                role: None,
+                place: Place::Ask
+            }
+        ));
+        let Request::Background { name, role, place } =
+            parse_background("critic as reviewer tree fix-x").unwrap()
+        else {
+            panic!("not a background request");
+        };
+        assert_eq!(
+            (name.as_deref(), role.as_deref()),
+            (Some("critic"), Some("reviewer"))
+        );
+        assert_eq!(place, Place::Tree("fix-x".to_owned()));
+        assert!(matches!(
+            parse_background("as reviewer here").unwrap(),
+            Request::Background {
+                name: None,
+                place: Place::Here,
+                ..
+            }
+        ));
+        // A number is a pane's, never an agent's name; so is a second name or a role left out.
+        assert!(parse_background("2").is_err());
+        assert!(parse_background("one two").is_err());
+        assert!(parse_background("as").is_err());
+        assert!(parse_background("Big").is_err());
+    }
+
+    #[tokio::test]
+    async fn an_agent_in_the_background_has_no_room_is_reached_by_name_and_comes_forward() {
+        let host = Arc::new(crate::Standalone) as Arc<dyn Host>;
+        let (mut panes, _inlets) = with_background("critic");
+        assert_eq!(
+            (panes.visible(), panes.split(), panes.active),
+            (1, false, 0)
+        );
+        assert!(panes.list[1].background);
+        // ⌃P stays: there is no other pane on the screen.
+        press(&mut panes, KeyCode::Char('p'), KeyModifiers::CONTROL);
+        assert_eq!(panes.active, 0);
+        // The owner's message reaches it by name, the Agents tab lists it.
+        panes.sync();
+        assert!(panes.list[0].app.background[0].starts_with("critic · all-rounder · rests"));
+        panes.active().pane_request = Some(parse_send("critic look at a.rs").unwrap());
+        panes.settle(&host);
+        let owners: Vec<String> = panes.list[1]
+            .app
+            .transcript
+            .blocks
+            .iter()
+            .filter_map(|block| match &block.kind {
+                crate::transcript::Kind::Owner(text) => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(owners, ["From pane 1: look at a.rs"]);
+        // Peeking shows it over the pane; Esc closes the peek and nothing else.
+        panes.active().pane_request = Some(Request::Peek(Some("critic".into())));
+        panes.settle(&host);
+        assert_eq!(panes.peek, Some(panes.list[1].id));
+        press(&mut panes, KeyCode::Esc, KeyModifiers::NONE);
+        assert_eq!(panes.peek, None);
+        // Shown, it stands beside the pane with the keys; hidden again, the keys come back.
+        panes.active().pane_request = Some(Request::Show("critic".into()));
+        panes.settle(&host);
+        assert_eq!((panes.visible(), panes.active), (2, 1));
+        assert!(!panes.list[1].background);
+        panes.active().pane_request = Some(Request::Hide);
+        panes.settle(&host);
+        assert_eq!((panes.visible(), panes.active), (1, 0));
+        assert_eq!(panes.list[1].name.as_deref(), Some("critic"));
+        // The last pane on the screen never hides.
+        panes.active().pane_request = Some(Request::Hide);
+        panes.settle(&host);
+        assert_eq!(panes.visible(), 1);
+        panes.active().pane_request = Some(Request::Show("nobody".into()));
+        panes.settle(&host);
+        assert_eq!(panes.visible(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_model_tells_an_agent_in_the_background_by_its_name() {
+        let (mut panes, _inlets) = with_background("critic");
+        panes.sync();
+        let (first, agent) = (panes.list[0].id, panes.list[1].id);
+        assert!(told(&mut panes, first, Some("critic"), "look at a.rs").is_ok());
+        assert!(
+            told(&mut panes, agent, None, "done").is_ok(),
+            "the only other one"
+        );
+        assert!(told(&mut panes, first, Some("nobody"), "hi").is_err());
+    }
+
+    #[tokio::test]
+    async fn closing_a_pane_gives_the_keys_to_a_pane_on_the_screen_never_to_the_background() {
+        let host = Arc::new(crate::Standalone) as Arc<dyn Host>;
+        let (mut panes, _inlets) = with_background("critic");
+        let (sender, _) = mpsc::unbounded_channel();
+        panes.building = Some(Building {
+            id: 3,
+            number: 3,
+            side: Side::Right,
+            resume: false,
+            tree: None,
+            role: None,
+            background: Some("tester".to_owned()),
+            reports: sender,
+        });
+        panes.on_built(Ok(session::for_tests()));
+        panes.active().pane_request = Some(Request::Show("critic".into()));
+        panes.settle(&host);
+        // pane 1 and critic on the screen, tester behind them; critic holds the keys and closes.
+        assert_eq!((panes.visible(), panes.active), (2, 1));
+        panes.active().pane_request = Some(Request::Close);
+        panes.settle(&host);
+        assert_eq!((panes.visible(), panes.list.len()), (1, 2));
+        assert!(!panes.list[panes.active].background);
+        assert_eq!(panes.list[panes.active].number, 1);
+    }
+
+    #[tokio::test]
+    async fn a_name_wins_over_a_number_and_a_number_over_a_role_and_two_alike_roles_name_none() {
+        let (mut panes, _inlets) = with_background("critic");
+        panes.list[0].app.role = Some("critic".into());
+        assert_eq!(
+            panes.resolve("critic", 9),
+            Some(1),
+            "the name, not pane 1's role"
+        );
+        assert_eq!(panes.resolve("1", 9), Some(0));
+        panes.list[1].app.role = Some("tester".into());
+        panes.list[0].app.role = Some("tester".into());
+        assert_eq!(panes.resolve("tester", 9), None, "two play it");
+        assert_eq!(panes.resolve_background("tester"), Some(1));
+        // "update plan" is a message when "update" names nobody.
+        panes.active().pane_request = Some(parse_send("update plan").unwrap());
+        panes.settle(&(Arc::new(crate::Standalone) as Arc<dyn Host>));
+        let owners = panes.list[1]
+            .app
+            .transcript
+            .blocks
+            .iter()
+            .filter(|block| matches!(&block.kind, crate::transcript::Kind::Owner(text) if text.ends_with("update plan")))
+            .count();
+        assert_eq!(owners, 1);
+    }
+
+    #[tokio::test]
+    async fn a_background_agent_ends_by_its_name_and_the_keys_stay() {
+        let host = Arc::new(crate::Standalone) as Arc<dyn Host>;
+        let (mut panes, _inlets) = with_background("critic");
+        panes.active().pane_request = Some(Request::Peek(Some("critic".into())));
+        panes.settle(&host);
+        panes.peek = None;
+        panes.active().pane_request = Some(Request::End("nobody".into()));
+        panes.settle(&host);
+        assert_eq!(panes.list.len(), 2);
+        panes.active().pane_request = Some(Request::End("critic".into()));
+        panes.settle(&host);
+        assert_eq!((panes.list.len(), panes.active, panes.peek), (1, 0, None));
+    }
+
+    #[tokio::test]
+    async fn a_click_where_a_hidden_pane_stood_never_moves_the_keys_behind_the_screen() {
+        let host = Arc::new(crate::Standalone) as Arc<dyn Host>;
+        let (mut panes, _inlets) = split(Side::Right);
+        let (sender, _) = mpsc::unbounded_channel();
+        panes.building = Some(Building {
+            id: 3,
+            number: 3,
+            side: Side::Right,
+            resume: false,
+            tree: None,
+            role: None,
+            background: None,
+            reports: sender,
+        });
+        panes.on_built(Ok(session::for_tests()));
+        assert_eq!(panes.visible(), 3);
+        let at = panes.list.iter().position(|pane| pane.number == 3).unwrap();
+        panes.list[at].area = Rect::new(80, 0, 40, 20);
+        panes.focus(at);
+        panes.active().pane_request = Some(Request::Hide);
+        panes.settle(&host);
+        let hidden = panes.list.iter().position(|pane| pane.number == 3).unwrap();
+        assert!(panes.list[hidden].background && panes.list[hidden].area == Rect::default());
+        panes.on_terminal(TermEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 100,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(!panes.list[panes.active].background);
+        panes.focus(hidden);
+        assert!(!panes.list[panes.active].background, "focus refuses it");
     }
 
     #[tokio::test]

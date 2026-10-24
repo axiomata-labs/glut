@@ -247,6 +247,8 @@ pub struct App {
     pub warm_until: Option<Instant>,
     /// The provider has said it cached something in this session: only then does the footer mark the cache.
     pub cache_seen: bool,
+    /// The agents in the background as the Agents tab lists them (T36e): one line each, told by the screen.
+    pub background: Vec<String>,
     /// The role this pane plays (T36c): a named agent's prompt and tools, never its model; `None` an all-rounder.
     pub role: Option<String>,
     /// Messages of another pane's model that wait for the owner's Enter here (T36c): never sent by a turn's end.
@@ -410,6 +412,7 @@ impl App {
             held: Vec::new(),
             role: None,
             cache_mode,
+            background: Vec::new(),
             keeper: None,
             warm_until: None,
             cache_seen: false,
@@ -1358,6 +1361,9 @@ impl App {
                     })
                 }
                 KeyCode::Char('0') => self.pane_request = Some(crate::panes::Request::Close),
+                // T36e: an agent in the background — its role picked first —, or this pane sent there.
+                KeyCode::Char('b' | 'B') => self.picker = Some(self.background_picker()),
+                KeyCode::Char('h' | 'H') => self.pane_request = Some(crate::panes::Request::Hide),
                 _ => {}
             }
             return;
@@ -1872,7 +1878,17 @@ impl App {
                 Ok(request) => self.pane_request = Some(request),
                 Err(reason) => self.transcript.note(reason, Tone::Fault),
             },
-            "close" => self.pane_request = Some(crate::panes::Request::Close),
+            "close" if rest.is_empty() => self.pane_request = Some(crate::panes::Request::Close),
+            "close" => self.pane_request = Some(crate::panes::Request::End(rest.to_owned())),
+            "bg" => match crate::panes::parse_background(rest) {
+                Ok(request) => self.pane_request = Some(request),
+                Err(reason) => self.transcript.note(reason, Tone::Fault),
+            },
+            "show" if rest.is_empty() => self.tell("/show <name> — ⌃A lists the agents in the background"),
+            "show" => self.pane_request = Some(crate::panes::Request::Show(rest.to_owned())),
+            "hide" => self.pane_request = Some(crate::panes::Request::Hide),
+            "peek" if rest.is_empty() => self.pane_request = Some(crate::panes::Request::Peek(None)),
+            "peek" => self.pane_request = Some(crate::panes::Request::Peek(Some(rest.to_owned()))),
             "cache" => match crate::warm::CacheMode::parse(rest) {
                 Some(mode) => self.set_cache(mode),
                 None => self.tell(format!(
@@ -3936,6 +3952,26 @@ impl App {
         format!("{source}; tools: {tools}")
     }
 
+    /// `⌃X B` (T36e): the role of a new agent in the background — every role, or none.
+    fn background_picker(&self) -> Picker {
+        let roles: Vec<Item> = self
+            .roles_picker()
+            .into_items()
+            .into_iter()
+            .map(|mut item| {
+                if let Pick::Role(role) = &item.pick {
+                    item.pick = Pick::Pane(crate::panes::Request::Background {
+                        name: None,
+                        role: role.clone(),
+                        place: crate::panes::Place::Ask,
+                    });
+                }
+                item
+            })
+            .collect();
+        Picker::new("An agent in the background: its role", roles, None)
+    }
+
     /// `/role`: the roles to play — Glut's, the owner's and the project's agents — and none.
     fn roles_picker(&self) -> Picker {
         let mut items = vec![Item::plain(
@@ -4098,7 +4134,9 @@ impl App {
                     Some(inbox) => inbox.send(note),
                     None => self.queue.push(note),
                 }
-                self.pane_request = Some(crate::panes::Request::SendPlan { to: Some(pane) });
+                self.pane_request = Some(crate::panes::Request::SendPlan {
+                    to: Some(pane.to_string()),
+                });
             }
             Choice::SendBack(note) => {
                 let Some(open) = self.ask.take() else { return };
@@ -5661,7 +5699,9 @@ mod tests {
         assert_eq!(answer.try_recv().unwrap(), Answer::Deny);
         assert_eq!(
             app.pane_request,
-            Some(crate::panes::Request::SendPlan { to: Some(2) })
+            Some(crate::panes::Request::SendPlan {
+                to: Some("2".to_owned())
+            })
         );
         let plan = app.plan_to_build().unwrap();
         assert!(

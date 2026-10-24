@@ -43,7 +43,7 @@ pub enum Report {
     Warmed(Result<glut::Usage, String>),
     /// `tell` (T36c): the model's message to pane `to` (the only other one when `None`); the reply says what became of it.
     Tell {
-        to: Option<u8>,
+        to: Option<String>,
         text: String,
         reply: oneshot::Sender<Result<String, String>>,
     },

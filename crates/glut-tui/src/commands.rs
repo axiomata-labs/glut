@@ -77,7 +77,7 @@ const fn command(
 }
 
 /// Every command, grouped by topic in [`Topic::ALL`]'s order, the most used first inside a topic.
-pub const COMMANDS: [Command; 33] = [
+pub const COMMANDS: [Command; 37] = [
     command(Topic::Session, "clear", "", "start a new session"),
     command(
         Topic::Session,
@@ -168,8 +168,8 @@ pub const COMMANDS: [Command; 33] = [
     command(
         Topic::Panes,
         "close",
-        "",
-        "close this pane; its session stays for /resume",
+        "[name]",
+        "close this pane — or end a background agent; its session stays for /resume",
     ),
     command(
         Topic::Panes,
@@ -182,6 +182,30 @@ pub const COMMANDS: [Command; 33] = [
         "role",
         "[name|none]",
         "the role this pane plays: a named agent's prompt and tools, not its model — reviewer, tester, docs or yours",
+    ),
+    command(
+        Topic::Panes,
+        "bg",
+        "[name] [as <role>] [here|tree]",
+        "an agent in the background: a session with no pane, reached by name — /bg as reviewer",
+    ),
+    command(
+        Topic::Panes,
+        "show",
+        "<name>",
+        "bring an agent from the background forward as a pane",
+    ),
+    command(
+        Topic::Panes,
+        "hide",
+        "",
+        "send this pane to the background, its memory kept (⌃X H)",
+    ),
+    command(
+        Topic::Panes,
+        "peek",
+        "<name>",
+        "read a background agent's stream over this pane; Esc closes it",
     ),
     command(
         Topic::Changes,
@@ -278,7 +302,7 @@ const fn key(topic: Topic, key: &'static str, what: &'static str, command: &'sta
 }
 
 /// Every key Glut has, grouped as [`COMMANDS`] are; a topic without keys shows no heading.
-pub const KEYS: [Key; 29] = [
+pub const KEYS: [Key; 31] = [
     key(
         Topic::Session,
         "⇧⇥",
@@ -354,6 +378,13 @@ pub const KEYS: [Key; 29] = [
     key(Topic::Panes, "⌃X 2", "a new pane, to the right", "/split"),
     key(Topic::Panes, "⌃X 3", "a new pane, below", "/split d"),
     key(Topic::Panes, "⌃X 0", "close this pane", "/close"),
+    key(
+        Topic::Panes,
+        "⌃X B",
+        "an agent in the background, its role picked",
+        "/bg",
+    ),
+    key(Topic::Panes, "⌃X H", "this pane to the background", "/hide"),
     key(
         Topic::Changes,
         "⌃R",

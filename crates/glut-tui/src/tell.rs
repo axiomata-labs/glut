@@ -118,8 +118,9 @@ impl Tell {
     }
 }
 
-/// A `tell` call's arguments: the pane (none — the other one, where there is only one) and the text.
-fn parsed(value: &Value) -> Result<(Option<u8>, String), String> {
+/// A `tell` call's arguments: the pane — its number, an agent's name or a role; none, the only other one — and the
+/// text.
+fn parsed(value: &Value) -> Result<(Option<String>, String), String> {
     let text = value
         .get("text")
         .and_then(Value::as_str)
@@ -133,11 +134,17 @@ fn parsed(value: &Value) -> Result<(Option<u8>, String), String> {
     }
     let to = match value.get("pane") {
         None | Some(Value::Null) => None,
-        Some(pane) => Some(
-            pane.as_u64()
-                .and_then(|pane| u8::try_from(pane).ok())
-                .ok_or("pane is a pane's number")?,
+        Some(Value::Number(number)) => Some(
+            number
+                .as_u64()
+                .filter(|number| *number <= u64::from(u8::MAX))
+                .ok_or("pane is a pane's number or an agent's name")?
+                .to_string(),
         ),
+        Some(Value::String(name)) if !name.trim().is_empty() && name.len() <= 64 => {
+            Some(name.trim().to_owned())
+        }
+        Some(_) => return Err("pane is a pane's number or an agent's name".into()),
     };
     Ok((to, text.to_owned()))
 }
@@ -171,8 +178,10 @@ impl Tool for Tell {
                 "type": "object",
                 "properties": {
                     "pane": {
-                        "type": "integer",
-                        "description": "The pane's number; leave it out when there is only one other pane."
+                        // One type: some providers refuse a list of them; a number still reads.
+                        "type": "string",
+                        "description": "A pane's number (\"2\"), or an agent's name or role; leave it out when \
+                                        there is only one other."
                     },
                     "text": { "type": "string", "description": "The message." }
                 },
@@ -185,8 +194,9 @@ impl Tool for Tell {
         // Known to the rules by its name; the ask shows to whom, how long, and the head and the tail.
         let what = match parsed(arguments) {
             Ok((to, text)) => {
+                // The model chose the name: printable, like the text, before it reaches the ask.
                 let to = to.map_or("the only other pane".to_owned(), |pane| {
-                    format!("pane {pane}")
+                    format!("pane {}", glut::permissions::printable(&pane))
                 });
                 let text = glut::permissions::printable(&text);
                 let count = text.chars().count();
@@ -232,7 +242,11 @@ mod tests {
         );
         assert_eq!(
             parsed(&json!({"pane": 2, "text": "done"})).unwrap(),
-            (Some(2), "done".to_owned())
+            (Some("2".to_owned()), "done".to_owned())
+        );
+        assert_eq!(
+            parsed(&json!({"pane": "reviewer", "text": "look"})).unwrap(),
+            (Some("reviewer".to_owned()), "look".to_owned())
         );
         assert!(parsed(&json!({"text": ""})).is_err());
         assert!(parsed(&json!({"pane": 300, "text": "x"})).is_err());

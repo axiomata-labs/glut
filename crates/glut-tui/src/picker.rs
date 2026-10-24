@@ -167,6 +167,11 @@ impl Picker {
         picker
     }
 
+    /// Its entries, taken out (to build another list of them).
+    pub fn into_items(self) -> Vec<Item> {
+        self.items
+    }
+
     /// A picker of Glut's own whose pick is hard to take back: see [`Picker::guarded`]'s field.
     pub fn guarded(mut self) -> Self {
         self.guarded = true;
