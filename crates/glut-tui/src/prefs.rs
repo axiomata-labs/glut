@@ -48,6 +48,13 @@ pub struct Prefs {
         deserialize_with = "crate::footer::lenient"
     )]
     pub footer: Option<crate::footer::Separators>,
+    /// How a resting session keeps its cache (T36e, `/cache`); `None`: pinging.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::warm::lenient"
+    )]
+    pub cache: Option<crate::warm::CacheMode>,
     /// The colours: `glut` or an app theme's name (TUI3c, `/theme`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
@@ -158,6 +165,17 @@ pub fn set_thinking(home: &Path, thinking: crate::transcript::Thinking) -> Resul
 pub fn set_vi(home: &Path, on: bool) -> Result<(), String> {
     let mut prefs = Prefs::read(home)?;
     prefs.vi = Some(on);
+    prefs.save(home)
+}
+
+/// Keeps how a resting session keeps its cache (`/cache`).
+///
+/// # Errors
+///
+/// A message when the file cannot be read (it is not written over) or written.
+pub fn set_cache(home: &Path, mode: crate::warm::CacheMode) -> Result<(), String> {
+    let mut prefs = Prefs::read(home)?;
+    prefs.cache = Some(mode);
     prefs.save(home)
 }
 

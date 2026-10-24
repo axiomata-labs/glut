@@ -35,6 +35,7 @@ mod todos;
 mod transcript;
 mod vi;
 mod view;
+mod warm;
 mod watch;
 mod worktree;
 

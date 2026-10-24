@@ -77,7 +77,7 @@ const fn command(
 }
 
 /// Every command, grouped by topic in [`Topic::ALL`]'s order, the most used first inside a topic.
-pub const COMMANDS: [Command; 32] = [
+pub const COMMANDS: [Command; 33] = [
     command(Topic::Session, "clear", "", "start a new session"),
     command(
         Topic::Session,
@@ -236,6 +236,12 @@ pub const COMMANDS: [Command; 32] = [
         "editor",
         "[command]",
         "pick your editor, or /editor <command>",
+    ),
+    command(
+        Topic::Settings,
+        "cache",
+        "ping|1h|off",
+        "how a resting session keeps its cache: read again (ping), Anthropic's hour (1h), or not at all",
     ),
     command(
         Topic::Settings,
@@ -527,7 +533,7 @@ mod tests {
     fn a_typed_part_takes_the_names_first_then_what_they_do() {
         assert_eq!(
             names(&fitting("c")),
-            ["clear", "compact", "context", "close"]
+            ["clear", "compact", "context", "close", "cache"]
         );
         assert_eq!(names(&fitting("hook")), ["skill"]);
         let con = fitting("con");

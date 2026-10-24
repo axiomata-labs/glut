@@ -147,6 +147,18 @@ pub struct RunOutcome {
     pub usage: Usage,
     /// How many calls the run had refused (#112), so a parent counts its subagent's toward its own.
     pub refusals: u32,
+    /// The call whose cached head the next turn reuses (TUI T36e): the run's first call — or the first after its last
+    /// compaction. Later calls carry this run's thinking, which the next turn leaves out, so their cache entries are
+    /// no head the next turn begins with. `None` for a run that called no model.
+    pub warm: Option<Warm>,
+}
+
+/// A run's model call, to be sent again to keep its cache: how many messages of the conversation it held (the run's
+/// returned conversation begins with them) and the tools on offer then.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Warm {
+    pub length: usize,
+    pub tools: Vec<ToolSpec>,
 }
 
 impl RunOutcome {
@@ -158,6 +170,7 @@ impl RunOutcome {
             turns: 0,
             usage: Usage::default(),
             refusals: 0,
+            warm: None,
         }
     }
 }
@@ -329,6 +342,7 @@ async fn run_inner<M: ChatModel>(
             gate: tools.gate().cloned(),
         },
         messages: Vec::new(),
+        last_call: None,
         usage: Usage::default(),
         answer: None,
         turns: 0,
@@ -415,6 +429,7 @@ async fn run_inner<M: ChatModel>(
         turns,
         messages,
         journal,
+        last_call,
         ..
     } = run;
     // A run that ended — answered, failed, cancelled, out of steps — is no unfinished one (D8). Only a run the process
@@ -435,6 +450,7 @@ async fn run_inner<M: ChatModel>(
         turns,
         usage,
         refusals,
+        warm: last_call,
     };
     (outcome, messages)
 }
@@ -504,6 +520,9 @@ struct Loop<'a, M: ChatModel> {
     offer_task: bool,
     hooks: RunHooks<'a>,
     messages: Vec<Message>,
+    /// The first model call since the run began or last compacted: how many messages it held and the tools it
+    /// offered (T36e, [`Warm`]).
+    last_call: Option<Warm>,
     usage: Usage,
     /// The last reply's text only: a remark beside earlier tool calls is no answer to the task.
     answer: Option<String>,
@@ -932,6 +951,12 @@ impl<M: ChatModel> Loop<'_, M> {
                 },
             });
         };
+        if self.last_call.is_none() {
+            self.last_call = Some(Warm {
+                length: self.messages.len(),
+                tools: specs.to_vec(),
+            });
+        }
         let completion = self.model.complete_streaming(
             &self.messages,
             specs,
@@ -1074,6 +1099,8 @@ impl<M: ChatModel> Loop<'_, M> {
         }
         self.messages = conversation;
         self.last_prompt = None;
+        // The conversation is new: the next call's head is the one the next turn reuses.
+        self.last_call = None;
         self.compacted_at = Some(self.messages.len());
         self.compacted_size = Some(self.estimated_prompt());
         sink.emit(Event::Compacted {
@@ -3453,6 +3480,15 @@ mod tests {
         assert_eq!(first.answer.as_deref(), Some("Remembered."));
         // system, user, the call, its result, the answer
         assert_eq!(kept.len(), 5);
+        // T36e: the first call — system and prompt — is the head the next turn reuses (later calls carry this run's
+        // thinking, which the next turn leaves out); a keep-warm sends it again.
+        let warm = first.warm.as_ref().unwrap();
+        assert_eq!(warm.length, 2);
+        assert_eq!(
+            &kept[..warm.length],
+            model.seen.lock().unwrap()[0].as_slice()
+        );
+        assert!(warm.tools.iter().any(|spec| spec.name == "echo"));
         let mut old = kept.clone();
         old[0] = Message::system("an old system prompt");
 

@@ -335,6 +335,18 @@ pub trait ChatModel: Send + Sync {
         self.complete(messages, tools, max_output_tokens)
     }
 
+    /// Keeps the provider's cache of this conversation warm (TUI T36e): the same request again, answered as briefly as
+    /// the provider allows — read from the cache, which renews it. By default one token of answer; a provider with a
+    /// way of its own to read without answering ([`crate::anthropic`]) uses it. What it used comes back.
+    fn warm(
+        &self,
+        messages: &[Message],
+        tools: &[ToolSpec],
+    ) -> impl Future<Output = Result<Usage, HarnessError>> + Send {
+        let reply = self.complete(messages, tools, Some(1));
+        async move { reply.await.map(|reply| reply.usage) }
+    }
+
     /// The model's name, for the events.
     fn name(&self) -> &str;
 
@@ -563,6 +575,14 @@ pub enum Model {
 }
 
 impl Model {
+    /// Asks Anthropic to keep this model's cache for an hour instead of five minutes (TUI T36e, `/cache 1h`); other
+    /// providers set their own lifetime, so it changes nothing there.
+    pub fn set_cache_hour(&self, hour: bool) {
+        if let Model::Anthropic(model) = self {
+            model.set_cache_hour(hour);
+        }
+    }
+
     /// A client for `endpoint` in `protocol`.
     ///
     /// # Errors
@@ -666,6 +686,13 @@ impl ChatModel for Model {
                     .complete_streaming(messages, tools, max_output_tokens, on_text)
                     .await
             }
+        }
+    }
+
+    async fn warm(&self, messages: &[Message], tools: &[ToolSpec]) -> Result<Usage, HarnessError> {
+        match self {
+            Model::OpenAi(model) => model.warm(messages, tools).await,
+            Model::Anthropic(model) => model.warm(messages, tools).await,
         }
     }
 

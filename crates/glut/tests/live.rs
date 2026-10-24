@@ -81,3 +81,59 @@ async fn a_real_stdio_server_connects_and_lists_its_tools() {
     println!("{} tools: {names:?}", names.len());
     assert!(!names.is_empty(), "a real server offers at least one tool");
 }
+
+/// Keeping a cache warm against a real API (TUI T36e): a turn, then its first call sent again as a keep-warm — the
+/// keep-warm must be taken (Anthropic: `max_tokens: 0`, unstreamed, with Glut's thinking and effort) and read the
+/// cache. Ignored by default: it needs a key and costs a few cents of cache.
+///
+/// `GLUT_LIVE_BASE_URL=https://api.anthropic.com GLUT_LIVE_MODEL=claude-opus-5-5 GLUT_LIVE_PROTOCOL=anthropic \
+///  GLUT_API_KEY=… cargo test -p glut --test live keeps_warm -- --ignored --nocapture`
+#[tokio::test]
+#[ignore = "needs a model API and a key"]
+async fn a_real_model_keeps_its_cache_warm() {
+    use glut::ChatModel as _;
+    use glut::providers::catalog::Protocol;
+    let base_url = std::env::var("GLUT_LIVE_BASE_URL").expect("GLUT_LIVE_BASE_URL");
+    let model = std::env::var("GLUT_LIVE_MODEL").expect("GLUT_LIVE_MODEL");
+    let protocol = match std::env::var("GLUT_LIVE_PROTOCOL").as_deref() {
+        Ok("anthropic") => Protocol::AnthropicMessages,
+        _ => Protocol::ChatCompletions,
+    };
+    let model = glut::Model::new(
+        ModelEndpoint {
+            base_url,
+            api_key: std::env::var("GLUT_API_KEY").ok(),
+            model,
+            effort: None,
+            versioned: false,
+        },
+        protocol,
+    )
+    .unwrap();
+    let dir = std::env::temp_dir().join(format!("glut-live-warm-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut config = RunConfig::new(&dir);
+    // A head long enough for every provider's smallest cache.
+    config.instructions = Some("Glut keeps this cache warm. ".repeat(600));
+    let (outcome, conversation) = glut::run_continuing(
+        &config,
+        &model,
+        &Toolbox::new(),
+        Vec::new(),
+        "Say hello in one word.",
+        &mut Vec::new(),
+        &Cancel::new(),
+    )
+    .await;
+    assert_eq!(outcome.reason, FinishReason::Answered, "{outcome:?}");
+    let warm = outcome.warm.expect("the run called the model");
+    let usage = model
+        .warm(&conversation[..warm.length], &warm.tools)
+        .await
+        .expect("the keep-warm is taken");
+    println!("{usage:?}");
+    assert!(
+        usage.cached_input_tokens > 0,
+        "it read the cache: {usage:?}"
+    );
+}

@@ -39,6 +39,8 @@ pub enum Report {
     ChooseModel(String),
     /// `glut_file`'s `pick_model` (T37c): the owner picks a provider and a model from Glut's lists; `None`: none.
     PickModel(oneshot::Sender<Option<(String, String)>>),
+    /// A resting session's cache was read again (T36e): what it used — or why the keeping stopped.
+    Warmed(Result<glut::Usage, String>),
     /// `tell` (T36c): the model's message to pane `to` (the only other one when `None`); the reply says what became of it.
     Tell {
         to: Option<u8>,
@@ -790,6 +792,7 @@ fn refused() -> RunOutcome {
         turns: 0,
         usage: Usage::default(),
         refusals: 0,
+        warm: None,
     }
 }
 

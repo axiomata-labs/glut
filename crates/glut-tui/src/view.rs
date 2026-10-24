@@ -795,11 +795,19 @@ fn draw_keys(frame: &mut Frame, app: &App, area: Rect, branch: Option<String>, c
         1,
     ));
     let window = app.meter_window();
-    segments.push(crate::footer::context(
+    let mut context = crate::footer::context(
         window.used,
         window.window.map(|(size, _)| size),
         window.compacts_at,
-    ));
+    );
+    // T36e: whether the provider still holds the cache — only once it has said it caches at all.
+    if app.cache_seen {
+        let warm = app
+            .warm_until
+            .is_some_and(|until| until > std::time::Instant::now());
+        context.text.push_str(if warm { " ●" } else { " ○" });
+    }
+    segments.push(context);
     if let Some(cost) = app.cost {
         segments.push(Segment::calm(format!("${cost:.4}"), 2));
     }

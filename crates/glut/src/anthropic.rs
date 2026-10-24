@@ -126,6 +126,9 @@ fn effort_for(model: &str, effort: Effort) -> &'static str {
 pub struct AnthropicMessages {
     endpoint: ModelEndpoint,
     client: reqwest::Client,
+    /// The cache's one-hour life instead of five minutes (TUI T36e): every write costs twice the input price then.
+    /// Shared by a clone: it is the session's choice, not the call's.
+    cache_hour: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// [`STALL_LIMIT`]; shorter in the tests.
     stall: Duration,
 }
@@ -152,8 +155,15 @@ impl AnthropicMessages {
         Ok(AnthropicMessages {
             endpoint,
             client,
+            cache_hour: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             stall: STALL_LIMIT,
         })
+    }
+
+    /// The cache's life from the next call on: an hour, or the five minutes Anthropic gives by default.
+    pub fn set_cache_hour(&self, hour: bool) {
+        self.cache_hour
+            .store(hour, std::sync::atomic::Ordering::Relaxed);
     }
 
     fn url(&self, path: &str) -> String {
@@ -203,6 +213,12 @@ impl AnthropicMessages {
             // The whole prefix is cached as the conversation grows: each call reads what the last one wrote.
             "cache_control": { "type": "ephemeral" },
         });
+        // The hour is Anthropic's own: a gateway that passes the API on may not take it.
+        if self.cache_hour.load(std::sync::atomic::Ordering::Relaxed)
+            && !crate::model::is_opencode(&self.endpoint.base_url)
+        {
+            body["cache_control"]["ttl"] = json!("1h");
+        }
         if !system.is_empty() {
             body["system"] = Value::Array(system);
         }
@@ -289,6 +305,34 @@ impl ChatModel for AnthropicMessages {
                 HarnessError::Protocol(message) => HarnessError::Protocol(redact(&message, key)),
                 other => other,
             })
+    }
+
+    /// Anthropic's own way to keep the cache: the same request with `max_tokens: 0`, not streamed — it reads the
+    /// cached head (which renews it) and is billed as that read, with no answer at all.
+    async fn warm(&self, messages: &[Message], tools: &[ToolSpec]) -> Result<Usage, HarnessError> {
+        let (mut body, betas) = self.body(messages, tools, None);
+        body["max_tokens"] = json!(0);
+        body["stream"] = json!(false);
+        let response = self
+            .request(reqwest::Method::POST, "messages", &betas)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(body.to_string())
+            .send()
+            .await
+            .map_err(|err| HarnessError::Transport(err.without_url().to_string()))?;
+        let key = self.endpoint.api_key.as_deref();
+        let status = response.status();
+        let text = read_capped(response).await?;
+        if !status.is_success() {
+            let body: String = text.chars().take(ERROR_BODY_CHARS).collect();
+            return Err(HarnessError::Http {
+                status: status.as_u16(),
+                body: redact(&body, key),
+            });
+        }
+        let value: Value = serde_json::from_str(&text)
+            .map_err(|_| HarnessError::Protocol("the warming call's answer is no JSON".into()))?;
+        Ok(warm_usage(value.get("usage").unwrap_or(&Value::Null)))
     }
 
     fn name(&self) -> &str {
@@ -862,6 +906,17 @@ pub(crate) fn list_request(
     }
 }
 
+/// A warming call's usage as Glut counts it: every prompt token processed, the part read from the cache apart.
+fn warm_usage(usage: &Value) -> Usage {
+    let tokens = |name: &str| usage.get(name).and_then(Value::as_u64).unwrap_or(0);
+    let read = tokens("cache_read_input_tokens");
+    Usage {
+        input_tokens: tokens("input_tokens") + read + tokens("cache_creation_input_tokens"),
+        cached_input_tokens: read,
+        output_tokens: tokens("output_tokens"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -913,6 +968,44 @@ mod tests {
             json!({"type": "message_delta", "delta": {"stop_reason": "tool_use"}, "usage": {"output_tokens": 42}}),
             json!({"type": "message_stop"}),
         ]
+    }
+
+    #[tokio::test]
+    async fn warming_reads_the_cache_without_an_answer_and_the_hour_is_asked_for_when_chosen() {
+        let warmed = Prepared {
+            status: 200,
+            body: json!({"content": [], "stop_reason": "max_tokens", "usage": {
+                "input_tokens": 3, "cache_read_input_tokens": 9000, "cache_creation_input_tokens": 0,
+                "output_tokens": 0
+            }})
+            .to_string(),
+            content_type: "application/json",
+            then_hang: false,
+        };
+        let api = FakeApi::spawn(vec![warmed, events(&thought_then_call())]).await;
+        let model = AnthropicMessages::new(endpoint(&api.base_url, "claude-opus-5-5")).unwrap();
+        let hi = [Message::user("hi")];
+        let usage = model.warm(&hi, &[]).await.unwrap();
+        assert_eq!(
+            usage,
+            Usage {
+                input_tokens: 9003,
+                cached_input_tokens: 9000,
+                output_tokens: 0
+            }
+        );
+        model.set_cache_hour(true);
+        model.complete(&hi, &[], None).await.unwrap();
+        let bodies = api.bodies();
+        assert_eq!(
+            (bodies[0]["max_tokens"].clone(), bodies[0]["stream"].clone()),
+            (json!(0), json!(false))
+        );
+        assert!(
+            bodies[0]["cache_control"].get("ttl").is_none(),
+            "five minutes by default"
+        );
+        assert_eq!(bodies[1]["cache_control"]["ttl"], "1h");
     }
 
     #[tokio::test]

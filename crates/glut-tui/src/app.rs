@@ -239,6 +239,14 @@ pub struct App {
     pub owner_spoke: bool,
     /// How many messages this session's model sent to other panes (T36c: at most [`crate::panes::MOST_TELLS`]).
     pub tells_sent: u32,
+    /// How this session keeps its cache while it rests (T36e).
+    pub cache_mode: crate::warm::CacheMode,
+    /// The keeping at work while the session rests; dropped when a turn starts.
+    keeper: Option<crate::warm::Keeper>,
+    /// Until when the provider holds the cache, as far as Glut knows; `None` before it held any.
+    pub warm_until: Option<Instant>,
+    /// The provider has said it cached something in this session: only then does the footer mark the cache.
+    pub cache_seen: bool,
     /// The role this pane plays (T36c): a named agent's prompt and tools, never its model; `None` an all-rounder.
     pub role: Option<String>,
     /// Messages of another pane's model that wait for the owner's Enter here (T36c): never sent by a turn's end.
@@ -284,6 +292,10 @@ impl App {
         let prefs = Prefs::load(&parts.home);
         let panel = prefs.panel;
         let vi = prefs.vi.unwrap_or(false);
+        let cache_mode = prefs.cache.unwrap_or_default();
+        engine
+            .model
+            .set_cache_hour(cache_mode == crate::warm::CacheMode::Hour);
         let (separators, separators_from) = match prefs.footer {
             Some(kept) => (kept, None),
             None => {
@@ -397,6 +409,10 @@ impl App {
             tells_sent: 0,
             held: Vec::new(),
             role: None,
+            cache_mode,
+            keeper: None,
+            warm_until: None,
+            cache_seen: false,
             held_since: None,
             waiting_models: Vec::new(),
             separators,
@@ -448,6 +464,7 @@ impl App {
 
     /// Opens session `session`: its conversation goes on, its stream is shown again.
     pub fn open(&mut self, session: Session) {
+        self.forget_warm();
         // What waited for the other session is not this one's.
         self.queue.clear();
         self.forget_models();
@@ -575,6 +592,8 @@ impl App {
         }
         // A picker left open (glut -r with a first message) is no place to choose from while the turn runs.
         self.picker = None;
+        // The turn reads the cache itself: no keeping beside it.
+        self.keeper = None;
         // Another pane's model is not the owner (T36c): its message stands apart, and only the owner's word ends a
         // chain of messages between models.
         if let Some(shown) = crate::tell::shown(&prompt) {
@@ -681,6 +700,9 @@ impl App {
                     }
                     self.usage += call;
                     self.context_used = *input_tokens;
+                    if *cached_input_tokens > 0 {
+                        self.cache_seen = true;
+                    }
                 }
                 // A compaction in the turn rewrote what came before: no mark's place in the conversation holds.
                 if let Event::Compacted { .. } = &event {
@@ -763,6 +785,11 @@ impl App {
                 self.scroll = 0;
             }
             Report::Done(outcome, conversation) => {
+                self.keep_warm(
+                    outcome.reason == FinishReason::Answered,
+                    outcome.warm.as_ref(),
+                    &conversation,
+                );
                 if let Some(path) = self.init_guide.take()
                     && outcome.reason == FinishReason::Answered
                 {
@@ -837,6 +864,7 @@ impl App {
                 }
             }
             Report::Compacted(result, before) => {
+                self.forget_warm();
                 self.busy = None;
                 match result {
                     Ok(compacted) => {
@@ -867,6 +895,7 @@ impl App {
                 }
             }
             Report::HandedOff(result, conversation) => {
+                self.forget_warm();
                 self.busy = None;
                 self.conversation = conversation;
                 match result {
@@ -928,6 +957,23 @@ impl App {
                     Tone::Fault,
                 );
                 self.transcript.settle();
+            }
+            Report::Warmed(Ok(usage)) => {
+                if let Some(prices) = self.engine.prices {
+                    *self.cost.get_or_insert(0.0) += prices.cost_usd(&usage);
+                }
+                self.usage += usage;
+                // A read that came back as a turn began is paid for, but the turn's own reads say what is cached.
+                if usage.cached_input_tokens > 0 && !self.working() {
+                    self.cache_seen = true;
+                    self.warm_until = Some(Instant::now() + crate::warm::LIFE);
+                }
+                self.spent(usage);
+            }
+            Report::Warmed(Err(reason)) => {
+                self.keeper = None;
+                self.transcript
+                    .note(format!("the cache is kept warm no more: {reason}"), Tone::Quiet);
             }
             // T36c: only the screen of several panes delivers; a pane alone has no one to tell.
             Report::Tell { reply, .. } => {
@@ -1048,6 +1094,11 @@ impl App {
                             );
                         }
                         self.engine = engine;
+                        // Another model has a cache of its own: the old one's keeping ends, the life is asked anew.
+                        self.forget_warm();
+                        self.engine
+                            .model
+                            .set_cache_hour(self.cache_mode == crate::warm::CacheMode::Hour);
                         // The next start begins where the owner switched to.
                         if let Err(reason) = session::keep_choice(&self.parts.home, &self.engine) {
                             self.transcript.note(
@@ -1612,6 +1663,8 @@ impl App {
 
     /// Shift+Tab: plan → ask → build → auto → plan, from the next call on.
     fn cycle_mode(&mut self) {
+        // Another mode offers other tools: the kept head is no longer the next turn's.
+        self.forget_warm();
         if self.parts.mode_locked {
             return self.transcript.note(
                 "this session's mode is set by the program that started it, for its role",
@@ -1661,6 +1714,7 @@ impl App {
             "help" | "?" => self.transcript.note(crate::commands::help(), Tone::Quiet),
             "quit" | "exit" | "q" => self.quit = true,
             "clear" => {
+                self.forget_warm();
                 self.selection = None;
                 self.search = None;
                 self.pending.clear();
@@ -1819,6 +1873,13 @@ impl App {
                 Err(reason) => self.transcript.note(reason, Tone::Fault),
             },
             "close" => self.pane_request = Some(crate::panes::Request::Close),
+            "cache" => match crate::warm::CacheMode::parse(rest) {
+                Some(mode) => self.set_cache(mode),
+                None => self.tell(format!(
+                    "cache: {} — /cache ping, /cache 1h or /cache off",
+                    self.cache_mode.label()
+                )),
+            },
             "role" if rest.is_empty() => self.picker = Some(self.roles_picker()),
             "role" => match rest {
                 "none" | "all-rounder" => self.play(None),
@@ -2704,6 +2765,9 @@ impl App {
     /// Goes back to before mark `mark`: the conversation cut there (its message back in the input to edit), the files
     /// put back from the snapshot — or one of the two.
     fn rewind(&mut self, mark: usize, conversation: bool, files: bool) {
+        if conversation {
+            self.forget_warm();
+        }
         if self.working() {
             return self
                 .transcript
@@ -3699,6 +3763,81 @@ impl App {
         }
     }
 
+    /// After a turn: until when the provider holds its cache, and — pinging — the keeping while the session rests.
+    fn keep_warm(
+        &mut self,
+        answered: bool,
+        warm: Option<&glut::Warm>,
+        conversation: &[glut::Message],
+    ) {
+        use crate::warm::CacheMode;
+        let anthropic = matches!(*self.engine.model, glut::Model::Anthropic(_));
+        let hour = self.cache_mode == CacheMode::Hour && anthropic;
+        if self.cache_seen {
+            let life = if hour {
+                crate::warm::HOUR
+            } else {
+                crate::warm::LIFE
+            };
+            self.warm_until = Some(Instant::now() + life);
+        }
+        self.keeper = None;
+        let pings = match self.cache_mode {
+            CacheMode::Ping => true,
+            // Only Anthropic lets the hour be asked for: elsewhere it is kept by reading, as with `ping`.
+            CacheMode::Hour => !anthropic,
+            CacheMode::Off => false,
+        };
+        // Only after an answered turn: a call that failed or was stopped may have cached nothing. A ping is a paid
+        // call outside a turn: the host's budget has its word first, as for `/compact` — and before every ping.
+        let may_spend = self.parts.host.may_spend().is_ok();
+        if let Some(warm) =
+            warm.filter(|warm| answered && pings && may_spend && warm.length <= conversation.len())
+        {
+            self.keeper = Some(crate::warm::keep(
+                Arc::clone(&self.engine.model),
+                conversation[..warm.length].to_vec(),
+                warm.tools.clone(),
+                Arc::clone(&self.parts.host),
+                self.reports.clone(),
+            ));
+        }
+    }
+
+    /// The cache this session kept is no head of what comes next (another conversation, a compacted one, another
+    /// role or mode): its keeping ends, and the footer marks nothing until the provider caches anew.
+    fn forget_warm(&mut self) {
+        self.keeper = None;
+        self.warm_until = None;
+        self.cache_seen = false;
+    }
+
+    /// `/cache ping|1h|off`: how this session keeps its cache from now on, kept for the next start.
+    fn set_cache(&mut self, mode: crate::warm::CacheMode) {
+        self.cache_mode = mode;
+        self.engine
+            .model
+            .set_cache_hour(mode == crate::warm::CacheMode::Hour);
+        if mode == crate::warm::CacheMode::Off {
+            self.keeper = None;
+        }
+        let said = match mode {
+            crate::warm::CacheMode::Ping => {
+                "cache: kept warm by reading it while the session rests (up to 30 min)"
+            }
+            crate::warm::CacheMode::Hour => {
+                "cache: Anthropic keeps it an hour (each write costs twice); other providers are read to keep it"
+            }
+            crate::warm::CacheMode::Off => {
+                "cache: not kept — a pause past the provider's few minutes starts cold"
+            }
+        };
+        match prefs::set_cache(&self.parts.home, mode) {
+            Ok(()) => self.tell(said),
+            Err(reason) => self.transcript.note(reason, Tone::Fault),
+        }
+    }
+
     /// Plays the role `name` from now on (T36c), said in the stream — or none, an all-rounder again.
     pub fn play(&mut self, name: Option<&str>) {
         match self.set_role(name) {
@@ -3723,6 +3862,8 @@ impl App {
     ///
     /// No agent of that name.
     pub fn set_role(&mut self, name: Option<&str>) -> Result<(), String> {
+        // Another role is another system prompt: the kept head is no longer the next turn's.
+        self.forget_warm();
         let gate = self.parts.tools.gate().cloned();
         let Some(name) = name else {
             if let Some(gate) = gate {
@@ -4592,6 +4733,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_resting_session_keeps_its_cache_warm_until_a_turn_or_off_and_the_reads_are_counted()
+    {
+        let (mut app, _reports) = app();
+        let done = |warm: Option<glut::Warm>| {
+            Report::Done(
+                RunOutcome {
+                    reason: FinishReason::Answered,
+                    answer: Some("ok".into()),
+                    turns: 1,
+                    usage: Usage::default(),
+                    refusals: 0,
+                    warm,
+                },
+                vec![glut::Message::user("hi"), glut::Message::user("ok")],
+            )
+        };
+        let warm = glut::Warm {
+            length: 1,
+            tools: Vec::new(),
+        };
+        app.on_report(done(Some(warm.clone())));
+        assert!(app.keeper.is_some(), "pinging by default");
+        assert!(
+            app.warm_until.is_none() && !app.cache_seen,
+            "no mark before the provider said it caches"
+        );
+        app.on_report(Report::Warmed(Ok(Usage {
+            input_tokens: 9000,
+            cached_input_tokens: 8900,
+            output_tokens: 0,
+        })));
+        assert!(app.cache_seen && app.warm_until.is_some_and(|until| until > Instant::now()));
+        assert_eq!(app.usage.input_tokens, 9000, "the reads are counted");
+        app.send("next".into());
+        assert!(app.keeper.is_none(), "a turn reads the cache itself");
+        app.busy = None;
+        app.on_report(done(Some(warm.clone())));
+        typed(&mut app, "/cache off");
+        assert!(app.keeper.is_none());
+        assert_eq!(
+            Prefs::load(&app.parts.home).cache,
+            Some(crate::warm::CacheMode::Off)
+        );
+        app.on_report(done(Some(warm)));
+        assert!(app.keeper.is_none(), "off keeps nothing");
+        app.on_report(Report::Warmed(Err("401".into())));
+        let _ = std::fs::remove_dir_all(&app.parts.home);
+    }
+
+    #[tokio::test]
     async fn an_at_sign_at_a_word_start_opens_the_files_and_esc_keeps_it() {
         let (mut app, mut reports) = app();
         app.input.insert_text("look at");
@@ -4687,6 +4878,7 @@ mod tests {
                 turns: 1,
                 usage: Usage::default(),
                 refusals: 0,
+                warm: None,
             },
             Vec::new(),
         ));
@@ -4713,6 +4905,7 @@ mod tests {
                 turns: 1,
                 usage: Usage::default(),
                 refusals: 0,
+                warm: None,
             },
             Vec::new(),
         ));
@@ -5199,6 +5392,7 @@ mod tests {
                 turns: 1,
                 usage: Usage::default(),
                 refusals: 0,
+                warm: None,
             },
             Vec::new(),
         ));
@@ -5662,6 +5856,7 @@ mod tests {
                     turns: 1,
                     usage: Usage::default(),
                     refusals: 0,
+                    warm: None,
                 },
                 Vec::new(),
             )
@@ -5689,6 +5884,7 @@ mod tests {
                 turns: 1,
                 usage: Usage::default(),
                 refusals: 0,
+                warm: None,
             },
             Vec::new(),
         ));
@@ -5757,7 +5953,7 @@ mod tests {
                 .iter()
                 .map(|command| command.name)
                 .collect::<Vec<_>>(),
-            ["clear", "compact", "context", "close"]
+            ["clear", "compact", "context", "close", "cache"]
         );
         app.on_terminal(key(KeyCode::Down, KeyModifiers::NONE));
         app.on_terminal(key(KeyCode::Tab, KeyModifiers::NONE));
@@ -6149,6 +6345,7 @@ mod tests {
             turns: 1,
             usage: Usage::default(),
             refusals: 0,
+            warm: None,
         };
         app.on_report(Report::Done(
             outcome.clone(),
