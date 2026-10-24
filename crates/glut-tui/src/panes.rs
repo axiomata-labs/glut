@@ -74,7 +74,49 @@ enum Node {
     },
 }
 
+/// The kept session `id` of `app`'s folder opened in it (TUI9e); one no longer kept — or never written, as a pane
+/// that was never sent anything — is said, and the pane starts new.
+fn open_kept(app: &mut App, id: &str) {
+    if app.session.id == id {
+        return;
+    }
+    if app.others_open.iter().any(|open| open == id) {
+        return app.tell("its kept session is open in another pane — a new one starts");
+    }
+    match crate::store::Session::load(&app.parts.home, id) {
+        Ok(session) if session.cwd == app.parts.config.cwd => app.open(session),
+        _ => app.tell("its kept session holds nothing or is gone — a new one starts"),
+    }
+}
+
 impl Node {
+    /// The split as a layout keeps it (TUI9e): each pane by its place in `order`.
+    fn shape(&self, order: &[u64]) -> crate::layout::Shape {
+        match self {
+            Node::Pane(id) => {
+                crate::layout::Shape::Pane(order.iter().position(|at| at == id).unwrap_or(0))
+            }
+            Node::Split { stacked, parts } => crate::layout::Shape::Split {
+                stacked: *stacked,
+                parts: parts.iter().map(|part| part.shape(order)).collect(),
+            },
+        }
+    }
+
+    /// A kept split again, each kept place standing for the pane in `ids` at it; `None` for a place with no pane.
+    fn from_shape(shape: &crate::layout::Shape, ids: &[u64]) -> Option<Node> {
+        Some(match shape {
+            crate::layout::Shape::Pane(at) => Node::Pane(*ids.get(*at)?),
+            crate::layout::Shape::Split { stacked, parts } => Node::Split {
+                stacked: *stacked,
+                parts: parts
+                    .iter()
+                    .map(|part| Node::from_shape(part, ids))
+                    .collect::<Option<Vec<_>>>()?,
+            },
+        })
+    }
+
     /// Puts pane `new` at `side` of pane `at`: beside it in a split that already runs that way, else in a split of
     /// their own where `at` stood. `false` when `at` is nowhere.
     fn split(&mut self, at: u64, new: u64, side: Side) -> bool {
@@ -214,6 +256,8 @@ pub enum Place {
     Here,
     /// A new worktree on this new branch.
     Tree(String),
+    /// A worktree made before, found again (TUI9e).
+    Kept(crate::worktree::Tree),
 }
 
 /// How a worktree's pane ends.
@@ -266,6 +310,8 @@ pub enum Request {
     Show(String),
     /// The asking pane sent to the background.
     Hide,
+    /// The panes kept at the last end, back as they stood (TUI9e, offered by `glut -c`).
+    Restore,
     /// A background agent's stream shown over the asking pane, only to read; `None` closes it.
     Peek(Option<String>),
     /// A background agent ended where it is, its turn stopped (`/close <name>`).
@@ -335,7 +381,7 @@ pub fn parse_background(rest: &str) -> Result<Request, String> {
 
 /// Whether `word` can name a background agent: lower-case letters, digits and dashes, a letter first — never a pane's
 /// number.
-fn is_name(word: &str) -> bool {
+pub(crate) fn is_name(word: &str) -> bool {
     // `/send` and `/bg` read these words as their own.
     const RESERVED: [&str; 4] = ["plan", "here", "tree", "as"];
     !RESERVED.contains(&word)
@@ -416,6 +462,8 @@ struct Building {
     role: Option<String>,
     /// The name of a background agent (T36e); `None` for a pane.
     background: Option<String>,
+    /// The kept session it goes on with (TUI9e), by its id.
+    restore: Option<String>,
     reports: mpsc::UnboundedSender<Report>,
 }
 
@@ -452,6 +500,25 @@ pub struct Panes {
     chain: u32,
     /// A background agent's stream shown over the active pane, only to read (T36e, `/peek`), by its session's id.
     pub peek: Option<u64>,
+    /// The first pane's folder: where the layout is kept (TUI9e).
+    cwd: std::path::PathBuf,
+    /// The kept layout coming back, pane by pane (TUI9e).
+    restoring: Option<Restoring>,
+    /// The kept session the next pane built goes on with.
+    restore_next: Option<String>,
+    /// A kept layout was offered (`glut -c`): a window ending with one pane forgets it.
+    offered: bool,
+}
+
+/// A kept layout coming back: the panes still to build, and each kept pane's session id once it stands.
+struct Restoring {
+    layout: crate::layout::Layout,
+    /// The places in `layout.panes` still to build.
+    left: std::collections::VecDeque<usize>,
+    /// Each kept pane's id once built.
+    ids: Vec<Option<u64>>,
+    /// The place in `layout.panes` of the pane being built now.
+    building: Option<usize>,
 }
 
 /// The other ends of [`Panes`]' channels, which the screen's loop waits on.
@@ -473,7 +540,12 @@ impl Panes {
         let (reports, report_inlet) = mpsc::unbounded_channel();
         let (built, built_inlet) = mpsc::unbounded_channel();
         forward(1, first, reports.clone());
+        let cwd = app.parts.config.cwd.clone();
         let panes = Panes {
+            cwd,
+            restoring: None,
+            restore_next: None,
+            offered: false,
             list: vec![Pane {
                 id: 1,
                 number: 1,
@@ -805,6 +877,10 @@ impl Panes {
 
     /// What the panes asked for since the last look: a split, a close, a toggle.
     pub fn settle(&mut self, host: &Arc<dyn Host>) {
+        // A kept layout comes back one pane at a time (TUI9e): the next once the one before stands.
+        if self.restoring.is_some() && self.building.is_none() {
+            self.restore_step(host);
+        }
         // One at a time: a close changes the list the next is looked for in.
         while let Some(at) = self
             .list
@@ -866,6 +942,7 @@ impl Panes {
                 Request::Hide => self.hide(),
                 Request::Peek(None) => self.close_peek(),
                 Request::End(name) => self.end_background(&name),
+                Request::Restore => self.restore(),
                 Request::Peek(Some(name)) => match self.resolve_background(&name) {
                     Some(at) => self.peek = Some(self.list[at].id),
                     _ => self.active().tell(format!(
@@ -1054,10 +1131,11 @@ impl Panes {
             .unwrap_or(u8::MAX);
         let cwd = self.active().parts.config.cwd.clone();
         let repo = match &place {
-            Place::Here => Ok(None),
+            Place::Here | Place::Kept(_) => Ok(None),
             _ => crate::worktree::repo_of(&cwd),
         };
         let tree = match (place, repo) {
+            (Place::Kept(tree), _) => Some(tree),
             (Place::Here, _) | (Place::Ask, Ok(None)) => None,
             (Place::Ask, Err(reason)) => {
                 self.active().tell(format!("no worktree offered: {reason}"));
@@ -1110,6 +1188,7 @@ impl Panes {
             tree,
             role,
             background,
+            restore: self.restore_next.take(),
             reports: reports.clone(),
         });
         let built = self.built.clone();
@@ -1130,8 +1209,15 @@ impl Panes {
         let (parts, engine) = match result {
             Ok(built) => built,
             Err(reason) => {
-                // A worktree made for it holds nothing yet: it goes with the pane that never came.
+                if let Some(restoring) = &mut self.restoring {
+                    restoring.building = None;
+                }
+                // A worktree made for it holds nothing yet: it goes with the pane that never came. One found again
+                // for a kept pane (TUI9e) holds its work: it stays.
                 let gone = match &building.tree {
+                    Some(tree) if building.restore.is_some() => {
+                        format!("; its worktree stays at {}", tree.place.display())
+                    }
                     Some(tree) => match crate::worktree::remove(tree, true) {
                         Ok(()) => format!("; its worktree {} is gone again", tree.branch),
                         Err(left) => {
@@ -1149,6 +1235,14 @@ impl Panes {
         let mut app = App::new(Arc::new(parts), engine, building.reports);
         if building.resume {
             app.picker = Some(app.session_picker());
+        }
+        if let Some(id) = &building.restore {
+            open_kept(&mut app, id);
+        }
+        if let Some(restoring) = &mut self.restoring
+            && let Some(at) = restoring.building.take()
+        {
+            restoring.ids[at] = Some(building.id);
         }
         if let Err(reason) = app.set_role(building.role.as_deref()) {
             app.transcript.note(reason, Tone::Fault);
@@ -1250,6 +1344,202 @@ impl Panes {
             }
         };
         self.active().tell(format!("sent to {label} — {when}"));
+    }
+
+    /// At the end (TUI9e): a window of several panes or with agents in the background keeps how it stood for the
+    /// next `glut -c`; one of a single pane forgets the layout it was offered. Nothing is kept while a layout is still
+    /// coming back, nor without a pane in the project's own folder to start from.
+    pub fn keep_layout(&mut self) {
+        if !self.may_split || self.restoring.is_some() {
+            return;
+        }
+        let home = self.list[0].app.parts.home.clone();
+        let mut shown: Vec<usize> = (0..self.list.len())
+            .filter(|at| !self.list[*at].background)
+            .collect();
+        let behind: Vec<usize> = (0..self.list.len())
+            .filter(|at| self.list[*at].background)
+            .collect();
+        if shown.len() <= 1 && behind.is_empty() {
+            if self.offered {
+                crate::layout::forget(&home, &self.cwd);
+            }
+            return;
+        }
+        // The first kept pane is the one a window of one pane already is: one in the project's folder.
+        let Some(first) = shown.iter().position(|at| self.list[*at].tree.is_none()) else {
+            return;
+        };
+        let first = shown.remove(first);
+        shown.insert(0, first);
+        let kept = |pane: &Pane| crate::layout::Kept {
+            session: pane.app.session.id.clone(),
+            role: pane.app.role.clone(),
+            agent: pane.background.then(|| pane.name.clone()).flatten(),
+            branch: pane.tree.as_ref().map(|tree| tree.branch.clone()),
+            into: pane.tree.as_ref().and_then(|tree| tree.into.clone()),
+        };
+        let order: Vec<u64> = shown.iter().map(|at| self.list[*at].id).collect();
+        let layout = crate::layout::Layout {
+            panes: shown
+                .iter()
+                .chain(&behind)
+                .map(|at| kept(&self.list[*at]))
+                .collect(),
+            shape: self.layout.shape(&order),
+        };
+        // The end is no place for a fault: a layout that cannot be written is simply not offered next time.
+        let _ = crate::layout::save(&home, &self.cwd, &layout);
+    }
+
+    /// `glut -c` (TUI9e): a kept layout is offered once, before anything is typed — what comes back said in full,
+    /// and no key answers it in its first moment.
+    pub fn offer_layout(&mut self) {
+        if !self.may_split {
+            return;
+        }
+        let home = self.list[0].app.parts.home.clone();
+        let Some(layout) = crate::layout::load(&home, &self.cwd) else {
+            return;
+        };
+        self.offered = true;
+        let items = vec![
+            crate::picker::Item::plain(
+                format!("yes: {}", layout.summary()),
+                layout.details(),
+                crate::picker::Pick::Pane(Request::Restore),
+            ),
+            crate::picker::Item::plain(
+                "no, one pane",
+                "the layout goes if this window ends with one pane",
+                crate::picker::Pick::Shown,
+            ),
+        ];
+        self.active().picker =
+            Some(crate::picker::Picker::new("The last layout again?", items, None).guarded());
+    }
+
+    /// The kept layout back: the first pane goes on with the first kept session, the others are built one by one
+    /// ([`Panes::restore_step`]), and the split takes its kept shape once they stand.
+    fn restore(&mut self) {
+        let home = self.list[0].app.parts.home.clone();
+        let Some(layout) = crate::layout::load(&home, &self.cwd) else {
+            return self.active().tell("no layout kept for this folder");
+        };
+        if self.list.len() > 1 || self.building.is_some() || self.restoring.is_some() {
+            return self
+                .active()
+                .tell("the layout comes back only into a window of one pane");
+        }
+        // Another session opened under a running turn would take its answer.
+        if self.active().working() {
+            return self.active().tell(
+                "the layout comes back once Glut is done — /resume then, or start glut -c again",
+            );
+        }
+        let first = layout.panes[0].clone();
+        open_kept(self.active(), &first.session);
+        if let Err(reason) = self.active().set_role(first.role.as_deref()) {
+            self.active().transcript.note(reason, Tone::Fault);
+        }
+        let mut ids = vec![None; layout.panes.len()];
+        ids[0] = Some(self.list[0].id);
+        self.restoring = Some(Restoring {
+            left: (1..layout.panes.len()).collect(),
+            ids,
+            building: None,
+            layout,
+        });
+    }
+
+    /// The next kept pane built — or, with none left, the split shaped as it stood.
+    fn restore_step(&mut self, host: &Arc<dyn Host>) {
+        let Some(restoring) = &mut self.restoring else {
+            return;
+        };
+        let Some(at) = restoring.left.pop_front() else {
+            return self.restore_shape();
+        };
+        let kept = restoring.layout.panes[at].clone();
+        // Every kept pane is built from the first, in the project's folder — not from the one built last.
+        if let Some(first) = restoring.ids[0]
+            && let Some(at) = self.list.iter().position(|pane| pane.id == first)
+        {
+            self.active = at;
+        }
+        // The worktree is found again where Glut puts it, by its branch alone.
+        let place = match &kept.branch {
+            None => Place::Here,
+            Some(branch) => {
+                let home = self.active().parts.home.clone();
+                let found = crate::worktree::repo_of(&self.cwd).and_then(|repo| {
+                    repo.ok_or_else(|| "this folder is in no git repository any more".to_owned())
+                        .and_then(|repo| {
+                            crate::worktree::reopen(&home, &repo, branch, kept.into.clone())
+                        })
+                });
+                match found {
+                    Ok(tree) => Place::Kept(tree),
+                    Err(reason) => {
+                        self.active().transcript.note(
+                            format!("a kept pane on {branch} stays away: {reason}"),
+                            Tone::Fault,
+                        );
+                        return;
+                    }
+                }
+            }
+        };
+        self.restore_next = Some(kept.session);
+        self.start_as(Side::Right, false, place, kept.role, kept.agent, host);
+        // A pane that could not start leaves no building: its kept place stays empty.
+        self.restore_next = None;
+        if self.building.is_some()
+            && let Some(restoring) = &mut self.restoring
+        {
+            restoring.building = Some(at);
+        }
+    }
+
+    /// Every kept pane that came back stands where it stood; with one missing, the panes stay as they were built.
+    fn restore_shape(&mut self) {
+        let Some(restoring) = self.restoring.take() else {
+            return;
+        };
+        let on_screen = restoring
+            .layout
+            .panes
+            .iter()
+            .filter(|kept| kept.agent.is_none())
+            .count();
+        let ids: Option<Vec<u64>> = restoring.ids[..on_screen].iter().copied().collect();
+        // The kept shape only where it holds exactly the panes on the screen now: the owner may have closed, hidden
+        // or split one meanwhile.
+        let mut now: Vec<u64> = self
+            .list
+            .iter()
+            .filter(|pane| !pane.background)
+            .map(|pane| pane.id)
+            .collect();
+        now.sort_unstable();
+        let ids = ids.filter(|ids| {
+            let mut kept = ids.clone();
+            kept.sort_unstable();
+            kept == now
+        });
+        match ids.and_then(|ids| Node::from_shape(&restoring.layout.shape, &ids)) {
+            Some(layout) => {
+                // The keys stay with the pane that has them, wherever it stands now.
+                let keys = self.list[self.active].id;
+                self.layout = layout;
+                self.reorder();
+                self.active = self.at(keys);
+                self.active().tell("the last layout is back");
+            }
+            None => self
+                .active()
+                .tell("the last layout is back but for the panes that could not start"),
+        }
     }
 
     /// `/bg`: a session with no room on the screen (T36e), named `name` or after its role (`reviewer`, a second
@@ -1632,6 +1922,7 @@ mod tests {
             tree: None,
             role: None,
             background: None,
+            restore: None,
             reports: sender,
         });
         panes.on_built(Ok(session::for_tests()));
@@ -1651,6 +1942,7 @@ mod tests {
             tree: None,
             role: None,
             background: Some(name.to_owned()),
+            restore: None,
             reports: sender,
         });
         panes.on_built(Ok(session::for_tests()));
@@ -1705,6 +1997,7 @@ mod tests {
             tree: None,
             role: None,
             background: None,
+            restore: None,
             reports: sender,
         });
         panes.on_built(Ok(session::for_tests()));
@@ -1834,6 +2127,7 @@ mod tests {
             tree: None,
             role: None,
             background: None,
+            restore: None,
             reports: sender,
         });
         panes.on_built(Ok(session::for_tests()));
@@ -1861,6 +2155,7 @@ mod tests {
             tree: None,
             role: None,
             background: None,
+            restore: None,
             reports: sender,
         });
         panes.on_built(Ok(session::for_tests()));
@@ -2455,6 +2750,7 @@ mod tests {
             tree: None,
             role: None,
             background: Some("tester".to_owned()),
+            restore: None,
             reports: sender,
         });
         panes.on_built(Ok(session::for_tests()));
@@ -2524,6 +2820,7 @@ mod tests {
             tree: None,
             role: None,
             background: None,
+            restore: None,
             reports: sender,
         });
         panes.on_built(Ok(session::for_tests()));
@@ -2544,6 +2841,97 @@ mod tests {
         assert!(!panes.list[panes.active].background);
         panes.focus(hidden);
         assert!(!panes.list[panes.active].background, "focus refuses it");
+    }
+
+    #[tokio::test]
+    async fn a_window_keeps_its_layout_and_gets_it_back_pane_by_pane() {
+        let dir = std::env::temp_dir().join(format!("glut-kept-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // Two panes side by side, the second split below, and an agent behind them.
+        let (mut panes, _inlets) = split(Side::Right);
+        panes.cwd = dir.clone();
+        let (sender, _) = mpsc::unbounded_channel();
+        panes.building = Some(Building {
+            id: 3,
+            number: 3,
+            side: Side::Down,
+            resume: false,
+            tree: None,
+            role: None,
+            background: None,
+            restore: None,
+            reports: sender.clone(),
+        });
+        panes.on_built(Ok(session::for_tests()));
+        panes.building = Some(Building {
+            id: 4,
+            number: 4,
+            side: Side::Right,
+            resume: false,
+            tree: None,
+            role: None,
+            background: Some("critic".into()),
+            restore: None,
+            reports: sender.clone(),
+        });
+        panes.on_built(Ok(session::for_tests()));
+        let shape_before = panes.layout.shape(&[1, 2, 3]);
+        let home = panes.list[0].app.parts.home.clone();
+        panes.keep_layout();
+        let kept = crate::layout::load(&home, &dir).unwrap();
+        assert_eq!(kept.summary(), "3 panes, 1 agent");
+        assert_eq!(kept.shape, shape_before);
+        assert_eq!(kept.panes[3].agent.as_deref(), Some("critic"));
+        // A new window of one pane takes it back: each kept pane built in turn, then the split as it stood.
+        let (first, reports) = app();
+        let (mut back, _inlets) = Panes::new(first, reports, true, Servers::Owner);
+        back.list[0].app.parts = Arc::clone(&panes.list[0].app.parts);
+        back.cwd = dir.clone();
+        back.offer_layout();
+        assert!(back.active().picker.is_some(), "offered once");
+        back.active().picker = None;
+        back.restore();
+        let mut next_id = 10;
+        while let Some(at) = back.restoring.as_mut().and_then(|r| r.left.pop_front()) {
+            let kept = back.restoring.as_ref().unwrap().layout.panes[at].clone();
+            back.restoring.as_mut().unwrap().building = Some(at);
+            back.building = Some(Building {
+                id: next_id,
+                number: u8::try_from(at + 1).unwrap(),
+                side: Side::Right,
+                resume: false,
+                tree: None,
+                role: None,
+                background: kept.agent,
+                restore: Some(kept.session),
+                reports: sender.clone(),
+            });
+            back.on_built(Ok(session::for_tests()));
+            next_id += 1;
+        }
+        back.restore_step(&(Arc::new(crate::Standalone) as Arc<dyn Host>));
+        assert!(back.restoring.is_none());
+        assert_eq!(
+            back.layout.shape(&[1, 10, 11]),
+            shape_before,
+            "the split as it stood"
+        );
+        assert_eq!((back.visible(), back.list.len()), (3, 4));
+        // A window ending with one pane forgets it.
+        let (single, reports) = app();
+        let (mut single, _inlets) = Panes::new(single, reports, true, Servers::Owner);
+        single.cwd = dir.clone();
+        single.list[0].app.parts = Arc::clone(&panes.list[0].app.parts);
+        single.keep_layout();
+        assert!(
+            crate::layout::load(&home, &dir).is_some(),
+            "kept unless it was offered"
+        );
+        single.offered = true;
+        single.keep_layout();
+        assert!(crate::layout::load(&home, &dir).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[tokio::test]

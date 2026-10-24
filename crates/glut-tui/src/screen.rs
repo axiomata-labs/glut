@@ -92,6 +92,8 @@ pub async fn run(
     };
     linked(HostLink(reports.clone()));
     let mut app = App::new(parts, engine, reports);
+    let offer_layout =
+        open.continue_last && open.prompt.is_none() && !open.pick && open.lost_turn.is_none();
     if open.continue_last {
         match store::Session::list(&app.parts.home, &app.parts.config.cwd)
             .into_iter()
@@ -116,6 +118,11 @@ pub async fn run(
         (None, None) => {}
     }
     let (mut panes, mut inlets) = Panes::new(app, from_session, host.may_split(), servers);
+    // `glut -c` goes on with the folder's newest session, and offers the panes kept with it (TUI9e) — not when a
+    // first message, a pick or a lost turn has the first word.
+    if offer_layout {
+        panes.offer_layout();
+    }
     let outcome = screen(&mut panes, &mut inlets, &host).await;
     host.state(State::Ended);
     outcome
@@ -269,6 +276,8 @@ async fn run_loop(
         drawn?;
         linked?;
         if panes.quitting() {
+            // How the window stood, for the next `glut -c` (TUI9e).
+            panes.keep_layout();
             for pane in &mut panes.list {
                 let app = &mut pane.app;
                 // A turn the host can go on with later is left to its journal when the terminal is gone.

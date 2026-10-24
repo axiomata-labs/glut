@@ -541,6 +541,84 @@ pub fn add(home: &Path, repo: &Repo, branch: &str) -> Result<Tree, String> {
     })
 }
 
+/// The worktree Glut made for `branch` of `repo` before (TUI9e, a layout kept for the next start), found again: its
+/// place is where [`add`] puts it below `home` — never a path read from a file — and its own git folder the one the
+/// repository lists for that place, not what the worktree's `.git` file (an agent's to write) says. `into` is the
+/// branch a take-over merges into, as kept.
+///
+/// # Errors
+///
+/// A message when the repository's config could run a program, a name is no branch name, or the worktree is gone,
+/// not the repository's, or on another branch.
+pub fn reopen(
+    home: &Path,
+    repo: &Repo,
+    branch: &str,
+    into: Option<String>,
+) -> Result<Tree, String> {
+    checked(&repo.pin())?;
+    plain_branch(repo, branch)?;
+    if let Some(into) = &into {
+        plain_branch(repo, into)?;
+    }
+    let name = repo
+        .top
+        .file_name()
+        .map_or("repo".into(), |name| name.to_string_lossy());
+    let place = home
+        .join(DIR)
+        .join(format!("{name}-{}", branch.replace('/', "-")));
+    let place = place
+        .canonicalize()
+        .map_err(|_| format!("the worktree of {branch} is gone ({})", place.display()))?;
+    // Where Glut keeps worktrees, a link at the place not followed out of it.
+    let root = home
+        .join(DIR)
+        .canonicalize()
+        .map_err(|err| err.to_string())?;
+    if !place.starts_with(&root) {
+        return Err(format!(
+            "{} is not where Glut keeps worktrees",
+            place.display()
+        ));
+    }
+    let dot_git = place.join(".git");
+    let listed = std::fs::read_dir(repo.common.join("worktrees"))
+        .map_err(|err| format!("{}: {err}", repo.common.display()))?
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|dir| {
+            std::fs::read_to_string(dir.join("gitdir")).is_ok_and(|gitdir| {
+                Path::new(gitdir.trim())
+                    .canonicalize()
+                    .is_ok_and(|at| at == dot_git)
+            })
+        })
+        .and_then(|dir| dir.canonicalize().ok())
+        .filter(|dir| dir.starts_with(repo.common.join("worktrees")));
+    let Some(git_dir) = listed else {
+        return Err(format!(
+            "{} is no worktree of {} any more",
+            place.display(),
+            repo.top.display()
+        ));
+    };
+    let tree = Tree {
+        place,
+        branch: branch.to_owned(),
+        git_dir,
+        repo: repo.clone(),
+        into,
+    };
+    // The worktree's own config is read too before git runs there.
+    checked(&tree.pin())?;
+    let on = git(&tree.pin(), &["symbolic-ref", "--quiet", "--short", "HEAD"]).unwrap_or_default();
+    if on != branch {
+        return Err(format!("the worktree of {branch} is on another branch now"));
+    }
+    Ok(tree)
+}
+
 /// What `tree` holds beside the branch its repository's folder is on.
 ///
 /// # Errors
@@ -958,6 +1036,36 @@ mod tests {
             "nothing staged is left"
         );
         let _ = std::fs::remove_dir_all(top.parent().unwrap());
+    }
+
+    #[test]
+    fn a_kept_worktree_is_found_again_by_its_branch_alone_and_never_by_what_it_says_of_itself() {
+        let (home, top) = repo("kept");
+        let repo = pinned(&top);
+        let made = add(&home, &repo, "glut/pane-2").unwrap();
+        let found = reopen(&home, &repo, "glut/pane-2", made.into.clone()).unwrap();
+        assert_eq!(
+            (found.git_dir.clone(), found.branch.clone()),
+            (made.git_dir.clone(), made.branch.clone())
+        );
+        assert_eq!(found.place, made.place.canonicalize().unwrap());
+        // Its `.git` file is an agent's to write: the repository's own list decides where its git folder is.
+        std::fs::write(made.place.join(".git"), "gitdir: /tmp/elsewhere\n").unwrap();
+        assert_eq!(
+            reopen(&home, &repo, "glut/pane-2", None).unwrap().git_dir,
+            made.git_dir
+        );
+        assert!(
+            reopen(&home, &repo, "glut/pane-9", None).is_err(),
+            "no such worktree"
+        );
+        assert!(
+            reopen(&home, &repo, "../../etc", None).is_err(),
+            "no branch name"
+        );
+        assert!(reopen(&home, &repo, "glut/pane-2", Some("-D".into())).is_err());
+        let _ = std::fs::remove_dir_all(top.parent().unwrap());
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]
