@@ -4,6 +4,7 @@
 
 mod agents;
 mod app;
+mod commands;
 mod follow;
 mod glimm;
 mod guides;

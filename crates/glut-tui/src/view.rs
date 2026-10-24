@@ -70,7 +70,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     draw_header(frame, app, header);
     // The side panel (T28) takes the right of the stream where the screen is wide enough for both.
     app.stream_width = stream.x + stream.width;
-    let stream = if app.panel == Some(true) && stream.width >= PANEL_MIN_SCREEN {
+    app.panel_fits = stream.width >= PANEL_MIN_SCREEN;
+    let stream = if app.panel == Some(true) && app.panel_fits {
         // The to-dos are looked at once per frame the panel shows: their count heads the tab, the model may change
         // them.
         let cwd = app.parts.config.cwd.clone();
@@ -115,6 +116,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     draw_keys(frame, app, keys);
     if app.picker.is_some() {
         draw_picker(frame, app, stream);
+    } else if app.keys_sheet.is_some() {
+        draw_keys_sheet(frame, app, stream);
     } else if app.review.open {
         draw_review(frame, app, stream);
     } else if app.plan_view.is_some() {
@@ -719,7 +722,7 @@ fn draw_keys(frame: &mut Frame, app: &App, area: Rect) {
         format!("y once · {keys} for this session · n refuse · Ctrl+C refuse and clear")
     } else if app.ask.is_some() {
         "y once · n refuse · Ctrl+C refuse and clear".to_owned()
-    } else if app.plan_view.is_some() {
+    } else if app.plan_view.is_some() || app.keys_sheet.is_some() {
         "↑↓ PgUp PgDn scroll · Esc closes".to_owned()
     } else if app.agent_view.is_some() {
         "a subagent's own stream · ↑↓ scroll · a number opens its subagent · Esc back".to_owned()
@@ -750,21 +753,11 @@ const TABS_WITH_COUNT: u16 = 46;
 
 /// The side panel: its tabs — the plan the run keeps (done quiet, under way glowing, open plain) and the gate, live
 /// (T15) — under Glimm, who heads it with the session's mood.
-fn draw_panel(frame: &mut Frame, app: &App, area: Rect) {
+fn draw_panel(frame: &mut Frame, app: &mut App, area: Rect) {
     use crate::app::Tab;
     use glut::planning::TodoStatus;
-    let tab = |name: &str, shown: bool| {
-        if shown {
-            Span::styled(
-                format!(" {name} "),
-                theme::glow().add_modifier(Modifier::BOLD),
-            )
-        } else {
-            Span::styled(format!(" {name} "), theme::quiet())
-        }
-    };
     let open = app.project_todos.open();
-    // The five names take 40 columns: a narrower panel shows the tab without its count rather than cut it.
+    // The count stands beside the name only where the panel has room for it.
     let todos_title = if open > 0 && area.width >= TABS_WITH_COUNT {
         format!("To-dos {open}")
     } else {
@@ -773,17 +766,18 @@ fn draw_panel(frame: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::LEFT)
         .border_style(theme::quiet())
-        .title(Line::from(vec![
-            tab("Plan", app.tab == Tab::Plan),
-            Span::styled("·", theme::quiet()),
-            tab("Gate", app.tab == Tab::Gate),
-            Span::styled("·", theme::quiet()),
-            tab("Meter", app.tab == Tab::Meter),
-            Span::styled("·", theme::quiet()),
-            tab("Agents", app.tab == Tab::Agents),
-            Span::styled("·", theme::quiet()),
-            tab(&todos_title, app.tab == Tab::Todos),
-        ]));
+        .title(tab_titles(
+            &[
+                (Tab::Plan, "Plan"),
+                (Tab::Gate, "Gate"),
+                (Tab::Meter, "Meter"),
+                (Tab::Agents, "Agents"),
+                (Tab::Todos, &todos_title),
+                (Tab::Keys, "Keys"),
+            ],
+            app.tab,
+            usize::from(area.width.saturating_sub(1)),
+        ));
     let width = usize::from(area.width.saturating_sub(4)).max(8);
     // Glimm heads the panel with the session's mood: working, waiting for the owner, pleased or gone out.
     let mut lines: Vec<Line> = vec![Line::default()];
@@ -828,6 +822,19 @@ fn draw_panel(frame: &mut Frame, app: &App, area: Rect) {
                 room,
             ));
         }
+        lines.push(Line::default());
+        lines.extend(keys);
+        frame.render_widget(Paragraph::new(lines).block(block), area);
+        return;
+    }
+    if app.tab == Tab::Keys {
+        lines.push(Line::default());
+        let keys = panel_keys(app, width);
+        let sheet = crate::commands::sheet(width + 2);
+        let room = usize::from(area.height).saturating_sub(lines.len() + keys.len() + 1);
+        // Scrolled no further than its end: the wheel past it does not leave rows to scroll back first.
+        app.keys_scroll = app.keys_scroll.min(sheet.len().saturating_sub(room));
+        lines.extend(sheet.into_iter().skip(app.keys_scroll).take(room));
         lines.push(Line::default());
         lines.extend(keys);
         frame.render_widget(Paragraph::new(lines).block(block), area);
@@ -920,6 +927,52 @@ fn draw_panel(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
+/// The panel's tab names in `width` cells: each with room around it and a dot between where they fit; else the
+/// others close together; else the others by their first letter — the shown one always whole, none cut.
+fn tab_titles(
+    tabs: &[(crate::app::Tab, &str)],
+    shown: crate::app::Tab,
+    width: usize,
+) -> Line<'static> {
+    let fits = |names: &[String], gap: &str| {
+        names.iter().map(|name| name.width()).sum::<usize>()
+            + gap.width() * names.len().saturating_sub(1)
+            <= width
+    };
+    let named = |short: bool, pad: bool| -> Vec<String> {
+        tabs.iter()
+            .map(|(tab, name)| {
+                if *tab == shown {
+                    format!(" {name} ")
+                } else if short {
+                    name.chars().next().map(String::from).unwrap_or_default()
+                } else if pad {
+                    format!(" {name} ")
+                } else {
+                    (*name).to_owned()
+                }
+            })
+            .collect()
+    };
+    let (names, gap) = [(false, true, "·"), (false, false, " "), (true, false, " ")]
+        .into_iter()
+        .map(|(short, pad, gap)| (named(short, pad), gap))
+        .find(|(names, gap)| fits(names, gap))
+        .unwrap_or_else(|| (named(true, false), " "));
+    let mut spans = Vec::new();
+    for ((tab, _), name) in tabs.iter().zip(names) {
+        if !spans.is_empty() {
+            spans.push(Span::styled(gap, theme::quiet()));
+        }
+        spans.push(if *tab == shown {
+            Span::styled(name, theme::glow().add_modifier(Modifier::BOLD))
+        } else {
+            Span::styled(name, theme::quiet())
+        });
+    }
+    Line::from(spans)
+}
+
 /// The panel's last rows: the shown tab's key hides it, the others' turn to them; the Agents list's own keys while it
 /// has them.
 fn panel_keys(app: &App, width: usize) -> Vec<Line<'static>> {
@@ -936,6 +989,7 @@ fn panel_keys(app: &App, width: usize) -> Vec<Line<'static>> {
             (Tab::Meter, "Ctrl+N", "meter"),
             (Tab::Agents, "Ctrl+A", "agents"),
             (Tab::Todos, "Ctrl+Y", "to-dos"),
+            (Tab::Keys, "Ctrl+K", "keys"),
         ]
         .iter()
         .map(|(tab, key, name)| {
@@ -954,18 +1008,29 @@ fn panel_keys(app: &App, width: usize) -> Vec<Line<'static>> {
         .collect()
 }
 
-/// The commands a typed `/` fits, in a small list just above the input, the chosen one marked.
+/// The commands a typed `/` fits, in a small list just above the input, the chosen one marked; a lone `/` shows
+/// them under their topics (T38), the headings never chosen.
 fn draw_suggestions(frame: &mut Frame, app: &App, area: Rect) {
     let suggestions = app.suggestions();
     if suggestions.is_empty() || area.height < 3 {
         return;
     }
-    let shown = suggestions.len().min(usize::from(area.height) - 2);
+    let grouped = app.input.text() == "/";
+    let chosen = app.suggested.min(suggestions.len() - 1);
+    // Every row: a topic's heading (`None`) or a command by its place in the list.
+    let mut rows: Vec<Option<usize>> = Vec::new();
+    for (at, command) in suggestions.iter().enumerate() {
+        if grouped && (at == 0 || suggestions[at - 1].topic != command.topic) {
+            rows.push(None);
+        }
+        rows.push(Some(at));
+    }
+    let shown = rows.len().min(usize::from(area.height) - 2);
     let height = shown as u16 + 2;
     // As wide as the longest help text needs (mark, name, gap, text and the frame), as far as the screen goes.
     let needed = suggestions
         .iter()
-        .map(|(_, what)| what.width() + 18)
+        .map(|command| command.what.width() + 18)
         .max()
         .unwrap_or(40);
     let width = area.width.min(needed as u16);
@@ -975,27 +1040,45 @@ fn draw_suggestions(frame: &mut Frame, app: &App, area: Rect) {
         width,
         height,
     };
-    let chosen = app.suggested.min(suggestions.len() - 1);
-    let first = chosen.saturating_sub(shown.saturating_sub(1));
-    let lines: Vec<Line> = suggestions
+    let chosen_row = rows
         .iter()
-        .enumerate()
+        .position(|row| *row == Some(chosen))
+        .unwrap_or(0);
+    let first = chosen_row.saturating_sub(shown.saturating_sub(1));
+    let lines: Vec<Line> = rows
+        .iter()
         .skip(first)
         .take(shown)
-        .map(|(at, (name, what))| {
-            let style = if at == chosen {
-                theme::glow()
-            } else {
-                Style::default()
-            };
-            Line::from(vec![
-                Span::styled(if at == chosen { "▸ " } else { "  " }, theme::glow()),
-                Span::styled(format!("/{name:<10}"), style),
-                Span::styled(format!(" {what}"), theme::quiet()),
-            ])
+        .enumerate()
+        .map(|(seen, row)| match row {
+            None => {
+                // The heading names the topic of the command below it.
+                let topic = rows[first + seen + 1..]
+                    .iter()
+                    .find_map(|row| *row)
+                    .map(|at| suggestions[at].topic.label())
+                    .unwrap_or_default();
+                Line::from(Span::styled(
+                    format!("  {topic}"),
+                    theme::glow().add_modifier(Modifier::BOLD),
+                ))
+            }
+            Some(at) => {
+                let command = suggestions[*at];
+                let style = if *at == chosen {
+                    theme::glow()
+                } else {
+                    Style::default()
+                };
+                Line::from(vec![
+                    Span::styled(if *at == chosen { "▸ " } else { "  " }, theme::glow()),
+                    Span::styled(format!("/{:<10}", command.name), style),
+                    Span::styled(format!(" {}", command.what), theme::quiet()),
+                ])
+            }
         })
         .collect();
-    // Framed as the pickers are (Ctrl+K, /model): the glow, it waits for the owner's choice.
+    // Framed as the pickers are (/model): the glow, it waits for the owner's choice.
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(theme::glow())
@@ -1003,6 +1086,31 @@ fn draw_suggestions(frame: &mut Frame, app: &App, area: Rect) {
             " Commands · Tab completes · Enter runs ",
             theme::glow(),
         ));
+    frame.render_widget(Clear, place);
+    frame.render_widget(Paragraph::new(lines).block(block), place);
+}
+
+/// The Keys sheet over the stream (T38), where the window has no room for the panel: only to read, framed quiet.
+fn draw_keys_sheet(frame: &mut Frame, app: &mut App, area: Rect) {
+    // Too small to show: closed rather than left taking keys unseen.
+    if area.width < 20 || area.height < 4 {
+        app.keys_sheet = None;
+        return;
+    }
+    let width = area.width.min(80);
+    let place = Rect { width, ..area };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(theme::quiet())
+        .title(Span::styled(" Keys · Esc closes ", theme::quiet()));
+    let inner = block.inner(place);
+    let rows = usize::from(inner.height);
+    app.overlay_rows = rows;
+    let sheet = crate::commands::sheet(usize::from(inner.width).saturating_sub(1));
+    let most = sheet.len().saturating_sub(rows);
+    let scroll = app.keys_sheet.map_or(0, |scroll| scroll.min(most));
+    app.keys_sheet = Some(scroll);
+    let lines: Vec<Line> = sheet.into_iter().skip(scroll).take(rows).collect();
     frame.render_widget(Clear, place);
     frame.render_widget(Paragraph::new(lines).block(block), place);
 }
@@ -1079,7 +1187,34 @@ fn draw_picker(frame: &mut Frame, app: &App, area: Rect) {
 
 #[cfg(test)]
 mod tests {
-    use super::{asked_rows, header_meter, panel_width, tokens};
+    use super::{asked_rows, header_meter, panel_width, tab_titles, tokens};
+    use unicode_width::UnicodeWidthStr;
+
+    #[test]
+    fn the_tab_names_close_up_before_they_would_be_cut_and_the_shown_one_stays_whole() {
+        use crate::app::Tab;
+        let tabs = [
+            (Tab::Plan, "Plan"),
+            (Tab::Gate, "Gate"),
+            (Tab::Meter, "Meter"),
+            (Tab::Agents, "Agents"),
+            (Tab::Todos, "To-dos"),
+            (Tab::Keys, "Keys"),
+        ];
+        let text = |width| {
+            tab_titles(&tabs, Tab::Keys, width)
+                .spans
+                .iter()
+                .map(|span| span.content.to_string())
+                .collect::<String>()
+        };
+        assert_eq!(text(60), " Plan · Gate · Meter · Agents · To-dos · Keys ");
+        assert_eq!(text(40), "Plan Gate Meter Agents To-dos  Keys ");
+        assert_eq!(text(31), "P G M A T  Keys ");
+        for width in [31, 40, 60] {
+            assert!(text(width).width() <= width);
+        }
+    }
 
     #[test]
     fn the_header_meter_keeps_the_context_first_and_reads_in_order() {

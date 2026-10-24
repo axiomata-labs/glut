@@ -15,14 +15,8 @@ pub enum Pick {
     Effort(Option<Effort>),
     Editor(String),
     Session(String),
-    /// A session command by its name (the palette, T12).
-    Run(String),
-    /// The keys an action is bound to, pressed for the owner (the palette).
-    Keys(Vec<crossterm::event::KeyEvent>),
     /// A file of the folder to mention after `@` (T9).
     File(String),
-    /// `@` with the file picker, from the palette.
-    Mention,
     /// A theme by its name (`/theme`).
     Theme(String),
     /// Rewind (Esc Esc): the owner's message to go back to before, by its mark.

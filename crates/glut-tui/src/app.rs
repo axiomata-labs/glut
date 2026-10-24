@@ -52,105 +52,6 @@ fn init_check(name: &str) -> String {
     )
 }
 
-/// What `/help` says.
-const HELP: &str = "Commands: /model [id] · /provider [id] · /effort [level] · /context [tokens] · /compact · \
-                    /editor [command] · /gate · /meter · /diff [session] · /agents · /plan · /thinking off|folded|open · /theme [name] · /vim on|off · /scrollback · \
-                    /memory · /todo [text|open|clean] · /skill [name] · /init · /clear · /help · /quit\n\
-                    Keys: Enter send · Shift+Enter or Alt+Enter new line · ↑ history · Shift+Tab plan → ask → \
-                    build → auto · Esc stop · Ctrl+O tool results · Ctrl+T thinking · Ctrl+B panel · Ctrl+G gate · Ctrl+N meter · Ctrl+A agents · Ctrl+Y to-dos · Ctrl+R review · \
-                    Ctrl+X E editor · PgUp/PgDn scroll · Ctrl+F search · drag to copy · a click on a subagent's tile \
-                    opens it · F2 mouse to the terminal \
-                    and back · F3 scrollback · Ctrl+C twice quit\n\
-                    Also: Ctrl+K every key · @ mentions a file · !cmd runs a command and shows Glut \
-                    its output · !!cmd runs it for you alone · a large paste stands as [pasted N lines]\n\
-                    While Glut works: Enter steers it (taken in before its next step) · Tab queues for after the \
-                    turn · Alt+↑ takes the last back · Esc Esc rewinds (or forks) to before a message · /steps \
-                    shows what a step changed\n\
-                    /vim on: Esc to Normal mode (h j k l w b e 0 ^ $ gg G · x r ~ J D C s S · d c y with a motion \
-                    or doubled · counts · p P · u Ctrl+R), i a I A o O to Insert; Esc in Normal mode stops Glut";
-
-/// The session's commands with what each does, as the list under a typed `/` shows them.
-pub const COMMANDS: [(&str, &str); 27] = [
-    (
-        "model",
-        "pick a model of the provider in use, or /model <id>",
-    ),
-    ("provider", "switch the provider, or /provider <id>"),
-    ("effort", "how hard the model thinks, or /effort <level>"),
-    ("context", "how full the window is; /context 64k sets it"),
-    ("compact", "summarise the conversation so far"),
-    (
-        "handoff",
-        "/handoff write: what was done and what comes next; /handoff read in a new session",
-    ),
-    ("editor", "pick your editor, or /editor <command>"),
-    (
-        "thinking",
-        "the model's thinking: /thinking off, folded or open",
-    ),
-    (
-        "panel",
-        "the side panel on the plan, or hide it (Ctrl+B; Ctrl+G the gate)",
-    ),
-    (
-        "gate",
-        "the rules in force; take an \"always\" back (Ctrl+G: the gate, live)",
-    ),
-    (
-        "meter",
-        "context, tokens and cost per turn and tool, lean's savings (Ctrl+N)",
-    ),
-    (
-        "diff",
-        "review what the last turn changed, hunk by hunk; /diff session (Ctrl+R)",
-    ),
-    (
-        "agents",
-        "the session's subagents: open one's own stream (a click on its tile does too; Ctrl+A: the Agents tab)",
-    ),
-    (
-        "plan",
-        "the plan Glut sent from plan mode, whole, with its task list",
-    ),
-    (
-        "resume",
-        "open an earlier session of this folder — the forks under theirs",
-    ),
-    (
-        "steps",
-        "the steps that changed files: what each changed, or the files back",
-    ),
-    (
-        "theme",
-        "Glut's colours, or an Axiomata theme's: /theme <name>",
-    ),
-    ("vim", "edit the input the vi way: /vim on or off"),
-    (
-        "scrollback",
-        "the conversation into the terminal's own scrollback (F3)",
-    ),
-    (
-        "memory",
-        "what the project's memory keeps: Enter shows a fact; /memory open edits its index",
-    ),
-    (
-        "skill",
-        "start a skill: /skill <name> [what for] — /skill alone lists them (make-agent, make-skill, make-hook, …)",
-    ),
-    (
-        "todo",
-        "the project's TODO.md (Ctrl+Y): /todo <text> adds one, /todo open edits it, /todo clean drops the done",
-    ),
-    (
-        "init",
-        "a short AGENTS.md for this folder, or check the guide it has (/init --migrate asks about CLAUDE.md again)",
-    ),
-    ("clear", "start a new session"),
-    ("help", "commands and keys"),
-    ("quit", "end the session"),
-    ("exit", "end the session"),
-];
-
 /// A question of the gate on the screen.
 pub struct OpenAsk {
     pub request: AskRequest,
@@ -172,6 +73,8 @@ pub enum Tab {
     Agents,
     /// The project's `TODO.md` (T41).
     Todos,
+    /// Every key by topic, only to read (T38).
+    Keys,
 }
 
 /// What runs in the background besides the screen.
@@ -293,6 +196,13 @@ pub struct App {
     pub stream_width: u16,
     /// Whether the last frame drew the side panel (a narrow screen leaves it out though it is on).
     pub panel_drawn: bool,
+    /// The last frame's stream was wide enough for the panel beside it: Ctrl+K opens the Keys tab, else the sheet
+    /// over the stream.
+    pub panel_fits: bool,
+    /// The Keys sheet over the stream (T38, a window too narrow for the panel): how far it is scrolled.
+    pub keys_sheet: Option<usize>,
+    /// How far the Keys tab is scrolled (the wheel over the panel).
+    pub keys_scroll: usize,
     pub frame: usize,
     quit_armed: Option<Instant>,
     pub quit: bool,
@@ -416,6 +326,9 @@ impl App {
             files: None,
             stream_width: u16::MAX,
             panel_drawn: false,
+            panel_fits: false,
+            keys_sheet: None,
+            keys_scroll: 0,
             frame: 0,
             quit_armed: None,
             quit: false,
@@ -742,6 +655,7 @@ impl App {
                     self.agent_view = None;
                     self.picker = None;
                     self.review.open = false;
+                    self.keys_sheet = None;
                     self.search = None;
                 } else if self.plan_view.as_ref().is_some_and(|view| view.asking) {
                     // A dialog whose ask is gone answers nothing else.
@@ -1070,7 +984,9 @@ impl App {
                 self.on_key(key);
                 self.settle_model_pick();
             }
-            TermEvent::Paste(text) if self.ask.is_none() && self.picker.is_none() => {
+            TermEvent::Paste(text)
+                if self.ask.is_none() && self.picker.is_none() && self.keys_sheet.is_none() =>
+            {
                 match &mut self.search {
                     // A paste while searching is what to search for.
                     Some(search) => {
@@ -1084,6 +1000,23 @@ impl App {
                 // Over a list, the review or the plan the stream below takes no wheel and no click.
                 MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
                     if self.picker.is_some() || self.review.open => {}
+                MouseEventKind::ScrollUp if self.keys_sheet.is_some() => {
+                    if let Some(scroll) = &mut self.keys_sheet {
+                        *scroll = scroll.saturating_sub(WHEEL_LINES);
+                    }
+                }
+                MouseEventKind::ScrollDown if self.keys_sheet.is_some() => {
+                    if let Some(scroll) = &mut self.keys_sheet {
+                        *scroll = scroll.saturating_add(WHEEL_LINES);
+                    }
+                }
+                // The wheel over the Keys tab rolls the sheet, never the stream beside it.
+                MouseEventKind::ScrollUp if self.over_keys_tab(mouse.column) => {
+                    self.keys_scroll = self.keys_scroll.saturating_sub(WHEEL_LINES);
+                }
+                MouseEventKind::ScrollDown if self.over_keys_tab(mouse.column) => {
+                    self.keys_scroll = self.keys_scroll.saturating_add(WHEEL_LINES);
+                }
                 MouseEventKind::ScrollUp if self.plan_view.is_some() => {
                     if let Some(view) = &mut self.plan_view {
                         view.scroll = view.scroll.saturating_sub(WHEEL_LINES);
@@ -1151,6 +1084,9 @@ impl App {
         if self.picker.is_some() {
             return self.on_picker_key(key);
         }
+        if self.keys_sheet.is_some() {
+            return self.on_sheet_key(key);
+        }
         if self.review.open {
             let action = self.review.key(key);
             return self.review_do(action);
@@ -1193,8 +1129,7 @@ impl App {
         }
         if ctrl && matches!(key.code, KeyCode::Char('k')) {
             self.chord = false;
-            self.picker = Some(palette());
-            return;
+            return self.show_keys();
         }
         // `@` at a word's start opens the folder's files to mention; Esc keeps the `@` as typed.
         if key.code == KeyCode::Char('@') && self.input.at_word_start() {
@@ -1203,13 +1138,25 @@ impl App {
         }
         let suggestions = self.suggestions();
         if !suggestions.is_empty() {
-            let chosen = suggestions[self.suggested.min(suggestions.len() - 1)].0;
+            let chosen = suggestions[self.suggested.min(suggestions.len() - 1)].name;
             match key.code {
                 KeyCode::Up => return self.suggested = self.suggested.saturating_sub(1),
                 KeyCode::Down => {
                     return self.suggested = (self.suggested + 1).min(suggestions.len() - 1);
                 }
                 KeyCode::Tab => {
+                    self.input.clear();
+                    return self.input.insert_text(&format!("/{chosen} "));
+                }
+                // Enter on a lone `/` or on what a command does only fills the chosen one in, as Tab does: it runs
+                // only a command whose name was typed (`/` Enter must not be `/clear`, nor `/new` be it).
+                KeyCode::Enter
+                    if !shift
+                        && !alt
+                        && !self.input.text().get(1..).is_some_and(|typed| {
+                            !typed.is_empty() && chosen.starts_with(typed)
+                        }) =>
+                {
                     self.input.clear();
                     return self.input.insert_text(&format!("/{chosen} "));
                 }
@@ -1322,7 +1269,7 @@ impl App {
     }
 
     /// The commands that fit what is typed: the input is a `/` and part of a name, nothing after it yet.
-    pub fn suggestions(&self) -> Vec<(&'static str, &'static str)> {
+    pub fn suggestions(&self) -> Vec<&'static crate::commands::Command> {
         let text = self.input.text();
         let Some(typed) = text.strip_prefix('/') else {
             return Vec::new();
@@ -1330,11 +1277,7 @@ impl App {
         if typed.contains([' ', '\n', '/']) {
             return Vec::new();
         }
-        COMMANDS
-            .iter()
-            .filter(|(name, _)| name.starts_with(typed))
-            .copied()
-            .collect()
+        crate::commands::fitting(typed)
     }
 
     /// Enter: a command when the input is one, else the next message. A command that has to wait while Glut works
@@ -1565,7 +1508,7 @@ impl App {
         let (name, rest) = line.split_once(' ').unwrap_or((line, ""));
         let rest = rest.trim();
         match name {
-            "help" | "?" => self.transcript.note(HELP, Tone::Quiet),
+            "help" | "?" => self.transcript.note(crate::commands::help(), Tone::Quiet),
             "quit" | "exit" | "q" => self.quit = true,
             "clear" => {
                 self.selection = None;
@@ -2215,6 +2158,42 @@ impl App {
         if let Err(reason) = prefs::set_panel(&self.parts.home, shown) {
             self.transcript.note(reason, Tone::Fault);
         }
+    }
+
+    /// Ctrl+K (T38): the Keys tab, as Ctrl+B is the Plan tab's; where the window has no room for the panel, the same
+    /// sheet over the stream.
+    fn show_keys(&mut self) {
+        if self.panel_fits {
+            return self.show_tab(Tab::Keys);
+        }
+        self.keys_sheet = Some(0);
+    }
+
+    /// A key while the Keys sheet is over the stream: ↑↓ PgUp PgDn scroll, Esc or Ctrl+K close it, any other is
+    /// nobody's — the sheet is only to read.
+    fn on_sheet_key(&mut self, key: KeyEvent) {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let page = self.overlay_rows.max(1);
+        let Some(scroll) = &mut self.keys_sheet else {
+            return;
+        };
+        match key.code {
+            KeyCode::Esc => self.keys_sheet = None,
+            KeyCode::Char('k') if ctrl => self.keys_sheet = None,
+            KeyCode::Up => *scroll = scroll.saturating_sub(1),
+            KeyCode::Down => *scroll = scroll.saturating_add(1),
+            KeyCode::PageUp => *scroll = scroll.saturating_sub(page),
+            KeyCode::PageDown => *scroll = scroll.saturating_add(page),
+            _ => {}
+        }
+    }
+
+    /// The mouse at `column` is over the Keys tab of a panel drawn.
+    fn over_keys_tab(&self, column: u16) -> bool {
+        self.panel == Some(true)
+            && self.panel_drawn
+            && self.tab == Tab::Keys
+            && column >= self.stream_width
     }
 
     /// Ctrl+B the Plan tab, Ctrl+G the Gate tab: the panel opens on it or turns to it; on it already, the panel goes.
@@ -3155,24 +3134,11 @@ impl App {
                         Ok(session) => self.open(session),
                         Err(reason) => self.transcript.note(reason, Tone::Fault),
                     },
-                    Some(Pick::Run(name)) if self.working() && waits(&name, "") => {
-                        self.transcript.note(
-                            format!("/{name} waits until Glut is done; Esc stops Glut"),
-                            Tone::Quiet,
-                        )
-                    }
-                    Some(Pick::Run(name)) => self.command(&name),
-                    Some(Pick::Keys(keys)) => {
-                        for key in keys {
-                            self.on_key(key);
-                        }
-                    }
                     // The path goes after the `@` typed before the picker opened, in quotes when it has a space.
                     Some(Pick::File(path)) if path.contains(' ') => {
                         self.input.insert_text(&format!("\"{path}\" "))
                     }
                     Some(Pick::File(path)) => self.input.insert_text(&format!("{path} ")),
-                    Some(Pick::Mention) => self.mention(),
                     Some(Pick::Theme(name)) => self.set_theme(&name),
                     Some(Pick::TakeBack(rules)) => self.take_back_always(&rules),
                     Some(Pick::Agent(path)) => {
@@ -3205,6 +3171,7 @@ impl App {
     /// Whether something stands over the stream: a list, the review, the plan, a subagent's view.
     fn overlaid(&self) -> bool {
         self.picker.is_some()
+            || self.keys_sheet.is_some()
             || self.review.open
             || self.plan_view.is_some()
             || self.agent_view.is_some()
@@ -3712,151 +3679,6 @@ impl App {
     }
 }
 
-/// The keys (Ctrl+K, T12): every action Glut has a key for, the key first, the `/` command beside it where there is
-/// one — found by typing, done on Enter. A command without a key is in the `/` list, not here (owner, 2026-10-22).
-fn palette() -> Picker {
-    let press = |code: KeyCode, modifiers: KeyModifiers| KeyEvent::new(code, modifiers);
-    let ctrl = KeyModifiers::CONTROL;
-    let none = KeyModifiers::NONE;
-    let keys: Vec<(&str, &str, &str, Pick)> = vec![
-        (
-            "/",
-            "the commands",
-            "",
-            Pick::Keys(vec![press(KeyCode::Char('/'), none)]),
-        ),
-        ("@", "mention a file", "", Pick::Mention),
-        (
-            "Ctrl+F",
-            "search the stream",
-            "",
-            Pick::Keys(vec![press(KeyCode::Char('f'), ctrl)]),
-        ),
-        (
-            "Ctrl+O",
-            "unfold or fold every tool result",
-            "",
-            Pick::Keys(vec![press(KeyCode::Char('o'), ctrl)]),
-        ),
-        (
-            "Ctrl+T",
-            "open or fold every thought",
-            "/thinking",
-            Pick::Keys(vec![press(KeyCode::Char('t'), ctrl)]),
-        ),
-        (
-            "Ctrl+B",
-            "the side panel on the plan, or hide it",
-            "/panel",
-            Pick::Keys(vec![press(KeyCode::Char('b'), ctrl)]),
-        ),
-        (
-            "Ctrl+G",
-            "the gate, live: every judgement, the hosts, the refusals",
-            "/gate",
-            Pick::Keys(vec![press(KeyCode::Char('g'), ctrl)]),
-        ),
-        (
-            "Ctrl+N",
-            "the meter: context, tokens and cost per turn and tool",
-            "/meter",
-            Pick::Keys(vec![press(KeyCode::Char('n'), ctrl)]),
-        ),
-        (
-            "Ctrl+A",
-            "the Agents tab: every subagent, live — ↑↓ and Enter open one",
-            "/agents",
-            Pick::Keys(vec![press(KeyCode::Char('a'), ctrl)]),
-        ),
-        (
-            "Ctrl+Y",
-            "the To-dos tab: the project's TODO.md — Space ticks, a adds",
-            "/todo",
-            Pick::Keys(vec![press(KeyCode::Char('y'), ctrl)]),
-        ),
-        (
-            "Ctrl+R",
-            "review what the last turn changed: accept, reject or comment each hunk",
-            "/diff",
-            Pick::Keys(vec![press(KeyCode::Char('r'), ctrl)]),
-        ),
-        (
-            "Shift+Tab",
-            "the next mode: plan → ask → build → auto",
-            "",
-            Pick::Keys(vec![press(KeyCode::BackTab, KeyModifiers::SHIFT)]),
-        ),
-        (
-            "Ctrl+X E",
-            "edit the input in your editor",
-            "/editor picks it",
-            Pick::Keys(vec![
-                press(KeyCode::Char('x'), ctrl),
-                press(KeyCode::Char('e'), none),
-            ]),
-        ),
-        (
-            "Shift+Enter",
-            "a new line in the input",
-            "",
-            Pick::Keys(vec![press(KeyCode::Enter, KeyModifiers::SHIFT)]),
-        ),
-        (
-            "PgUp",
-            "scroll the stream up",
-            "",
-            Pick::Keys(vec![press(KeyCode::PageUp, none)]),
-        ),
-        (
-            "PgDn",
-            "scroll the stream down",
-            "",
-            Pick::Keys(vec![press(KeyCode::PageDown, none)]),
-        ),
-        (
-            "F2",
-            "hand the mouse to the terminal and back",
-            "",
-            Pick::Keys(vec![press(KeyCode::F(2), none)]),
-        ),
-        (
-            "F3",
-            "the conversation into the terminal's scrollback",
-            "/scrollback",
-            Pick::Keys(vec![press(KeyCode::F(3), none)]),
-        ),
-        (
-            "Tab",
-            "while Glut works: queue the message for after",
-            "",
-            Pick::Keys(vec![press(KeyCode::Tab, none)]),
-        ),
-        (
-            "Alt+↑",
-            "take the last waiting message back",
-            "",
-            Pick::Keys(vec![press(KeyCode::Up, KeyModifiers::ALT)]),
-        ),
-        (
-            "Esc",
-            "stop Glut",
-            "",
-            Pick::Keys(vec![press(KeyCode::Esc, none)]),
-        ),
-        (
-            "Ctrl+C twice",
-            "quit",
-            "/quit",
-            Pick::Run("quit".to_owned()),
-        ),
-    ];
-    let items = keys
-        .into_iter()
-        .map(|(key, what, command, pick)| Item::plain(format!("{key:<13}{what}"), command, pick))
-        .collect();
-    Picker::new("Keys", items, None)
-}
-
 /// What to do with a step of `/steps`.
 fn step_do(run: String, turn: u32) -> Picker {
     let items = vec![
@@ -4190,28 +4012,28 @@ mod tests {
     }
 
     #[test]
-    fn the_palette_finds_an_action_by_its_words_and_does_it() {
+    fn ctrl_k_keeps_the_keys_in_the_panel_or_shows_them_over_a_narrow_stream_only_to_read() {
         let (mut app, _reports) = app();
+        app.panel_fits = true;
         app.on_terminal(key(KeyCode::Char('k'), KeyModifiers::CONTROL));
-        assert!(app.picker.is_some());
-        for c in "scrollback".chars() {
-            app.on_terminal(key(KeyCode::Char(c), KeyModifiers::NONE));
-        }
-        app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
-        assert!(
-            app.scrollback_request,
-            "the action ran, found by its command's name"
+        assert_eq!((app.panel, app.tab), (Some(true), Tab::Keys));
+        app.on_terminal(key(KeyCode::Char('x'), KeyModifiers::NONE));
+        assert_eq!(
+            app.input.text(),
+            "x",
+            "the tab takes no key: the input types"
         );
-        app.scrollback_request = false;
         app.on_terminal(key(KeyCode::Char('k'), KeyModifiers::CONTROL));
-        for c in "search the".chars() {
-            app.on_terminal(key(KeyCode::Char(c), KeyModifiers::NONE));
-        }
-        app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
-        assert!(
-            app.search.is_some(),
-            "a key's action is pressed for the owner"
-        );
+        assert_eq!(app.panel, Some(false), "Ctrl+K again hides the panel");
+        app.panel_fits = false;
+        app.on_terminal(key(KeyCode::Char('k'), KeyModifiers::CONTROL));
+        assert_eq!(app.keys_sheet, Some(0));
+        app.on_terminal(key(KeyCode::Down, KeyModifiers::NONE));
+        app.on_terminal(key(KeyCode::Char('y'), KeyModifiers::NONE));
+        assert_eq!(app.keys_sheet, Some(1));
+        assert_eq!(app.input.text(), "x", "nothing typed through the sheet");
+        app.on_terminal(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(app.keys_sheet, None);
     }
 
     #[tokio::test]
@@ -4789,7 +4611,7 @@ mod tests {
         // Another list in its place answers it with none: the tool never waits on a list gone.
         let (reply, mut answer) = oneshot::channel();
         app.on_report(Report::PickModel(reply));
-        app.picker = Some(palette());
+        app.picker = Some(Picker::new("Theme", Vec::new(), None));
         app.on_terminal(key(KeyCode::Down, KeyModifiers::NONE));
         assert_eq!(answer.try_recv().unwrap(), None);
     }
@@ -5130,11 +4952,12 @@ mod tests {
     #[test]
     fn the_plans_ask_closes_what_was_open_and_takes_no_ctrl_or_alt_key() {
         let (mut app, _reports) = app();
-        app.picker = Some(palette());
+        app.picker = Some(Picker::new("Theme", Vec::new(), None));
         app.review.open = true;
+        app.keys_sheet = Some(0);
         let mut answer = plan_asked(&mut app);
         assert!(
-            app.picker.is_none() && !app.review.open,
+            app.picker.is_none() && !app.review.open && app.keys_sheet.is_none(),
             "no key meant for them answers the plan"
         );
         app.on_terminal(key(KeyCode::Char('y'), KeyModifiers::CONTROL));
@@ -5335,7 +5158,7 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert!(notes[0].starts_with("Commands:"));
+        assert!(notes[0].starts_with("Commands\n"));
         assert!(notes[1].contains("no command /nonesuch"));
         typed(&mut app, "/effort");
         assert_eq!(
@@ -5354,16 +5177,16 @@ mod tests {
         app.on_terminal(key(KeyCode::Char('/'), KeyModifiers::NONE));
         assert_eq!(
             app.suggestions().len(),
-            COMMANDS.len(),
-            "a lone slash shows them all"
+            crate::commands::COMMANDS.len() - 1,
+            "a lone slash shows them all but /exit"
         );
         app.on_terminal(key(KeyCode::Char('c'), KeyModifiers::NONE));
         assert_eq!(
             app.suggestions()
                 .iter()
-                .map(|(name, _)| *name)
+                .map(|command| command.name)
                 .collect::<Vec<_>>(),
-            ["context", "compact", "clear"]
+            ["clear", "compact", "context"]
         );
         app.on_terminal(key(KeyCode::Down, KeyModifiers::NONE));
         app.on_terminal(key(KeyCode::Tab, KeyModifiers::NONE));
@@ -5375,9 +5198,22 @@ mod tests {
         assert!(
             app.transcript.blocks.iter().any(|block| matches!(
                 &block.kind,
-                crate::transcript::Kind::Note { text, .. } if text.starts_with("Commands:")
+                crate::transcript::Kind::Note { text, .. } if text.starts_with("Commands\n")
             )),
             "Enter on a part of a name ran /help"
+        );
+        app.input.clear();
+        app.input.insert_text("/");
+        app.suggested = 0;
+        app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.input.text(), "/clear ", "a lone slash runs nothing");
+        app.input.clear();
+        app.input.insert_text("/session");
+        app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(
+            app.input.text(),
+            "/clear ",
+            "nor does a word of what a command does"
         );
     }
 
