@@ -97,7 +97,8 @@ pub fn draw_panes(frame: &mut Frame, panes: &mut crate::panes::Panes) {
             ..Chrome::whole()
         };
         draw_in(frame, &mut pane.app, area, &chrome);
-        return draw_peek(frame, panes, area);
+        draw_peek(frame, panes, area);
+        return draw_tiles(frame, panes);
     }
     let [header, body] =
         Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(frame.area());
@@ -132,6 +133,7 @@ pub fn draw_panes(frame: &mut Frame, panes: &mut crate::panes::Panes) {
         if areas[at].is_empty() {
             pane.app.panel_drawn = false;
             pane.app.panel_fits = room;
+            pane.app.ask_area = Rect::default();
             continue;
         }
         let chrome = Chrome {
@@ -161,6 +163,23 @@ pub fn draw_panes(frame: &mut Frame, panes: &mut crate::panes::Panes) {
     }
     let area = panes.list[active].area;
     draw_peek(frame, panes, area);
+    draw_tiles(frame, panes);
+}
+
+/// The tiles (T69) at the window's top right, over everything but the gate's questions.
+fn draw_tiles(frame: &mut Frame, panes: &mut crate::panes::Panes) {
+    // Only the questions drawn this frame: a pane held as a tab or sent to the background shows none.
+    let asks: Vec<Rect> = panes
+        .list
+        .iter()
+        .filter(|pane| !pane.background && !pane.area.is_empty())
+        .map(|pane| pane.app.ask_area)
+        .filter(|area| !area.is_empty())
+        .collect();
+    for (spot, rows) in panes.tiles.place(frame.area(), &asks) {
+        frame.render_widget(Clear, spot);
+        frame.render_widget(Paragraph::new(rows), spot);
+    }
 }
 
 /// Panes held as tabs where the room is too small for all (T36f): each by its number and role, the one shown marked,
@@ -320,7 +339,9 @@ fn draw_in(frame: &mut Frame, app: &mut App, area: Rect, chrome: &Chrome) {
     } else {
         draw_stream(frame, app, stream);
     }
+    app.ask_area = Rect::default();
     if let Some(rows) = ask_rows {
+        app.ask_area = ask;
         draw_ask(frame, app, ask, rows);
     }
     draw_input(frame, app, input, &rows, cursor, chrome.active);
@@ -1395,10 +1416,18 @@ fn draw_panel(frame: &mut Frame, app: &mut App, area: Rect) {
                 format!(" {}", tr!(in_background)),
                 theme::strong(),
             )));
+            // Cards while they leave half the tab to the subagents; else those at rest fold to a line each.
+            let cards = 3 * app.background.len() <= usize::from(area.height) / 2;
             for agent in &app.background {
-                for row in wrap(agent, width) {
-                    lines.push(Line::from(Span::raw(format!(" {row}"))));
-                }
+                let rows = if cards || agent.doing != crate::agents::Doing::Rests {
+                    agent.lines(width + 1)
+                } else {
+                    agent.line(width + 1)
+                };
+                lines.extend(rows.into_iter().map(|mut row| {
+                    row.spans.insert(0, Span::raw(" "));
+                    row
+                }));
             }
             for row in wrap(tr!(background_keys), width) {
                 lines.push(Line::from(Span::styled(format!(" {row}"), theme::quiet())));

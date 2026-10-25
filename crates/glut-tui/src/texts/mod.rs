@@ -1526,6 +1526,28 @@ glut::catalog! {
         btw_waiting: &'static str,
         /// The key line while a side question's card is open.
         hint_btw: &'static str,
+        /// A background agent's card while it asks (T69): `{target}`.
+        agent_asks_live: &'static str,
+        /// A card's live line while the model writes.
+        agent_writing: &'static str,
+        /// A card's live line while it works and shows nothing yet.
+        agent_working_live: &'static str,
+        /// A background agent that asks the owner.
+        agent_asks_state: &'static str,
+        /// A background agent that holds a message.
+        agent_holds_state: &'static str,
+        /// A background agent at work.
+        agent_works_state: &'static str,
+        /// A background agent at rest.
+        agent_rests_state: &'static str,
+        /// A tile of several subagents that ended: `{n}`, two or more.
+        tiles_subagents: &'static str,
+        /// `/notify tiles` alone: `{now}` on or off.
+        notify_tiles_now: &'static str,
+        /// Tiles switched on.
+        notify_tiles_on: &'static str,
+        /// Tiles switched off.
+        notify_tiles_off: &'static str,
     }
 }
 

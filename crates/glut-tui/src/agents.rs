@@ -168,9 +168,9 @@ pub fn overview(stream: &crate::transcript::Transcript) -> Vec<(Vec<usize>, &Age
     groups.into_iter().flatten().collect()
 }
 
-/// The tab's rows at `width` for at most `room` rows: per subagent its task — glowing while it runs, quiet once it
-/// ended — and under it what it does now or how it ended, with its calls and tokens. `chosen` is marked; the list
-/// starts late enough for it to be seen.
+/// The tab's rows at `width` for at most `room` rows (T69): a subagent that runs as a card — its task and state on
+/// the frame, glowing; what it does now inside; its model, calls, tokens and time below —, one that ended as a quiet
+/// line of how it ended and what it spent. `chosen` is marked; the list starts late enough for it to be seen.
 pub fn overview_lines(
     list: &[(Vec<usize>, &Agent)],
     chosen: Option<usize>,
@@ -182,35 +182,14 @@ pub fn overview_lines(
         // Deep nesting stops indenting where the panel would have no room left for the task.
         let indent = "  ".repeat((path.len() - 1).min(width / 4));
         let picked = chosen == Some(at);
-        let running = agent.state == ToolState::Running;
-        let (mark, end) = match agent.state {
-            ToolState::Running => ("⬡", ""),
-            ToolState::Done => ("✓", tr!(agent_done)),
-            ToolState::Failed => ("✗", tr!(agent_stopped)),
-            ToolState::Refused => ("⊘", tr!(agent_refused)),
-        };
-        let mut task_style = if running {
-            theme::glow()
-        } else {
-            theme::quiet()
-        };
-        if picked {
-            task_style = task_style.add_modifier(ratatui::style::Modifier::BOLD);
-        }
-        let room_for_text = width.saturating_sub(indent.len() + 4).max(4);
-        let mut rows = vec![Line::from(vec![
-            Span::styled(if picked { "▸" } else { " " }, theme::glow()),
-            Span::raw(indent.clone()),
-            Span::styled(format!("{mark} "), task_style),
-            Span::styled(
-                cut(&crate::transcript::clean(&agent.task), room_for_text),
-                task_style,
-            ),
-        ])];
         let model = agent
             .model
             .as_deref()
             .map(|model| format!(" · {}", crate::transcript::clean(model)))
+            .unwrap_or_default();
+        let ran = agent
+            .ran()
+            .map(|ran| format!(" · {}", took(ran)))
             .unwrap_or_default();
         let spent = tr!(
             agent_spent,
@@ -218,22 +197,52 @@ pub fn overview_lines(
             tokens = crate::meter::tokens(agent.input_tokens + agent.output_tokens),
             model = model
         );
-        if running {
-            rows.push(Line::from(Span::raw(format!(
-                " {indent}  {}",
-                cut(&crate::transcript::clean(&agent.live), room_for_text)
-            ))));
-            rows.push(Line::from(Span::styled(
-                format!(" {indent}  {spent}"),
-                theme::quiet(),
-            )));
-        } else {
-            rows.push(Line::from(Span::styled(
-                cut(&format!(" {indent}  {end} · {spent}"), width),
-                theme::quiet(),
-            )));
+        if agent.state == ToolState::Running {
+            let live = if agent.live.is_empty() {
+                tr!(agent_starting).to_owned()
+            } else {
+                agent.live.clone()
+            };
+            let card = Card {
+                title: &agent.task,
+                state: tr!(agent_running),
+                live: &live,
+                live_style: theme::quiet(),
+                stats: &format!("{spent}{ran}"),
+                style: theme::glow(),
+                picked,
+            };
+            let rows = card.lines(width.saturating_sub(indent.len()));
+            entries.push(
+                rows.into_iter()
+                    .map(|mut row| {
+                        row.spans.insert(0, Span::raw(indent.clone()));
+                        row
+                    })
+                    .collect(),
+            );
+            continue;
         }
-        entries.push(rows);
+        let (mark, end) = match agent.state {
+            ToolState::Done => ("✓", tr!(agent_done)),
+            ToolState::Failed => ("✗", tr!(agent_stopped)),
+            ToolState::Refused | ToolState::Running => ("⊘", tr!(agent_refused)),
+        };
+        let mut style = theme::quiet();
+        if picked {
+            style = style.add_modifier(ratatui::style::Modifier::BOLD);
+        }
+        let task = crate::transcript::clean(&agent.task).replace('\n', " ");
+        entries.push(vec![Line::from(vec![
+            Span::styled(if picked { "▸" } else { " " }, theme::glow()),
+            Span::styled(
+                cut(
+                    &format!("{indent}{mark} {task} · {end} · {spent}{ran}"),
+                    width.saturating_sub(1),
+                ),
+                style,
+            ),
+        ])]);
     }
     // From the chosen one back, as many entries as fit; then on from the first one shown.
     let first = match chosen {
@@ -251,6 +260,10 @@ pub fn overview_lines(
     let mut lines = Vec::new();
     for entry in entries.into_iter().skip(first) {
         if lines.len() + entry.len() > room {
+            // Too little room for a whole card: the chosen one is still seen, as its frame's top row.
+            if lines.is_empty() && room > 0 {
+                lines.extend(entry.into_iter().take(room));
+            }
             break;
         }
         lines.extend(entry);
@@ -258,10 +271,173 @@ pub fn overview_lines(
     lines
 }
 
+/// An agent as a card (T69), the stream's tile (T18) in the panel: the title and the state on the frame, what it does
+/// now inside, its numbers below. Too narrow for a frame: one line.
+pub struct Card<'a> {
+    pub title: &'a str,
+    pub state: &'a str,
+    pub live: &'a str,
+    pub live_style: ratatui::style::Style,
+    pub stats: &'a str,
+    /// The frame's: the glow while it works or asks.
+    pub style: ratatui::style::Style,
+    /// Chosen in the list: its title stands out.
+    pub picked: bool,
+}
+
+impl Card<'_> {
+    /// Its rows at `width`; text from a model or an agent's name is cleaned before it is drawn.
+    pub fn lines(&self, width: usize) -> Vec<Line<'static>> {
+        use unicode_width::UnicodeWidthStr;
+        let one_line = |text: &str| crate::transcript::clean(text).replace('\n', " ");
+        let title_style = if self.picked {
+            theme::strong().add_modifier(ratatui::style::Modifier::REVERSED)
+        } else {
+            theme::strong()
+        };
+        let state = one_line(self.state);
+        if width < 24 {
+            return vec![Line::from(vec![
+                Span::styled(if self.picked { "▸" } else { " " }, theme::glow()),
+                Span::styled(
+                    cut(
+                        &format!("⬡ {} · {state}", one_line(self.title)),
+                        width.saturating_sub(1),
+                    ),
+                    self.style,
+                ),
+            ])];
+        }
+        // Inside the side rows' "│ " and " │".
+        let inner = width.saturating_sub(4).max(4);
+        let state = cut(&state, inner / 2);
+        // The top row: "╭─ ⬡ ", the title, " ─… ", the state, " ─╮" — ten cells of frame and at least one of line.
+        let title = cut(
+            &one_line(self.title),
+            width.saturating_sub(state.width() + 11).max(1),
+        );
+        let fill = width.saturating_sub(title.width() + state.width() + 10);
+        let live = cut(&one_line(self.live), inner);
+        let stats = cut(&one_line(self.stats), width.saturating_sub(6).max(1));
+        let bottom = width.saturating_sub(stats.width() + 5);
+        vec![
+            Line::from(vec![
+                Span::styled("╭─ ⬡ ", self.style),
+                Span::styled(title, title_style),
+                Span::styled(format!(" {} ", "─".repeat(fill)), self.style),
+                Span::styled(state, self.style),
+                Span::styled(" ─╮", self.style),
+            ]),
+            Line::from(vec![
+                Span::styled("│ ", self.style),
+                Span::styled(live.clone(), self.live_style),
+                Span::raw(" ".repeat(inner.saturating_sub(live.width()))),
+                Span::styled(" │", self.style),
+            ]),
+            Line::from(vec![
+                Span::styled("╰─ ", self.style),
+                Span::styled(stats, theme::quiet()),
+                Span::styled(format!(" {}╯", "─".repeat(bottom)), self.style),
+            ]),
+        ]
+    }
+}
+
+/// A background agent as the Agents tab shows it (T69), told by the screen once per frame.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Behind {
+    pub name: String,
+    pub role: String,
+    pub model: String,
+    pub doing: Doing,
+    /// What it does now, what it asks, or the first line of its last answer.
+    pub live: String,
+    pub cost: Option<f64>,
+    /// Its cache: `Some(true)` kept warm now, `Some(false)` seen but cold, `None` never seen.
+    pub cache: Option<bool>,
+    /// How long it has worked without a rest.
+    pub working: Option<std::time::Duration>,
+}
+
+/// How a background agent stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Doing {
+    Asks,
+    Holds,
+    Works,
+    Rests,
+}
+
+impl Behind {
+    /// One quiet line of it, where the tab is short of room: its name, how it stands, what it said last.
+    pub fn line(&self, width: usize) -> Vec<Line<'static>> {
+        let live = crate::transcript::clean(&self.live).replace('\n', " ");
+        vec![Line::from(Span::styled(
+            cut(
+                &format!(
+                    " ⬡ {} · {} · {live}",
+                    crate::transcript::clean(&self.name),
+                    tr!(agent_rests_state)
+                ),
+                width,
+            ),
+            theme::quiet(),
+        ))]
+    }
+
+    /// Its card at `width`: glowing while it works or asks, what it asks in the glow.
+    pub fn lines(&self, width: usize) -> Vec<Line<'static>> {
+        let (state, style) = match self.doing {
+            Doing::Asks => (tr!(agent_asks_state), theme::glow()),
+            Doing::Holds => (tr!(agent_holds_state), theme::glow()),
+            Doing::Works => (tr!(agent_works_state), theme::glow()),
+            Doing::Rests => (tr!(agent_rests_state), theme::quiet()),
+        };
+        let mut stats = format!("{} · {}", self.role, self.model);
+        if let Some(cost) = self.cost {
+            stats.push_str(&format!(" · {}", glut::lang::usd(cost, 4)));
+        }
+        match self.cache {
+            Some(true) => stats.push_str(" · cache ●"),
+            Some(false) => stats.push_str(" · cache ○"),
+            None => {}
+        }
+        if let Some(working) = self.working.filter(|working| working.as_secs() >= 1) {
+            stats.push_str(&format!(" · {}", took(working)));
+        }
+        let live_style = match self.doing {
+            Doing::Asks => theme::glow(),
+            Doing::Works => theme::strong(),
+            Doing::Holds | Doing::Rests => theme::quiet(),
+        };
+        Card {
+            title: &self.name,
+            state,
+            live: &self.live,
+            live_style,
+            stats: &stats,
+            style,
+            picked: false,
+        }
+        .lines(width)
+    }
+}
+
+/// A run's time as a card says it: `45s`, `2:14`, `1:02:03`.
+pub fn took(ran: std::time::Duration) -> String {
+    let secs = ran.as_secs();
+    match secs {
+        0..60 => format!("{secs}s"),
+        60..3600 => format!("{}:{:02}", secs / 60, secs % 60),
+        _ => format!("{}:{:02}:{:02}", secs / 3600, secs / 60 % 60, secs % 60),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crossterm::event::KeyEventKind;
+    use unicode_width::UnicodeWidthStr;
 
     fn press(code: KeyCode) -> KeyEvent {
         KeyEvent {
@@ -309,14 +485,60 @@ mod tests {
         assert_eq!(tasks, ["third", "second", "first"]);
         let rows = overview_lines(&list, Some(2), 40, 100);
         let text: Vec<String> = rows.iter().map(ToString::to_string).collect();
-        // The running one has its live line and its spending under it, an ended one a single line.
-        assert_eq!(text.len(), 3 + 2 * 2, "{text:?}");
-        assert!(text[0].contains("⬡ third"));
-        assert!(text[3].contains("✓ second") && text[4].contains("done · 0 calls"));
-        assert!(text[5].starts_with('▸') && text[5].contains("first"));
+        // The running one is a card of three rows, an ended one a single line.
+        assert_eq!(text.len(), 3 + 1 + 1, "{text:?}");
+        assert!(
+            text[0].starts_with("╭─ ⬡ third") && text[0].ends_with("running ─╮"),
+            "{text:?}"
+        );
+        assert!(text[1].starts_with("│ starting…"), "{text:?}");
+        assert!(text[2].starts_with("╰─ 0 calls"), "{text:?}");
+        assert!(text[3].contains("✓ second · done · 0 calls"), "{text:?}");
+        assert!(text[4].starts_with('▸') && text[4].contains("first"));
+        assert!(
+            text.iter().take(3).all(|row| row.width() == 40),
+            "the card fills the width: {text:?}"
+        );
         // Little room: the chosen one is still shown.
-        let rows = overview_lines(&list, Some(2), 40, 2);
+        let rows = overview_lines(&list, Some(2), 40, 1);
         assert!(rows[0].to_string().contains("first"), "{rows:?}");
+        // A running card chosen with less room than it needs shows its top row.
+        let rows = overview_lines(&list, Some(0), 40, 1);
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].to_string().starts_with("╭─ ⬡ third"), "{rows:?}");
+    }
+
+    #[test]
+    fn a_background_agent_is_a_card_with_what_it_does_and_its_numbers() {
+        let behind = Behind {
+            name: "reviewer".into(),
+            role: "reviewer".into(),
+            model: "m/x".into(),
+            doing: Doing::Works,
+            live: "bash cargo test\u{202e}".into(),
+            cost: Some(0.0123),
+            cache: Some(true),
+            working: Some(std::time::Duration::from_secs(134)),
+        };
+        let text: Vec<String> = behind.lines(48).iter().map(ToString::to_string).collect();
+        assert_eq!(text.len(), 3);
+        assert!(
+            text[0].starts_with("╭─ ⬡ reviewer") && text[0].ends_with("works ─╮"),
+            "{text:?}"
+        );
+        assert!(
+            text[1].starts_with("│ bash cargo test ") && !text[1].contains('\u{202e}'),
+            "{text:?}"
+        );
+        assert!(
+            text[2].contains("reviewer · m/x · $0.0123 · cache ● · 2:14"),
+            "{text:?}"
+        );
+        assert!(text.iter().all(|row| row.width() == 48), "{text:?}");
+        let narrow = behind.lines(20);
+        assert_eq!(narrow.len(), 1, "too narrow for a frame");
+        assert_eq!(took(std::time::Duration::from_secs(3723)), "1:02:03");
+        assert_eq!(took(std::time::Duration::from_secs(45)), "45s");
     }
 
     #[test]

@@ -47,6 +47,7 @@ mod shell;
 mod store;
 mod tell;
 mod theme;
+mod tiles;
 mod todos;
 mod transcript;
 mod vi;

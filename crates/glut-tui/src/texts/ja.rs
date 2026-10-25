@@ -165,7 +165,7 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "notify",
-            "ウィンドウが前面にないとき、ターンの終了や確認待ちを知らせる: on、確認待ちのみ（asks）、off、macOS 経由（system）; /notify after <s>",
+            "ウィンドウが前面にないとき、ターンの終了や確認待ちを知らせる: on、確認待ちのみ（asks）、off、macOS 経由（system）; /notify after <s>; /notify tiles on|off",
         ),
         (
             "motion",
@@ -1410,4 +1410,15 @@ pub const TEXTS: Texts = Texts {
     btw_failed: "ついでの質問に失敗しました: {reason}",
     btw_waiting: "思考中…",
     hint_btw: "Esc でカードを閉じる · PgUp PgDn でスクロール",
+    agent_asks_live: "確認待ち: {target}",
+    agent_writing: "書いています…",
+    agent_working_live: "作業中…",
+    agent_asks_state: "確認待ち",
+    agent_holds_state: "メッセージを保留中",
+    agent_works_state: "作業中",
+    agent_rests_state: "待機中",
+    tiles_subagents: "{n} 件のサブエージェントが完了",
+    notify_tiles_now: "ウィンドウ右上のタイル: {now} — /notify tiles on|off",
+    notify_tiles_on: "右上のタイル: オン",
+    notify_tiles_off: "右上のタイル: オフ",
 };

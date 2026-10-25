@@ -172,6 +172,8 @@ pub struct App {
     side_tools: Option<Vec<glut::ToolSpec>>,
     /// The card of the side question asked last (T57, `/btw`).
     pub side: Option<crate::btw::Side>,
+    /// Where the gate's question was drawn last: no tile stands over it (T69).
+    pub ask_area: ratatui::layout::Rect,
     /// The session as it is kept (T25).
     pub session: Session,
     /// The run's task list as `todo_write` last sent it (the Plan tab, T28).
@@ -311,8 +313,8 @@ pub struct App {
     pub warm_until: Option<Instant>,
     /// The provider has said it cached something in this session: only then does the footer mark the cache.
     pub cache_seen: bool,
-    /// The agents in the background as the Agents tab lists them (T36e): one line each, told by the screen.
-    pub background: Vec<String>,
+    /// The agents in the background as the Agents tab shows them (T36e, as cards since T69), told by the screen.
+    pub background: Vec<crate::agents::Behind>,
     /// The role this pane plays (T36c): a named agent's prompt and tools, never its model; `None` an all-rounder.
     pub role: Option<String>,
     /// Messages of another pane's model that wait for the owner's Enter here (T36c): never sent by a turn's end.
@@ -460,6 +462,7 @@ impl App {
             lent: None,
             side_tools: None,
             side: None,
+            ask_area: ratatui::layout::Rect::default(),
             session,
             todos: Vec::new(),
             project_todos: crate::todos::Todos::default(),
@@ -802,6 +805,29 @@ impl App {
     fn notify_command(&mut self, rest: &str) {
         let home = self.parts.home.clone();
         let kept = Prefs::load(&home);
+        // T69: the tiles at the window's top right, apart from the terminal's notifications.
+        if let Some(word) = rest
+            .strip_prefix("tiles")
+            .filter(|word| word.is_empty() || word.starts_with(' '))
+        {
+            let on = match word.trim() {
+                "on" => true,
+                "off" => false,
+                _ => {
+                    let now = if crate::tiles::on() { "on" } else { "off" };
+                    return self.tell(tr!(notify_tiles_now, now = now));
+                }
+            };
+            crate::tiles::set(on);
+            return match prefs::set_tiles(&home, on) {
+                Ok(()) => self.say(if on {
+                    tr!(notify_tiles_on)
+                } else {
+                    tr!(notify_tiles_off)
+                }),
+                Err(reason) => self.transcript.note(reason, Tone::Fault),
+            };
+        }
         if let Some(secs) = rest.strip_prefix("after") {
             let Some(secs) = secs
                 .trim()
@@ -4465,6 +4491,64 @@ impl App {
         }
     }
 
+    /// What the session does now, in a line (T69, a background agent's card): what it asks; while it works its
+    /// newest tool call, subagent, words or thought; at rest the first line of its last answer.
+    pub fn live_line(&self) -> String {
+        use crate::transcript::{Kind, ToolState};
+        let first_line = |text: &str| {
+            text.lines()
+                .find(|line| !line.trim().is_empty())
+                .unwrap_or("")
+                .trim()
+                .to_owned()
+        };
+        if let Some(open) = &self.ask {
+            return tr!(agent_asks_live, target = first_line(&open.request.target));
+        }
+        if self.working() {
+            for block in self.transcript.blocks.iter().rev() {
+                match &block.kind {
+                    Kind::Tool {
+                        name,
+                        target,
+                        state: ToolState::Running,
+                        ..
+                    } => return format!("{name} {target}"),
+                    Kind::Agent(agent) if agent.state == ToolState::Running => {
+                        return format!("⬡ {}", agent.task);
+                    }
+                    Kind::Answer {
+                        streaming: true, ..
+                    } => return tr!(agent_writing).to_owned(),
+                    Kind::Thinking {
+                        streaming: true, ..
+                    } => return tr!(thinking_live).to_owned(),
+                    Kind::Owner(_) => break,
+                    _ => {}
+                }
+            }
+            return tr!(agent_working_live).to_owned();
+        }
+        let answer = self
+            .transcript
+            .blocks
+            .iter()
+            .rev()
+            .find_map(|block| match &block.kind {
+                Kind::Answer { text, .. } => Some(first_line(text)),
+                Kind::Owner(_) => Some(String::new()),
+                _ => None,
+            });
+        match (self.last_turn, answer) {
+            (Some(false), Some(answer)) if !answer.is_empty() => {
+                format!("{} · {answer}", tr!(agent_stopped))
+            }
+            (Some(false), _) => tr!(agent_stopped).to_owned(),
+            (_, Some(answer)) => answer,
+            (_, None) => String::new(),
+        }
+    }
+
     /// Keeps a copy of the conversation as it is handed to a turn (`prompt`: the owner's message it works on), a
     /// compaction or a handoff (`None`): a side question sees it while they hold the conversation (T57).
     fn lend(&mut self, prompt: Option<String>) {
@@ -4630,6 +4714,22 @@ impl App {
             self.toggle_panel();
         }
         self.agents_list = first;
+    }
+
+    /// A tile's click (T69): the Agents tab shown, its list taking the keys at the subagent of `path`; `None`: a
+    /// background agent's, whose cards head the tab.
+    pub fn open_agents(&mut self, path: Option<Vec<usize>>) {
+        self.tab = Tab::Agents;
+        if self.panel != Some(true) {
+            self.toggle_panel();
+        }
+        // A background agent's card stands above the list: the keys stay with the input.
+        self.agents_list = path;
+    }
+
+    /// Whether the turn under way was told to stop (Esc): what ends now ends as the owner wanted.
+    pub fn stopping(&self) -> bool {
+        self.running.as_ref().is_some_and(Cancel::is_cancelled)
     }
 
     /// The row of the Agents tab's chosen subagent; one no longer listed gives way to the first.
@@ -7751,6 +7851,25 @@ pub(crate) mod tests {
             }
         }
         panic!("the side question never ended");
+    }
+
+    #[test]
+    fn notify_tiles_switches_the_tiles_keeps_the_choice_and_reads_the_word_whole() {
+        let _serial = crate::tiles::serial();
+        let (mut app, _reports) = app();
+        let home = app.parts.home.clone();
+        app.notify_command("tiles off");
+        assert!(!crate::tiles::on());
+        assert_eq!(Prefs::load(&home).tiles, Some(false));
+        // Another word is no `tiles`: the tiles stay as they are.
+        app.notify_command("tilesx");
+        assert!(!crate::tiles::on());
+        app.notify_command("tiles");
+        assert!(last_note(&app).contains("off"), "{}", last_note(&app));
+        app.notify_command("tiles on");
+        assert!(crate::tiles::on());
+        assert_eq!(Prefs::load(&home).tiles, Some(true));
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[tokio::test(flavor = "multi_thread")]

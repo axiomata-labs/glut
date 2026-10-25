@@ -181,7 +181,7 @@ pub const TEXTS: Texts = Texts {
         (
             "notify",
             "te prévient quand un tour se termine ou demande, tant que la fenêtre est ailleurs : on, demandes \
-             seulement (asks), off, par macOS (system) ; /notify after <s>",
+             seulement (asks), off, par macOS (system) ; /notify after <s> ; /notify tiles on|off",
         ),
         (
             "motion",
@@ -1516,4 +1516,15 @@ pub const TEXTS: Texts = Texts {
     btw_failed: "la question en aparté a échoué : {reason}",
     btw_waiting: "réfléchit…",
     hint_btw: "Échap ferme la carte · PgPréc PgSuiv la font défiler",
+    agent_asks_live: "demande : {target}",
+    agent_writing: "écrit…",
+    agent_working_live: "travaille…",
+    agent_asks_state: "demande",
+    agent_holds_state: "garde un message",
+    agent_works_state: "travaille",
+    agent_rests_state: "au repos",
+    tiles_subagents: "{n} sous-agents terminés",
+    notify_tiles_now: "tuiles en haut à droite de la fenêtre : {now} — /notify tiles on|off",
+    notify_tiles_on: "tuiles en haut à droite : activées",
+    notify_tiles_off: "tuiles en haut à droite : désactivées",
 };

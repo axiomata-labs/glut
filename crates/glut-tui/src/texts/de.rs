@@ -181,7 +181,7 @@ pub const TEXTS: Texts = Texts {
         (
             "notify",
             "sagt dir, wenn ein Zug endet oder fragt, während das Fenster nicht vorne ist: on, nur Fragen (asks), off, \
-             über macOS (system); /notify after <s>",
+             über macOS (system); /notify after <s>; /notify tiles on|off",
         ),
         (
             "motion",
@@ -1512,4 +1512,15 @@ pub const TEXTS: Texts = Texts {
     btw_failed: "die Nebenfrage ging nicht: {reason}",
     btw_waiting: "denkt…",
     hint_btw: "Esc schließt die Karte · Bild↑ Bild↓ blättern",
+    agent_asks_live: "fragt: {target}",
+    agent_writing: "schreibt…",
+    agent_working_live: "arbeitet…",
+    agent_asks_state: "fragt",
+    agent_holds_state: "hält eine Nachricht",
+    agent_works_state: "arbeitet",
+    agent_rests_state: "ruht",
+    tiles_subagents: "{n} Subagents fertig",
+    notify_tiles_now: "Kacheln oben rechts im Fenster: {now} — /notify tiles on|off",
+    notify_tiles_on: "Kacheln oben rechts: an",
+    notify_tiles_off: "Kacheln oben rechts: aus",
 };

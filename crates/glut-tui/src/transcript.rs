@@ -130,9 +130,27 @@ pub struct Agent {
     pub model: Option<String>,
     /// Whether its `task` call named an agent.
     named: bool,
+    /// When it started and ended, as this window saw it (T69): a stream read back from a kept session saw neither.
+    started: Option<std::time::Instant>,
+    ended: Option<std::time::Instant>,
 }
 
 impl Agent {
+    /// How long it ran, or runs; `None` for less than a second — a stream read back from a kept session ran none.
+    pub fn ran(&self) -> Option<std::time::Duration> {
+        let started = self.started?;
+        let ran = self
+            .ended
+            .unwrap_or_else(std::time::Instant::now)
+            .saturating_duration_since(started);
+        (ran.as_secs() >= 1).then_some(ran)
+    }
+
+    /// It ended: its time stops.
+    fn end(&mut self) {
+        self.ended.get_or_insert_with(std::time::Instant::now);
+    }
+
     /// Takes in one event the subagent reported (unwrapped once: its own events at depth 0, its subagents' still
     /// wrapped).
     fn take(&mut self, event: &Event) {
@@ -408,6 +426,8 @@ impl Transcript {
                         live: tr!(agent_starting).into(),
                         model: None,
                         named: agent.is_some(),
+                        started: Some(std::time::Instant::now()),
+                        ended: None,
                     })));
                     return;
                 }
@@ -452,6 +472,7 @@ impl Transcript {
                             // What still ran inside it ended with it.
                             agent.stream.settle();
                             agent.live.clear();
+                            agent.end();
                             Some((&mut agent.state, &mut agent.answer))
                         }
                         _ => None,
@@ -673,6 +694,7 @@ impl Transcript {
                     agent.state = ToolState::Failed;
                     agent.stream.settle();
                     agent.live.clear();
+                    agent.end();
                     block.touch();
                 }
                 _ => {}

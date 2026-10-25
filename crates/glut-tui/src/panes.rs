@@ -357,6 +357,37 @@ pub enum Request {
     SwitchNow(Switch),
 }
 
+/// What a report is for a tile (T69), read before the pane takes it.
+enum Tiled {
+    /// A question of the gate, on this target.
+    Asks(String),
+    /// A turn ended — not one the owner stopped.
+    Ended { answered: bool, answer: String },
+    /// A subagent the turn started ended, by its `task` call.
+    Subagent { id: String, ok: bool },
+}
+
+impl Tiled {
+    fn of(report: &Report) -> Option<Tiled> {
+        match report {
+            Report::Ask(request, _) => Some(Tiled::Asks(request.target.clone())),
+            Report::Done(outcome, _) if outcome.reason != glut::FinishReason::Cancelled => {
+                Some(Tiled::Ended {
+                    answered: outcome.reason == glut::FinishReason::Answered,
+                    answer: outcome.answer.clone().unwrap_or_default(),
+                })
+            }
+            Report::Event(glut::Event::ToolResult { id, name, ok, .. }) if name == "task" => {
+                Some(Tiled::Subagent {
+                    id: id.clone(),
+                    ok: *ok,
+                })
+            }
+            _ => None,
+        }
+    }
+}
+
 /// Where Glut starts anew (T44), and what it opens there: the folder's newest session, or one a search found (T55)
 /// with the stream searched for its text.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -584,6 +615,10 @@ pub struct Panes {
     pub notifier: crate::notify::Notifier,
     /// What the environment says about the terminal, for the way a notification goes (T53).
     pub notify_env: crate::notify::Env,
+    /// The tiles at the window's top right (T69).
+    pub tiles: crate::tiles::Tiles,
+    /// The left button went down on a tile: its release and drags are the tile's too.
+    tile_pressed: bool,
 }
 
 /// A kept layout coming back: the panes still to build, and each kept pane's session id once it stands.
@@ -617,6 +652,14 @@ impl Panes {
         let (built, built_inlet) = mpsc::unbounded_channel();
         forward(1, first, reports.clone());
         let cwd = app.parts.config.cwd.clone();
+        // The window's tiles as the owner left them (T69): once, as the window opens. Tests keep theirs.
+        if !cfg!(test) {
+            crate::tiles::set(
+                crate::prefs::Prefs::load(&app.parts.home)
+                    .tiles
+                    .unwrap_or(true),
+            );
+        }
         // Tests do not guess from the terminal they happen to run in.
         let notify_env = if cfg!(test) {
             crate::notify::Env::default()
@@ -625,6 +668,8 @@ impl Panes {
         };
         let panes = Panes {
             notifier: crate::notify::Notifier::new(&notify_env),
+            tiles: crate::tiles::Tiles::default(),
+            tile_pressed: false,
             notify_env,
             cwd,
             restoring: None,
@@ -740,6 +785,16 @@ impl Panes {
     /// Once per frame: answered questions go, and what the panes share is told to each — the terminal's mouse (the
     /// active pane's word is the screen's) and the sessions the others hold.
     pub fn sync(&mut self) {
+        // A question's tile stands while its session waits and its card is not the active pane's; the others their
+        // time (T69).
+        let active = self.list[self.active].id;
+        let waiting: Vec<u64> = self
+            .list
+            .iter()
+            .filter(|pane| pane.app.waits_for_owner() && pane.id != active)
+            .map(|pane| pane.id)
+            .collect();
+        self.tiles.tick(|id| waiting.contains(&id));
         // The look changed (`/motion`, `/reader`): every pane's blocks are laid out anew, its pictures from their
         // first frame (TUI9b).
         let look = crate::motion::look();
@@ -790,36 +845,36 @@ impl Panes {
                 )
             })
             .collect();
-        // The Agents tab of every pane lists the agents in the background (T36e).
-        let background: Vec<String> = self
+        // The Agents tab of every pane lists the agents in the background (T36e), each a card (T69).
+        let background: Vec<crate::agents::Behind> = self
             .list
             .iter()
             .filter(|pane| pane.background)
             .map(|pane| {
+                use crate::agents::Doing;
                 let app = &pane.app;
-                let state = if app.waits_for_owner() {
-                    "asks"
+                let doing = if app.waits_for_owner() {
+                    Doing::Asks
                 } else if !app.held.is_empty() {
-                    "holds a message"
+                    Doing::Holds
                 } else if app.working() {
-                    "works"
+                    Doing::Works
                 } else {
-                    "rests"
+                    Doing::Rests
                 };
-                let cost = app
-                    .cost
-                    .map(|cost| format!(" · ${cost:.4}"))
-                    .unwrap_or_default();
-                let cache = match (app.cache_seen, app.warm_until) {
-                    (true, Some(until)) if until > Instant::now() => " · cache ●",
-                    (true, _) => " · cache ○",
-                    _ => "",
-                };
-                format!(
-                    "{} · {} · {state}{cost}{cache}",
-                    pane.name.as_deref().unwrap_or("agent"),
-                    app.role.as_deref().unwrap_or("all-rounder")
-                )
+                let cache = app
+                    .cache_seen
+                    .then(|| app.warm_until.is_some_and(|until| until > Instant::now()));
+                crate::agents::Behind {
+                    name: pane.name.clone().unwrap_or_else(|| "agent".to_owned()),
+                    role: app.role.clone().unwrap_or_else(|| "all-rounder".to_owned()),
+                    model: app.engine.model_name().to_owned(),
+                    doing,
+                    live: app.live_line(),
+                    cost: app.cost,
+                    cache,
+                    working: app.working_since.map(|since| since.elapsed()),
+                }
             })
             .collect();
         if self
@@ -867,9 +922,78 @@ impl Panes {
             return;
         };
         let occasion = self.occasion(at, &report);
+        let tile = Tiled::of(&report);
         self.list[at].app.on_report(report);
         if let Some((occasion, ran)) = occasion {
             self.notice(at, &occasion, ran);
+        }
+        if let Some(tile) = tile {
+            self.tile(at, tile);
+        }
+    }
+
+    /// Whether the active pane shows its Agents tab: what it lists needs no tile.
+    fn agents_shown(&self) -> bool {
+        let app = &self.list[self.active].app;
+        app.panel == Some(true) && app.panel_drawn && app.tab == crate::app::Tab::Agents
+    }
+
+    /// A tile for what the pane at `at` reported (T69), unless the owner sees it already: a question of any pane but
+    /// the active one; the end of a background agent's turn, or of a pane drawn nowhere (held as a tab); a subagent of
+    /// a pane on the screen that ended.
+    fn tile(&mut self, at: usize, tiled: Tiled) {
+        use crate::tiles::{Goes, Stand, Tile};
+        let pane = &self.list[at];
+        let who = self.shown_label(at);
+        let goes = if pane.background {
+            Goes::Behind
+        } else {
+            Goes::Pane(pane.id)
+        };
+        match tiled {
+            Tiled::Asks(target) if at != self.active => {
+                let mut tile = Tile::new(who, Stand::Asks, &target, goes);
+                tile.asks_of = Some(pane.id);
+                self.tiles.push(tile);
+            }
+            Tiled::Asks(_) => {}
+            // A queued message started the next turn: the work is not done.
+            Tiled::Ended { .. } if pane.app.working() => {}
+            Tiled::Ended { answered, answer } => {
+                let unseen = if pane.background {
+                    !self.agents_shown()
+                } else {
+                    at != self.active && pane.area.is_empty()
+                };
+                if unseen {
+                    let (stand, line) = if answered {
+                        (Stand::Done, answer)
+                    } else {
+                        (Stand::Failed, String::new())
+                    };
+                    self.tiles.push(Tile::new(who, stand, &line, goes));
+                }
+            }
+            Tiled::Subagent { id, ok } => {
+                // One the owner stopped with the turn (Esc) ended as they wanted it to.
+                if pane.background
+                    || pane.app.stopping()
+                    || (at == self.active && self.agents_shown())
+                {
+                    return;
+                }
+                let found = pane
+                    .app
+                    .transcript
+                    .agents()
+                    .into_iter()
+                    .find(|(path, agent)| path.len() == 1 && agent.id == id)
+                    .map(|(path, agent)| (path, agent.task.clone(), agent.answer.clone()));
+                if let Some((path, task, answer)) = found {
+                    let id = pane.id;
+                    self.tiles.subagent_ended(id, path, &task, ok, &answer);
+                }
+            }
         }
     }
 
@@ -1040,6 +1164,27 @@ impl Panes {
                 self.list[at].app.on_terminal(event);
             }
             return;
+        }
+        // A click on a tile opens where it came from (T69); nothing beneath it gets the click.
+        if let TermEvent::Mouse(mouse) = &event
+            && mouse.kind == MouseEventKind::Down(MouseButton::Left)
+            && let Some(goes) = self.tiles.clicked(mouse.column, mouse.row)
+        {
+            self.tile_pressed = true;
+            return self.open_tile(goes);
+        }
+        // The release and the drags of a press on a tile are the tile's.
+        if let TermEvent::Mouse(mouse) = &event
+            && self.tile_pressed
+        {
+            match mouse.kind {
+                MouseEventKind::Drag(MouseButton::Left) => return,
+                MouseEventKind::Up(MouseButton::Left) => {
+                    self.tile_pressed = false;
+                    return;
+                }
+                _ => self.tile_pressed = false,
+            }
         }
         // A click on a link opens it (TUI9d): the screen holds the mouse, the terminal never gets to.
         if let TermEvent::Mouse(mouse) = &event
@@ -1967,6 +2112,26 @@ impl Panes {
         self.active().shown_again();
     }
 
+    /// Where a tile's click goes (T69): the Agents tab — at the subagent, in its pane —, or the pane itself.
+    fn open_tile(&mut self, goes: crate::tiles::Goes) {
+        use crate::tiles::Goes;
+        let at = |id: u64| self.list.iter().position(|pane| pane.id == id);
+        match goes {
+            Goes::Behind => self.active().open_agents(None),
+            Goes::Subagent { pane, path } => {
+                if let Some(at) = at(pane) {
+                    self.focus(at);
+                    self.active().open_agents(Some(path));
+                }
+            }
+            Goes::Pane(pane) => {
+                if let Some(at) = at(pane) {
+                    self.focus(at);
+                }
+            }
+        }
+    }
+
     /// `/swap [n]`: the main pane and pane `n` trade places — without a number the asking pane, or with only two the
     /// other one; the keys stay with the pane that has them.
     fn swap(&mut self, with: Option<String>) {
@@ -2623,6 +2788,106 @@ mod tests {
             },
             Vec::new(),
         )
+    }
+
+    #[tokio::test]
+    async fn tiles_tell_of_a_background_agent_and_a_subagent_and_a_click_opens_the_agents_tab() {
+        let _serial = crate::tiles::serial();
+        let (mut panes, _inlets) = with_background("critic");
+        let front = panes.list[0].id;
+        let behind = panes.list[1].id;
+        let mut answered = ended(glut::FinishReason::Answered);
+        if let Report::Done(outcome, _) = &mut answered {
+            outcome.answer = Some("Found two bugs.\nmore".into());
+        }
+        panes.on_report(behind, answered);
+        assert_eq!(panes.tiles.list.len(), 1);
+        let tile = &panes.tiles.list[0];
+        assert_eq!(
+            (
+                tile.who.as_str(),
+                tile.stand,
+                tile.lines.clone(),
+                tile.goes.clone()
+            ),
+            (
+                "critic",
+                crate::tiles::Stand::Done,
+                vec!["Found two bugs.".to_owned()],
+                crate::tiles::Goes::Behind
+            )
+        );
+        // A question of the agent stays while it waits.
+        let (answer, _answered) = oneshot::channel();
+        let request = glut::permissions::AskRequest {
+            tool: "bash".into(),
+            target: "rm -rf target".into(),
+            scopes: Vec::new(),
+            from: None,
+        };
+        panes.on_report(behind, Report::Ask(request, answer));
+        panes.sync();
+        assert!(
+            panes
+                .tiles
+                .list
+                .iter()
+                .any(|tile| tile.asks_of == Some(behind)
+                    && tile.stand == crate::tiles::Stand::Asks
+                    && tile.lines == ["rm -rf target"])
+        );
+        // A subagent of the pane in front that ended.
+        let task = |id: &str| glut::Event::ToolCall {
+            turn: 1,
+            id: id.into(),
+            name: "task".into(),
+            arguments: r#"{"description":"review a.rs","prompt":"go"}"#.into(),
+        };
+        let result = |id: &str| glut::Event::ToolResult {
+            turn: 1,
+            id: id.into(),
+            name: "task".into(),
+            ok: true,
+            output: "Looks fine.".into(),
+            truncated: false,
+        };
+        panes.on_report(front, Report::Event(task("t1")));
+        panes.on_report(front, Report::Event(result("t1")));
+        let sub = panes
+            .tiles
+            .list
+            .iter()
+            .find(|tile| tile.subagents == 1)
+            .expect("a subagent's tile");
+        assert_eq!(
+            (sub.who.as_str(), sub.lines.clone()),
+            ("review a.rs", vec!["Looks fine.".to_owned()])
+        );
+        assert_eq!(panes.tiles.list.len(), 3);
+        // A click on it opens the Agents tab at that subagent.
+        panes.tiles.place(Rect::new(0, 0, 120, 40), &[]);
+        let spot = panes
+            .tiles
+            .list
+            .iter()
+            .find(|tile| tile.subagents == 1)
+            .unwrap()
+            .area;
+        panes.on_terminal(TermEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: spot.x + 2,
+            row: spot.y + 1,
+            modifiers: KeyModifiers::NONE,
+        }));
+        let app = &panes.list[0].app;
+        assert_eq!((app.panel, app.tab), (Some(true), crate::app::Tab::Agents));
+        assert!(app.agents_list.is_some(), "the list takes the keys at it");
+        assert_eq!(panes.tiles.list.len(), 2, "the tile clicked went");
+        // With the Agents tab shown, what it lists needs no tile.
+        panes.list[0].app.panel_drawn = true;
+        panes.on_report(front, Report::Event(task("t2")));
+        panes.on_report(front, Report::Event(result("t2")));
+        assert_eq!(panes.tiles.list.len(), 2);
     }
 
     #[tokio::test]
@@ -3290,7 +3555,11 @@ mod tests {
         assert_eq!(panes.active, 0);
         // The owner's message reaches it by name, the Agents tab lists it.
         panes.sync();
-        assert!(panes.list[0].app.background[0].starts_with("critic · all-rounder · rests"));
+        let behind = &panes.list[0].app.background[0];
+        assert_eq!(
+            (behind.name.as_str(), behind.role.as_str(), behind.doing),
+            ("critic", "all-rounder", crate::agents::Doing::Rests)
+        );
         panes.active().pane_request = Some(parse_send("critic look at a.rs").unwrap());
         panes.settle(&host);
         let owners: Vec<String> = panes.list[1]

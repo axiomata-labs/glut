@@ -178,7 +178,7 @@ pub const TEXTS: Texts = Texts {
         (
             "notify",
             "te avisa cuando un turno termina o pregunta mientras la ventana está en otro lado: on, solo preguntas \
-             (asks), off, por macOS (system); /notify after <s>",
+             (asks), off, por macOS (system); /notify after <s>; /notify tiles on|off",
         ),
         (
             "motion",
@@ -1510,4 +1510,15 @@ pub const TEXTS: Texts = Texts {
     btw_failed: "la pregunta al margen falló: {reason}",
     btw_waiting: "pensando…",
     hint_btw: "Esc cierra la tarjeta · RePág AvPág la desplazan",
+    agent_asks_live: "pregunta: {target}",
+    agent_writing: "escribiendo…",
+    agent_working_live: "trabajando…",
+    agent_asks_state: "pregunta",
+    agent_holds_state: "guarda un mensaje",
+    agent_works_state: "trabaja",
+    agent_rests_state: "en reposo",
+    tiles_subagents: "{n} subagentes terminados",
+    notify_tiles_now: "mosaicos arriba a la derecha de la ventana: {now} — /notify tiles on|off",
+    notify_tiles_on: "mosaicos arriba a la derecha: activados",
+    notify_tiles_off: "mosaicos arriba a la derecha: desactivados",
 };

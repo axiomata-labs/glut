@@ -177,7 +177,7 @@ pub const TEXTS: Texts = Texts {
         (
             "notify",
             "avisa quando um turno termina ou pergunta enquanto a janela está em outro lugar: on, só perguntas (asks), \
-             off, pelo macOS (system); /notify after <s>",
+             off, pelo macOS (system); /notify after <s>; /notify tiles on|off",
         ),
         (
             "motion",
@@ -1486,4 +1486,15 @@ pub const TEXTS: Texts = Texts {
     btw_failed: "a pergunta à parte falhou: {reason}",
     btw_waiting: "pensando…",
     hint_btw: "Esc fecha o cartão · PgUp PgDn rolam-no",
+    agent_asks_live: "pergunta: {target}",
+    agent_writing: "escrevendo…",
+    agent_working_live: "trabalhando…",
+    agent_asks_state: "pergunta",
+    agent_holds_state: "guarda uma mensagem",
+    agent_works_state: "trabalha",
+    agent_rests_state: "em repouso",
+    tiles_subagents: "{n} subagentes concluídos",
+    notify_tiles_now: "blocos no canto superior direito da janela: {now} — /notify tiles on|off",
+    notify_tiles_on: "blocos no canto superior direito: ativados",
+    notify_tiles_off: "blocos no canto superior direito: desativados",
 };

@@ -125,7 +125,7 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "notify",
-            "窗口不在前台时，提示回合结束或询问：on、仅询问（asks）、off、通过 macOS（system）；/notify after <s>",
+            "窗口不在前台时，提示回合结束或询问：on、仅询问（asks）、off、通过 macOS（system）；/notify after <s>；/notify tiles on|off",
         ),
         (
             "motion",
@@ -1343,4 +1343,15 @@ pub const TEXTS: Texts = Texts {
     btw_failed: "顺便一问失败：{reason}",
     btw_waiting: "思考中…",
     hint_btw: "Esc 关闭卡片 · PgUp PgDn 滚动",
+    agent_asks_live: "询问：{target}",
+    agent_writing: "正在写…",
+    agent_working_live: "工作中…",
+    agent_asks_state: "询问",
+    agent_holds_state: "留着一条消息",
+    agent_works_state: "工作中",
+    agent_rests_state: "空闲",
+    tiles_subagents: "{n} 个子代理完成",
+    notify_tiles_now: "窗口右上角的卡片：{now} — /notify tiles on|off",
+    notify_tiles_on: "右上角卡片：开启",
+    notify_tiles_off: "右上角卡片：关闭",
 };

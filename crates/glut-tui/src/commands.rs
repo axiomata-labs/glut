@@ -324,9 +324,9 @@ pub const COMMANDS: [Command; 49] = [
     command(
         Topic::Settings,
         "notify",
-        "on|asks|off|system|after",
+        "on|asks|off|system|after|tiles",
         "tell me when a turn ends or asks while the window is elsewhere: on, asks only, off, macOS's own (system); \
-         /notify after <s>",
+         /notify after <s>; /notify tiles on|off — the tiles at the top right",
     ),
     command(
         Topic::Settings,

@@ -70,6 +70,9 @@ pub struct Prefs {
     /// How many seconds a turn must have run before its end is told (T53, `/notify after`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notify_after: Option<u32>,
+    /// Whether tiles show at the window's top right (T69, `/notify tiles`); `None`: they do.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tiles: Option<bool>,
     /// How much the screen moves (TUI9b, `/motion`); `None`: fully.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub motion: Option<crate::motion::Motion>,
@@ -274,6 +277,17 @@ pub fn set_notify(
 pub fn set_notify_after(home: &Path, secs: u32) -> Result<(), String> {
     let mut prefs = Prefs::read(home)?;
     prefs.notify_after = Some(secs);
+    prefs.save(home)
+}
+
+/// Keeps whether tiles show (`/notify tiles`, T69).
+///
+/// # Errors
+///
+/// A message when the file cannot be read (it is not written over) or written.
+pub fn set_tiles(home: &Path, on: bool) -> Result<(), String> {
+    let mut prefs = Prefs::read(home)?;
+    prefs.tiles = Some(on);
     prefs.save(home)
 }
 

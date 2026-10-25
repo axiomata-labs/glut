@@ -182,7 +182,7 @@ pub const TEXTS: Texts = Texts {
         (
             "notify",
             "ti avvisa quando un turno finisce o chiede mentre la finestra è altrove: on, solo domande (asks), off, \
-             tramite macOS (system); /notify after <s>",
+             tramite macOS (system); /notify after <s>; /notify tiles on|off",
         ),
         (
             "motion",
@@ -1515,4 +1515,15 @@ pub const TEXTS: Texts = Texts {
     btw_failed: "la domanda a margine non è riuscita: {reason}",
     btw_waiting: "sta pensando…",
     hint_btw: "Esc chiude la scheda · PagSu PagGiù la scorrono",
+    agent_asks_live: "chiede: {target}",
+    agent_writing: "sta scrivendo…",
+    agent_working_live: "al lavoro…",
+    agent_asks_state: "chiede",
+    agent_holds_state: "tiene un messaggio",
+    agent_works_state: "al lavoro",
+    agent_rests_state: "a riposo",
+    tiles_subagents: "{n} subagenti finiti",
+    notify_tiles_now: "riquadri in alto a destra della finestra: {now} — /notify tiles on|off",
+    notify_tiles_on: "riquadri in alto a destra: attivi",
+    notify_tiles_off: "riquadri in alto a destra: disattivati",
 };
