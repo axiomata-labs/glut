@@ -50,16 +50,18 @@ impl Plan {
     /// The state as one line, for the Plan tab and the dialog.
     pub fn state_line(&self) -> (String, Style) {
         match &self.state {
-            State::Waiting => ("waiting for you".to_owned(), theme::glow()),
+            State::Waiting => (tr!(plan_waiting).to_owned(), theme::glow()),
             State::Approved(mode) => (
-                format!("approved · {mode}"),
+                tr!(plan_approved, mode = mode),
                 Style::default().fg(theme::c().fine),
             ),
-            State::SentBack(Some(note)) => (format!("sent back: {}", clean(note)), theme::quiet()),
-            State::SentBack(None) => ("sent back".to_owned(), theme::quiet()),
-            State::Dropped => ("not decided: the turn ended".to_owned(), theme::quiet()),
+            State::SentBack(Some(note)) => {
+                (tr!(plan_sent_back_note, note = clean(note)), theme::quiet())
+            }
+            State::SentBack(None) => (tr!(plan_sent_back).to_owned(), theme::quiet()),
+            State::Dropped => (tr!(plan_dropped).to_owned(), theme::quiet()),
             State::Handed(pane) => (
-                format!("built in pane {pane}"),
+                tr!(plan_handed, pane = pane),
                 Style::default().fg(theme::c().fine),
             ),
         }
@@ -173,17 +175,14 @@ pub fn lines(
     let mut body = crate::markdown::render(&plan.text, width.max(8));
     if !todos.is_empty() {
         body.push(Line::default());
-        body.push(Line::from(Span::styled("Task list", theme::strong())));
+        body.push(Line::from(Span::styled(tr!(task_list), theme::strong())));
         body.extend(todo_lines(todos, width));
     }
     let mut foot: Vec<Line<'static>> = Vec::new();
     if dialog.asking {
         foot.push(Line::default());
         if let Some(note) = &dialog.note {
-            for row in wrap(
-                "Why it goes back — Glut reads it with the plan's answer (⏎ sends, ⎋ returns):",
-                width,
-            ) {
+            for row in wrap(tr!(plan_why), width) {
                 foot.push(Line::from(Span::styled(row, theme::quiet())));
             }
             let shown = cut(&clean(note), width.saturating_sub(4));
@@ -193,30 +192,24 @@ pub fn lines(
                 Span::styled("▍", theme::glow()),
             ]));
         } else {
-            let mut choices = vec![("⏎".to_owned(), "approve".to_owned())];
+            let mut choices = vec![("⏎".to_owned(), tr!(plan_approve).to_owned())];
             for (at, mode) in modes.iter().enumerate().take(9) {
                 let label = if mode == "auto" && auto_unsandboxed {
-                    format!("{mode} (no sandbox!)")
+                    tr!(plan_no_sandbox, mode = mode)
                 } else {
                     clean(mode)
                 };
                 choices.push(((at + 1).to_string(), label));
             }
             if let Some(pane) = dialog.elsewhere {
-                choices.push(("b".to_owned(), format!("build in pane {pane}")));
+                choices.push(("b".to_owned(), tr!(plan_build_in, pane = pane)));
             }
-            choices.push(("n".to_owned(), "send back with a note".to_owned()));
-            choices.push(("⎋".to_owned(), "send back".to_owned()));
+            choices.push(("n".to_owned(), tr!(plan_send_back_note).to_owned()));
+            choices.push(("⎋".to_owned(), tr!(plan_send_back).to_owned()));
             foot.extend(flow(&choices, width));
             if let Some(first) = modes.first() {
                 foot.push(Line::from(Span::styled(
-                    cut(
-                        &format!(
-                            "approved, Glut carries it out in {} mode; a number picks another",
-                            clean(first)
-                        ),
-                        width,
-                    ),
+                    cut(&tr!(plan_carries_out, mode = clean(first)), width),
                     theme::quiet(),
                 )));
             }
@@ -226,7 +219,7 @@ pub fn lines(
         foot.push(Line::default());
         foot.push(Line::from(vec![
             Span::styled(cut(&state, width.saturating_sub(24)), style),
-            Span::styled(" · ↑↓ scroll · ⎋ closes", theme::quiet()),
+            Span::styled(format!(" · {}", tr!(hint_scroll_short)), theme::quiet()),
         ]));
     }
     let room = height.saturating_sub(foot.len()).max(1);
@@ -295,7 +288,10 @@ pub fn todo_lines(todos: &[TodoItem], width: usize) -> Vec<Line<'static>> {
 pub fn head(plan: &Plan, width: usize, most: usize) -> Vec<Line<'static>> {
     let (state, style) = plan.state_line();
     let mut lines = vec![Line::from(vec![
-        Span::styled(" Plan · ", theme::strong()),
+        Span::styled(
+            format!(" {} · ", crate::texts::t().tab_names[0]),
+            theme::strong(),
+        ),
         Span::styled(cut(&state, width.saturating_sub(8)), style),
     ])];
     let body = crate::markdown::render(&plan.text, width.saturating_sub(1).max(8));
@@ -306,7 +302,7 @@ pub fn head(plan: &Plan, width: usize, most: usize) -> Vec<Line<'static>> {
     }
     if total > most {
         lines.push(Line::from(Span::styled(
-            format!(" … {} more lines — /plan shows it whole", total - most),
+            format!(" {}", tr!(plan_more_lines, n = total - most)),
             theme::quiet().add_modifier(Modifier::ITALIC),
         )));
     }

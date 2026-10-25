@@ -72,10 +72,10 @@ pub fn draw_panes(frame: &mut Frame, panes: &mut crate::panes::Panes) {
         .map(|pane| {
             let said = match (&pane.name, pane.background) {
                 (Some(name), true) if !pane.app.waits_for_owner() => {
-                    format!("{name} holds a message — /show {name}")
+                    tr!(holds_message, name = name)
                 }
-                (Some(name), true) => format!("{name} asks — /show {name}"),
-                _ => format!("pane {} asks — ⌃P", pane.number),
+                (Some(name), true) => tr!(agent_asks, name = name),
+                _ => tr!(pane_asks, n = pane.number),
             };
             (pane.id, said)
         })
@@ -210,12 +210,12 @@ fn draw_peek(frame: &mut Frame, panes: &mut crate::panes::Panes, area: Rect) {
     let name = pane
         .name
         .clone()
-        .unwrap_or_else(|| format!("pane {}", pane.number));
+        .unwrap_or_else(|| tr!(pane_named, n = pane.number));
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(theme::quiet())
         .title(Span::styled(
-            format!(" {name} — in the background · ⎋ closes · /show {name} brings it forward "),
+            format!(" {} ", tr!(peek_title, name = name)),
             theme::quiet(),
         ));
     let inner = block.inner(area);
@@ -355,12 +355,21 @@ fn draw_review(frame: &mut Frame, app: &mut App, area: Rect) {
     }
     let (done, all) = app.review.progress();
     let scope = match app.review.scope {
-        Some(crate::review::Scope::Session) => "this session",
-        _ => "the last turn",
+        Some(crate::review::Scope::Session) => tr!(review_session),
+        _ => tr!(review_turn),
     };
     let since = crate::transcript::cut(&crate::transcript::clean(&app.review.since), 40);
     let title = crate::transcript::cut(
-        &format!(" Review · {scope}, since before «{since}» · {done} of {all} files reviewed "),
+        &format!(
+            " {} ",
+            tr!(
+                review_title,
+                scope = scope,
+                since = since,
+                done = done,
+                all = all
+            )
+        ),
         usize::from(area.width).saturating_sub(4),
     );
     let block = Block::default()
@@ -388,9 +397,9 @@ fn draw_plan(frame: &mut Frame, app: &mut App, area: Rect) {
         theme::quiet()
     };
     let title = if asking {
-        " Glut's plan — approve it, or send it back "
+        format!(" {} ", tr!(plan_asking_title))
     } else {
-        " Glut's plan "
+        format!(" {} ", tr!(plan_title))
     };
     let block = Block::default()
         .borders(Borders::ALL)
@@ -432,7 +441,7 @@ fn draw_picture(frame: &mut Frame, app: &mut App, area: Rect) {
         .borders(Borders::ALL)
         .border_style(theme::glow())
         .title(Span::styled(
-            format!(" {} · ⎋ closes · o opens it ", image.label()),
+            format!(" {} ", tr!(picture_title, label = image.label())),
             theme::glow(),
         ));
     let inner = block.inner(area);
@@ -453,7 +462,7 @@ fn draw_picture(frame: &mut Frame, app: &mut App, area: Rect) {
         Some(lines) => frame.render_widget(Paragraph::new(lines), place),
         None => frame.render_widget(
             Paragraph::new(Span::styled(
-                format!("image #{} cannot be drawn: it is gone", image.number),
+                tr!(picture_gone, n = image.number),
                 theme::fault(),
             )),
             inner,
@@ -548,9 +557,9 @@ fn waiting_lines(app: &App, width: usize) -> Vec<Line<'static>> {
         .map(|(steer, text)| {
             let first = crate::transcript::clean(text.lines().next().unwrap_or(""));
             let (mark, word) = match (steer, working) {
-                (true, _) => (Span::styled("↪ ", theme::glow()), "before its next step"),
-                (false, true) => (Span::styled("⏭ ", theme::quiet()), "after this turn"),
-                (false, false) => (Span::styled("⏭ ", theme::quiet()), "⏎ sends it"),
+                (true, _) => (Span::styled("↪ ", theme::glow()), tr!(steer_before)),
+                (false, true) => (Span::styled("⏭ ", theme::quiet()), tr!(queued_after)),
+                (false, false) => (Span::styled("⏭ ", theme::quiet()), tr!(queued_send)),
             };
             Line::from(vec![
                 mark,
@@ -561,7 +570,7 @@ fn waiting_lines(app: &App, width: usize) -> Vec<Line<'static>> {
         .collect();
     if all.len() > WAITING_ROWS {
         lines.push(Line::from(Span::styled(
-            format!("  … {} more waiting", all.len() - WAITING_ROWS),
+            format!("  {}", tr!(more_waiting, n = all.len() - WAITING_ROWS)),
             theme::quiet(),
         )));
     }
@@ -586,13 +595,9 @@ fn draw_welcome(frame: &mut Frame, app: &mut App, area: Rect) {
     // The very first start (TUI9c): the keys to begin with, and `/init` where the folder has no guide yet.
     if app.first_start {
         lines.push(Line::default());
-        let mut first = vec![
-            "⌃K all the keys · / all the commands".to_owned(),
-            "⇧⇥ plan first, or build".to_owned(),
-        ];
+        let mut first = vec![tr!(welcome_keys).to_owned(), tr!(welcome_modes).to_owned()];
         if !app.parts.config.cwd.join("AGENTS.md").exists() {
-            first
-                .push("/init writes AGENTS.md: what Glut should know about this folder".to_owned());
+            first.push(tr!(welcome_init).to_owned());
         }
         for line in first {
             lines.push(Line::from(Span::styled(
@@ -608,9 +613,10 @@ fn draw_welcome(frame: &mut Frame, app: &mut App, area: Rect) {
         .welcome_projects()
         .iter()
         .map(|project| {
-            let when = project
-                .last
-                .map_or_else(|| "pinned".into(), |last| crate::projects::ago(last, now));
+            let when = project.last.map_or_else(
+                || tr!(pinned).into(),
+                |last| crate::projects::ago(last, now),
+            );
             Line::from(vec![
                 Span::styled(crate::transcript::clean(&project.name()), theme::strong()),
                 Span::styled(
@@ -630,7 +636,7 @@ fn draw_welcome(frame: &mut Frame, app: &mut App, area: Rect) {
         lines.push(Line::default());
         lines.extend(projects);
         lines.push(Line::from(Span::styled(
-            crate::motion::spoken("/projects picks one").into_owned(),
+            crate::motion::spoken(tr!(projects_pick)).into_owned(),
             theme::glow(),
         )));
     }
@@ -786,7 +792,7 @@ fn draw_stream(frame: &mut Frame, app: &mut App, area: Rect) {
         }
     }
     if app.scroll > 0 {
-        let mark = format!(" ↓ {} more ", app.scroll);
+        let mark = format!(" {} ", tr!(scroll_more, n = app.scroll));
         let place = Rect {
             x: area.x + area.width.saturating_sub(mark.width() as u16 + 1),
             y: area.y + area.height.saturating_sub(1),
@@ -850,13 +856,19 @@ fn draw_ask(frame: &mut Frame, app: &App, area: Rect, rows: Vec<String>) {
             match &open.request.from {
                 // T40: beside others a subagent's ask says whose it is.
                 Some(from) => format!(
-                    " ⬡ {} asks: {} ",
-                    crate::transcript::cut(&crate::transcript::clean(from), 40),
-                    crate::transcript::clean(&open.request.tool)
+                    " ⬡ {} ",
+                    tr!(
+                        agent_asks_tool,
+                        name = crate::transcript::cut(&crate::transcript::clean(from), 40),
+                        tool = crate::transcript::clean(&open.request.tool)
+                    )
                 ),
                 None => format!(
-                    " Glut asks: {} ",
-                    crate::transcript::clean(&open.request.tool)
+                    " {} ",
+                    tr!(
+                        glut_asks_tool,
+                        tool = crate::transcript::clean(&open.request.tool)
+                    )
                 ),
             },
             theme::glow(),
@@ -874,19 +886,24 @@ fn draw_ask(frame: &mut Frame, app: &App, area: Rect, rows: Vec<String>) {
     let width = usize::from(area.width.saturating_sub(4));
     lines.push(Line::from(vec![
         key("y".into()),
-        Span::raw("allow this once"),
+        Span::raw(tr!(allow_once)),
     ]));
+    // The scope stands where the language puts it, in bold.
+    let allow_scope = crate::texts::t().allow_scope;
+    let (before, after) = allow_scope
+        .split_once("{scope}")
+        .unwrap_or((allow_scope, ""));
     for (at, scope) in open.request.scopes.iter().take(9).enumerate() {
         let scope =
             crate::transcript::cut(&crate::transcript::clean(scope), width.saturating_sub(30));
         lines.push(Line::from(vec![
             key((at + 1).to_string()),
-            Span::raw("allow "),
+            Span::raw(before),
             Span::styled(scope, Style::default().add_modifier(Modifier::BOLD)),
-            Span::styled(" for this session", theme::quiet()),
+            Span::styled(after, theme::quiet()),
         ]));
     }
-    lines.push(Line::from(vec![key("n".into()), Span::raw("refuse")]));
+    lines.push(Line::from(vec![key("n".into()), Span::raw(tr!(refuse))]));
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let beside = ask_glimm_width(area.width);
@@ -926,7 +943,7 @@ fn asked_rows(target: &str, width: usize, most: usize) -> Vec<String> {
     let tail = 2;
     let head = most.saturating_sub(tail + 1).max(1);
     let mut shown: Vec<String> = rows[..head].to_vec();
-    shown.push(format!("… {} more rows …", rows.len() - head - tail));
+    shown.push(tr!(more_rows, n = rows.len() - head - tail));
     shown.extend_from_slice(&rows[rows.len() - tail..]);
     shown
 }
@@ -951,14 +968,15 @@ fn draw_input(
     if let Some(search) = &app.search {
         let found = match (search.current, search.matches.len()) {
             (_, 0) if search.query.is_empty() => String::new(),
-            (_, 0) => "  no match".to_owned(),
-            (Some(at), count) => format!("  {} of {count}", at + 1),
-            (None, count) => format!("  {count} matches"),
+            (_, 0) => format!("  {}", tr!(no_match)),
+            (Some(at), count) => format!("  {}", tr!(match_of, at = at + 1, count = count)),
+            (None, count) => format!("  {}", tr!(matches, count = count)),
         };
         let query = crate::transcript::clean(&search.query);
+        let label = format!("{} ", tr!(search_label));
         frame.render_widget(
             Paragraph::new(Line::from(vec![
-                Span::styled("search ", theme::glow()),
+                Span::styled(label.clone(), theme::glow()),
                 Span::raw(query.clone()),
                 Span::styled(found, theme::quiet()),
             ])),
@@ -966,7 +984,7 @@ fn draw_input(
         );
         if active {
             frame.set_cursor_position(Position {
-                x: text.x + 7 + query.width() as u16,
+                x: text.x + (label.width() + query.width()) as u16,
                 y: text.y,
             });
         }
@@ -1015,12 +1033,6 @@ fn draw_input(
         });
     }
 }
-
-/// The footer's hints while Glut works, and while it waits for the next message.
-const WORKING_HINTS: &str =
-    "Glut works · ⏎ steers it · ⇥ queues for after · ⌥↑ takes back · ⎋ stops";
-const USUAL_HINTS: &str =
-    "⏎ send · ⇧⏎ new line · ⇧⇥ mode · ⌃K keys · @ file · !cmd · ⌃F search · ⌃C quit";
 
 /// The footer (T39): the status as segments — the vi state, the mode, the model, the context, the cost, the branch —
 /// and the key hints, the moment's or the usual ones.
@@ -1102,7 +1114,7 @@ fn draw_keys(frame: &mut Frame, app: &App, area: Rect, branch: Option<String>, c
         segments.insert(
             usize::from(chrome.number.is_some()),
             Segment::marked(
-                format!("working {}s", since.elapsed().as_secs()),
+                tr!(working_secs, n = since.elapsed().as_secs()),
                 theme::c().glow,
                 0,
             ),
@@ -1138,40 +1150,40 @@ fn draw_keys(frame: &mut Frame, app: &App, area: Rect, branch: Option<String>, c
         toast.to_owned()
     } else if let Some((alone, _)) = crate::app::owners_command(&app.input.text()) {
         if alone {
-            "⏎ runs this in your shell, for you alone (!!)".to_owned()
+            tr!(hint_shell_alone).to_owned()
         } else {
-            "⏎ runs this in your shell and shows Glut its output (!)".to_owned()
+            tr!(hint_shell).to_owned()
         }
     } else if app.search.is_some() {
-        "⏎ or ↑ the match above · ⇧⏎ or ↓ the one below · ⎋ close".to_owned()
+        tr!(hint_search).to_owned()
     } else if app.plan_asks() {
-        "Glut waits for your word on its plan · ⌃C refuse and clear".to_owned()
+        tr!(hint_plan).to_owned()
     } else if app.ask.is_some() && scopes > 0 {
         let keys = if scopes == 1 {
             "1".to_owned()
         } else {
             format!("1–{scopes}")
         };
-        format!("y once · {keys} for this session · n refuse · ⌃C refuse and clear")
+        tr!(hint_ask_scopes, keys = keys)
     } else if app.ask.is_some() {
-        "y once · n refuse · ⌃C refuse and clear".to_owned()
+        tr!(hint_ask).to_owned()
     } else if app.reading.is_some() {
-        "↑↓ a block · ⏎ folds · c copies · g G the ends · / search · ⎋ back".to_owned()
+        tr!(hint_reading).to_owned()
     } else if app.plan_view.is_some() || app.keys_sheet.is_some() {
-        "↑↓ PgUp PgDn scroll · ⎋ closes".to_owned()
+        tr!(hint_scroll).to_owned()
     } else if app.agent_view.is_some() {
-        "a subagent's own stream · ↑↓ scroll · a number opens its subagent · ⎋ back".to_owned()
+        tr!(hint_agent).to_owned()
     } else if app.picker.is_some() {
-        "type to filter · ↑↓ choose · ⏎ take · ⎋ close".to_owned()
+        tr!(hint_picker).to_owned()
     } else if app.working() {
-        WORKING_HINTS.to_owned()
+        tr!(hint_working).to_owned()
     } else {
-        USUAL_HINTS.to_owned()
+        tr!(hint_usual).to_owned()
     };
     // A pane the keys are not in shows only what waits there; the active one says which other pane asks.
     let hints = if !chrome.active {
         if asks {
-            "asks — ⌃P answers".to_owned()
+            tr!(hint_other_asks).to_owned()
         } else {
             String::new()
         }
@@ -1181,7 +1193,7 @@ fn draw_keys(frame: &mut Frame, app: &App, area: Rect, branch: Option<String>, c
         hints
     };
     // Any other hint is the moment's: it goes after the segments that may.
-    let moment = hints != WORKING_HINTS && hints != USUAL_HINTS;
+    let moment = hints != tr!(hint_working) && hints != tr!(hint_usual);
     let line = crate::footer::line(
         segments,
         &crate::motion::spoken(&hints),
@@ -1202,10 +1214,11 @@ fn draw_panel(frame: &mut Frame, app: &mut App, area: Rect) {
     use glut::planning::TodoStatus;
     let open = app.project_todos.open();
     // The count stands beside the name only where the panel has room for it.
+    let names = crate::texts::t().tab_names;
     let todos_title = if open > 0 && area.width >= TABS_WITH_COUNT {
-        format!("To-dos {open}")
+        format!("{} {open}", names[4])
     } else {
-        "To-dos".to_owned()
+        names[4].to_owned()
     };
     // The panel with the keys (TUI9a) shows it in its edge.
     let edge = if app.panel_focus {
@@ -1218,12 +1231,12 @@ fn draw_panel(frame: &mut Frame, app: &mut App, area: Rect) {
         .border_style(edge)
         .title(tab_titles(
             &[
-                (Tab::Plan, "Plan"),
-                (Tab::Gate, "Gate"),
-                (Tab::Meter, "Meter"),
-                (Tab::Agents, "Agents"),
+                (Tab::Plan, names[0]),
+                (Tab::Gate, names[1]),
+                (Tab::Meter, names[2]),
+                (Tab::Agents, names[3]),
                 (Tab::Todos, &todos_title),
-                (Tab::Keys, "Keys"),
+                (Tab::Keys, names[5]),
             ],
             app.tab,
             usize::from(area.width.saturating_sub(1)),
@@ -1260,7 +1273,7 @@ fn draw_panel(frame: &mut Frame, app: &mut App, area: Rect) {
         // T36e: the agents in the background first — sessions of their own, reached by name.
         if !app.background.is_empty() {
             lines.push(Line::from(Span::styled(
-                " In the background",
+                format!(" {}", tr!(in_background)),
                 theme::strong(),
             )));
             for agent in &app.background {
@@ -1268,21 +1281,14 @@ fn draw_panel(frame: &mut Frame, app: &mut App, area: Rect) {
                     lines.push(Line::from(Span::raw(format!(" {row}"))));
                 }
             }
-            for row in wrap(
-                "/peek <name> reads one · /show <name> brings it forward · /send <name> …",
-                width,
-            ) {
+            for row in wrap(tr!(background_keys), width) {
                 lines.push(Line::from(Span::styled(format!(" {row}"), theme::quiet())));
             }
             lines.push(Line::default());
         }
         let list = crate::agents::overview(&app.transcript);
         if list.is_empty() {
-            for row in wrap(
-                "No subagent yet. When Glut hands a piece of work to one, it shows here: what it does now, its calls \
-                 and tokens.",
-                width,
-            ) {
+            for row in wrap(tr!(no_subagent), width) {
                 lines.push(Line::from(Span::styled(format!(" {row}"), theme::quiet())));
             }
         } else {
@@ -1318,20 +1324,16 @@ fn draw_panel(frame: &mut Frame, app: &mut App, area: Rect) {
         let keys = panel_keys(app, width);
         let todos = &app.project_todos;
         if let Some(fault) = &todos.fault {
-            for row in wrap(&format!("{} cannot be read: {fault}", todos.name()), width) {
+            for row in wrap(
+                &tr!(todos_unreadable, name = todos.name(), fault = fault),
+                width,
+            ) {
                 lines.push(Line::from(Span::styled(format!(" {row}"), theme::fault())));
             }
         } else if todos.open() + todos.done() == 0 {
             let text = match todos.path() {
-                Some(_) => format!(
-                    "Nothing to do in {}. /todo <text> (or a here) notes the next idea at its end.",
-                    todos.name()
-                ),
-                None => format!(
-                    "No {} yet. /todo <text> (or a here) notes an idea and creates it: the to-dos that last \
-                     between sessions, yours and Glut's.",
-                    todos.name()
-                ),
+                Some(_) => tr!(todos_nothing, name = todos.name()),
+                None => tr!(todos_none, name = todos.name()),
             };
             for row in wrap(&text, width) {
                 lines.push(Line::from(Span::styled(format!(" {row}"), theme::quiet())));
@@ -1378,10 +1380,7 @@ fn draw_panel(frame: &mut Frame, app: &mut App, area: Rect) {
         // With a plan above, no hint for a list that may never come.
         if app.plan.is_none() {
             body.push(Line::default());
-            for row in wrap(
-                "No plan yet. For work of several steps Glut writes its task list here, and ticks it off as it goes.",
-                width,
-            ) {
+            for row in wrap(tr!(no_plan), width) {
                 body.push(Line::from(Span::styled(format!(" {row}"), theme::quiet())));
             }
         }
@@ -1393,7 +1392,7 @@ fn draw_panel(frame: &mut Frame, app: &mut App, area: Rect) {
             .count();
         body.push(Line::default());
         body.push(Line::from(Span::styled(
-            format!(" {done} of {} done", app.todos.len()),
+            format!(" {}", tr!(done_of, done = done, all = app.todos.len())),
             theme::quiet(),
         )));
         body.push(Line::default());
@@ -1430,13 +1429,26 @@ fn tab_titles(
             + gap.width() * names.len().saturating_sub(1)
             <= width
     };
+    // Short, a tab keeps as much of its name as tells it from the others: "A" and "Au" for Agenten and Aufgaben.
+    let short_of = |name: &str| -> String {
+        let chars: Vec<char> = name.chars().collect();
+        (1..=chars.len())
+            .map(|len| chars[..len].iter().collect::<String>())
+            .find(|prefix| {
+                tabs.iter()
+                    .filter(|(_, other)| other.starts_with(prefix.as_str()))
+                    .count()
+                    == 1
+            })
+            .unwrap_or_else(|| name.to_owned())
+    };
     let named = |short: bool, pad: bool| -> Vec<String> {
         tabs.iter()
             .map(|(tab, name)| {
                 if *tab == shown {
                     format!(" {name} ")
                 } else if short {
-                    name.chars().next().map(String::from).unwrap_or_default()
+                    short_of(name)
                 } else if pad {
                     format!(" {name} ")
                 } else {
@@ -1470,31 +1482,30 @@ fn panel_keys(app: &App, width: usize) -> Vec<Line<'static>> {
     use crate::app::Tab;
     // With the panel's focus, ←→ go round the tabs (TUI9a).
     let tabs = if app.panel_focus {
-        "←→ tabs · "
+        format!("{} · ", tr!(keys_tabs))
     } else {
-        ""
+        String::new()
     };
     let text = if app.tab == Tab::Agents && app.agents_list.is_some() {
-        format!("{tabs}↑↓ choose · ⏎ opens · x stops it · ⎋ back to the input · ⌃X A hides")
+        format!("{tabs}{}", tr!(keys_agents))
     } else if app.tab == Tab::Todos && app.project_todos.keys {
-        format!(
-            "{tabs}↑↓ choose · Space ticks · a adds · o editor · ⎋ back to the input · ⌃Y hides"
-        )
+        format!("{tabs}{}", tr!(keys_todos))
     } else if app.panel_focus {
-        "←→ tabs · ↑↓ PgUp PgDn scroll · ⎋ back to the input".to_owned()
+        tr!(keys_focus).to_owned()
     } else {
+        let names = crate::texts::t().tab_words;
         [
-            (Tab::Plan, "⌃B", "plan"),
-            (Tab::Gate, "⌃G", "gate"),
-            (Tab::Meter, "⌃N", "meter"),
-            (Tab::Agents, "⌃X A", "agents"),
-            (Tab::Todos, "⌃Y", "to-dos"),
-            (Tab::Keys, "⌃K", "keys"),
+            (Tab::Plan, "⌃B", names[0]),
+            (Tab::Gate, "⌃G", names[1]),
+            (Tab::Meter, "⌃N", names[2]),
+            (Tab::Agents, "⌃X A", names[3]),
+            (Tab::Todos, "⌃Y", names[4]),
+            (Tab::Keys, "⌃K", names[5]),
         ]
         .iter()
         .map(|(tab, key, name)| {
             if *tab == app.tab {
-                format!("{key} hides")
+                tr!(key_hides, key = key)
             } else {
                 format!("{key} {name}")
             }
@@ -1583,7 +1594,7 @@ fn draw_suggestions(frame: &mut Frame, app: &App, area: Rect) {
         .borders(Borders::ALL)
         .border_style(theme::glow())
         .title(Span::styled(
-            " Commands · ⇥ completes · ⏎ runs ",
+            format!(" {} ", tr!(commands_title)),
             theme::glow(),
         ));
     frame.render_widget(Clear, place);
@@ -1602,7 +1613,10 @@ fn draw_keys_sheet(frame: &mut Frame, app: &mut App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(theme::quiet())
-        .title(Span::styled(" Keys · ⎋ closes ", theme::quiet()));
+        .title(Span::styled(
+            format!(" {} ", tr!(keys_title)),
+            theme::quiet(),
+        ));
     let inner = block.inner(place);
     let rows = usize::from(inner.height);
     app.overlay_rows = rows;
@@ -1634,12 +1648,12 @@ fn draw_picker(frame: &mut Frame, app: &App, area: Rect) {
     let block = match picker.sort {
         Some(sort) => {
             let free = if picker.free_only {
-                " · free only"
+                format!(" · {}", tr!(free_only))
             } else {
-                ""
+                String::new()
             };
             block.title_bottom(Span::styled(
-                format!(" sorted by {}{free} · ⌃S sort · ⌃F free ", sort.label()),
+                format!(" {} ", tr!(sorted_by, sort = sort.label(), free = free)),
                 theme::quiet(),
             ))
         }
@@ -1662,7 +1676,7 @@ fn draw_picker(frame: &mut Frame, app: &App, area: Rect) {
         };
         let detail = if item.dim {
             // Not allowed by the account (OpenRouter's settings), or of an API Glut does not speak yet (a gateway's).
-            format!("  {} · not usable here", item.detail)
+            format!("  {}", tr!(not_usable, detail = item.detail))
         } else {
             format!("  {}", item.detail)
         };
@@ -1674,7 +1688,7 @@ fn draw_picker(frame: &mut Frame, app: &App, area: Rect) {
     }
     if shown.is_empty() {
         lines.push(Line::from(Span::styled(
-            "  nothing matches",
+            format!("  {}", tr!(nothing_matches)),
             theme::quiet(),
         )));
     }
@@ -1712,6 +1726,21 @@ mod tests {
         for width in [31, 40, 60] {
             assert!(text(width).width() <= width);
         }
+        // Short, two names alike at the start keep as much as tells them apart (T48: Tâches and Touches).
+        let alike = [
+            (Tab::Plan, "计划"),
+            (Tab::Gate, "Gate"),
+            (Tab::Meter, "计量"),
+            (Tab::Agents, "Tâches"),
+            (Tab::Todos, "Touches"),
+            (Tab::Keys, "Keys"),
+        ];
+        let short: String = tab_titles(&alike, Tab::Keys, 24)
+            .spans
+            .iter()
+            .map(|span| span.content.to_string())
+            .collect();
+        assert_eq!(short, "计划 G 计量 Tâ To  Keys ");
     }
 
     #[test]

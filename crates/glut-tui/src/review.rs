@@ -131,7 +131,7 @@ pub fn parse(diff: &str) -> Vec<FileDiff> {
                 .unwrap_or_else(|| names.to_owned());
             let note = path
                 .starts_with('"')
-                .then(|| "a name git quotes: not reviewable here".to_owned());
+                .then(|| tr!(review_quoted_name).to_owned());
             files.push(FileDiff {
                 path,
                 created: false,
@@ -149,7 +149,7 @@ pub fn parse(diff: &str) -> Vec<FileDiff> {
         } else if line.starts_with("deleted file mode") {
             file.deleted = true;
         } else if line.starts_with("Binary files ") {
-            file.note = Some("binary: not reviewable here".into());
+            file.note = Some(tr!(review_binary).into());
         } else if let Some(name) = line.strip_prefix("--- a/") {
             file.path = name.trim_end_matches('\t').to_owned();
         } else if let Some(name) = line.strip_prefix("+++ b/") {
@@ -201,12 +201,12 @@ pub fn parse(diff: &str) -> Vec<FileDiff> {
                     }
                     // Fewer lines than the header promised: the diff was cut here.
                     if old != old_count || new != new_count {
-                        file.note = Some("the change was cut here: /steps shows it whole".into());
+                        file.note = Some(tr!(review_cut).into());
                     } else {
                         file.hunks.push(hunk);
                     }
                 }
-                None => file.note = Some("a hunk header Glut cannot read".into()),
+                None => file.note = Some(tr!(review_bad_header).into()),
             }
         }
     }
@@ -216,7 +216,7 @@ pub fn parse(diff: &str) -> Vec<FileDiff> {
             file.hunks.clear();
         }
         if file.hunks.is_empty() && file.note.is_none() {
-            file.note = Some("only its mode changed".into());
+            file.note = Some(tr!(review_mode_only).into());
         }
     }
     files.retain(|file| !file.path.is_empty());
@@ -263,9 +263,9 @@ pub fn put_back(current: Option<&str>, hunk: &Hunk) -> Result<String, String> {
     };
     // Git read a byte that is no UTF-8 as U+FFFD: written back, it would be another byte.
     if hunk.lines.iter().any(|(_, line)| line.contains('\u{FFFD}')) {
-        return Err("the change has bytes that are no text: put it back by hand".into());
+        return Err(tr!(review_not_text).into());
     }
-    let changed_since = || "the file changed since: open /diff again".to_owned();
+    let changed_since = || tr!(review_changed_since).to_owned();
     let Some(end) = at.checked_add(new.len()).filter(|end| *end <= lines.len()) else {
         return Err(changed_since());
     };
@@ -525,10 +525,7 @@ impl Review {
             .min(self.files.len().saturating_sub(shown));
         if self.files.is_empty() {
             top.push(Line::from(Span::styled(
-                fit(
-                    "  nothing changed in this scope — s switches turn and session",
-                    width,
-                ),
+                fit(&format!("  {}", tr!(review_nothing)), width),
                 theme::quiet(),
             )));
         }
@@ -537,16 +534,16 @@ impl Review {
             let chosen = at == self.file;
             let mark = if chosen { "▸ " } else { "  " };
             let state = if self.is_reviewed(file) {
-                " ✓ reviewed"
+                format!(" ✓ {}", tr!(review_reviewed))
             } else {
-                ""
+                String::new()
             };
             let kind = if file.created {
-                " new"
+                format!(" {}", tr!(review_new))
             } else if file.deleted {
-                " gone"
+                format!(" {}", tr!(review_gone))
             } else {
-                ""
+                String::new()
             };
             let tail = format!("{kind}  +{added} −{removed}{state}");
             let name = fit(&file.path, width.saturating_sub(tail.chars().count() + 2));
@@ -580,15 +577,18 @@ impl Review {
                     selected_at = body.len();
                 }
                 let verdict = match self.verdicts.get(&hunk.key(&file.path)) {
-                    Some(Verdict::Accepted) => "  ✓ accepted",
-                    Some(Verdict::Commented) => "  ✎ commented",
-                    None => "",
+                    Some(Verdict::Accepted) => format!("  ✓ {}", tr!(review_accepted)),
+                    Some(Verdict::Commented) => format!("  ✎ {}", tr!(review_commented)),
+                    None => String::new(),
                 };
                 let head = format!(
-                    "{}lines {}–{}{verdict}",
+                    "{}{}{verdict}",
                     if chosen { "▸ " } else { "  " },
-                    hunk.new_start,
-                    hunk.new_start + hunk.new_count.saturating_sub(1)
+                    tr!(
+                        review_lines,
+                        from = hunk.new_start,
+                        to = hunk.new_start + hunk.new_count.saturating_sub(1)
+                    )
                 );
                 body.push(Line::from(Span::styled(
                     fit(&head, width),
@@ -635,15 +635,15 @@ impl Review {
         let fit = |text: String| crate::transcript::cut(&crate::transcript::clean(&text), width);
         let line = match &self.typing {
             Some(Typing::Why(text)) => Line::from(vec![
-                Span::styled(" why (⏎ rejects, may stay empty) › ", theme::glow()),
+                Span::styled(format!(" {} › ", tr!(review_why)), theme::glow()),
                 Span::raw(fit(format!("{text}▏"))),
             ]),
             Some(Typing::Comment(text)) => Line::from(vec![
-                Span::styled(" comment (⏎ sends it with your next message) › ", theme::glow()),
+                Span::styled(format!(" {} › ", tr!(review_comment)), theme::glow()),
                 Span::raw(fit(format!("{text}▏"))),
             ]),
             None => Line::from(Span::styled(
-                fit(" ↑↓ hunk · ←→ file · a accept · r reject · c comment · v reviewed · s turn/session · ⎋".into()),
+                fit(format!(" {}", tr!(review_keys))),
                 theme::quiet(),
             )),
         };

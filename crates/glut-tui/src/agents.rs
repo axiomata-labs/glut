@@ -60,23 +60,28 @@ impl View {
 /// The view's title: the task, its state, what it spent.
 pub fn title(agent: &Agent, depth: usize, width: usize) -> String {
     let state = match agent.state {
-        ToolState::Running => "running",
-        ToolState::Done => "done",
-        ToolState::Failed => "stopped",
-        ToolState::Refused => "refused",
+        ToolState::Running => tr!(agent_running),
+        ToolState::Done => tr!(agent_done),
+        ToolState::Failed => tr!(agent_stopped),
+        ToolState::Refused => tr!(agent_refused),
     };
     let level = if depth > 1 {
-        format!("Subagent (level {depth})")
+        tr!(subagent_level, depth = depth)
     } else {
-        "Subagent".to_owned()
+        tr!(subagent).to_owned()
     };
     cut(
         &format!(
-            " {level} · {} · {state} · {} calls · {}k in · {}k out ",
-            crate::transcript::clean(&agent.task),
-            agent.calls,
-            agent.input_tokens / 1000,
-            agent.output_tokens / 1000
+            " {} ",
+            tr!(
+                subagent_title,
+                level = level,
+                task = crate::transcript::clean(&agent.task),
+                state = state,
+                calls = agent.calls,
+                input = agent.input_tokens / 1000,
+                output = agent.output_tokens / 1000
+            )
         ),
         width,
     )
@@ -98,13 +103,13 @@ pub fn lines(
     }
     if stream.is_empty() && agent.state == ToolState::Running {
         stream.push(Line::from(Span::styled(
-            " nothing yet: the subagent is starting",
+            format!(" {}", tr!(subagent_starting)),
             theme::quiet(),
         )));
     } else if stream.is_empty() {
         // A session opened again keeps the conversation, not a subagent's steps: what it answered is what is left.
         stream.push(Line::from(Span::styled(
-            " its steps were not kept with the session — what it answered:",
+            format!(" {}", tr!(subagent_not_kept)),
             theme::quiet(),
         )));
         stream.extend(crate::markdown::render(&agent.answer, usize::from(width)));
@@ -137,9 +142,9 @@ fn footer(agent: &Agent, width: usize) -> Line<'static> {
         })
         .collect();
     let keys = if nested.is_empty() {
-        "↑↓ PgUp PgDn scroll · ⎋ back".to_owned()
+        tr!(subagent_keys).to_owned()
     } else {
-        format!("{} · number opens · ↑↓ scroll · ⎋ back", nested.join(" · "))
+        format!("{} · {}", nested.join(" · "), tr!(subagent_keys_nested))
     };
     Line::from(Span::styled(cut(&keys, width), theme::quiet()))
 }
@@ -180,9 +185,9 @@ pub fn overview_lines(
         let running = agent.state == ToolState::Running;
         let (mark, end) = match agent.state {
             ToolState::Running => ("⬡", ""),
-            ToolState::Done => ("✓", "done"),
-            ToolState::Failed => ("✗", "stopped"),
-            ToolState::Refused => ("⊘", "refused"),
+            ToolState::Done => ("✓", tr!(agent_done)),
+            ToolState::Failed => ("✗", tr!(agent_stopped)),
+            ToolState::Refused => ("⊘", tr!(agent_refused)),
         };
         let mut task_style = if running {
             theme::glow()
@@ -207,10 +212,11 @@ pub fn overview_lines(
             .as_deref()
             .map(|model| format!(" · {}", crate::transcript::clean(model)))
             .unwrap_or_default();
-        let spent = format!(
-            "{} calls · {} tokens{model}",
-            agent.calls,
-            crate::meter::tokens(agent.input_tokens + agent.output_tokens)
+        let spent = tr!(
+            agent_spent,
+            calls = agent.calls,
+            tokens = crate::meter::tokens(agent.input_tokens + agent.output_tokens),
+            model = model
         );
         if running {
             rows.push(Line::from(Span::raw(format!(

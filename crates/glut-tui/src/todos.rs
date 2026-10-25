@@ -55,9 +55,9 @@ impl Failure {
     /// The failure as a note for the owner.
     pub fn message(&self, name: &str) -> String {
         match self {
-            Self::Changed => format!("{name} changed in the meantime: nothing written, look again"),
-            Self::Unreadable(reason) => format!("{name} cannot be read: {reason}"),
-            Self::Unwritable(reason) => format!("{name} cannot be written: {reason}"),
+            Self::Changed => tr!(todos_changed, name = name),
+            Self::Unreadable(reason) => tr!(todos_unreadable, name = name, fault = reason),
+            Self::Unwritable(reason) => tr!(todos_unwritable, name = name, fault = reason),
         }
     }
 }
@@ -280,9 +280,9 @@ impl Todos {
         if total > room {
             let below = total - skip - shown.len();
             let text = match (skip, below) {
-                (0, _) => format!(" … {below} more rows below"),
-                (_, 0) => format!(" … {skip} rows above"),
-                _ => format!(" … {skip} rows above, {below} below"),
+                (0, _) => format!(" {}", tr!(rows_below, below = below)),
+                (_, 0) => format!(" {}", tr!(rows_above, above = skip)),
+                _ => format!(" {}", tr!(rows_around, above = skip, below = below)),
             };
             shown.push(Line::from(Span::styled(text, theme::quiet())));
         }
@@ -302,14 +302,21 @@ impl Todos {
             Row::Heading(text) => styled(text.clone(), theme::strong()),
             Row::Text(text) => styled(text.clone(), theme::quiet()),
             Row::Done { count, unfolded } => {
-                let action = if *unfolded { "fold them" } else { "show them" };
+                let action = if *unfolded {
+                    tr!(todos_fold)
+                } else {
+                    tr!(todos_show)
+                };
                 let style = if chosen {
                     theme::glow()
                 } else {
                     theme::quiet()
                 };
                 vec![Line::from(Span::styled(
-                    format!("{lead}✓ {count} done · Space: {action}"),
+                    format!(
+                        "{lead}✓ {}",
+                        tr!(todos_done, count = count, action = action)
+                    ),
                     style,
                 ))]
             }
@@ -451,9 +458,9 @@ fn read(path: &Path) -> Result<Option<String>, String> {
     };
     let meta = file.metadata().map_err(|error| error.to_string())?;
     if !meta.is_file() {
-        return Err("no plain file".to_owned());
+        return Err(tr!(no_plain_file).to_owned());
     }
-    let too_large = || format!("larger than {} KB", MAX_BYTES / 1024);
+    let too_large = || tr!(larger_than_kb, kb = MAX_BYTES / 1024);
     if meta.len() > MAX_BYTES {
         return Err(too_large());
     }
@@ -473,7 +480,7 @@ fn write(path: &Path, text: &str) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt as _;
     let mode = match path.symlink_metadata() {
         Ok(meta) if meta.is_file() => meta.permissions().mode() & 0o777,
-        Ok(_) => return Err("no plain file".to_owned()),
+        Ok(_) => return Err(tr!(no_plain_file).to_owned()),
         Err(_) => NEW_MODE,
     };
     let dir = path.parent().unwrap_or(Path::new("."));

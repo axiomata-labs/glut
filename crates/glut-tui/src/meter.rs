@@ -230,74 +230,90 @@ impl Meter {
         let fit = |text: String| crate::transcript::cut(&crate::transcript::clean(&text), width);
         let quiet = |text: String| Line::from(Span::styled(fit(text), theme::quiet()));
         let head = |text: &str| Line::from(Span::styled(fit(format!(" {text}")), theme::glow()));
-        let mut lines = vec![head("Context")];
+        let mut lines = vec![head(tr!(meter_context))];
         match window.window {
             Some((size, source)) => {
                 lines.push(bar(window.used, u64::from(size), window.compacts_at, width));
                 lines.push(Line::from(Span::raw(fit(format!(
-                    "  {} of {} ({}%)",
-                    tokens(window.used),
-                    tokens(u64::from(size)),
-                    window.used * 100 / u64::from(size.max(1))
+                    "  {}",
+                    tr!(
+                        meter_of,
+                        used = tokens(window.used),
+                        size = tokens(u64::from(size)),
+                        share = window.used * 100 / u64::from(size.max(1))
+                    )
                 )))));
                 lines.push(quiet(match window.compacts_at {
-                    Some(at) => format!("  compacts itself at {} (│)", tokens(at)),
-                    None => "  compacts only on /compact".to_owned(),
+                    Some(at) => format!("  {}", tr!(meter_compacts_at, at = tokens(at))),
+                    None => format!("  {}", tr!(meter_compacts_manual)),
                 }));
-                lines.push(quiet(format!("  window: {source} · /context sets it")));
+                // Where the window came from, as the session named it — its own words read in the language now.
+                let source = match source {
+                    crate::session::WINDOW_SET_HERE => tr!(window_set_here),
+                    crate::session::WINDOW_FROM_LIST => tr!(window_from_list),
+                    other => other,
+                };
+                lines.push(quiet(format!("  {}", tr!(meter_window, source = source))));
             }
             None => {
                 lines.push(Line::from(Span::raw(fit(format!(
-                    "  {} used",
-                    tokens(window.used)
+                    "  {}",
+                    tr!(meter_used, used = tokens(window.used))
                 )))));
-                lines.push(quiet("  window unknown: /context 128k sets it".to_owned()));
+                lines.push(quiet(format!("  {}", tr!(meter_window_unknown))));
             }
         }
 
         let (all, cost) = (window.usage, window.cost);
         lines.push(Line::default());
-        lines.push(head("Session"));
+        lines.push(head(tr!(meter_session)));
         lines.push(Line::from(Span::raw(fit(format!(
-            "  in {} · cached {} · out {}",
-            tokens(all.input_tokens),
-            cached_share(&all),
-            tokens(all.output_tokens)
+            "  {}",
+            tr!(
+                meter_in_out,
+                input = tokens(all.input_tokens),
+                cached = cached_share(&all),
+                output = tokens(all.output_tokens)
+            )
         )))));
         lines.push(quiet(match cost {
-            Some(cost) => format!("  ${cost:.4} at the model's price"),
-            None => "  no price known for this model".to_owned(),
+            Some(cost) => format!("  {}", tr!(meter_price, cost = format!("${cost:.4}"))),
+            None => format!("  {}", tr!(meter_no_price)),
         }));
         if let Some(effort) = &window.effort {
-            lines.push(quiet(format!("  effort {effort}")));
+            lines.push(quiet(format!("  {}", tr!(meter_effort, effort = effort))));
         }
         if let Some(budget) = &window.budget {
-            lines.push(quiet(format!("  budget {budget}")));
+            lines.push(quiet(format!("  {}", tr!(meter_budget, budget = budget))));
         }
 
         lines.push(Line::default());
         lines.push(head("Glut lean"));
         let (calls, before, after) = self.lean;
         lines.push(quiet(if calls == 0 {
-            "  this session: nothing spared yet".to_owned()
+            format!("  {}", tr!(meter_lean_none))
         } else {
             format!(
-                "  this session: {} chars spared on {calls} calls ({}%)",
-                count(before.saturating_sub(after)),
-                before.saturating_sub(after) * 100 / before.max(1)
+                "  {}",
+                tr!(
+                    meter_lean_session,
+                    chars = count(before.saturating_sub(after)),
+                    calls = calls,
+                    share = before.saturating_sub(after) * 100 / before.max(1)
+                )
             )
         }));
         if let Some((calls, saved)) = self.lean_all {
             lines.push(quiet(format!(
-                "  all runs: {} chars on {calls} calls (glut gain)",
-                count(saved)
+                "  {}",
+                tr!(meter_lean_all, chars = count(saved), calls = calls)
             )));
         }
 
         lines.push(Line::default());
-        lines.push(head("Turns"));
+        lines.push(head(tr!(meter_turns)));
         if self.turns.is_empty() {
-            lines.push(quiet("  none yet".to_owned()));
+            lines.push(quiet(format!("  {}", tr!(meter_none_yet))));
         }
         for turn in self.turns.iter().rev().take(TURNS_LISTED) {
             let cost = turn
@@ -307,30 +323,40 @@ impl Meter {
             lines.push(Line::from(vec![
                 Span::styled(format!("  #{:<3}", turn.number), theme::glow()),
                 Span::raw(crate::transcript::cut(
-                    &format!(
-                        "in {} · out {}{cost}",
-                        tokens(turn.usage.input_tokens),
-                        tokens(turn.usage.output_tokens)
+                    &tr!(
+                        meter_turn_in_out,
+                        input = tokens(turn.usage.input_tokens),
+                        output = tokens(turn.usage.output_tokens),
+                        cost = cost
                     ),
                     width.saturating_sub(6),
                 )),
             ]));
             lines.push(quiet(format!(
-                "       {} cached · {} calls · {} tools",
-                cached_share(&turn.usage),
-                turn.calls,
-                turn.tools
+                "       {}",
+                tr!(
+                    meter_turn_detail,
+                    cached = cached_share(&turn.usage),
+                    calls = turn.calls,
+                    tools = turn.tools
+                )
             )));
             // TUI10: how fast the model wrote, and how long the first piece took.
             let speed = match (turn.rate(), turn.first_token) {
                 (Some(rate), Some(first)) => Some(format!(
-                    "       {rate:.0} tok/s · first token after {:.1} s",
-                    first.as_secs_f64()
+                    "       {rate:.0} tok/s · {}",
+                    tr!(
+                        meter_first_token,
+                        secs = format!("{:.1}", first.as_secs_f64())
+                    )
                 )),
                 (Some(rate), None) => Some(format!("       {rate:.0} tok/s")),
                 (None, Some(first)) => Some(format!(
-                    "       first token after {:.1} s",
-                    first.as_secs_f64()
+                    "       {}",
+                    tr!(
+                        meter_first_token,
+                        secs = format!("{:.1}", first.as_secs_f64())
+                    )
                 )),
                 (None, None) => None,
             };
@@ -340,15 +366,15 @@ impl Meter {
         }
 
         lines.push(Line::default());
-        lines.push(head("Tools"));
+        lines.push(head(tr!(meter_tools)));
         if self.tools.is_empty() {
-            lines.push(quiet("  none called yet".to_owned()));
+            lines.push(quiet(format!("  {}", tr!(meter_none_called))));
         }
         let mut tools: Vec<(&String, &ToolCount)> = self.tools.iter().collect();
         tools.sort_by(|a, b| b.1.calls.cmp(&a.1.calls).then(a.0.cmp(b.0)));
         for (name, tool) in tools.iter().take(TOOLS_LISTED) {
             let failed = if tool.failed > 0 {
-                format!(" · {} failed", tool.failed)
+                format!(" · {}", tr!(meter_failed, n = tool.failed))
             } else {
                 String::new()
             };
@@ -363,7 +389,10 @@ impl Meter {
             )));
         }
         if tools.len() > TOOLS_LISTED {
-            lines.push(quiet(format!("  … {} more", tools.len() - TOOLS_LISTED)));
+            lines.push(quiet(format!(
+                "  {}",
+                tr!(more_listed, n = tools.len() - TOOLS_LISTED)
+            )));
         }
         lines.truncate(height);
         lines
@@ -594,7 +623,7 @@ mod tests {
         }
         let window = Window {
             used: 150_000,
-            window: Some((200_000, "the provider's list")),
+            window: Some((200_000, crate::session::WINDOW_FROM_LIST)),
             compacts_at: Some(160_000),
             effort: Some("high".into()),
             budget: None,

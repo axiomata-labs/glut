@@ -2369,7 +2369,7 @@ impl App {
         };
         match session::keep_window(&self.parts.home, &self.engine, tokens) {
             Ok(()) => {
-                self.engine.window = Some((tokens, "set in Glut"));
+                self.engine.window = Some((tokens, session::WINDOW_SET_HERE));
                 self.transcript.note(
                     format!(
                         "{} counts with {tokens} tokens from now on",

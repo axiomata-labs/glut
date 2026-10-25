@@ -173,17 +173,17 @@ impl Watch {
         };
         let more = |left: usize| {
             Line::from(Span::styled(
-                fit(format!("  … {left} more"), width),
+                fit(format!("  {}", tr!(more_listed, n = left)), width),
                 theme::quiet(),
             ))
         };
         let mut lines = Vec::new();
         let sandbox = match guard.sandbox {
-            Some(true) => ("sandbox on", theme::quiet()),
-            Some(false) => ("no sandbox on this system", theme::fault()),
-            None => ("sandbox off", theme::fault()),
+            Some(true) => (tr!(gate_sandbox_on), theme::quiet()),
+            Some(false) => (tr!(gate_sandbox_none), theme::fault()),
+            None => (tr!(gate_sandbox_off), theme::fault()),
         };
-        let mode = fit(format!(" mode {} · ", guard.mode), width);
+        let mode = fit(format!(" {} · ", tr!(gate_mode, mode = guard.mode)), width);
         let left = width.saturating_sub(mode.width());
         lines.push(Line::from(vec![
             Span::styled(mode, theme::quiet()),
@@ -192,7 +192,10 @@ impl Watch {
         let (allow, ask, deny) = guard.rules;
         lines.push(Line::from(Span::styled(
             fit(
-                format!(" rules: {allow} allow · {ask} ask · {deny} deny (/gate)"),
+                format!(
+                    " {}",
+                    tr!(gate_rules, allow = allow, ask = ask, deny = deny)
+                ),
                 width,
             ),
             theme::quiet(),
@@ -210,11 +213,14 @@ impl Watch {
         lines.push(Line::from(Span::styled(
             fit(
                 format!(
-                    " refused this turn {} of {} · same call {} of {}",
-                    self.refused,
-                    limits.total,
-                    self.most_repeated(),
-                    limits.repeat
+                    " {}",
+                    tr!(
+                        gate_refused,
+                        refused = self.refused,
+                        total = limits.total,
+                        same = self.most_repeated(),
+                        repeat = limits.repeat
+                    )
                 ),
                 width,
             ),
@@ -223,7 +229,7 @@ impl Watch {
         if !guard.granted.is_empty() {
             lines.push(Line::default());
             lines.push(Line::from(Span::styled(
-                fit(" From now on (/gate takes back)".into(), width),
+                fit(format!(" {}", tr!(gate_from_now)), width),
                 theme::glow(),
             )));
             for label in guard.granted.iter().take(LISTED) {
@@ -235,15 +241,12 @@ impl Watch {
         }
         lines.push(Line::default());
         lines.push(Line::from(Span::styled(
-            fit(" Network".into(), width),
+            fit(format!(" {}", tr!(gate_network)), width),
             theme::glow(),
         )));
         if self.hosts.is_empty() {
             lines.push(Line::from(Span::styled(
-                fit(
-                    "  none yet: each host a command reaches shows here".into(),
-                    width,
-                ),
+                fit(format!("  {}", tr!(gate_no_hosts)), width),
                 theme::quiet(),
             )));
         }
@@ -255,7 +258,11 @@ impl Watch {
             };
             let mut count = format!("{}×", host.reached);
             if host.refused > 0 {
-                count = format!("{}× · refused {}×", host.reached, host.refused);
+                count = tr!(
+                    gate_host_refused,
+                    reached = host.reached,
+                    refused = host.refused
+                );
             }
             lines.push(Line::from(vec![
                 Span::styled(format!("  {mark} "), style),
@@ -271,15 +278,12 @@ impl Watch {
         }
         lines.push(Line::default());
         lines.push(Line::from(Span::styled(
-            fit(" Judgements".into(), width),
+            fit(format!(" {}", tr!(gate_judgements)), width),
             theme::glow(),
         )));
         if self.seen.is_empty() {
             lines.push(Line::from(Span::styled(
-                fit(
-                    "  none yet: each tool call shows here as it is judged".into(),
-                    width,
-                ),
+                fit(format!("  {}", tr!(gate_no_judgements)), width),
                 theme::quiet(),
             )));
         }

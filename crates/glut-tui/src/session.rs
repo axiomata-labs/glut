@@ -455,6 +455,11 @@ pub async fn build(
     Ok((parts, engine))
 }
 
+/// Where a model's window came from: set with `/context` in Glut, or the provider's model list — the Meter tab
+/// says either in the language read now (T48). (`settings.json` names itself.)
+pub const WINDOW_SET_HERE: &str = "set in Glut";
+pub const WINDOW_FROM_LIST: &str = "the provider's list";
+
 /// The engine of provider `id` (or the default one) and `model` (or the provider's default), at `effort` — `None`
 /// takes the owner's `settings.json`, `Some(None)` sends none and leaves it to the provider: its key, its window and
 /// prices — the window set in Glut first, then the owner's settings, then the list.
@@ -501,7 +506,7 @@ pub async fn engine(
         .get(&resolved.id)
         .and_then(|entry| entry.windows.get(&name).copied());
     let window = set
-        .map(|tokens| (tokens, "set in Glut"))
+        .map(|tokens| (tokens, WINDOW_SET_HERE))
         .or_else(|| {
             parts
                 .owner_windows
@@ -512,7 +517,7 @@ pub async fn engine(
             listed
                 .as_ref()
                 .and_then(|info| info.context_window)
-                .map(|tokens| (tokens, "the provider's list"))
+                .map(|tokens| (tokens, WINDOW_FROM_LIST))
         });
     let prices = parts
         .owner_prices

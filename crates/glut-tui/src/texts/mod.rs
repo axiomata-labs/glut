@@ -48,6 +48,332 @@ glut::catalog! {
         help_vim: &'static str,
         /// What the key symbols stand for, by the names the system gives the keys.
         legend: &'static str,
+        /// A background agent holds a message for the owner: `{name}`.
+        holds_message: &'static str,
+        /// A background agent asks the owner: `{name}`.
+        agent_asks: &'static str,
+        /// Another pane asks the owner: `{n}` its number.
+        pane_asks: &'static str,
+        /// A pane by its number: `{n}`.
+        pane_named: &'static str,
+        /// The frame of `/peek`: `{name}` the agent.
+        peek_title: &'static str,
+        /// What a review covers: the whole session.
+        review_session: &'static str,
+        /// What a review covers: the last turn.
+        review_turn: &'static str,
+        /// The review's frame: `{scope}` one of the two above, `{since}` the message it starts before, `{done}` of
+        /// `{all}` files.
+        review_title: &'static str,
+        /// The plan's frame while Glut waits for the owner's word on it.
+        plan_asking_title: &'static str,
+        /// The plan's frame, only to read.
+        plan_title: &'static str,
+        /// An image shown whole: `{label}` its line.
+        picture_title: &'static str,
+        /// An image that cannot be drawn: `{n}` its number.
+        picture_gone: &'static str,
+        /// When a steering message is taken in.
+        steer_before: &'static str,
+        /// When a queued message goes, while Glut works.
+        queued_after: &'static str,
+        /// A queued message while Glut rests.
+        queued_send: &'static str,
+        /// Waiting messages beyond those shown: `{n}`.
+        more_waiting: &'static str,
+        /// The first start's hint to the keys and commands.
+        welcome_keys: &'static str,
+        /// The first start's hint to the modes.
+        welcome_modes: &'static str,
+        /// The first start's hint to `/init` where the folder has no guide.
+        welcome_init: &'static str,
+        /// A pinned project with no session yet.
+        pinned: &'static str,
+        /// Under the welcome's projects.
+        projects_pick: &'static str,
+        /// Rows below while the stream is scrolled up: `{n}`.
+        scroll_more: &'static str,
+        /// An ask's frame from a subagent: `{name}` it, `{tool}` the tool.
+        agent_asks_tool: &'static str,
+        /// An ask's frame: `{tool}` the tool.
+        glut_asks_tool: &'static str,
+        /// An ask's first choice.
+        allow_once: &'static str,
+        /// An ask's choice of a scope for the session: `{scope}`, drawn in bold where it stands.
+        allow_scope: &'static str,
+        /// An ask's last choice.
+        refuse: &'static str,
+        /// Rows of a long target left out: `{n}`.
+        more_rows: &'static str,
+        /// The search found nothing.
+        no_match: &'static str,
+        /// The search's match shown: `{at}` of `{count}`.
+        match_of: &'static str,
+        /// The search's matches: `{count}`.
+        matches: &'static str,
+        /// Before the search's query.
+        search_label: &'static str,
+        /// The footer's count while the screen holds still: `{n}` seconds.
+        working_secs: &'static str,
+        /// The footer while the input is a `!!` command.
+        hint_shell_alone: &'static str,
+        /// The footer while the input is a `!` command.
+        hint_shell: &'static str,
+        /// The footer while the search is open.
+        hint_search: &'static str,
+        /// The footer while the plan waits for the owner's word.
+        hint_plan: &'static str,
+        /// The footer while an ask with scopes is open: `{keys}` their keys.
+        hint_ask_scopes: &'static str,
+        /// The footer while an ask without scopes is open.
+        hint_ask: &'static str,
+        /// The footer in the reading mode.
+        hint_reading: &'static str,
+        /// The footer over a view only to read.
+        hint_scroll: &'static str,
+        /// The footer over a subagent's own stream.
+        hint_agent: &'static str,
+        /// The footer while a list is open.
+        hint_picker: &'static str,
+        /// The footer while Glut works.
+        hint_working: &'static str,
+        /// The footer while Glut rests.
+        hint_usual: &'static str,
+        /// A pane without the keys whose session asks.
+        hint_other_asks: &'static str,
+        /// The Agents tab's heading of the agents in the background.
+        in_background: &'static str,
+        /// Under the agents in the background.
+        background_keys: &'static str,
+        /// The Agents tab with no subagent yet.
+        no_subagent: &'static str,
+        /// The project's to-dos cannot be read: `{name}` the file, `{fault}` why.
+        todos_unreadable: &'static str,
+        /// The project's to-dos file holds none: `{name}` the file.
+        todos_nothing: &'static str,
+        /// The project has no to-dos file yet: `{name}` the file.
+        todos_none: &'static str,
+        /// The Plan tab with no plan and no task list.
+        no_plan: &'static str,
+        /// The task list's count: `{done}` of `{all}`.
+        done_of: &'static str,
+        /// The panel's keys with its focus: the tabs.
+        keys_tabs: &'static str,
+        /// The panel's keys in the Agents list.
+        keys_agents: &'static str,
+        /// The panel's keys in the To-dos list.
+        keys_todos: &'static str,
+        /// The panel's keys with its focus elsewhere.
+        keys_focus: &'static str,
+        /// The shown tab's key: `{key}`.
+        key_hides: &'static str,
+        /// The frame of the command suggestions.
+        commands_title: &'static str,
+        /// The frame of the Keys sheet over the stream.
+        keys_title: &'static str,
+        /// A model list filtered to the free ones.
+        free_only: &'static str,
+        /// A model list's bottom line: `{sort}` how it is sorted, `{free}` the filter or nothing.
+        sorted_by: &'static str,
+        /// A list entry that cannot be used here: `{detail}` what it says.
+        not_usable: &'static str,
+        /// A list where nothing fits what was typed.
+        nothing_matches: &'static str,
+        /// The side panel's tabs: Plan, Gate, Meter, Agents, To-dos, Keys — in this order.
+        tab_names: &'static [&'static str],
+        /// The Meter tab's heading of the context window.
+        meter_context: &'static str,
+        /// How full the window is: `{used}` of `{size}`, `{share}` percent.
+        meter_of: &'static str,
+        /// Where the session compacts itself: `{at}` tokens.
+        meter_compacts_at: &'static str,
+        /// The session compacts only when told.
+        meter_compacts_manual: &'static str,
+        /// Where the window's size came from: `{source}`.
+        meter_window: &'static str,
+        /// A window size the owner set in Glut.
+        window_set_here: &'static str,
+        /// A window size from the provider's model list.
+        window_from_list: &'static str,
+        /// Tokens used where the window is unknown: `{used}`.
+        meter_used: &'static str,
+        /// The window's size is unknown.
+        meter_window_unknown: &'static str,
+        /// The Meter tab's heading of the session's totals.
+        meter_session: &'static str,
+        /// The session's tokens: `{input}` in, `{cached}` cached, `{output}` out.
+        meter_in_out: &'static str,
+        /// The session's cost: `{cost}`.
+        meter_price: &'static str,
+        /// No price for the model.
+        meter_no_price: &'static str,
+        /// The effort the model runs at: `{effort}`.
+        meter_effort: &'static str,
+        /// The run's budget: `{budget}`.
+        meter_budget: &'static str,
+        /// Glut lean spared nothing yet.
+        meter_lean_none: &'static str,
+        /// What Glut lean spared this session: `{chars}` characters, `{calls}` calls, `{share}` percent.
+        meter_lean_session: &'static str,
+        /// What Glut lean spared over every run: `{chars}`, `{calls}`.
+        meter_lean_all: &'static str,
+        /// The Meter tab's heading of the turns.
+        meter_turns: &'static str,
+        /// No turn yet.
+        meter_none_yet: &'static str,
+        /// One turn's tokens: `{input}`, `{output}`, `{cost}` its cost or nothing.
+        meter_turn_in_out: &'static str,
+        /// One turn's cache, calls and tools: `{cached}`, `{calls}`, `{tools}`.
+        meter_turn_detail: &'static str,
+        /// How long the first token took: `{secs}` seconds.
+        meter_first_token: &'static str,
+        /// The Meter tab's heading of the tools.
+        meter_tools: &'static str,
+        /// No tool called yet.
+        meter_none_called: &'static str,
+        /// Calls of a tool that failed: `{n}`.
+        meter_failed: &'static str,
+        /// Entries of a list beyond those shown: `{n}`.
+        more_listed: &'static str,
+        /// The Gate tab: commands run in the sandbox.
+        gate_sandbox_on: &'static str,
+        /// The Gate tab: the system has no sandbox.
+        gate_sandbox_none: &'static str,
+        /// The Gate tab: the sandbox is off.
+        gate_sandbox_off: &'static str,
+        /// The Gate tab: the mode, `{mode}` its name.
+        gate_mode: &'static str,
+        /// The Gate tab: how many rules of each kind, `{allow}`, `{ask}`, `{deny}` — the kinds' own words stay.
+        gate_rules: &'static str,
+        /// The Gate tab: this turn's refusals, `{refused}` of `{total}`, the same call `{same}` of `{repeat}`.
+        gate_refused: &'static str,
+        /// The Gate tab's heading of the "always" answers.
+        gate_from_now: &'static str,
+        /// The Gate tab's heading of the hosts.
+        gate_network: &'static str,
+        /// The Gate tab with no host reached yet.
+        gate_no_hosts: &'static str,
+        /// A host reached `{reached}` times and refused `{refused}` times.
+        gate_host_refused: &'static str,
+        /// The Gate tab's heading of the judgements.
+        gate_judgements: &'static str,
+        /// The Gate tab with no call judged yet.
+        gate_no_judgements: &'static str,
+        /// The project's to-dos changed under Glut: `{name}` the file.
+        todos_changed: &'static str,
+        /// The project's to-dos cannot be written: `{name}`, `{fault}`.
+        todos_unwritable: &'static str,
+        /// A list scrolled to its top: `{below}` rows below.
+        rows_below: &'static str,
+        /// A list scrolled to its end: `{above}` rows above.
+        rows_above: &'static str,
+        /// A list scrolled between: `{above}` rows above, `{below}` below.
+        rows_around: &'static str,
+        /// What Space does to the done items shown.
+        todos_fold: &'static str,
+        /// What Space does to the done items folded.
+        todos_show: &'static str,
+        /// The done items' row: `{count}` of them, `{action}` what Space does.
+        todos_done: &'static str,
+        /// A path that is no plain file.
+        no_plain_file: &'static str,
+        /// A file over the limit: `{kb}` kilobytes.
+        larger_than_kb: &'static str,
+        /// A subagent's state: at work.
+        agent_running: &'static str,
+        /// A subagent's state: finished.
+        agent_done: &'static str,
+        /// A subagent's state: it failed or was stopped.
+        agent_stopped: &'static str,
+        /// A subagent's state: the gate refused it.
+        agent_refused: &'static str,
+        /// A subagent's view, at the first level.
+        subagent: &'static str,
+        /// A subagent's view below the first: `{depth}` its level.
+        subagent_level: &'static str,
+        /// A subagent's view's frame: `{level}`, `{task}`, `{state}`, `{calls}`, `{input}` and `{output}` thousands of
+        /// tokens.
+        subagent_title: &'static str,
+        /// A subagent's view before it has done anything.
+        subagent_starting: &'static str,
+        /// A subagent's view of a session opened again.
+        subagent_not_kept: &'static str,
+        /// A subagent's view's keys.
+        subagent_keys: &'static str,
+        /// A subagent's view's keys, after its own subagents by number.
+        subagent_keys_nested: &'static str,
+        /// What a subagent spent: `{calls}`, `{tokens}`, `{model}` its model or nothing.
+        agent_spent: &'static str,
+        /// The plan waits for the owner.
+        plan_waiting: &'static str,
+        /// The plan approved: `{mode}` the mode it runs in.
+        plan_approved: &'static str,
+        /// The plan sent back: `{note}` the owner's note.
+        plan_sent_back_note: &'static str,
+        /// The plan sent back without a note.
+        plan_sent_back: &'static str,
+        /// The plan left undecided.
+        plan_dropped: &'static str,
+        /// The plan handed to another pane: `{pane}`.
+        plan_handed: &'static str,
+        /// The heading of the plan's task list.
+        task_list: &'static str,
+        /// Above the note that sends a plan back.
+        plan_why: &'static str,
+        /// The plan dialog's choice to approve it.
+        plan_approve: &'static str,
+        /// A mode offered while no sandbox guards it: `{mode}`.
+        plan_no_sandbox: &'static str,
+        /// The plan dialog's choice to build in another pane: `{pane}`.
+        plan_build_in: &'static str,
+        /// The plan dialog's choice to send it back with a note.
+        plan_send_back_note: &'static str,
+        /// The plan dialog's choice to send it back.
+        plan_send_back: &'static str,
+        /// Under the plan dialog's choices: `{mode}` the mode it runs in once approved.
+        plan_carries_out: &'static str,
+        /// The keys of a view only to read, after its state.
+        hint_scroll_short: &'static str,
+        /// The plan's rows beyond the Plan tab's: `{n}`.
+        plan_more_lines: &'static str,
+        /// A file in the review whose name git quotes.
+        review_quoted_name: &'static str,
+        /// A binary file in the review.
+        review_binary: &'static str,
+        /// A change the diff cut short.
+        review_cut: &'static str,
+        /// A hunk header the review cannot read.
+        review_bad_header: &'static str,
+        /// A file whose mode alone changed.
+        review_mode_only: &'static str,
+        /// A hunk that cannot be put back: it holds bytes that are no text.
+        review_not_text: &'static str,
+        /// A hunk that cannot be put back: the file changed since.
+        review_changed_since: &'static str,
+        /// A review with no change in its scope.
+        review_nothing: &'static str,
+        /// A file the owner marked reviewed.
+        review_reviewed: &'static str,
+        /// A file the change created.
+        review_new: &'static str,
+        /// A file the change deleted.
+        review_gone: &'static str,
+        /// A hunk the owner accepted.
+        review_accepted: &'static str,
+        /// A hunk the owner commented on.
+        review_commented: &'static str,
+        /// A hunk's head: lines `{from}` to `{to}`.
+        review_lines: &'static str,
+        /// Before the reason a hunk is rejected.
+        review_why: &'static str,
+        /// Before a comment on a hunk.
+        review_comment: &'static str,
+        /// The review's keys.
+        review_keys: &'static str,
+        /// The side panel's tabs as the panel's key hints name them (`⌃B plan`), in `tab_names`' order.
+        tab_words: &'static [&'static str],
+        /// How a model list is sorted: by name, newest, cheapest, largest window — in this order.
+        sort_names: &'static [&'static str],
     }
 }
 
@@ -258,6 +584,16 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn every_language_names_each_tab_and_sort() {
+        for lang in Lang::ALL {
+            let texts = of(lang);
+            assert_eq!(texts.tab_names.len(), 6, "{}", lang.code());
+            assert_eq!(texts.tab_words.len(), 6, "{}", lang.code());
+            assert_eq!(texts.sort_names.len(), 4, "{}", lang.code());
         }
     }
 

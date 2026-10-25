@@ -126,13 +126,19 @@ impl Sort {
         }
     }
 
+    /// How it is said in the language read now (T48).
     pub fn label(self) -> &'static str {
-        match self {
-            Sort::Name => "name",
-            Sort::Newest => "newest",
-            Sort::Cheapest => "cheapest",
-            Sort::Largest => "largest window",
-        }
+        let at = match self {
+            Sort::Name => 0,
+            Sort::Newest => 1,
+            Sort::Cheapest => 2,
+            Sort::Largest => 3,
+        };
+        crate::texts::t()
+            .sort_names
+            .get(at)
+            .copied()
+            .unwrap_or_default()
     }
 }
 
