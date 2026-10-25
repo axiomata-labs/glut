@@ -15,8 +15,8 @@ use crate::host::{Host, Launch, Servers};
 use crate::session::{self, Report};
 use crate::transcript::Tone;
 
-/// The most panes on the screen (T36f): the main one and five beside it.
-pub const MOST: usize = 6;
+/// The most panes on the screen (T36f): the main one and six beside it, two rows of three.
+pub const MOST: usize = 7;
 /// How many messages models send each other without the owner's word before the next waits for it (T36c).
 pub const MOST_CHAIN: u32 = 6;
 /// How many messages one session's model may send to other panes (T36c).
@@ -37,7 +37,7 @@ pub const SHARE_MOST: u16 = 80;
 
 /// How the panes stand (T36f): the main one — the pane Glut started with, or the one `/swap` put there — on the left at
 /// full height, the others on the right in a grid of at most two rows: one at full height, two above each other, then
-/// 2+1, 2+2, 3+2.
+/// 2+1, 2+2, 3+2, 3+3.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Grid {
     /// The main pane, by its session's id.
@@ -2342,24 +2342,25 @@ mod tests {
         );
         add(&mut panes, 5);
         add(&mut panes, 6);
+        add(&mut panes, 7);
         assert_eq!(panes.visible(), MOST);
         press(&mut panes, KeyCode::Char('x'), KeyModifiers::CONTROL);
         press(&mut panes, KeyCode::Char('2'), KeyModifiers::NONE);
-        assert!(panes.building.is_none(), "at most six");
+        assert!(panes.building.is_none(), "at most seven");
         // Closing pane 2: the others move up in reading order.
         panes.focus(1);
         press(&mut panes, KeyCode::Char('x'), KeyModifiers::CONTROL);
         press(&mut panes, KeyCode::Char('0'), KeyModifiers::NONE);
-        assert_eq!(numbers_of(&panes), vec![1, 3, 4, 5, 6]);
-        assert_eq!(panes.grid.others, [3, 4, 5, 6]);
+        assert_eq!(numbers_of(&panes), vec![1, 3, 4, 5, 6, 7]);
+        assert_eq!(panes.grid.others, [3, 4, 5, 6, 7]);
         // The main pane is never closed; /swap puts another in its place, the keys staying where they are.
         panes.focus(0);
         press(&mut panes, KeyCode::Char('x'), KeyModifiers::CONTROL);
         press(&mut panes, KeyCode::Char('0'), KeyModifiers::NONE);
-        assert_eq!(panes.visible(), 5, "the main pane stays");
+        assert_eq!(panes.visible(), 6, "the main pane stays");
         panes.active().pane_request = Some(Request::Swap(Some("4".into())));
         panes.settle(&(Arc::new(crate::Standalone) as Arc<dyn Host>));
-        assert_eq!(numbers_of(&panes), vec![4, 3, 1, 5, 6]);
+        assert_eq!(numbers_of(&panes), vec![4, 3, 1, 5, 6, 7]);
         assert_eq!(panes.list[panes.active].number, 1, "the keys stay");
     }
 
@@ -3411,8 +3412,8 @@ mod tests {
     #[test]
     fn the_grid_beside_the_main_pane_fills_two_rows_and_takes_one_out_evenly() {
         assert_eq!(
-            (1..=5).map(Grid::rows).collect::<Vec<_>>(),
-            [(1, 0), (1, 1), (2, 1), (2, 2), (3, 2)]
+            (1..=6).map(Grid::rows).collect::<Vec<_>>(),
+            [(1, 0), (1, 1), (2, 1), (2, 2), (3, 2), (3, 3)]
         );
         let mut grid = Grid::new(1);
         grid.others = vec![2, 3, 4, 5, 6];

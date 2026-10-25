@@ -108,7 +108,7 @@ impl Layout {
         self.panes.iter().filter(|kept| kept.agent.is_some())
     }
 
-    /// Whether the file says something Glut could have written: one to six panes on the screen, agents only behind
+    /// Whether the file says something Glut could have written: one to seven panes on the screen, agents only behind
     /// them and named as `/bg` names them, the first pane in the project's own folder, a share within its bounds,
     /// nothing twice, and plain names.
     fn sound(&self) -> bool {
@@ -252,7 +252,7 @@ mod tests {
         assert!(odd(|layout| layout.share = 95), "a share beyond its bounds");
         assert!(
             odd(|layout| {
-                for at in 0..6 {
+                for at in 0..7 {
                     layout.panes.insert(1, kept(&format!("p{at}"), None));
                 }
             }),

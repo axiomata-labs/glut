@@ -173,7 +173,7 @@ pub const COMMANDS: [Command; 43] = [
         Topic::Panes,
         "split",
         "[resume] [as <role>] [here|tree [branch]]",
-        "a new session beside the main pane (up to six in all); in a git repository here or in a worktree",
+        "a new session beside the main pane (up to six, two rows of three); in a git repository here or in a worktree",
     ),
     command(
         Topic::Panes,
