@@ -223,38 +223,6 @@ pub fn folder_of(typed: &str, home: &Path, cwd: &Path) -> Result<PathBuf, String
     Ok(folder)
 }
 
-/// The rest of the folder name a typed path begins, what ⇥ adds after `/projects ` — only where one folder fits.
-pub fn completion(typed: &str, home: &Path, cwd: &Path) -> Option<String> {
-    if typed.is_empty() {
-        return None;
-    }
-    let (parent, start) = match typed.rfind('/') {
-        Some(at) => (&typed[..=at], &typed[at + 1..]),
-        None => ("", typed),
-    };
-    // `~` is the home only as a path's first part, as [`folder_of`] reads it (`~foo` is a folder of that name).
-    let base = match parent.strip_prefix("~/") {
-        Some(rest) => home.join(rest),
-        None if parent.is_empty() => cwd.to_path_buf(),
-        None => cwd.join(parent),
-    };
-    let fitting: Vec<String> = std::fs::read_dir(&base)
-        .ok()?
-        .flatten()
-        .filter(|entry| entry.path().is_dir())
-        .filter_map(|entry| entry.file_name().into_string().ok())
-        .filter(|name| {
-            name.starts_with(start) && (start.starts_with('.') || !name.starts_with('.'))
-        })
-        // A name with control characters is no name to put into the input.
-        .filter(|name| !name.chars().any(char::is_control))
-        .collect();
-    match fitting.as_slice() {
-        [only] => Some(format!("{}/", &only[start.len()..])),
-        _ => None,
-    }
-}
-
 /// `folder` as the list writes it: the owner's home as `~`.
 pub fn shown_path(folder: &Path, home: &Path) -> String {
     match folder.strip_prefix(home) {
@@ -343,7 +311,7 @@ mod tests {
     }
 
     #[test]
-    fn a_typed_folder_is_a_folder_and_no_worktree_and_tab_completes_the_only_fit() {
+    fn a_typed_folder_is_a_folder_and_no_worktree() {
         let home = home("typed");
         let project = home.join("Development").join("Glut");
         std::fs::create_dir_all(&project).unwrap();
@@ -372,20 +340,6 @@ mod tests {
             folder_of("~/.glut/worktrees/x", &home, &home)
                 .unwrap_err()
                 .contains("worktrees")
-        );
-        assert_eq!(
-            completion("~/Dev", &home, &home).as_deref(),
-            Some("elopment/")
-        );
-        assert_eq!(completion("~/D", &home, &home), None, "two fit");
-        assert_eq!(
-            completion("", &home, &home),
-            None,
-            "nothing typed, nothing completed"
-        );
-        assert_eq!(
-            completion("~/Development/G", &home, &home).as_deref(),
-            Some("lut/")
         );
         assert_eq!(shown_path(&home.join("a/b"), &home), "~/a/b");
         let _ = std::fs::remove_dir_all(&home);

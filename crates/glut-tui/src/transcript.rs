@@ -1130,7 +1130,7 @@ pub fn clean(text: &str) -> String {
 }
 
 /// Bidi controls and zero-width characters: they make what is shown differ from what is there.
-fn hides(c: char) -> bool {
+pub(crate) fn hides(c: char) -> bool {
     matches!(
         c,
         '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{2069}' | '\u{feff}'

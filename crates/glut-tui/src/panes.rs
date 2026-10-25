@@ -553,6 +553,10 @@ pub struct Panes {
     pub links: Vec<crate::links::Spot>,
     /// The project Glut goes on in once this window ended (T44): the screen's loop ends, the layout kept.
     pub switch_to: Option<std::path::PathBuf>,
+    /// The window's focus and the notifications waiting to go out (T53).
+    pub notifier: crate::notify::Notifier,
+    /// What the environment says about the terminal, for the way a notification goes (T53).
+    pub notify_env: crate::notify::Env,
 }
 
 /// A kept layout coming back: the panes still to build, and each kept pane's session id once it stands.
@@ -586,7 +590,15 @@ impl Panes {
         let (built, built_inlet) = mpsc::unbounded_channel();
         forward(1, first, reports.clone());
         let cwd = app.parts.config.cwd.clone();
+        // Tests do not guess from the terminal they happen to run in.
+        let notify_env = if cfg!(test) {
+            crate::notify::Env::default()
+        } else {
+            crate::notify::Env::read()
+        };
         let panes = Panes {
+            notifier: crate::notify::Notifier::new(&notify_env),
+            notify_env,
             cwd,
             restoring: None,
             restore_next: None,
@@ -824,8 +836,90 @@ impl Panes {
             let _ = reply.send(self.tell(id, to, text));
             return;
         }
-        if let Some(pane) = self.list.iter_mut().find(|pane| pane.id == id) {
-            pane.app.on_report(report);
+        let Some(at) = self.list.iter().position(|pane| pane.id == id) else {
+            return;
+        };
+        let occasion = self.occasion(at, &report);
+        self.list[at].app.on_report(report);
+        if let Some((occasion, ran)) = occasion {
+            self.notice(at, &occasion, ran);
+        }
+    }
+
+    /// What `report` of the pane at `at` is for a notification (T53), and how long its turn has run: an ask, or the end
+    /// of a turn the owner did not stop.
+    fn occasion(&self, at: usize, report: &Report) -> Option<(crate::notify::Occasion, Duration)> {
+        let app = &self.list[at].app;
+        let ran = app
+            .working_since
+            .or(app.busy_since)
+            .map(|since| since.elapsed())
+            .unwrap_or_default();
+        let occasion = match report {
+            Report::Ask(request, _) => crate::notify::Occasion::Asks {
+                tool: request.tool.clone(),
+            },
+            Report::Done(outcome, _) if outcome.reason != glut::FinishReason::Cancelled => {
+                crate::notify::Occasion::Ended {
+                    ran,
+                    answered: outcome.reason == glut::FinishReason::Answered,
+                }
+            }
+            _ => return None,
+        };
+        Some((occasion, ran))
+    }
+
+    /// Tells the owner of `occasion` of the pane at `at` (T53): a message while the window is elsewhere, a toast in the
+    /// active pane when another one ends while the owner looks — an ask elsewhere shows in the footer already.
+    fn notice(&mut self, at: usize, occasion: &crate::notify::Occasion, ran: Duration) {
+        use glut::permissions::settings::NotifyWhen;
+        let choice = crate::notify::choice();
+        // A queued message started the next turn: the work is not done.
+        if !occasion.is_ask() && self.list[at].app.working() {
+            return;
+        }
+        let who = (self.list.len() > 1).then(|| {
+            let pane = &self.list[at];
+            match (&pane.name, pane.background) {
+                (Some(name), true) => name.clone(),
+                _ => tr!(pane_named, n = pane.number),
+            }
+        });
+        if self.notifier.focused == Some(true) {
+            let long = ran >= Duration::from_secs(u64::from(choice.after));
+            if choice.when != NotifyWhen::Off
+                && choice.when != NotifyWhen::Asks
+                && at != self.active
+                && !occasion.is_ask()
+                && long
+            {
+                let said = format!("{}: {}", who.unwrap_or_default(), occasion.said());
+                self.active().say(said);
+            }
+            return;
+        }
+        if crate::notify::worth_a_message(choice, self.notifier.focused, occasion, ran) {
+            self.notifier.push(who, occasion);
+        }
+    }
+
+    /// The window's project as a notification names it: its folder's name.
+    pub fn project_name(&self) -> String {
+        let project = &self.list[self.active].app.project;
+        project.file_name().map_or_else(
+            || project.display().to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        )
+    }
+
+    /// Sends what waits to be told, if it may go now (T53).
+    pub fn send_notifications(&mut self, out: &mut impl std::io::Write) {
+        let project = self.project_name();
+        if let Some(text) = self.notifier.take(&project, Instant::now()) {
+            let way = self.notify_env.way(crate::notify::choice().when);
+            // A terminal that cannot take the message takes no frame either: the loop says so on its next draw.
+            let _ = crate::notify::send(out, way, &text, self.notify_env.tmux);
         }
     }
 
@@ -892,6 +986,11 @@ impl Panes {
     /// A key, a paste or the mouse: the active pane's, but a click moves into the pane under it (the click itself
     /// goes nowhere) and the wheel goes to the pane under it.
     pub fn on_terminal(&mut self, event: TermEvent) {
+        // The window came to the front or went (T53): only notifications care.
+        if matches!(event, TermEvent::FocusGained | TermEvent::FocusLost) {
+            self.notifier.focus(event == TermEvent::FocusGained);
+            return;
+        }
         // A background agent's stream over the pane is only to read: Esc (or ⌃C) closes it, nothing else goes through.
         if self.peek.is_some() {
             if let TermEvent::Key(key) = &event
@@ -2463,6 +2562,63 @@ mod tests {
         panes.active().pane_request = Some(Request::SwitchNow(there.clone()));
         panes.settle(&host);
         assert_eq!(panes.switch_to, Some(there));
+    }
+
+    fn ended(reason: glut::FinishReason) -> Report {
+        Report::Done(
+            glut::RunOutcome {
+                reason,
+                answer: None,
+                turns: 1,
+                usage: glut::Usage::default(),
+                refusals: 0,
+                warm: None,
+            },
+            Vec::new(),
+        )
+    }
+
+    #[tokio::test]
+    async fn another_pane_ending_is_a_toast_while_the_owner_looks_and_a_notification_while_away() {
+        glut::lang::set_for_thread(Some(glut::lang::Lang::En));
+        let (mut panes, _inlets) = split();
+        panes.active = 0;
+        let other = panes.list[1].id;
+        let long_ago = Instant::now() - Duration::from_secs(20);
+        panes.notifier.focused = Some(true);
+        panes.list[1].app.working_for_tests();
+        panes.list[1].app.busy_since = Some(long_ago);
+        panes.on_report(other, ended(glut::FinishReason::Answered));
+        assert_eq!(panes.list[0].app.toast(), Some("pane 2: done after 20 s"));
+        assert_eq!(
+            panes.notifier.due(),
+            None,
+            "no message while the owner looks"
+        );
+        // The owner stopped it: nothing to tell.
+        panes.notifier.focused = Some(false);
+        panes.list[1].app.working_for_tests();
+        panes.list[1].app.busy_since = Some(long_ago);
+        panes.on_report(other, ended(glut::FinishReason::Cancelled));
+        assert_eq!(panes.notifier.due(), None);
+        // A short turn's end waits for no message either; a long one's does.
+        panes.list[1].app.working_for_tests();
+        panes.list[1].app.busy_since = Some(Instant::now());
+        panes.on_report(other, ended(glut::FinishReason::Answered));
+        assert_eq!(panes.notifier.due(), None);
+        panes.list[1].app.working_for_tests();
+        panes.list[1].app.busy_since = Some(long_ago);
+        panes.on_report(other, ended(glut::FinishReason::Failed));
+        assert!(panes.notifier.due().is_some());
+        let mut out = Vec::new();
+        panes.send_notifications(&mut out);
+        let sent = String::from_utf8(out).unwrap();
+        assert!(sent.ends_with('\x07'), "the bell: {sent:?}");
+        assert_eq!(panes.notifier.due(), None, "sent");
+        // A focus report from the terminal is the notifier's, no pane's key.
+        panes.on_terminal(TermEvent::FocusGained);
+        assert_eq!(panes.notifier.focused, Some(true));
+        glut::lang::set_for_thread(None);
     }
 
     #[tokio::test]

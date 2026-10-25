@@ -1527,6 +1527,8 @@ pub struct BuiltGate {
     pub parallel_subagents: u32,
     /// From how many bytes a project's guide is pointed out as too large (TUI T42), from `~/.glut/settings.json`.
     pub guide_warn_bytes: u64,
+    /// When the terminal UI tells the owner a turn ended or asks (TUI T53), from `~/.glut/settings.json`.
+    pub notify: settings::NotifySection,
 }
 
 impl BuiltGate {
@@ -1607,6 +1609,7 @@ pub fn build_gate(
         prices: loaded.prices,
         parallel_subagents: loaded.parallel_subagents,
         guide_warn_bytes: loaded.guide_warn_bytes,
+        notify: loaded.notify,
     })
 }
 
@@ -2320,6 +2323,7 @@ mod tests {
             prices: std::collections::HashMap::new(),
             parallel_subagents: crate::config::DEFAULT_PARALLEL_SUBAGENTS,
             guide_warn_bytes: u64::from(crate::config::DEFAULT_GUIDE_WARN_KB) * 1024,
+            notify: settings::NotifySection::default(),
         };
         let off = built(true, true, false).notes();
         assert_eq!(off.len(), 3, "{off:?}");

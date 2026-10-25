@@ -276,9 +276,36 @@ pub(crate) fn bounded(text: String, store: &ResultStore, max: usize) -> String {
     )
 }
 
+/// The whole text a result bounded by a store tagged `tag` stood for, read back from that store's folder `dir` — for an
+/// export that writes results out whole (TUI T54). `None`: `bounded` is whole, names another store, or its text is
+/// gone.
+pub fn whole_of(dir: &Path, tag: &str, bounded: &str) -> Option<String> {
+    // The note as `bounded` writes it, not only its id: a tool's own output naming an id is not taken for one.
+    let marker = format!("characters left out of the middle; `{NAME}` with id \"{tag}-");
+    let at = bounded.find(&marker)? + marker.len();
+    let number: usize = bounded[at..].split('"').next()?.parse().ok()?;
+    std::fs::read_to_string(text_path(dir, number)).ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_export_reads_a_bounded_results_whole_text_from_its_own_store_only() {
+        let dir = std::env::temp_dir().join(format!("glut-whole-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = ResultStore::persistent(StoreSpec {
+            dir: dir.clone(),
+            tag: "s1".into(),
+        });
+        let text: String = "x".repeat(50);
+        let shown = bounded(text.clone(), &store, 10);
+        assert_eq!(whole_of(&dir, "s1", &shown), Some(text));
+        assert_eq!(whole_of(&dir, "s2", &shown), None, "another store's note");
+        assert_eq!(whole_of(&dir, "s1", "short"), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn the_whole_text_comes_back_in_parts_and_only_from_this_run() {

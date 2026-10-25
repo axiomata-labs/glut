@@ -97,7 +97,7 @@ const fn command(
 }
 
 /// Every command, grouped by topic in [`Topic::ALL`]'s order, the most used first inside a topic.
-pub const COMMANDS: [Command; 44] = [
+pub const COMMANDS: [Command; 46] = [
     command(Topic::Session, "clear", "", "start a new session"),
     command(
         Topic::Session,
@@ -122,6 +122,13 @@ pub const COMMANDS: [Command; 44] = [
         "handoff",
         "write|read",
         "/handoff write: what was done and what comes next; /handoff read in a new session",
+    ),
+    command(
+        Topic::Session,
+        "export",
+        "[md|html|jsonl|copy] [full] [path]",
+        "write the session out to read or share: Markdown, one HTML file or JSON lines, into ~/.glut/exports or a \
+         path; copy puts the Markdown on the clipboard; full adds the whole results and the system prompt",
     ),
     command(Topic::Session, "quit", "", "end the session"),
     command(Topic::Session, "exit", "", "end the session, as /quit does"),
@@ -293,6 +300,13 @@ pub const COMMANDS: [Command; 44] = [
         "links",
         "clickable|plain",
         "a link's text is the link where the terminal speaks OSC 8, or the URL written after it",
+    ),
+    command(
+        Topic::Settings,
+        "notify",
+        "on|asks|off|system|after",
+        "tell me when a turn ends or asks while the window is elsewhere: on, asks only, off, macOS's own (system); \
+         /notify after <s>",
     ),
     command(
         Topic::Settings,
@@ -563,6 +577,27 @@ pub fn ghost(text: &str) -> Option<String> {
         return Some(command.args.to_owned());
     }
     completion(text)
+}
+
+/// Whether command `name` takes a path (T68: its arguments name `[path]`), what that place takes, and its fixed words
+/// (`/export`'s `html`, `full`), which a word they begin is completed to instead.
+pub fn takes_path(name: &str) -> Option<(crate::paths::Wants, Vec<&'static str>)> {
+    let command = COMMANDS.iter().find(|command| command.name == name)?;
+    if !command.args.contains("[path]") {
+        return None;
+    }
+    let fixed = command
+        .args
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|word| !word.is_empty() && *word != "path")
+        .collect();
+    // A project is a folder; every other place takes a file as well.
+    let wants = if name == "projects" {
+        crate::paths::Wants::Folders
+    } else {
+        crate::paths::Wants::Any
+    };
+    Some((wants, fixed))
 }
 
 /// The rest of the fixed word a typed command's argument begins (`/motion c` → `alm`), what ⇥ adds.

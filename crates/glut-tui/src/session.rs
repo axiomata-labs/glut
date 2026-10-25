@@ -187,6 +187,9 @@ pub struct Parts {
     pub guide_paths: Vec<PathBuf>,
     /// From how many bytes one of them is pointed out as too large (T42, the owner's `guide.warnAt`).
     pub guide_warn_bytes: u64,
+    /// When the owner is told a turn ended or asks (T53): the owner's `notify` in `~/.glut/settings.json`, the
+    /// second source after `/notify`.
+    pub notify: glut::permissions::settings::NotifySection,
     /// The skills `/skill` starts (T37c), by name with their description.
     pub skills: Vec<(String, String)>,
     /// The project's memory folder (T35), for `/memory`; a host's session has none.
@@ -319,6 +322,7 @@ pub async fn build(
     config.refusals = built.refusals;
     config.parallel_subagents = built.parallel_subagents;
     let guide_warn_bytes = built.guide_warn_bytes;
+    let notify = built.notify;
     config.snapshots = Some(home.join(".glut").join("snapshots"));
     config.savings = Some(home.join(".glut").join(glut::lean::FILE));
     host.configure(&mut config, &built);
@@ -417,6 +421,7 @@ pub async fn build(
         guide_chars,
         guide_paths,
         guide_warn_bytes,
+        notify,
         skills,
         memory,
         pane_link,
@@ -663,17 +668,27 @@ fn web_search() -> glut::tools::search::WebSearch {
     )
 }
 
+/// What a turn goes on from: the session it belongs to, by its id, and the conversation so far.
+pub struct Before {
+    pub session: String,
+    pub conversation: Vec<Message>,
+}
+
 /// Runs one turn in the background: `prompt` after `conversation` on `engine`, every step to the screen, the end as
 /// [`Report::Done`] — also when the turn panics, then with the conversation as it was before it.
 pub fn turn(
     parts: Arc<Parts>,
     engine: Engine,
-    conversation: Vec<Message>,
+    before: Before,
     input: TurnInput,
     cancel: Cancel,
     inbox: glut::Inbox,
     reports: mpsc::UnboundedSender<Report>,
 ) {
+    let Before {
+        session: session_id,
+        conversation,
+    } = before;
     let kept = conversation.clone();
     let host = Arc::clone(&parts.host);
     let asked = match &input {
@@ -688,6 +703,14 @@ pub fn turn(
             ..engine.config(&parts)
         };
         config.pane_tools = parts.pane_link.split();
+        // The whole texts of long results stay with the session (T54): a later turn reads them on, `/export full`
+        // writes them out. A host that keeps them elsewhere (an Axiomata chat) has set its own folder already.
+        if config.results.is_none() {
+            config.results = Some(glut::results::StoreSpec {
+                dir: crate::store::results_dir(&parts.home, &session_id),
+                tag: session_id,
+            });
+        }
         // T36c: the pane's role speaks after the guides, for every turn while it holds.
         if let Some((name, prompt)) = parts.pane_link.role() {
             let base = config.instructions.take().unwrap_or_default();
@@ -1209,6 +1232,7 @@ pub fn for_tests() -> (Parts, Engine) {
         guide_chars: 0,
         guide_paths: Vec::new(),
         guide_warn_bytes: u64::from(glut::config::DEFAULT_GUIDE_WARN_KB) * 1024,
+        notify: glut::permissions::settings::NotifySection::default(),
         skills: Vec::new(),
         memory: None,
         pane_link: Arc::new(crate::tell::Link::default()),

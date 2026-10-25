@@ -7,8 +7,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use crossterm::event::{
-    self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    self, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
+    EnableFocusChange, EnableMouseCapture, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
+    PushKeyboardEnhancementFlags,
 };
 use crossterm::terminal::{
     self, BeginSynchronizedUpdate, Clear, ClearType, EndSynchronizedUpdate, EnterAlternateScreen,
@@ -503,6 +504,10 @@ async fn run_loop(
                 .list
                 .iter()
                 .any(|pane| pane.app.working() || pane.app.toast().is_some());
+        // A notification gathering what comes in its five seconds goes once they are over (T53).
+        let notify_due = panes.notifier.due();
+        let notify_at =
+            tokio::time::Instant::from_std(notify_due.unwrap_or_else(std::time::Instant::now));
         tokio::select! {
             // A closed window or a kill ends the session cleanly: the turn stopped, the terminal given back.
             _ = terminate.recv() => panes.list.iter_mut().for_each(|pane| pane.app.abandon()),
@@ -539,9 +544,11 @@ async fn run_loop(
                 }
             }
             _ = second.tick(), if counting => {}
+            _ = tokio::time::sleep_until(notify_at), if notify_due.is_some() => {}
         }
         // What a pane asked for — a split, a close, the other pane — once its key or command is through.
         panes.settle(host);
+        panes.send_notifications(&mut io::stdout());
     }
 }
 
@@ -649,7 +656,9 @@ pub(crate) fn enter() -> io::Result<bool> {
         out,
         EnterAlternateScreen,
         EnableBracketedPaste,
-        EnableMouseCapture
+        EnableMouseCapture,
+        // The window's focus, for the notifications (T53): a terminal that has no reports ignores it.
+        EnableFocusChange
     )?;
     let enhanced = terminal::supports_keyboard_enhancement().unwrap_or(false);
     if enhanced {
@@ -670,6 +679,7 @@ pub(crate) fn leave(enhanced: bool) {
     let _ = execute!(
         out,
         DisableMouseCapture,
+        DisableFocusChange,
         DisableBracketedPaste,
         LeaveAlternateScreen,
         cursor::SetCursorStyle::DefaultUserShape,

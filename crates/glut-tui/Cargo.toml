@@ -26,7 +26,8 @@ serde.workspace = true
 chrono.workspace = true
 serde_json.workspace = true
 unicode-width.workspace = true
-pulldown-cmark.workspace = true
+# `html` for `/export`'s page (T54): its writer and escaping, one small crate of the same authors more.
+pulldown-cmark = { workspace = true, features = ["html"] }
 tree-sitter.workspace = true
 tree-sitter-highlight.workspace = true
 tree-sitter-rust.workspace = true

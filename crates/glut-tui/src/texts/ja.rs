@@ -41,6 +41,11 @@ pub const TEXTS: Texts = Texts {
             "handoff",
             "/handoff write: 済んだことと次にすること; 新しいセッションで /handoff read",
         ),
+        (
+            "export",
+            "セッションを読む・共有するために書き出す: Markdown、1 つの HTML ファイル、または JSON 行を ~/.glut/exports か指定のパスへ。copy は Markdown \
+             をクリップボードへ、full は結果全体とシステムプロンプトも含める",
+        ),
         ("quit", "セッションを終える"),
         ("exit", "セッションを終える（/quit と同じ）"),
         (
@@ -145,6 +150,10 @@ pub const TEXTS: Texts = Texts {
         (
             "links",
             "ターミナルが OSC 8 に対応すればリンクの文字がリンクに、そうでなければ後ろに URL",
+        ),
+        (
+            "notify",
+            "ウィンドウが前面にないとき、ターンの終了や確認待ちを知らせる: on、確認待ちのみ（asks）、off、macOS 経由（system）; /notify after <s>",
         ),
         (
             "motion",
@@ -611,7 +620,7 @@ pub const TEXTS: Texts = Texts {
     project_same: "すでにこのプロジェクトです",
     no_message: "メッセージなし",
     sessions_none: "セッション（このフォルダーにはまだ他のセッションはありません）",
-    sessions_title: "このフォルダーのセッション — ⑂ 分岐、● 現在、⌫ で削除",
+    sessions_title: "このフォルダーのセッション — ⑂ 分岐、● 現在、⌫ で削除、⌃E でエクスポート",
     as_it_stood: "前回の状態: {layout}",
     session_open_undeletable: "そのセッションは Pane で開いています — 削除できません",
     session_gone: "そのセッションはすでにありません",
@@ -921,6 +930,26 @@ pub const TEXTS: Texts = Texts {
     ],
     setup_provider_prompt: "プロバイダー:",
     cli: &[
+        (
+            "Write a session out to read or share: a session's id or file, or a run's id or journal; Markdown, HTML or \
+             JSON lines, on stdout unless --out names a new file",
+            "セッションを読む・共有するために書き出す: セッションの id かファイル、または実行の id かジャーナル。Markdown、HTML、JSON 行で、--out が新しいファイルを指定しない限り \
+             stdout へ",
+        ),
+        (
+            "A session's id or its file (~/.glut/sessions/<id>.json), or a run's id or journal \
+             (~/.glut/runs/<id>.jsonl)",
+            "セッションの id かそのファイル（~/.glut/sessions/<id>.json）、または実行の id かジャーナル（~/.glut/runs/<id>.jsonl）",
+        ),
+        ("md, html or jsonl", "md、html、jsonl のいずれか"),
+        (
+            "The whole results from the session's store and the system prompt too, not only what the model saw",
+            "モデルが見た内容だけでなく、セッションの保存領域にある結果全体とシステムプロンプトも含める",
+        ),
+        (
+            "A new file to write it to (never one that is there)",
+            "書き込む新しいファイル（既存のファイルには書きません）",
+        ),
         ("Glut, in the terminal", "Glut、ターミナルで"),
         (
             "The folder the session works in",
@@ -1234,4 +1263,37 @@ pub const TEXTS: Texts = Texts {
         one: "{n} 回の呼び出し",
         other: "{n} 回の呼び出し",
     },
+    notify_done: "{time}後に完了",
+    notify_ended: "{time}後に回答なしで終了",
+    notify_asks: "確認待ち: {what}",
+    notify_ask_command: "コマンドの実行",
+    notify_ask_file: "ファイルの変更",
+    notify_ask_network: "ネットワークへの接続",
+    notify_ask_mcp: "MCP ツールの使用",
+    notify_ask_agent: "エージェントの起動",
+    notify_ask_glut: "Glut のファイルの変更",
+    notify_ask_other: "{tool} の使用",
+    notify_secs: "{n} 秒",
+    notify_mins: "{n} 分",
+    notify_more: "ほか {n} 件",
+    notify_on: "通知: オン — ウィンドウが前面にないとき、ターンの終了と確認待ちを知らせます",
+    notify_asks_only: "通知: 確認待ちのみ",
+    notify_off: "通知: オフ",
+    notify_system: "通知: macOS 経由 — クリックするとターミナルではなくスクリプトエディタが開きます",
+    notify_after_set: "通知: ターンが {n} 秒以上続いたときに終了を知らせます",
+    notify_after_bad: "/notify after は秒数を取ります（0〜{most}）",
+    notify_now: "通知: {when}、ターン終了は {after} 秒後から、{way} 経由 — /notify on|asks|off|system、/notify after <s>",
+    export_owner: "あなた",
+    export_glut: "Glut",
+    export_thinking: "思考",
+    export_system: "システムプロンプト",
+    export_tool: "呼び出し: {name}",
+    export_result: "結果: {name}",
+    export_written: "{path} にエクスポートしました — 機密が含まれる場合があります: 共有する前に確認してください",
+    export_copied: "セッションを Markdown としてコピーしました — 機密が含まれる場合があります: 共有する前に確認してください",
+    export_empty: "まだエクスポートするものがありません: 最初のターンが終わっていません",
+    export_exists: "{path} は既にあります — 別のファイル名を指定してください",
+    export_unknown: "{what} というセッション、実行、ファイルはありません",
+    paths_title: "{folder} — ⇥ で補完、⏎ で選択、esc で閉じる",
+    paths_more: "… ほか {n} 件、続けて入力してください",
 };

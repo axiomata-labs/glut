@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use crossterm::event::{
     Event as TermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
 };
+use glut::permissions::settings::NotifyWhen;
 use glut::permissions::{Answer, AskRequest, Mode};
 use glut::providers::{Providers, models};
 use glut::{Cancel, Effort, Event, FinishReason, Message, Usage};
@@ -143,6 +144,14 @@ pub struct App {
     pub picker: Option<Picker>,
     /// The entry chosen in the list of commands a typed `/` shows.
     pub suggested: usize,
+    /// The names that fit the path being typed (T68), and the one chosen.
+    pub paths: Option<crate::paths::Listing>,
+    pub path_chosen: usize,
+    /// The owner picked in the path list with ↑↓: only then is ⏎ a pick — else it sends what is typed, a path at its
+    /// end and all.
+    path_picked: bool,
+    /// The input as it stood when Esc closed the path list or a file was taken: no list for it again.
+    paths_closed: Option<String>,
     /// The conversation between turns; taken while a turn runs.
     conversation: Vec<Message>,
     /// The session as it is kept (T25).
@@ -306,6 +315,8 @@ pub struct App {
     pub picture_view: Option<glut::images::Image>,
     /// Since when Glut works (TUI9b): what the footer counts while the screen holds still.
     pub busy_since: Option<Instant>,
+    /// Since when Glut has worked without a rest (T53): a chain of queued turns counts as one for a notification.
+    pub working_since: Option<Instant>,
     /// The state last seen (TUI9b): the reader mode says each change in a line of its own.
     seen_state: Option<State>,
     /// How many turns had started when the state was last seen: a queued message's turn begins with no rest between.
@@ -359,6 +370,7 @@ impl App {
             prefs.reader.unwrap_or(false),
         );
         crate::links::set(prefs.links);
+        crate::notify::set(prefs.notify, prefs.notify_after, parts.notify);
         crate::pictures::set_drawing(prefs.images);
         engine
             .model
@@ -413,6 +425,10 @@ impl App {
             input: Input::new(),
             picker: None,
             suggested: 0,
+            paths: None,
+            path_chosen: 0,
+            path_picked: false,
+            paths_closed: None,
             conversation: Vec::new(),
             session,
             todos: Vec::new(),
@@ -487,6 +503,7 @@ impl App {
             cache_seen: false,
             held_since: None,
             busy_since: None,
+            working_since: None,
             images_given: 0,
             attaching: 0,
             attaching_since: None,
@@ -613,6 +630,13 @@ impl App {
             State::Rests => self.busy_since = None,
             State::Asks => {}
         }
+        match now {
+            State::Rests => self.working_since = None,
+            _ if self.working_since.is_none() => {
+                self.working_since = self.busy_since.or(Some(Instant::now()))
+            }
+            _ => {}
+        }
         if next_turn && saying {
             return self.transcript.note(tr!(state_next_message), Tone::Quiet);
         }
@@ -675,6 +699,111 @@ impl App {
     pub fn say(&mut self, text: impl Into<String>) {
         // A toast may name a file the model made: cleaned like everything else drawn.
         self.toast = Some((crate::transcript::clean(&text.into()), Instant::now()));
+    }
+
+    /// `/export`: the session as it was saved after its last turn, into a new file or onto the clipboard (T54).
+    fn export_command(&mut self, rest: &str) {
+        let asked = crate::export::parse(rest);
+        if self.session.conversation.is_empty() {
+            return self.transcript.note(tr!(export_empty), Tone::Quiet);
+        }
+        let home = self.parts.home.clone();
+        let format = if asked.copy {
+            crate::export::Format::Markdown
+        } else {
+            asked.format
+        };
+        let text = crate::export::render(
+            &crate::export::of_session(&self.session, asked.full, &home),
+            format,
+        );
+        if asked.copy {
+            return match crate::select::copy(&text) {
+                Ok(_) => self.tell(tr!(export_copied)),
+                Err(reason) => self.transcript.note(reason, Tone::Fault),
+            };
+        }
+        let path = match &asked.path {
+            Some(typed) => crate::export::named_path(typed, &home, &self.parts.config.cwd),
+            None => {
+                crate::export::default_path(&home, &self.session.cwd, format, chrono::Local::now())
+            }
+        };
+        self.exported(crate::export::write(&path, &text, &home).map(|()| path));
+    }
+
+    /// What an export became, said where it stays.
+    fn exported(&mut self, written: Result<std::path::PathBuf, String>) {
+        match written {
+            Ok(path) => {
+                let shown = crate::projects::shown_path(&path, &self.parts.home);
+                self.tell(tr!(export_written, path = shown));
+            }
+            Err(reason) => self.transcript.note(reason, Tone::Fault),
+        }
+    }
+
+    /// `/resume`'s ⌃E: the chosen session written out as Markdown, into `~/.glut/exports` (T54).
+    fn export_listed(&mut self, id: &str) {
+        let home = self.parts.home.clone();
+        let session = if id == self.session.id {
+            Ok(self.session.clone())
+        } else {
+            Session::load(&home, id)
+        };
+        let written = session.and_then(|session| {
+            let format = crate::export::Format::Markdown;
+            let text =
+                crate::export::render(&crate::export::of_session(&session, false, &home), format);
+            let path =
+                crate::export::default_path(&home, &session.cwd, format, chrono::Local::now());
+            crate::export::write(&path, &text, &home).map(|()| path)
+        });
+        self.exported(written);
+    }
+
+    /// `/notify`: when the owner is told a turn ended or asks (T53), or — alone — what holds now.
+    fn notify_command(&mut self, rest: &str) {
+        let home = self.parts.home.clone();
+        let kept = Prefs::load(&home);
+        if let Some(secs) = rest.strip_prefix("after") {
+            let Some(secs) = secs
+                .trim()
+                .parse::<u32>()
+                .ok()
+                .filter(|secs| *secs <= crate::notify::MAX_AFTER)
+            else {
+                let most = crate::notify::MAX_AFTER;
+                return self
+                    .transcript
+                    .note(tr!(notify_after_bad, most = most), Tone::Fault);
+            };
+            crate::notify::set(kept.notify, Some(secs), self.parts.notify);
+            return match prefs::set_notify_after(&home, secs) {
+                Ok(()) => self.say(tr!(notify_after_set, n = secs)),
+                Err(reason) => self.transcript.note(reason, Tone::Fault),
+            };
+        }
+        let Some(when) = crate::notify::parse(rest) else {
+            let choice = crate::notify::choice();
+            let way = crate::notify::Env::read().way(choice.when);
+            return self.tell(tr!(
+                notify_now,
+                when = crate::notify::word(choice.when),
+                after = choice.after,
+                way = way.label()
+            ));
+        };
+        crate::notify::set(Some(when), kept.notify_after, self.parts.notify);
+        match prefs::set_notify(&home, when) {
+            Ok(()) => self.say(match when {
+                NotifyWhen::On => tr!(notify_on),
+                NotifyWhen::Asks => tr!(notify_asks_only),
+                NotifyWhen::Off => tr!(notify_off),
+                NotifyWhen::System => tr!(notify_system),
+            }),
+            Err(reason) => self.transcript.note(reason, Tone::Fault),
+        }
     }
 
     /// A quiet line in the stream that stays, where a toast would pass: what happened to a pane (T36a).
@@ -780,7 +909,10 @@ impl App {
         session::turn(
             Arc::clone(&self.parts),
             self.engine.clone(),
-            std::mem::take(&mut self.conversation),
+            session::Before {
+                session: self.session.id.clone(),
+                conversation: std::mem::take(&mut self.conversation),
+            },
             session::TurnInput::Message(prompt, images),
             cancel,
             inbox,
@@ -805,7 +937,10 @@ impl App {
         session::turn(
             Arc::clone(&self.parts),
             self.engine.clone(),
-            std::mem::take(&mut self.conversation),
+            session::Before {
+                session: self.session.id.clone(),
+                conversation: std::mem::take(&mut self.conversation),
+            },
             session::TurnInput::Resume(run),
             cancel,
             inbox,
@@ -1295,6 +1430,7 @@ impl App {
             TermEvent::Key(key) if key.kind != KeyEventKind::Release => {
                 self.on_key(key);
                 self.settle_model_pick();
+                self.refresh_paths();
             }
             // The reading mode and the panel's focus type nothing, a paste neither (TUI9a).
             TermEvent::Paste(text)
@@ -1317,6 +1453,7 @@ impl App {
                             Some(paths) => self.attach_files(&paths),
                             None => self.input.paste(&text),
                         }
+                        self.refresh_paths();
                     }
                 }
             }
@@ -1526,6 +1663,47 @@ impl App {
                 _ => {}
             }
         }
+        // The path list (T68): ↑↓ pick, ⇥ completes as far as only one fits (else takes), ⏎ takes what ↑↓ picked,
+        // Esc closes.
+        if let Some(listing) = &self.paths
+            && !self.chord
+            && self.picker.is_none()
+            && self.ask.is_none()
+        {
+            let last = listing.entries.len() - 1;
+            let chosen = self.path_chosen.min(last);
+            match key.code {
+                KeyCode::Up if !shift && !ctrl && !alt => {
+                    self.path_picked = true;
+                    return self.path_chosen = chosen.saturating_sub(1);
+                }
+                KeyCode::Down if !shift && !ctrl && !alt => {
+                    self.path_picked = true;
+                    return self.path_chosen = (chosen + 1).min(last);
+                }
+                KeyCode::Tab => {
+                    let start = listing.start.clone();
+                    return match listing.common() {
+                        Some(common) if listing.entries.len() > 1 => {
+                            self.replace_path_start(&start, &common)
+                        }
+                        _ => self.take_path(chosen),
+                    };
+                }
+                KeyCode::Enter if !shift && !alt && self.path_picked => {
+                    return self.take_path(chosen);
+                }
+                // While Glut works, Esc stops the turn as ever; the list goes with the text it stood for.
+                KeyCode::Esc => {
+                    self.paths_closed = Some(self.input.text());
+                    self.paths = None;
+                    if !self.working() {
+                        return;
+                    }
+                }
+                _ => {}
+            }
+        }
         if self.picker.is_some() {
             self.chord = false;
         }
@@ -1648,12 +1826,7 @@ impl App {
             // A command's word half typed: ⇥ completes it (`/motion c` → `/motion calm`).
             KeyCode::Tab if self.input.at_end() => {
                 let text = self.input.text();
-                let completed = match text.strip_prefix("/projects ") {
-                    Some(typed) if self.parts.projects && !typed.contains('\n') => {
-                        crate::projects::completion(typed, &self.parts.home, &self.parts.config.cwd)
-                    }
-                    _ => crate::commands::completion(&text),
-                };
+                let completed = crate::commands::completion(&text);
                 match completed {
                     Some(rest) => self.input.insert_text(&rest),
                     None if self.working() => self.queue_next(),
@@ -1667,6 +1840,69 @@ impl App {
                 self.suggested = 0;
             }
             _ => {}
+        }
+    }
+
+    /// The names that fit the path at the input's end (T68), read anew after every key — only while the input has
+    /// the keys and no command list is up.
+    fn refresh_paths(&mut self) {
+        let text = self.input.text();
+        let free = self.picker.is_none()
+            && self.ask.is_none()
+            && self.search.is_none()
+            && self.reading.is_none()
+            && !self.panel_focus
+            && self.input.at_end()
+            && self.suggestions().is_empty()
+            && self.paths_closed.as_deref() != Some(text.as_str());
+        let projects = self.parts.projects;
+        let listing = free
+            .then(|| {
+                crate::paths::typed(&text, |name| {
+                    (name != "projects" || projects)
+                        .then(|| crate::commands::takes_path(name))
+                        .flatten()
+                })
+            })
+            .flatten()
+            .and_then(|typed| crate::paths::list(typed, &self.parts.home, &self.parts.config.cwd));
+        // The same folder and start keep the owner's place in the list.
+        let same = matches!(
+            (&self.paths, &listing),
+            (Some(old), Some(new)) if old.folder == new.folder && old.start == new.start
+        );
+        if !same {
+            self.path_chosen = 0;
+            self.path_picked = false;
+        }
+        if self.paths_closed.as_deref() != Some(text.as_str()) {
+            self.paths_closed = None;
+        }
+        self.paths = listing;
+    }
+
+    /// The typed start of the path's last name replaced by `name`.
+    fn replace_path_start(&mut self, start: &str, name: &str) {
+        for _ in start.chars() {
+            self.input.backspace();
+        }
+        self.input.insert_text(name);
+    }
+
+    /// Takes the name chosen in the path list: a folder with its `/`, the list going on in it; a file ends the list.
+    fn take_path(&mut self, chosen: usize) {
+        let Some(listing) = self.paths.take() else {
+            return;
+        };
+        let entry = &listing.entries[chosen.min(listing.entries.len() - 1)];
+        let name = if entry.dir {
+            format!("{}/", entry.name)
+        } else {
+            entry.name.clone()
+        };
+        self.replace_path_start(&listing.start, &name);
+        if !entry.dir {
+            self.paths_closed = Some(self.input.text());
         }
     }
 
@@ -2168,6 +2404,8 @@ impl App {
                     self.tell(tr!(motion_now, motion = now.label(), still = still));
                 }
             },
+            "notify" => self.notify_command(rest),
+            "export" => self.export_command(rest),
             "links" => match crate::links::Links::parse(rest) {
                 Some(links) => {
                     crate::links::set(Some(links));
@@ -3924,6 +4162,13 @@ impl App {
                 }
             }
             KeyCode::Char('s') if ctrl => picker.next_sort(),
+            // `/resume`'s ⌃E: the chosen session exported (T54) — a letter alone filters the list.
+            KeyCode::Char('e') if ctrl && matches!(picker.chosen(), Some(Pick::Session(_))) => {
+                if let Some(Pick::Session(id)) = picker.chosen() {
+                    self.picker = None;
+                    self.export_listed(&id);
+                }
+            }
             KeyCode::Char('f') if ctrl => picker.toggle_free(),
             KeyCode::Up => picker.up(),
             KeyCode::Down | KeyCode::Tab => picker.down(),
@@ -7837,6 +8082,73 @@ pub(crate) mod tests {
             !app.parts.home.join(".glut").join("sessions").exists(),
             "a hosted session is not kept under ~/.glut"
         );
+    }
+
+    #[tokio::test]
+    async fn a_path_typed_lists_its_folder_tab_completes_enter_takes_and_a_file_ends_the_list() {
+        let root = std::env::temp_dir().join(format!("glut-app-paths-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("crates/glut")).unwrap();
+        std::fs::create_dir_all(root.join("crates/glut-tui")).unwrap();
+        std::fs::write(root.join("Cargo.toml"), "").unwrap();
+        let mut app = app_in(&root, &[], &root);
+        let typing = |app: &mut App, text: &str| {
+            for c in text.chars() {
+                app.on_terminal(key(KeyCode::Char(c), KeyModifiers::NONE));
+            }
+        };
+        typing(&mut app, "look at ./cr");
+        let listing = app.paths.clone().expect("a list");
+        assert_eq!(listing.entries.len(), 1);
+        app.on_terminal(key(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(
+            app.input.text(),
+            "look at ./crates/",
+            "the only one, with its slash"
+        );
+        assert_eq!(
+            app.paths.as_ref().map(|listing| listing.entries.len()),
+            Some(2),
+            "the list goes on in it"
+        );
+        app.on_terminal(key(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(
+            app.input.text(),
+            "look at ./crates/glut",
+            "as far as both fit"
+        );
+        app.on_terminal(key(KeyCode::Down, KeyModifiers::NONE));
+        app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(
+            app.input.text(),
+            "look at ./crates/glut-tui/",
+            "Enter takes the chosen one, not sends"
+        );
+        assert!(app.paths.is_none(), "an empty folder lists nothing");
+        // A file taken ends the list; Enter without a pick sends what is typed.
+        app.input.clear();
+        typing(&mut app, "see ./Car");
+        app.on_terminal(key(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(app.input.text(), "see ./Cargo.toml");
+        assert!(app.paths.is_none());
+        app.input.clear();
+        typing(&mut app, "see ./crates/glu");
+        assert!(app.paths.is_some());
+        app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.input.is_empty(), "sent, no pick taken");
+        if let Some(cancel) = &app.running {
+            cancel.cancel();
+        }
+        // Esc closes the list for what stands; typing on opens it again.
+        app.input.clear();
+        typing(&mut app, "/projects ./c");
+        assert!(app.paths.is_some(), "a command that takes a path");
+        app.on_terminal(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.paths.is_none());
+        assert_eq!(app.input.text(), "/projects ./c", "Esc kept the input");
+        typing(&mut app, "r");
+        assert!(app.paths.is_some());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// An app working in `cwd` that read `guides`, keeping its prefs in `home`.

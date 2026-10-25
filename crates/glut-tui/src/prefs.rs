@@ -64,6 +64,12 @@ pub struct Prefs {
     /// How links are shown (TUI9d, `/links`); `None`: clickable where the terminal speaks OSC 8.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub links: Option<crate::links::Links>,
+    /// When the owner is told a turn ended or asks (T53, `/notify`); `None`: `notify.when` of the settings, else on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notify: Option<glut::permissions::settings::NotifyWhen>,
+    /// How many seconds a turn must have run before its end is told (T53, `/notify after`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notify_after: Option<u32>,
     /// How much the screen moves (TUI9b, `/motion`); `None`: fully.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub motion: Option<crate::motion::Motion>,
@@ -243,6 +249,31 @@ pub fn set_images(home: &Path, drawing: crate::pictures::Drawing) -> Result<(), 
 pub fn set_links(home: &Path, links: crate::links::Links) -> Result<(), String> {
     let mut prefs = Prefs::read(home)?;
     prefs.links = Some(links);
+    prefs.save(home)
+}
+
+/// Keeps when the owner is told (`/notify`).
+///
+/// # Errors
+///
+/// A message when the file cannot be read (it is not written over) or written.
+pub fn set_notify(
+    home: &Path,
+    when: glut::permissions::settings::NotifyWhen,
+) -> Result<(), String> {
+    let mut prefs = Prefs::read(home)?;
+    prefs.notify = Some(when);
+    prefs.save(home)
+}
+
+/// Keeps after how many seconds a turn's end is told (`/notify after`).
+///
+/// # Errors
+///
+/// A message when the file cannot be read (it is not written over) or written.
+pub fn set_notify_after(home: &Path, secs: u32) -> Result<(), String> {
+    let mut prefs = Prefs::read(home)?;
+    prefs.notify_after = Some(secs);
     prefs.save(home)
 }
 

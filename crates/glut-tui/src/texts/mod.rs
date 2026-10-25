@@ -1356,6 +1356,72 @@ glut::catalog! {
         tile_opens: &'static str,
         /// A subagent's calls: `{n}`.
         agent_calls: Plural,
+        /// A turn ended with an answer, in a notification (T53): `{time}` how long it ran.
+        notify_done: &'static str,
+        /// A turn ended without an answer (an error, refusals, the budget): `{time}`.
+        notify_ended: &'static str,
+        /// The gate asks, in a notification: `{what}` the kind of call.
+        notify_asks: &'static str,
+        /// An ask's kind: a shell command.
+        notify_ask_command: &'static str,
+        /// An ask's kind: a change of a file.
+        notify_ask_file: &'static str,
+        /// An ask's kind: the network.
+        notify_ask_network: &'static str,
+        /// An ask's kind: an MCP tool.
+        notify_ask_mcp: &'static str,
+        /// An ask's kind: a subagent.
+        notify_ask_agent: &'static str,
+        /// An ask's kind: the memory or Glut's own files.
+        notify_ask_glut: &'static str,
+        /// An ask's kind: another tool, `{tool}` its name.
+        notify_ask_other: &'static str,
+        /// How long a turn ran: `{n}` seconds.
+        notify_secs: &'static str,
+        /// How long a turn ran: `{n}` minutes.
+        notify_mins: &'static str,
+        /// A notification names a few; `{n}` more.
+        notify_more: &'static str,
+        /// `/notify on`.
+        notify_on: &'static str,
+        /// `/notify asks`.
+        notify_asks_only: &'static str,
+        /// `/notify off`.
+        notify_off: &'static str,
+        /// `/notify system`.
+        notify_system: &'static str,
+        /// `/notify after`: `{n}` seconds.
+        notify_after_set: &'static str,
+        /// `/notify after` without seconds it takes: `{most}` the most.
+        notify_after_bad: &'static str,
+        /// `/notify` alone: `{when}` the choice, `{after}` the seconds, `{way}` how it goes out.
+        notify_now: &'static str,
+        /// An export's heading of the owner's messages (T54).
+        export_owner: &'static str,
+        /// An export's heading of the model's answers.
+        export_glut: &'static str,
+        /// An export's heading of the model's thinking.
+        export_thinking: &'static str,
+        /// An export's heading of the system prompt.
+        export_system: &'static str,
+        /// An export's line before a call: `{name}` the tool.
+        export_tool: &'static str,
+        /// An export's line before a result: `{name}` the tool.
+        export_result: &'static str,
+        /// `/export` wrote a file: `{path}`.
+        export_written: &'static str,
+        /// `/export copy` put the Markdown on the clipboard.
+        export_copied: &'static str,
+        /// `/export` before the first turn ended.
+        export_empty: &'static str,
+        /// `/export`'s file is there already: `{path}`.
+        export_exists: &'static str,
+        /// `glut export` found nothing by the name: `{what}`.
+        export_unknown: &'static str,
+        /// The path list's frame (T68): `{folder}` the folder read.
+        paths_title: &'static str,
+        /// The path list names the first; `{n}` more fit.
+        paths_more: &'static str,
     }
 }
 

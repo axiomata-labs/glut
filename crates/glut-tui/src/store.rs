@@ -15,6 +15,8 @@ use crate::transcript::{Kind, Transcript};
 
 /// The folder of the sessions, below `~/.glut`.
 const DIR: &str = "sessions";
+/// The folder of the sessions' long results (T54), below `~/.glut`: one folder per session, by its id.
+const RESULTS_DIR: &str = "results";
 /// The most sessions a list shows.
 const LISTED: usize = 50;
 /// A session file larger than this is not read. Measured (TUI9f): 10,000 steps whose every tenth result is as long
@@ -194,6 +196,8 @@ impl Session {
         let session = Self::load(home, id)?;
         let path = Self::dir(home).join(format!("{id}.json"));
         std::fs::remove_file(&path).map_err(|err| format!("{}: {err}", path.display()))?;
+        // Its long results' whole texts go with it (T54); best effort, a folder left is only space.
+        let _ = std::fs::remove_dir_all(results_dir(home, id));
         // A session that cannot be read may hold any image: then none goes.
         let files = std::fs::read_dir(Self::dir(home))
             .map(|entries| {
@@ -344,7 +348,7 @@ fn head_of(text: &str) -> Option<Head> {
     })
 }
 
-fn read(path: &Path) -> Result<Session, String> {
+pub(crate) fn read(path: &Path) -> Result<Session, String> {
     let file = glut::providers::open_no_follow(path).map_err(|err| match err.kind() {
         std::io::ErrorKind::NotFound => "no such session".to_owned(),
         _ => format!("{}: {err}", path.display()),
@@ -380,6 +384,18 @@ pub fn title_of(text: &str) -> String {
     let mut short: String = line.chars().take(TITLE_CHARS - 1).collect();
     short.push('…');
     short
+}
+
+/// Where session `id` keeps the whole texts of its long results (T54): what `read_full_result` reads in a later turn
+/// and `/export full` writes out.
+pub fn results_dir(home: &Path, id: &str) -> PathBuf {
+    // An id read from inside a file need not be its name: only one that can be a name picks a folder.
+    let id = if !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        id
+    } else {
+        "unnamed"
+    };
+    home.join(glut::providers::DIR).join(RESULTS_DIR).join(id)
 }
 
 #[cfg(test)]

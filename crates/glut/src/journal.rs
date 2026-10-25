@@ -222,6 +222,19 @@ pub fn open(dir: &Path, run: &str) -> Result<(Journal, Recorded), String> {
     Ok((Journal { file, path }, recorded))
 }
 
+/// Reads the journal of `run` without taking it over: no lock, nothing mended — for an export (TUI T54), which may
+/// read a run still going.
+///
+/// # Errors
+///
+/// No such journal, or one that cannot be read.
+pub fn read_back(dir: &Path, run: &str) -> Result<Recorded, String> {
+    let path = path_of(dir, run)?;
+    let file = open_existing(&path, false).map_err(|err| format!("no run {run}: {err}"))?;
+    let (recorded, _) = read(&file, &path)?;
+    Ok(recorded)
+}
+
 /// Opens a journal that is there: never through a link, never a pipe or a device that would block or never end, and
 /// only one of this user's — the folder is the owner's alone, but a process outside the sandbox could still plant one.
 fn open_existing(path: &Path, append: bool) -> Result<File, String> {

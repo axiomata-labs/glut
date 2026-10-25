@@ -104,7 +104,39 @@ struct File {
     /// only.
     #[serde(default)]
     guide: Option<GuideSection>,
+    /// When the terminal UI tells the owner a turn ended or asks (TUI T53): `{"when": "asks", "after": 20}`. The
+    /// owner's only.
+    #[serde(default)]
+    notify: Option<NotifySection>,
 }
+
+/// The `notify` section (TUI T53): the second source after what `/notify` kept.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NotifySection {
+    #[serde(default)]
+    pub when: Option<NotifyWhen>,
+    /// The seconds a turn must have run before its end is told.
+    #[serde(default)]
+    pub after: Option<u32>,
+}
+
+/// When the terminal UI tells the owner (TUI T53).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NotifyWhen {
+    /// A turn's end and an ask, through the terminal.
+    On,
+    /// Only an ask.
+    Asks,
+    /// Never.
+    Off,
+    /// As `on`, through macOS's own notifications instead of the terminal's (never over SSH).
+    System,
+}
+
+/// The most seconds `notify.after` may say: an hour.
+pub const MAX_NOTIFY_AFTER: u32 = 3600;
 
 /// The `guide` section (TUI T42).
 #[derive(Debug, Default, Clone, Copy, Deserialize)]
@@ -253,6 +285,8 @@ pub struct Settings {
     pub subagents: Option<SubagentsSection>,
     /// The `guide` section as written; only the owner's is read.
     pub guide: Option<GuideSection>,
+    /// The `notify` section as written (TUI T53); only the owner's is read.
+    pub notify: Option<NotifySection>,
 }
 
 /// Reads one settings file; a missing file says nothing.
@@ -377,6 +411,7 @@ fn settings_of(
         prices: file.prices,
         subagents: file.subagents,
         guide: file.guide,
+        notify: file.notify,
     })
 }
 
@@ -408,6 +443,8 @@ pub struct Loaded {
     /// From how many bytes a project's guide is pointed out as too large (T42): the owner's `guide.warnAt` in KB,
     /// else the default.
     pub guide_warn_bytes: u64,
+    /// The owner's `notify` section (TUI T53).
+    pub notify: NotifySection,
 }
 
 impl Loaded {
@@ -523,6 +560,13 @@ pub fn load(home: &Path, project: &Path, trusted: bool) -> Result<Loaded, Harnes
             });
         }
     };
+    let notify = user.notify.unwrap_or_default();
+    if let Some(after) = notify.after.filter(|after| *after > MAX_NOTIFY_AFTER) {
+        return Err(HarnessError::Settings {
+            path: owners.display().to_string(),
+            reason: format!("notify.after is {after}, from 0 to {MAX_NOTIFY_AFTER} (seconds)"),
+        });
+    }
     let ceiling = user.mode.unwrap_or_default().looseness();
     let owner = &user.sandbox;
     let mut sandbox = SandboxSettings {
@@ -561,6 +605,7 @@ pub fn load(home: &Path, project: &Path, trusted: bool) -> Result<Loaded, Harnes
         prices: user.prices,
         parallel_subagents,
         guide_warn_bytes: u64::from(guide_warn_kb) * 1024,
+        notify,
     };
     for file in project_files(project) {
         let settings = read(&file)?;
@@ -897,6 +942,40 @@ mod tests {
             load(&home, &project, false),
             Err(HarnessError::Settings { .. })
         ));
+    }
+
+    #[test]
+    fn the_owner_sets_when_the_terminal_ui_tells_a_project_does_not() {
+        let (home, project) = (temp("notify-home"), temp("notify-project"));
+        assert_eq!(
+            load(&home, &project, true).unwrap().notify,
+            NotifySection::default()
+        );
+        write(
+            &home.join(".glut/settings.json"),
+            r#"{"notify": {"when": "asks", "after": 30}}"#,
+        );
+        write(
+            &project.join(".glut/settings.json"),
+            r#"{"notify": {"when": "off"}}"#,
+        );
+        assert_eq!(
+            load(&home, &project, true).unwrap().notify,
+            NotifySection {
+                when: Some(NotifyWhen::Asks),
+                after: Some(30)
+            }
+        );
+        for odd in [
+            r#"{"notify": {"when": "loud"}}"#.to_owned(),
+            format!(r#"{{"notify": {{"after": {}}}}}"#, MAX_NOTIFY_AFTER + 1),
+        ] {
+            write(&home.join(".glut/settings.json"), &odd);
+            assert!(matches!(
+                load(&home, &project, true),
+                Err(HarnessError::Settings { .. })
+            ));
+        }
     }
 
     #[test]

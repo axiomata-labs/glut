@@ -56,8 +56,28 @@ enum Command {
         /// A session's id or a log file; the newest session of the folder when left out.
         what: Option<String>,
     },
+    /// Write a session out to read or share: a session's id or file, or a run's id or journal; Markdown, HTML or JSON
+    /// lines, on stdout unless --out names a new file.
+    Export {
+        /// A session's id or its file (~/.glut/sessions/<id>.json), or a run's id or journal (~/.glut/runs/<id>.jsonl).
+        what: String,
+        /// md, html or jsonl.
+        #[arg(long, default_value = "md", value_parser = parse_format)]
+        format: glut_tui::ExportFormat,
+        /// The whole results from the session's store and the system prompt too, not only what the model saw.
+        #[arg(long)]
+        full: bool,
+        /// A new file to write it to (never one that is there).
+        #[arg(long, value_name = "FILE")]
+        out: Option<PathBuf>,
+    },
     #[command(flatten)]
     Headless(glut::cli::Command),
+}
+
+/// `--format`'s word.
+fn parse_format(word: &str) -> Result<glut_tui::ExportFormat, String> {
+    glut_tui::ExportFormat::parse(word).ok_or_else(|| "one of md, html, jsonl".to_owned())
 }
 
 /// The language `--lang` names among `args`, before clap reads them: `--lang de` or `--lang=de`.
@@ -111,6 +131,15 @@ fn main() -> std::process::ExitCode {
     let (code, switch) = runtime.block_on(async {
         match cli.command.take() {
             Some(Command::Watch { what }) => (watch(&cli.cwd, what.as_deref()).await, None),
+            Some(Command::Export {
+                what,
+                format,
+                full,
+                out,
+            }) => (
+                glut_tui::export_headless(&what, format, full, out.as_deref()),
+                None,
+            ),
             Some(Command::Headless(command)) => (glut::cli::dispatch(command).await, None),
             None => {
                 if cli.reader {

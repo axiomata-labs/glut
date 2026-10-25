@@ -42,6 +42,12 @@ pub const TEXTS: Texts = Texts {
             "handoff",
             "/handoff write: was getan ist und was als Nächstes kommt; /handoff read in einer neuen Session",
         ),
+        (
+            "export",
+            "die Session zum Lesen oder Teilen ausgeben: Markdown, eine HTML-Datei oder JSON-Zeilen, nach \
+             ~/.glut/exports oder an einen Pfad; copy legt das Markdown in die Zwischenablage; full nimmt die ganzen \
+             Ergebnisse und den Systemprompt dazu",
+        ),
         ("quit", "die Session beenden"),
         ("exit", "die Session beenden, wie /quit"),
         (
@@ -158,6 +164,11 @@ pub const TEXTS: Texts = Texts {
         (
             "links",
             "der Text eines Links ist der Link, wo das Terminal OSC 8 spricht, sonst steht die URL dahinter",
+        ),
+        (
+            "notify",
+            "sagt dir, wenn ein Zug endet oder fragt, während das Fenster nicht vorne ist: on, nur Fragen (asks), off, \
+             über macOS (system); /notify after <s>",
         ),
         (
             "motion",
@@ -663,7 +674,7 @@ pub const TEXTS: Texts = Texts {
     project_same: "das ist bereits dieses Projekt",
     no_message: "keine Nachricht",
     sessions_none: "Sessions (noch keine andere für diesen Ordner gespeichert)",
-    sessions_title: "Sessions dieses Ordners — ⑂ ein Abzweig, ● diese, ⌫ löscht",
+    sessions_title: "Sessions dieses Ordners — ⑂ ein Abzweig, ● diese, ⌫ löscht, ⌃E exportiert",
     as_it_stood: "wie es stand: {layout}",
     session_open_undeletable: "diese Session ist in einem Pane offen — sie kann nicht gelöscht werden",
     session_gone: "diese Session ist schon weg",
@@ -990,6 +1001,27 @@ pub const TEXTS: Texts = Texts {
     ],
     setup_provider_prompt: "Provider:",
     cli: &[
+        (
+            "Write a session out to read or share: a session's id or file, or a run's id or journal; Markdown, HTML or \
+             JSON lines, on stdout unless --out names a new file",
+            "Eine Session zum Lesen oder Teilen ausgeben: die ID oder Datei einer Session oder die ID oder das Journal \
+             eines Laufs; Markdown, HTML oder JSON-Zeilen, auf stdout, außer --out nennt eine neue Datei",
+        ),
+        (
+            "A session's id or its file (~/.glut/sessions/<id>.json), or a run's id or journal \
+             (~/.glut/runs/<id>.jsonl)",
+            "Die ID einer Session oder ihre Datei (~/.glut/sessions/<id>.json), oder die ID oder das Journal eines \
+             Laufs (~/.glut/runs/<id>.jsonl)",
+        ),
+        ("md, html or jsonl", "md, html oder jsonl"),
+        (
+            "The whole results from the session's store and the system prompt too, not only what the model saw",
+            "Auch die ganzen Ergebnisse aus der Ablage der Session und den Systemprompt, nicht nur, was das Modell sah",
+        ),
+        (
+            "A new file to write it to (never one that is there)",
+            "Eine neue Datei, in die geschrieben wird (nie eine, die es schon gibt)",
+        ),
         ("Glut, in the terminal", "Glut, im Terminal"),
         (
             "The folder the session works in",
@@ -1330,4 +1362,38 @@ pub const TEXTS: Texts = Texts {
         one: "{n} Aufruf",
         other: "{n} Aufrufe",
     },
+    notify_done: "fertig nach {time}",
+    notify_ended: "ohne Antwort beendet nach {time}",
+    notify_asks: "fragt: {what}",
+    notify_ask_command: "einen Befehl ausführen",
+    notify_ask_file: "eine Datei ändern",
+    notify_ask_network: "ins Netz",
+    notify_ask_mcp: "ein MCP-Werkzeug nutzen",
+    notify_ask_agent: "einen Agenten starten",
+    notify_ask_glut: "Gluts Dateien ändern",
+    notify_ask_other: "{tool} nutzen",
+    notify_secs: "{n} s",
+    notify_mins: "{n} min",
+    notify_more: "+{n} weitere",
+    notify_on: "Mitteilungen: an — Ende eines Zugs und Fragen, solange das Fenster nicht vorne ist",
+    notify_asks_only: "Mitteilungen: nur Fragen",
+    notify_off: "Mitteilungen: aus",
+    notify_system: "Mitteilungen: über macOS — ein Klick öffnet den Skripteditor, nicht das Terminal",
+    notify_after_set: "Mitteilungen: Ende eines Zugs, wenn er {n} s lief",
+    notify_after_bad: "/notify after nimmt Sekunden, von 0 bis {most}",
+    notify_now: "Mitteilungen: {when}, Ende eines Zugs nach {after} s, über {way} — /notify on|asks|off|system, \
+                 /notify after <s>",
+    export_owner: "Du",
+    export_glut: "Glut",
+    export_thinking: "Denken",
+    export_system: "Systemprompt",
+    export_tool: "Aufruf: {name}",
+    export_result: "Ergebnis: {name}",
+    export_written: "exportiert nach {path} — kann Geheimnisse enthalten: vor dem Teilen lesen",
+    export_copied: "die Session als Markdown kopiert — kann Geheimnisse enthalten: vor dem Teilen lesen",
+    export_empty: "noch nichts zu exportieren: der erste Zug ist nicht zu Ende",
+    export_exists: "{path} gibt es schon — nenne eine andere Datei",
+    export_unknown: "keine Session, kein Lauf und keine Datei {what}",
+    paths_title: "{folder} — ⇥ ergänzt, ⏎ übernimmt, esc schließt",
+    paths_more: "… {n} weitere, tipp weiter",
 };

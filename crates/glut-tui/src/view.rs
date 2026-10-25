@@ -345,6 +345,7 @@ fn draw_in(frame: &mut Frame, app: &mut App, area: Rect, chrome: &Chrome) {
         draw_picture(frame, app, stream);
     } else {
         draw_suggestions(frame, app, stream);
+        draw_paths(frame, app, stream);
     }
 }
 
@@ -1597,6 +1598,78 @@ fn draw_suggestions(frame: &mut Frame, app: &App, area: Rect) {
             format!(" {} ", tr!(commands_title)),
             theme::glow(),
         ));
+    frame.render_widget(Clear, place);
+    frame.render_widget(Paragraph::new(lines).block(block), place);
+}
+
+/// The names that fit the path being typed (T68), in a small list just above the input as the commands' is, the
+/// chosen one marked, folders with their `/`.
+fn draw_paths(frame: &mut Frame, app: &App, area: Rect) {
+    let Some(listing) = &app.paths else {
+        return;
+    };
+    if area.height < 3 || listing.entries.is_empty() {
+        return;
+    }
+    let more = usize::from(listing.more > 0);
+    let shown = (listing.entries.len() + more).min(usize::from(area.height) - 2);
+    let height = shown as u16 + 2;
+    let chosen = app.path_chosen.min(listing.entries.len() - 1);
+    let rows = shown - more.min(shown.saturating_sub(1));
+    let first = chosen.saturating_sub(rows.saturating_sub(1));
+    let mut lines: Vec<Line> = listing
+        .entries
+        .iter()
+        .enumerate()
+        .skip(first)
+        .take(rows)
+        .map(|(at, entry)| {
+            let marked = at == chosen;
+            let name = if entry.dir {
+                format!("{}/", entry.name)
+            } else {
+                entry.name.clone()
+            };
+            let style = match (marked, entry.dir) {
+                (true, _) => theme::glow(),
+                (false, true) => Style::default().add_modifier(Modifier::BOLD),
+                (false, false) => Style::default(),
+            };
+            Line::from(vec![
+                Span::styled(if marked { "▸ " } else { "  " }, theme::glow()),
+                Span::styled(name, style),
+            ])
+        })
+        .collect();
+    if more == 1 && lines.len() < shown {
+        lines.push(Line::from(Span::styled(
+            format!("  {}", tr!(paths_more, n = listing.more)),
+            theme::quiet(),
+        )));
+    }
+    let folder = crate::transcript::clean(&crate::projects::shown_path(
+        &listing.folder,
+        &app.parts.home,
+    ));
+    let title = format!(" {} ", tr!(paths_title, folder = folder));
+    let needed = listing
+        .entries
+        .iter()
+        .map(|entry| entry.name.width() + 6)
+        .chain([title.width() + 2])
+        .max()
+        .unwrap_or(40);
+    let width = area.width.min(needed as u16);
+    let place = Rect {
+        x: area.x,
+        y: area.y + area.height - height,
+        width,
+        height,
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(theme::glow())
+        .title(Span::styled(title, theme::glow()));
     frame.render_widget(Clear, place);
     frame.render_widget(Paragraph::new(lines).block(block), place);
 }
