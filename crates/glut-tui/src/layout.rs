@@ -1,6 +1,7 @@
 //! The panes kept for the next start (`docs/plans/glut-tui.md`, TUI9e): at the end, a window split into panes or
 //! with agents in the background writes how it stood — each pane's session by its id, its role, an agent's name, a
-//! worktree's branch, and the shape of the split. `glut -c` offers it once.
+//! worktree's branch, and the main pane's share of the width (T36f). `glut -c` offers it once. A file from before
+//! T36f, with the shape of a split, comes back as the grid: its panes in their reading order, the first the main one.
 //!
 //! It is kept in the owner's `~/.glut/layouts/`, one file per project folder (named as Claude Code names its project
 //! folders), never in the project: a repository can neither ship one nor point its `.glut` elsewhere for Glut to write
@@ -17,30 +18,27 @@ use serde::{Deserialize, Serialize};
 const DIR: &str = "layouts";
 /// A layout file larger than this is none.
 const MAX_BYTES: u64 = 64 * 1024;
-/// The most panes on the screen and agents behind it a layout holds, as many as Glut opens.
-const MOST_SHOWN: usize = 4;
-const MOST_AGENTS: usize = 4;
+/// The most panes on the screen a layout holds, as many as Glut opens.
+const MOST_SHOWN: usize = crate::panes::MOST;
+/// The most agents in the background a layout holds: Glut sets them no limit (T36f), a file is bounded all the same.
+const MOST_AGENTS: usize = 64;
 /// The longest name, role, branch or session id a layout holds.
 const MOST_NAME: usize = 128;
 
 /// How the panes stood.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Layout {
-    /// The panes on the screen in reading order — one in the project's own folder first —, then the agents in the
-    /// background.
+    /// The panes on the screen in reading order — the main one, in the project's own folder, first —, then the
+    /// agents in the background.
     pub panes: Vec<Kept>,
-    /// The split, its leaves the places of the screen's panes in `panes`.
-    pub shape: Shape,
+    /// The main pane's share of the width, in percent (T36f).
+    #[serde(default = "share")]
+    pub share: u16,
 }
 
-/// A split as it stood.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Shape {
-    /// A pane, by its place in [`Layout::panes`].
-    Pane(usize),
-    /// Two or more parts side by side, or one above the other.
-    Split { stacked: bool, parts: Vec<Shape> },
+/// A layout from before T36f had no share: the main pane at its start.
+fn share() -> u16 {
+    crate::panes::SHARE
 }
 
 /// One pane or agent as it stood.
@@ -110,9 +108,9 @@ impl Layout {
         self.panes.iter().filter(|kept| kept.agent.is_some())
     }
 
-    /// Whether the file says something Glut could have written: a shape that names every pane on the screen once
-    /// in splits of two parts or more, agents only behind them and named as `/bg` names them, the first pane in the
-    /// project's own folder, nothing twice, and plain names.
+    /// Whether the file says something Glut could have written: one to six panes on the screen, agents only behind
+    /// them and named as `/bg` names them, the first pane in the project's own folder, a share within its bounds,
+    /// nothing twice, and plain names.
     fn sound(&self) -> bool {
         let plain = |text: &str| {
             !text.is_empty()
@@ -145,9 +143,6 @@ impl Layout {
             seen.dedup();
             seen.len() == all
         };
-        let mut leaves = Vec::new();
-        self.shape.leaves(&mut leaves);
-        leaves.sort_unstable();
         names_plain
             && agents_last
             && (1..=MOST_SHOWN).contains(&shown)
@@ -156,25 +151,7 @@ impl Layout {
             && unique(|kept| Some(kept.session.as_str()))
             && unique(|kept| kept.branch.as_deref())
             && unique(|kept| kept.agent.as_deref())
-            && self.shape.well_formed()
-            && leaves == (0..shown).collect::<Vec<_>>()
-    }
-}
-
-impl Shape {
-    fn leaves(&self, out: &mut Vec<usize>) {
-        match self {
-            Shape::Pane(at) => out.push(*at),
-            Shape::Split { parts, .. } => parts.iter().for_each(|part| part.leaves(out)),
-        }
-    }
-
-    /// Every split of two parts or more, as Glut's own splits are.
-    fn well_formed(&self) -> bool {
-        match self {
-            Shape::Pane(_) => true,
-            Shape::Split { parts, .. } => parts.len() >= 2 && parts.iter().all(Shape::well_formed),
-        }
+            && (crate::panes::SHARE_LEAST..=crate::panes::SHARE_MOST).contains(&self.share)
     }
 }
 
@@ -235,10 +212,7 @@ mod tests {
     fn pair() -> Layout {
         Layout {
             panes: vec![kept("s1", None), kept("s2", None)],
-            shape: Shape::Split {
-                stacked: false,
-                parts: vec![Shape::Pane(0), Shape::Pane(1)],
-            },
+            share: 60,
         }
     }
 
@@ -275,30 +249,14 @@ mod tests {
             !layout.sound()
         };
         assert!(pair().sound());
-        assert!(
-            odd(|layout| layout.shape = Shape::Pane(0)),
-            "a pane left out"
-        );
-        assert!(odd(|layout| {
-            layout.shape = Shape::Split {
-                stacked: false,
-                parts: vec![Shape::Pane(0), Shape::Pane(0)],
-            }
-        }));
+        assert!(odd(|layout| layout.share = 95), "a share beyond its bounds");
         assert!(
             odd(|layout| {
-                layout.shape = Shape::Split {
-                    stacked: false,
-                    parts: vec![
-                        Shape::Pane(0),
-                        Shape::Split {
-                            stacked: true,
-                            parts: vec![Shape::Pane(1)],
-                        },
-                    ],
+                for at in 0..6 {
+                    layout.panes.insert(1, kept(&format!("p{at}"), None));
                 }
             }),
-            "a split of one part"
+            "more panes than Glut shows"
         );
         assert!(odd(|layout| layout.panes[1].session = "s2\n".into()));
         assert!(
@@ -320,13 +278,23 @@ mod tests {
         assert!(odd(|layout| layout.panes[1].branch = Some("-D".into())));
         assert!(
             odd(|layout| {
-                for at in 0..5 {
+                for at in 0..=MOST_AGENTS {
                     layout
                         .panes
                         .push(kept(&format!("a{at}"), Some(&format!("agent-{at}"))));
                 }
             }),
-            "more agents than Glut keeps"
+            "more agents than a file holds"
         );
+    }
+
+    #[test]
+    fn a_layout_from_before_the_grid_comes_back_with_the_main_pane_at_half() {
+        let old = r#"{"panes":[{"session":"s1"},{"session":"s2"},{"session":"s3"}],
+            "shape":{"split":{"stacked":false,"parts":[{"pane":0},
+            {"split":{"stacked":true,"parts":[{"pane":1},{"pane":2}]}}]}}}"#;
+        let layout: Layout = serde_json::from_str(old).unwrap();
+        assert!(layout.sound());
+        assert_eq!((layout.panes.len(), layout.share), (3, crate::panes::SHARE));
     }
 }

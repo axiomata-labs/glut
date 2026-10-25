@@ -81,7 +81,7 @@ const fn command(
 }
 
 /// Every command, grouped by topic in [`Topic::ALL`]'s order, the most used first inside a topic.
-pub const COMMANDS: [Command; 42] = [
+pub const COMMANDS: [Command; 43] = [
     command(Topic::Session, "clear", "", "start a new session"),
     command(
         Topic::Session,
@@ -172,14 +172,20 @@ pub const COMMANDS: [Command; 42] = [
     command(
         Topic::Panes,
         "split",
-        "[l|r|u|d] [resume] [as <role>] [here|tree [branch]]",
-        "a new session beside this one (up to four), right unless told; in a git repository here or in a worktree",
+        "[resume] [as <role>] [here|tree [branch]]",
+        "a new session beside the main pane (up to six in all); in a git repository here or in a worktree",
+    ),
+    command(
+        Topic::Panes,
+        "swap",
+        "[n]",
+        "the main pane and pane n (or this one) trade places",
     ),
     command(
         Topic::Panes,
         "close",
         "[name]",
-        "close this pane — or end a background agent; its session stays for /resume",
+        "close this pane (not the main one) — or end a background agent; its session stays for /resume",
     ),
     command(
         Topic::Panes,
@@ -336,7 +342,7 @@ const fn key(topic: Topic, key: &'static str, what: &'static str, command: &'sta
 }
 
 /// Every key Glut has, grouped as [`COMMANDS`] are; a topic without keys shows no heading.
-pub const KEYS: [Key; 40] = [
+pub const KEYS: [Key; 41] = [
     key(
         Topic::Session,
         "⇧⇥",
@@ -426,8 +432,19 @@ pub const KEYS: [Key; 40] = [
         "the next pane, round in reading order (⌃] too: ⌃6 on a German layout)",
         "",
     ),
-    key(Topic::Panes, "⌃X 2", "a new pane, to the right", "/split"),
-    key(Topic::Panes, "⌃X 3", "a new pane, below", "/split d"),
+    key(
+        Topic::Panes,
+        "⌃X 2",
+        "a new pane beside the main one (⌃X 3 too)",
+        "/split",
+    ),
+    key(
+        Topic::Panes,
+        "⌃X }",
+        "the main pane wider (the mouse drags its border too)",
+        "",
+    ),
+    key(Topic::Panes, "⌃X {", "the main pane narrower", ""),
     key(Topic::Panes, "⌃X 0", "close this pane", "/close"),
     key(
         Topic::Panes,

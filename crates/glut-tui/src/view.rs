@@ -119,8 +119,9 @@ pub fn draw_panes(frame: &mut Frame, panes: &mut crate::panes::Panes) {
     } else {
         body
     };
-    let (areas, lines) = panes.areas(body);
-    // The active pane last: its cursor is the one the terminal shows. Background agents stand nowhere.
+    let (areas, placed) = panes.areas(body);
+    // The active pane last: its cursor is the one the terminal shows. Background agents stand nowhere, and a pane
+    // held as a tab only on its tab's line (T36f).
     let mut order: Vec<usize> = (0..panes.list.len())
         .filter(|at| *at != active && !panes.list[*at].background)
         .collect();
@@ -128,6 +129,11 @@ pub fn draw_panes(frame: &mut Frame, panes: &mut crate::panes::Panes) {
     for at in order {
         let pane = &mut panes.list[at];
         pane.area = areas[at];
+        if areas[at].is_empty() {
+            pane.app.panel_drawn = false;
+            pane.app.panel_fits = room;
+            continue;
+        }
         let chrome = Chrome {
             number: Some(pane.number),
             active: at == active,
@@ -141,8 +147,11 @@ pub fn draw_panes(frame: &mut Frame, panes: &mut crate::panes::Panes) {
         pane.app.panel_drawn = at == active && shows_panel;
         pane.app.panel_fits = room;
     }
+    if let Some(tabs) = &placed.tabs {
+        draw_tabs(frame, panes, tabs);
+    }
     // A quiet line parts panes side by side.
-    for line in lines {
+    for line in placed.lines {
         for y in line.y..line.y + line.height {
             frame.render_widget(
                 Paragraph::new(Span::styled("│", theme::quiet())),
@@ -152,6 +161,37 @@ pub fn draw_panes(frame: &mut Frame, panes: &mut crate::panes::Panes) {
     }
     let area = panes.list[active].area;
     draw_peek(frame, panes, area);
+}
+
+/// Panes held as tabs where the room is too small for all (T36f): each by its number and role, the one shown marked,
+/// one that asks the owner in Glut's glow.
+fn draw_tabs(frame: &mut Frame, panes: &crate::panes::Panes, tabs: &crate::panes::Tabs) {
+    let names: Vec<(u64, String)> = tabs
+        .panes
+        .iter()
+        .map(|id| (*id, panes.tab_name(*id)))
+        .collect();
+    for (id, spot) in crate::panes::tab_spots(tabs.area, &names, tabs.shown) {
+        let name = names
+            .iter()
+            .find(|(named, _)| *named == id)
+            .map_or_else(String::new, |(_, name)| name.clone());
+        let asks = panes
+            .list
+            .iter()
+            .any(|pane| pane.id == id && pane.app.waits_for_owner());
+        let style = if id == tabs.shown {
+            theme::strong().add_modifier(ratatui::style::Modifier::REVERSED)
+        } else if asks {
+            theme::glow()
+        } else {
+            theme::quiet()
+        };
+        frame.render_widget(
+            Paragraph::new(Span::styled(format!(" {name} "), style)),
+            spot,
+        );
+    }
 }
 
 /// `/peek` (T36e): a background agent's stream over the active pane's area, only to read — its name and how to close

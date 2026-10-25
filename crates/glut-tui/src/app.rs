@@ -1547,22 +1547,21 @@ impl App {
         if std::mem::take(&mut self.chord) {
             match key.code {
                 KeyCode::Char('e' | 'E') => self.edit_request = Some(self.input.expanded()),
-                // T36a, as Emacs has them but for the owner's order: after 1 comes 2, to the right.
-                KeyCode::Char('2') => {
+                // T36a, as Emacs has them; since T36f a new pane goes into the grid, so both split alike.
+                KeyCode::Char('2' | '3') => {
                     self.pane_request = Some(crate::panes::Request::Split {
-                        side: crate::panes::Side::Right,
                         resume: false,
                         place: crate::panes::Place::Ask,
                         role: None,
                     })
                 }
-                KeyCode::Char('3') => {
-                    self.pane_request = Some(crate::panes::Request::Split {
-                        side: crate::panes::Side::Down,
-                        resume: false,
-                        place: crate::panes::Place::Ask,
-                        role: None,
-                    })
+                // T36f, as Emacs widens and narrows a window: the main pane's share of the width.
+                KeyCode::Char('}') => {
+                    self.pane_request = Some(crate::panes::Request::Widen(crate::panes::SHARE_STEP))
+                }
+                KeyCode::Char('{') => {
+                    self.pane_request =
+                        Some(crate::panes::Request::Widen(-crate::panes::SHARE_STEP))
                 }
                 KeyCode::Char('0') => self.pane_request = Some(crate::panes::Request::Close),
                 // T36e: an agent in the background — its role picked first —, or this pane sent there.
@@ -2195,6 +2194,8 @@ impl App {
             "show" if rest.is_empty() => self.tell("/show <name> — ⌃X A lists the agents in the background"),
             "show" => self.pane_request = Some(crate::panes::Request::Show(rest.to_owned())),
             "hide" => self.pane_request = Some(crate::panes::Request::Hide),
+            "swap" if rest.is_empty() => self.pane_request = Some(crate::panes::Request::Swap(None)),
+            "swap" => self.pane_request = Some(crate::panes::Request::Swap(Some(rest.to_owned()))),
             "peek" if rest.is_empty() => self.pane_request = Some(crate::panes::Request::Peek(None)),
             "peek" => self.pane_request = Some(crate::panes::Request::Peek(Some(rest.to_owned()))),
             "cache" => match crate::warm::CacheMode::parse(rest) {
@@ -4623,6 +4624,7 @@ impl App {
                         name: None,
                         role: role.clone(),
                         place: crate::panes::Place::Ask,
+                        sure: false,
                     });
                 }
                 item
@@ -7057,10 +7059,7 @@ pub(crate) mod tests {
         };
         let layout = crate::layout::Layout {
             panes: vec![kept("s1"), kept("s2")],
-            shape: crate::layout::Shape::Split {
-                stacked: false,
-                parts: vec![crate::layout::Shape::Pane(0), crate::layout::Shape::Pane(1)],
-            },
+            share: crate::panes::SHARE,
         };
         crate::layout::save(&app.parts.home, &app.parts.config.cwd, &layout).unwrap();
         let picker = app.session_picker();

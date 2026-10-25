@@ -15,63 +15,244 @@ use crate::host::{Host, Launch, Servers};
 use crate::session::{self, Report};
 use crate::transcript::Tone;
 
-/// The most panes (T36d): four, each split again as the owner likes.
-pub const MOST: usize = 4;
+/// The most panes on the screen (T36f): the main one and five beside it.
+pub const MOST: usize = 6;
 /// How many messages models send each other without the owner's word before the next waits for it (T36c).
 pub const MOST_CHAIN: u32 = 6;
 /// How many messages one session's model may send to other panes (T36c).
 pub const MOST_TELLS: u32 = 30;
-/// The most background agents (T36e), beside the panes.
-pub const MOST_BACKGROUND: usize = 4;
+/// Background agents have no limit (T36f) — only the owner's `/bg` makes one —, but one beyond this many is asked for
+/// once a window: each works, and costs, on its own.
+pub const BACKGROUND_ASKED: usize = 6;
 /// How long a first `/quit` or `/close` stays armed while a pane works: the second within it goes on.
 const ARMED: Duration = Duration::from_secs(10);
+/// The narrowest and the lowest a pane is let be beside the main one: below, the right side shows its panes as tabs.
+const PANE_MIN_COLUMNS: u16 = 40;
+const PANE_MIN_ROWS: u16 = 8;
+/// The main pane's share of the width, in percent: where it starts, how far `⌃X {`/`⌃X }` move it, its bounds.
+pub const SHARE: u16 = 50;
+pub const SHARE_STEP: i16 = 5;
+pub const SHARE_LEAST: u16 = 20;
+pub const SHARE_MOST: u16 = 80;
 
-/// Where a new pane goes beside the active one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Side {
-    /// Beside it, before it.
-    Left,
-    /// Beside it, after it — `/split` without a side.
-    Right,
-    /// Above it.
-    Up,
-    /// Below it.
-    Down,
+/// How the panes stand (T36f): the main one — the pane Glut started with, or the one `/swap` put there — on the left at
+/// full height, the others on the right in a grid of at most two rows: one at full height, two above each other, then
+/// 2+1, 2+2, 3+2.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Grid {
+    /// The main pane, by its session's id.
+    main: u64,
+    /// The others in reading order: the top row left to right, then the bottom one.
+    others: Vec<u64>,
+    /// The main pane's share of the width, in percent.
+    share: u16,
 }
 
-impl Side {
-    /// `l`, `r`, `u`, `d` or the words; `None` for anything else.
-    pub fn parse(word: &str) -> Option<Side> {
-        match word {
-            "l" | "left" => Some(Side::Left),
-            "r" | "right" => Some(Side::Right),
-            "u" | "up" => Some(Side::Up),
-            "d" | "down" => Some(Side::Down),
-            _ => None,
+/// Where the panes stand in an area: each one's area (none for a pane shown only as a tab), the columns that part
+/// panes side by side, and the tabs where the room is too small for all.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Placed {
+    pub areas: Vec<(u64, Rect)>,
+    pub lines: Vec<Rect>,
+    /// The column that parts the main pane from the others: the mouse moves it.
+    pub border: Option<Rect>,
+    pub tabs: Option<Tabs>,
+}
+
+/// Panes shown one at a time (T36f): a line of their tabs over the one shown whole.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Tabs {
+    /// The line the tabs stand on.
+    pub area: Rect,
+    /// The panes it holds, in reading order, by their sessions' ids.
+    pub panes: Vec<u64>,
+    /// The one shown.
+    pub shown: u64,
+}
+
+impl Grid {
+    fn new(main: u64) -> Self {
+        Grid {
+            main,
+            others: Vec::new(),
+            share: SHARE,
         }
     }
 
-    fn stacked(self) -> bool {
-        matches!(self, Side::Up | Side::Down)
+    /// The panes in reading order: the main one, then the grid's.
+    fn order(&self) -> Vec<u64> {
+        std::iter::once(self.main)
+            .chain(self.others.iter().copied())
+            .collect()
     }
 
-    fn before(self) -> bool {
-        matches!(self, Side::Left | Side::Up)
+    /// Takes pane `id` out; the main one gone, the first of the others takes its place.
+    fn remove(&mut self, id: u64) {
+        if id == self.main {
+            if !self.others.is_empty() {
+                self.main = self.others.remove(0);
+            }
+        } else {
+            self.others.retain(|other| *other != id);
+        }
     }
-}
 
-/// How the panes stand (T36d): a pane, or a split of panes side by side or one above the other — a pane split again
-/// in the other direction becomes a split of its own.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Node {
-    /// A pane, by its session's id.
-    Pane(u64),
-    Split {
-        /// One above the other rather than side by side.
-        stacked: bool,
-        /// Two or more, in reading order.
-        parts: Vec<Node>,
-    },
+    /// Pane `id` and the main one trade places; `false` when `id` is none of the others.
+    fn swap(&mut self, id: u64) -> bool {
+        let Some(at) = self.others.iter().position(|other| *other == id) else {
+            return false;
+        };
+        self.others[at] = self.main;
+        self.main = id;
+        true
+    }
+
+    /// How many of `count` panes stand in the grid's top row and how many in its bottom one.
+    fn rows(count: usize) -> (usize, usize) {
+        (count.div_ceil(2), count / 2)
+    }
+
+    /// The main pane's width in `width`: its share, kept so both it and the right side hold a pane.
+    fn main_width(&self, width: u16) -> u16 {
+        let share = u32::from(width) * u32::from(self.share) / 100;
+        let most = width.saturating_sub(PANE_MIN_COLUMNS + 1);
+        (share as u16).clamp(PANE_MIN_COLUMNS.min(most), most)
+    }
+
+    /// Whether `count` panes beside the main one keep each at least `least` columns and [`PANE_MIN_ROWS`] in `area`.
+    fn fits(&self, area: Rect, count: usize, least: u16) -> bool {
+        if count == 0 {
+            return area.width >= least;
+        }
+        let main = self.main_width(area.width);
+        let right = area.width.saturating_sub(main + 1);
+        let (top, bottom) = Grid::rows(count);
+        let columns = top as u16;
+        let width = right.saturating_sub(columns - 1) / columns;
+        let height = if bottom > 0 {
+            area.height / 2
+        } else {
+            area.height
+        };
+        main >= least && width >= least && height >= PANE_MIN_ROWS
+    }
+
+    /// The narrowest this keeps every pane at least `least` columns wide.
+    fn needs(&self, least: u16) -> u16 {
+        let count = self.others.len();
+        let tall = Rect::new(0, 0, 0, u16::MAX);
+        // Every pane of the top row and the main one take `least` and a column each: no narrower width can do.
+        let columns = Grid::rows(count).0 as u16;
+        let floor = least.saturating_mul(columns + 1).saturating_add(columns);
+        (floor..u16::MAX)
+            .find(|width| {
+                self.fits(
+                    Rect {
+                        width: *width,
+                        ..tall
+                    },
+                    count,
+                    least,
+                )
+            })
+            .unwrap_or(u16::MAX)
+    }
+
+    /// Where each pane stands in `area`. A right side too small for its grid shows its panes as tabs — the active one
+    /// whole when it is one of them, else `front`; a window too narrow for two panes shows every pane as a tab, the
+    /// active one whole. The pane with the keys is always drawn.
+    fn place(&self, area: Rect, front: u64, active: u64) -> Placed {
+        let mut placed = Placed::default();
+        if self.others.is_empty() {
+            placed.areas.push((self.main, area));
+            return placed;
+        }
+        if area.width < 2 * PANE_MIN_COLUMNS + 1 || area.height < PANE_MIN_ROWS {
+            return Grid::tabbed(area, self.order(), active, placed);
+        }
+        let main = self.main_width(area.width);
+        placed.areas.push((
+            self.main,
+            Rect {
+                width: main,
+                ..area
+            },
+        ));
+        let border = Rect::new(area.x + main, area.y, 1, area.height);
+        placed.lines.push(border);
+        placed.border = Some(border);
+        let right = Rect {
+            x: area.x + main + 1,
+            width: area.width - main - 1,
+            ..area
+        };
+        if !self.fits(area, self.others.len(), PANE_MIN_COLUMNS) {
+            let shown = [active, front]
+                .into_iter()
+                .find(|id| self.others.contains(id))
+                .unwrap_or(self.others[0]);
+            return Grid::tabbed(right, self.others.clone(), shown, placed);
+        }
+        let (top, bottom) = Grid::rows(self.others.len());
+        let top_height = if bottom > 0 {
+            right.height / 2
+        } else {
+            right.height
+        };
+        let rows = [
+            (
+                &self.others[..top],
+                Rect {
+                    height: top_height,
+                    ..right
+                },
+            ),
+            (
+                &self.others[top..],
+                Rect {
+                    y: right.y + top_height,
+                    height: right.height - top_height,
+                    ..right
+                },
+            ),
+        ];
+        for (ids, row) in rows {
+            let count = ids.len() as u16;
+            for (at, id) in ids.iter().enumerate() {
+                let at = at as u16;
+                // One column between each two panes for the line that parts them.
+                let width = row.width.saturating_sub(count - 1) / count;
+                let x = row.x + at * (width + 1);
+                if at > 0 {
+                    placed.lines.push(Rect::new(x - 1, row.y, 1, row.height));
+                }
+                let width = if at + 1 == count {
+                    row.width.saturating_sub(at * (width + 1))
+                } else {
+                    width
+                };
+                placed.areas.push((*id, Rect { x, width, ..row }));
+            }
+        }
+        placed
+    }
+
+    /// `panes` in `area` as tabs: their line on top, `shown` whole below it, the others nowhere.
+    fn tabbed(area: Rect, panes: Vec<u64>, shown: u64, mut placed: Placed) -> Placed {
+        let line = Rect { height: 1, ..area };
+        let below = Rect {
+            y: area.y + 1,
+            height: area.height.saturating_sub(1),
+            ..area
+        };
+        placed.areas.push((shown, below));
+        placed.tabs = Some(Tabs {
+            area: line,
+            panes,
+            shown,
+        });
+        placed
+    }
 }
 
 /// The kept session `id` of `app`'s folder opened in it (TUI9e); one no longer kept — or never written, as a pane
@@ -86,164 +267,6 @@ fn open_kept(app: &mut App, id: &str) {
     match crate::store::Session::load(&app.parts.home, id) {
         Ok(session) if session.cwd == app.parts.config.cwd => app.open(session),
         _ => app.tell("its kept session holds nothing or is gone — a new one starts"),
-    }
-}
-
-impl Node {
-    /// The split as a layout keeps it (TUI9e): each pane by its place in `order`.
-    fn shape(&self, order: &[u64]) -> crate::layout::Shape {
-        match self {
-            Node::Pane(id) => {
-                crate::layout::Shape::Pane(order.iter().position(|at| at == id).unwrap_or(0))
-            }
-            Node::Split { stacked, parts } => crate::layout::Shape::Split {
-                stacked: *stacked,
-                parts: parts.iter().map(|part| part.shape(order)).collect(),
-            },
-        }
-    }
-
-    /// A kept split again, each kept place standing for the pane in `ids` at it; `None` for a place with no pane.
-    fn from_shape(shape: &crate::layout::Shape, ids: &[u64]) -> Option<Node> {
-        Some(match shape {
-            crate::layout::Shape::Pane(at) => Node::Pane(*ids.get(*at)?),
-            crate::layout::Shape::Split { stacked, parts } => Node::Split {
-                stacked: *stacked,
-                parts: parts
-                    .iter()
-                    .map(|part| Node::from_shape(part, ids))
-                    .collect::<Option<Vec<_>>>()?,
-            },
-        })
-    }
-
-    /// Puts pane `new` at `side` of pane `at`: beside it in a split that already runs that way, else in a split of
-    /// their own where `at` stood. `false` when `at` is nowhere.
-    fn split(&mut self, at: u64, new: u64, side: Side) -> bool {
-        match self {
-            Node::Pane(id) if *id == at => {
-                let (first, second) = if side.before() { (new, at) } else { (at, new) };
-                *self = Node::Split {
-                    stacked: side.stacked(),
-                    parts: vec![Node::Pane(first), Node::Pane(second)],
-                };
-                true
-            }
-            Node::Pane(_) => false,
-            Node::Split { stacked, parts } => {
-                if *stacked == side.stacked()
-                    && let Some(place) = parts.iter().position(|part| *part == Node::Pane(at))
-                {
-                    let place = if side.before() { place } else { place + 1 };
-                    parts.insert(place, Node::Pane(new));
-                    return true;
-                }
-                parts.iter_mut().any(|part| part.split(at, new, side))
-            }
-        }
-    }
-
-    /// Takes pane `id` out; a split left with one part becomes that part, and a part that becomes a split running
-    /// the way its parent's does gives its parts to the parent — the room is shared evenly again.
-    fn remove(&mut self, id: u64) {
-        if let Node::Split { stacked, parts } = self {
-            parts.retain(|part| *part != Node::Pane(id));
-            for part in parts.iter_mut() {
-                part.remove(id);
-            }
-            let direction = *stacked;
-            *parts = std::mem::take(parts)
-                .into_iter()
-                .flat_map(|part| match part {
-                    Node::Split { stacked, parts } if stacked == direction => parts,
-                    other => vec![other],
-                })
-                .collect();
-            if parts.len() == 1 {
-                *self = parts.remove(0);
-            }
-        }
-    }
-
-    /// The panes in reading order: left to right, top to bottom.
-    fn order(&self, out: &mut Vec<u64>) {
-        match self {
-            Node::Pane(id) => out.push(*id),
-            Node::Split { parts, .. } => parts.iter().for_each(|part| part.order(out)),
-        }
-    }
-
-    /// The narrowest this keeps every pane at least `least` columns wide: side by side the room is shared evenly,
-    /// so it takes as many times the widest part's need, with a column between each two.
-    fn needs(&self, least: u16) -> u16 {
-        match self {
-            Node::Pane(_) => least,
-            Node::Split {
-                stacked: true,
-                parts,
-            } => parts
-                .iter()
-                .map(|part| part.needs(least))
-                .max()
-                .unwrap_or(least),
-            Node::Split {
-                stacked: false,
-                parts,
-            } => {
-                let count = parts.len() as u16;
-                let widest = parts
-                    .iter()
-                    .map(|part| part.needs(least))
-                    .max()
-                    .unwrap_or(least);
-                widest
-                    .saturating_mul(count)
-                    .saturating_add(count.saturating_sub(1))
-            }
-        }
-    }
-
-    /// Each pane's area in `area`, and the columns parting panes side by side.
-    fn place(&self, area: Rect, areas: &mut Vec<(u64, Rect)>, lines: &mut Vec<Rect>) {
-        match self {
-            Node::Pane(id) => areas.push((*id, area)),
-            Node::Split { stacked, parts } => {
-                let count = parts.len() as u16;
-                for (at, part) in parts.iter().enumerate() {
-                    let at = at as u16;
-                    let last = at + 1 == count;
-                    let part_area = if *stacked {
-                        let height = area.height / count;
-                        Rect {
-                            y: area.y + at * height,
-                            height: if last {
-                                area.height - at * height
-                            } else {
-                                height
-                            },
-                            ..area
-                        }
-                    } else {
-                        // One column between each two panes for the line that parts them.
-                        let width = area.width.saturating_sub(count - 1) / count;
-                        let x = area.x + at * (width + 1);
-                        if at > 0 {
-                            lines.push(Rect::new(x - 1, area.y, 1, area.height));
-                        }
-                        Rect {
-                            x,
-                            width: if last {
-                                area.width.saturating_sub(at * (width + 1))
-                            } else {
-                                width
-                            },
-                            ..area
-                        }
-                    };
-                    part.place(part_area, areas, lines);
-                }
-            }
-        }
     }
 }
 
@@ -273,13 +296,12 @@ pub enum Leaving {
     DiscardSure,
 }
 
-/// What a pane asks of the screen: its keys (`⌃]`, `⌃X 2`, `⌃X 3`, `⌃X 0`), commands (`/split`, `/close`) and picks.
+/// What a pane asks of the screen: its keys (`⌃]`, `⌃X 2`, `⌃X 0`, `⌃X {`), commands (`/split`, `/close`) and picks.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Request {
-    /// A new pane at `side` working at `place`, playing `role` (T36c); `resume`: an earlier session in it, picked from
-    /// the list.
+    /// A new pane in the grid (T36f) working at `place`, playing `role` (T36c); `resume`: an earlier session in it,
+    /// picked from the list.
     Split {
-        side: Side,
         resume: bool,
         place: Place,
         role: Option<String>,
@@ -300,12 +322,18 @@ pub enum Request {
     },
     /// The asking pane's last plan with its task list, to be built in pane `to`.
     SendPlan { to: Option<String> },
-    /// A background agent (T36e): a session with no room on the screen, named `name` or after its role.
+    /// A background agent (T36e): a session with no room on the screen, named `name` or after its role; `sure`: the
+    /// owner said yes to one beyond [`BACKGROUND_ASKED`] (T36f).
     Background {
         name: Option<String>,
         role: Option<String>,
         place: Place,
+        sure: bool,
     },
+    /// The main pane and pane `n` (or the asking one) trade places (T36f, `/swap`).
+    Swap(Option<String>),
+    /// The main pane wider by this many percent of the window, or narrower (T36f, `⌃X }`, `⌃X {`).
+    Widen(i16),
     /// A background agent brought forward as a pane.
     Show(String),
     /// The asking pane sent to the background.
@@ -380,7 +408,12 @@ pub fn parse_background(rest: &str) -> Result<Request, String> {
             }
         }
     }
-    Ok(Request::Background { name, role, place })
+    Ok(Request::Background {
+        name,
+        role,
+        place,
+        sure: false,
+    })
 }
 
 /// Whether `word` can name a background agent: lower-case letters, digits and dashes, a letter first — never a pane's
@@ -396,42 +429,43 @@ pub(crate) fn is_name(word: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
-/// `/split`'s words: a side (`l r u d`), `resume`, and where — `here`, or `tree` with an optional branch name.
+/// `/split`'s words: `resume`, where — `here`, or `tree` with an optional branch name — and `as <role>`. A new pane
+/// goes into the grid beside the main one (T36f): no side to name any more.
 ///
 /// # Errors
 ///
 /// What `/split` takes, for a word it does not.
 pub fn parse_split(rest: &str) -> Result<Request, String> {
-    let mut side = Side::Right;
     let mut resume = false;
     let mut place = Place::Ask;
     let mut role = None;
     let mut words = rest.split_whitespace().peekable();
     while let Some(word) = words.next() {
-        match (word, Side::parse(word)) {
-            (_, Some(given)) => side = given,
-            ("resume", None) => resume = true,
-            ("here", None) => place = Place::Here,
-            ("as", None) => match words.next() {
+        match word {
+            "resume" => resume = true,
+            "here" => place = Place::Here,
+            "as" => match words.next() {
                 Some(name) => role = Some(name.to_owned()),
                 None => return Err("/split as <role>: a role's name (/role lists them)".to_owned()),
             },
-            ("tree", None) => {
-                let branch = words.next_if(|next| {
-                    Side::parse(next).is_none()
-                        && !matches!(*next, "resume" | "here" | "tree" | "as")
-                });
+            "tree" => {
+                let branch =
+                    words.next_if(|next| !matches!(*next, "resume" | "here" | "tree" | "as"));
                 place = Place::Tree(branch.unwrap_or_default().to_owned());
             }
-            (other, None) => {
+            "l" | "r" | "u" | "d" | "left" | "right" | "up" | "down" => {
                 return Err(format!(
-                    "/split {other}: l, r, u or d; resume; here or tree [branch]; as <role>"
+                    "/split {word}: a new pane goes into the grid beside the main one — no side to name"
+                ));
+            }
+            other => {
+                return Err(format!(
+                    "/split {other}: resume; here or tree [branch]; as <role>"
                 ));
             }
         }
     }
     Ok(Request::Split {
-        side,
         resume,
         place,
         role,
@@ -460,7 +494,6 @@ pub struct Pane {
 struct Building {
     id: u64,
     number: u8,
-    side: Side,
     resume: bool,
     tree: Option<crate::worktree::Tree>,
     role: Option<String>,
@@ -483,7 +516,17 @@ pub struct Panes {
     /// The pane the keys go to, as a place in `list`.
     pub active: usize,
     /// How the panes stand.
-    layout: Node,
+    grid: Grid,
+    /// The pane last shown whole beside the main one: the one the right side shows when it holds them as tabs.
+    front: u64,
+    /// Where the panes stood in the last frame: the room a new one would share, the tabs and the border a click finds.
+    placed: Placed,
+    /// The room the panes had in the last frame; empty before the first.
+    room: Rect,
+    /// The border to the main pane is being dragged by the mouse.
+    dragging: bool,
+    /// The owner said yes to more than [`BACKGROUND_ASKED`] agents in the background: not asked again this window.
+    background_sure: bool,
     /// Whether this screen may split at all: a host's session (a card of Axiomata's studio) is its pane alone.
     may_split: bool,
     /// The first session's servers, which a new pane starts too — never more (`--strict-mcp-config` stays strict).
@@ -567,7 +610,12 @@ impl Panes {
                 tree: None,
             }],
             active: 0,
-            layout: Node::Pane(1),
+            grid: Grid::new(1),
+            front: 1,
+            placed: Placed::default(),
+            room: Rect::default(),
+            dragging: false,
+            background_sure: false,
             may_split,
             servers,
             reports,
@@ -878,6 +926,12 @@ impl Panes {
         }
         if let TermEvent::Mouse(mouse) = &event
             && self.split()
+            && self.on_frame(mouse)
+        {
+            return;
+        }
+        if let TermEvent::Mouse(mouse) = &event
+            && self.split()
         {
             let under = self
                 .list
@@ -934,11 +988,10 @@ impl Panes {
                 Request::Close => self.close(),
                 Request::CloseAs(leaving) => self.leave(leaving),
                 Request::Split {
-                    side,
                     resume,
                     place,
                     role,
-                } => self.start(side, resume, place, role, host),
+                } => self.start(resume, place, role, host),
                 Request::Send { to, text, whole } => {
                     // A first word naming no pane or agent is the message's own (`/send 3 files changed`).
                     let named = to
@@ -957,9 +1010,16 @@ impl Panes {
                     self.send(None, Some(format!("{word} plan")));
                 }
                 Request::SendPlan { to } => self.send(to, None),
-                Request::Background { name, role, place } => {
-                    self.start_background(name, role, place, host);
+                Request::Background {
+                    name,
+                    role,
+                    place,
+                    sure,
+                } => {
+                    self.start_background(name, role, place, sure, host);
                 }
+                Request::Swap(with) => self.swap(with),
+                Request::Widen(by) => self.widen(by),
                 Request::Show(name) => self.show(&name),
                 Request::Hide => self.hide(),
                 Request::Peek(None) => self.close_peek(),
@@ -1045,6 +1105,11 @@ impl Panes {
         if !self.split() {
             return self.active().tell("the last pane — /quit ends Glut");
         }
+        if self.list[self.active].id == self.grid.main {
+            return self
+                .active()
+                .tell("the main pane stays — /swap <n> puts another in its place first");
+        }
         let number = self.list[self.active].number;
         let armed = self
             .close_armed
@@ -1074,6 +1139,12 @@ impl Panes {
     /// How the active worktree's pane ends, picked: kept, taken over or discarded — the pane stays open where that
     /// does not go through, saying why.
     fn leave(&mut self, leaving: Leaving) {
+        // A `/swap` while the question was open may have made this pane the main one.
+        if self.list[self.active].id == self.grid.main {
+            return self
+                .active()
+                .tell("the main pane stays — /swap <n> puts another in its place first");
+        }
         let Some(tree) = self.list[self.active].tree.clone() else {
             return self.remove_active();
         };
@@ -1114,7 +1185,7 @@ impl Panes {
     /// Takes the active pane away; a turn under way is stopped.
     fn remove_active(&mut self) {
         let mut pane = self.list.remove(self.active);
-        self.layout.remove(pane.id);
+        self.grid.remove(pane.id);
         let number = pane.number;
         let stopped = pane.app.working();
         pane.app.stop_turn();
@@ -1142,21 +1213,13 @@ impl Panes {
 
     /// Starts a new pane beside the active one: a session in the same folder, on the active pane's provider and
     /// model, in build — built beside the screen.
-    fn start(
-        &mut self,
-        side: Side,
-        resume: bool,
-        place: Place,
-        role: Option<String>,
-        host: &Arc<dyn Host>,
-    ) {
-        self.start_as(side, resume, place, role, None, host);
+    fn start(&mut self, resume: bool, place: Place, role: Option<String>, host: &Arc<dyn Host>) {
+        self.start_as(resume, place, role, None, host);
     }
 
     /// [`Self::start`], or — with `background` a name — an agent in the background (T36e).
     fn start_as(
         &mut self,
-        side: Side,
         resume: bool,
         place: Place,
         role: Option<String>,
@@ -1169,7 +1232,20 @@ impl Panes {
                 .tell("this session's host keeps one pane: its studio splits its own windows");
         }
         if background.is_none() && self.visible() >= MOST {
-            return self.active().tell(format!("at most {MOST} panes for now"));
+            return self.active().tell(format!(
+                "at most {MOST} panes — /bg starts one in the background"
+            ));
+        }
+        if background.is_none() && !self.room_for_one_more() {
+            let narrower = if self.grid.share > SHARE {
+                "a narrower main pane (⌃X {), "
+            } else {
+                ""
+            };
+            return self.active().tell(format!(
+                "no room for another pane beside the main one — {narrower}a wider window, or /bg starts it in the \
+                 background"
+            ));
         }
         if self.building.is_some() {
             return self.active().tell("a pane is starting already");
@@ -1202,7 +1278,7 @@ impl Panes {
             // A background agent works here unless told `tree`: it has no pane to ask in.
             (Place::Ask, Ok(Some(_))) if background.is_some() => None,
             (Place::Ask, Ok(Some(repo))) => {
-                let picker = where_picker(side, resume, role.as_deref(), &repo, number);
+                let picker = where_picker(resume, role.as_deref(), &repo, number);
                 self.active().picker = Some(picker);
                 return;
             }
@@ -1241,7 +1317,6 @@ impl Panes {
         self.building = Some(Building {
             id,
             number,
-            side,
             resume,
             tree,
             role,
@@ -1331,8 +1406,7 @@ impl Panes {
         let busy_here =
             !current.input.is_empty() || current.waits_for_owner() || current.picker.is_some();
         let active_id = self.list[self.active].id;
-        let placed = self.layout.split(active_id, building.id, building.side);
-        debug_assert!(placed, "the active pane is always in the layout");
+        self.grid.others.push(building.id);
         self.list.push(Pane {
             id: building.id,
             number: building.number,
@@ -1439,14 +1513,13 @@ impl Panes {
             branch: pane.tree.as_ref().map(|tree| tree.branch.clone()),
             into: pane.tree.as_ref().and_then(|tree| tree.into.clone()),
         };
-        let order: Vec<u64> = shown.iter().map(|at| self.list[*at].id).collect();
         let layout = crate::layout::Layout {
             panes: shown
                 .iter()
                 .chain(&behind)
                 .map(|at| kept(&self.list[*at]))
                 .collect(),
-            shape: self.layout.shape(&order),
+            share: self.grid.share,
         };
         // The end is no place for a fault: a layout that cannot be written is simply not offered next time.
         let _ = crate::layout::save(&home, &self.cwd, &layout);
@@ -1551,7 +1624,7 @@ impl Panes {
             }
         };
         self.restore_next = Some(kept.session);
-        self.start_as(Side::Right, false, place, kept.role, kept.agent, host);
+        self.start_as(false, place, kept.role, kept.agent, host);
         // A pane that could not start leaves no building: its kept place stays empty.
         self.restore_next = None;
         if self.building.is_some()
@@ -1561,7 +1634,8 @@ impl Panes {
         }
     }
 
-    /// Every kept pane that came back stands where it stood; with one missing, the panes stay as they were built.
+    /// Every kept pane that came back stands where it stood, the first the main one; with one missing, the panes stay
+    /// as they were built.
     fn restore_shape(&mut self) {
         let Some(restoring) = self.restoring.take() else {
             return;
@@ -1587,11 +1661,15 @@ impl Panes {
             kept.sort_unstable();
             kept == now
         });
-        match ids.and_then(|ids| Node::from_shape(&restoring.layout.shape, &ids)) {
-            Some(layout) => {
+        match ids {
+            Some(ids) => {
                 // The keys stay with the pane that has them, wherever it stands now.
                 let keys = self.list[self.active].id;
-                self.layout = layout;
+                self.grid = Grid {
+                    main: ids[0],
+                    others: ids[1..].to_vec(),
+                    share: restoring.layout.share,
+                };
                 self.reorder();
                 self.active = self.at(keys);
                 self.active().tell("the last layout is back");
@@ -1609,13 +1687,15 @@ impl Panes {
         name: Option<String>,
         role: Option<String>,
         place: Place,
+        sure: bool,
         host: &Arc<dyn Host>,
     ) {
         let background = self.list.iter().filter(|pane| pane.background).count();
-        if background >= MOST_BACKGROUND {
-            return self.active().tell(format!(
-                "at most {MOST_BACKGROUND} agents in the background"
-            ));
+        self.background_sure |= sure;
+        if background >= BACKGROUND_ASKED && !self.background_sure {
+            let picker = more_picker(background + 1, name, role, place);
+            self.active().picker = Some(picker);
+            return;
         }
         let base = name
             .or_else(|| role.clone())
@@ -1635,10 +1715,10 @@ impl Panes {
         } else {
             base
         };
-        self.start_as(Side::Right, false, place, role, Some(name), host);
+        self.start_as(false, place, role, Some(name), host);
     }
 
-    /// `/show <name>`: a background agent brought forward as a pane, to the right of the active one.
+    /// `/show <name>`: a background agent brought forward as a pane, the last in the grid.
     fn show(&mut self, name: &str) {
         let Some(at) = self.resolve_background(name) else {
             return self.active().tell(format!(
@@ -1651,11 +1731,15 @@ impl Panes {
                 .active()
                 .tell(format!("at most {MOST} panes: /hide or /close one first"));
         }
+        if !self.room_for_one_more() {
+            return self
+                .active()
+                .tell("no room for another pane beside the main one: a wider window, or /hide or /close one first");
+        }
         let id = self.list[at].id;
-        let beside = self.list[self.active].id;
         // Panes leave little room beside them: the side panel goes, as when a pane is split off.
         self.active().panel = Some(false);
-        self.layout.split(beside, id, Side::Right);
+        self.grid.others.push(id);
         self.list[at].background = false;
         self.peek = None;
         self.reorder();
@@ -1701,10 +1785,10 @@ impl Panes {
                 .active()
                 .tell("the last pane stays: /bg starts an agent in the background");
         }
-        if self.list.iter().filter(|pane| pane.background).count() >= MOST_BACKGROUND {
-            return self.active().tell(format!(
-                "at most {MOST_BACKGROUND} agents in the background"
-            ));
+        if self.list[self.active].id == self.grid.main {
+            return self
+                .active()
+                .tell("the main pane stays — /swap <n> puts another in its place first");
         }
         let at = self.active;
         let number = self.list[at].number;
@@ -1734,7 +1818,7 @@ impl Panes {
             self.list[at].name = Some(name);
         }
         let id = self.list[at].id;
-        self.layout.remove(id);
+        self.grid.remove(id);
         self.list[at].background = true;
         // Where it stood is another pane's now: the mouse must not find it there.
         self.list[at].area = Rect::default();
@@ -1762,7 +1846,133 @@ impl Panes {
             return;
         }
         self.active = at;
+        let id = self.list[at].id;
+        if id != self.grid.main {
+            self.front = id;
+        }
         self.active().shown_again();
+    }
+
+    /// `/swap [n]`: the main pane and pane `n` trade places — without a number the asking pane, or with only two the
+    /// other one; the keys stay with the pane that has them.
+    fn swap(&mut self, with: Option<String>) {
+        if !self.split() {
+            return self.active().tell("one pane — /split first");
+        }
+        let main = self.grid.main;
+        let target = match &with {
+            Some(word) => self
+                .resolve(word, usize::MAX)
+                .filter(|at| !self.list[*at].background),
+            None if self.list[self.active].id != main => Some(self.active),
+            None if self.grid.others.len() == 1 => Some(self.at(self.grid.others[0])),
+            None => return self.active().tell("which one? /swap <number>"),
+        };
+        let Some(target) = target else {
+            let word = with.as_deref().unwrap_or_default();
+            return self.active().tell(format!(
+                "no pane {} on the screen",
+                crate::transcript::clean(word)
+            ));
+        };
+        let id = self.list[target].id;
+        if id == main {
+            return self.active().tell("that is the main pane already");
+        }
+        let keys = self.list[self.active].id;
+        self.grid.swap(id);
+        // The keys' pane stays the one shown in front where the right side holds tabs.
+        self.front = if keys == id { main } else { keys };
+        self.reorder();
+        self.active = self.at(keys);
+        let number = self.list[self.at(id)].number;
+        self.active()
+            .tell(format!("pane {number} is the main pane now"));
+    }
+
+    /// `⌃X }` / `⌃X {`: the main pane wider or narrower by `by` percent, within its bounds.
+    fn widen(&mut self, by: i16) {
+        if !self.split() {
+            return;
+        }
+        let share = i32::from(self.grid.share) + i32::from(by);
+        self.grid.share = share.clamp(i32::from(SHARE_LEAST), i32::from(SHARE_MOST)) as u16;
+    }
+
+    /// A click on a tab shows its pane and gives it the keys; the border to the main pane follows the mouse while
+    /// dragged. `true` when the mouse was the frame's, not a pane's.
+    fn on_frame(&mut self, mouse: &crossterm::event::MouseEvent) -> bool {
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                // An `Up` lost while the window was one pane or under a peek ends a drag here.
+                self.dragging = false;
+                if let Some(tabs) = &self.placed.tabs
+                    && contains(tabs.area, mouse.column, mouse.row)
+                {
+                    let names: Vec<(u64, String)> = tabs
+                        .panes
+                        .iter()
+                        .map(|id| (*id, self.tab_name(*id)))
+                        .collect();
+                    // A tab of the last frame whose pane has gone since is no pane to go to.
+                    if let Some(id) = tab_under(tabs.area, &names, tabs.shown, mouse.column)
+                        && let Some(at) = self.list.iter().position(|pane| pane.id == id)
+                    {
+                        self.focus(at);
+                    }
+                    return true;
+                }
+                if self
+                    .placed
+                    .border
+                    .is_some_and(|border| contains(border, mouse.column, mouse.row))
+                {
+                    self.dragging = true;
+                    return true;
+                }
+                false
+            }
+            MouseEventKind::Drag(MouseButton::Left) if self.dragging => {
+                let room = self.room;
+                if room.width > 0 {
+                    let column = u32::from(mouse.column.saturating_sub(room.x));
+                    let share = (column * 100 / u32::from(room.width)) as u16;
+                    self.grid.share = share.clamp(SHARE_LEAST, SHARE_MOST);
+                }
+                true
+            }
+            MouseEventKind::Up(MouseButton::Left) if self.dragging => {
+                self.dragging = false;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// A tab's words: the pane's number and, if it plays one, its role, cut short.
+    pub fn tab_name(&self, id: u64) -> String {
+        // A role's name may be long: a tab keeps room for the others.
+        const MOST_ROLE: usize = 12;
+        let Some(pane) = self.list.iter().find(|pane| pane.id == id) else {
+            return String::new();
+        };
+        match &pane.app.role {
+            Some(role) => format!(
+                "{} {}",
+                pane.number,
+                crate::transcript::cut(&crate::transcript::clean(role), MOST_ROLE)
+            ),
+            None => pane.number.to_string(),
+        }
+    }
+
+    /// Whether one more pane beside the main one keeps each at least [`PANE_MIN_COLUMNS`] and [`PANE_MIN_ROWS`] in
+    /// the room the last frame had; before the first frame there is no telling, and it may.
+    fn room_for_one_more(&self) -> bool {
+        self.room.width == 0
+            || self
+                .grid
+                .fits(self.room, self.grid.others.len() + 1, PANE_MIN_COLUMNS)
     }
 
     /// Closes a peek; a question that came up under it counts as shown only from now.
@@ -1773,8 +1983,7 @@ impl Panes {
 
     /// The list in the layout's reading order, so `⌃P` goes round as the panes stand.
     fn reorder(&mut self) {
-        let mut order = Vec::new();
-        self.layout.order(&mut order);
+        let order = self.grid.order();
         self.list.sort_by_key(|pane| {
             order
                 .iter()
@@ -1790,35 +1999,40 @@ impl Panes {
 
     /// The narrowest the panes may share and keep each at least `least` columns wide.
     pub fn needs(&self, least: u16) -> u16 {
-        self.layout.needs(least)
+        self.grid.needs(least)
     }
 
-    /// Each pane's area in `area`, in the list's order, and the columns that part panes side by side.
-    pub fn areas(&self, area: Rect) -> (Vec<Rect>, Vec<Rect>) {
+    /// Each pane's area in `area`, in the list's order (none for a pane drawn only as a tab), and where the frame's
+    /// lines and tabs stand — kept for the mouse and for the room a new pane would share.
+    pub fn areas(&mut self, area: Rect) -> (Vec<Rect>, Placed) {
         if !self.split() {
-            return (vec![area], Vec::new());
+            self.room = area;
+            self.placed = Placed::default();
+            self.dragging = false;
+            return (vec![area], Placed::default());
         }
-        let mut placed = Vec::new();
-        let mut lines = Vec::new();
-        self.layout.place(area, &mut placed, &mut lines);
+        let active = self.list[self.active].id;
+        let placed = self.grid.place(area, self.front, active);
         let areas = self
             .list
             .iter()
             .map(|pane| {
                 placed
+                    .areas
                     .iter()
                     .find(|(id, _)| *id == pane.id)
                     .map_or(Rect::default(), |(_, area)| *area)
             })
             .collect();
-        (areas, lines)
+        self.room = area;
+        self.placed = placed.clone();
+        (areas, placed)
     }
 }
 
 /// Where a new pane in a git repository works: this folder, or a worktree whose branch the owner may rename first
 /// (the command goes into the input).
 fn where_picker(
-    side: Side,
     resume: bool,
     role: Option<&str>,
     repo: &crate::worktree::Repo,
@@ -1826,12 +2040,6 @@ fn where_picker(
 ) -> crate::picker::Picker {
     use crate::picker::{Item, Pick, Picker};
     let branch = crate::worktree::proposed_branch(repo, number);
-    let letter = match side {
-        Side::Left => "l",
-        Side::Right => "r",
-        Side::Up => "u",
-        Side::Down => "d",
-    };
     let resume_word = if resume { " resume" } else { "" };
     let role_words = role.map_or(String::new(), |role| format!(" as {role}"));
     let items = vec![
@@ -1839,7 +2047,6 @@ fn where_picker(
             "this folder",
             "both panes change the same files",
             Pick::Pane(Request::Split {
-                side,
                 resume,
                 place: Place::Here,
                 role: role.map(str::to_owned),
@@ -1848,12 +2055,70 @@ fn where_picker(
         Item::plain(
             "a new worktree",
             format!("on the branch {branch} — ⏎ puts it in the input to rename first"),
-            Pick::Input(format!(
-                "/split {letter}{resume_word}{role_words} tree {branch}"
-            )),
+            Pick::Input(format!("/split{resume_word}{role_words} tree {branch}")),
         ),
     ];
     Picker::new(format!("Pane {number}: where does it work?"), items, None).guarded()
+}
+
+/// One more agent in the background than [`BACKGROUND_ASKED`] (T36f): asked once a window, no the default.
+fn more_picker(
+    count: usize,
+    name: Option<String>,
+    role: Option<String>,
+    place: Place,
+) -> crate::picker::Picker {
+    use crate::picker::{Item, Pick, Picker};
+    let items = vec![
+        Item::plain("no", "no agent starts", Pick::Shown),
+        Item::plain(
+            "yes, start it",
+            "each agent's turns cost on their own — Glut asks no more in this window",
+            Pick::Pane(Request::Background {
+                name,
+                role,
+                place,
+                sure: true,
+            }),
+        ),
+    ];
+    Picker::new(
+        format!("{count} agents in the background at once?"),
+        items,
+        None,
+    )
+    .guarded()
+}
+
+/// The tab under `column` on a line of tabs drawn as [`tab_spots`] lays them out.
+fn tab_under(area: Rect, names: &[(u64, String)], shown: u64, column: u16) -> Option<u64> {
+    tab_spots(area, names, shown)
+        .into_iter()
+        .find(|(_, spot)| column >= spot.x && column < spot.x + spot.width)
+        .map(|(id, _)| id)
+}
+
+/// Where each tab stands on its line: ` name ` after ` name `, from the left, as many as fit — starting late enough
+/// that the tab of `shown` is among them.
+pub fn tab_spots(area: Rect, names: &[(u64, String)], shown: u64) -> Vec<(u64, Rect)> {
+    let laid = |from: usize| {
+        let mut x = area.x;
+        let end = area.x + area.width;
+        let mut spots = Vec::new();
+        for (id, name) in &names[from..] {
+            let width = unicode_width::UnicodeWidthStr::width(name.as_str()) as u16 + 2;
+            if x + width > end {
+                break;
+            }
+            spots.push((*id, Rect::new(x, area.y, width, 1)));
+            x += width + 1;
+        }
+        spots
+    };
+    (0..names.len())
+        .map(laid)
+        .find(|spots| spots.iter().any(|(id, _)| *id == shown))
+        .unwrap_or_else(|| laid(0))
 }
 
 /// How a worktree's pane ends, with what it holds said.
@@ -1969,15 +2234,14 @@ mod tests {
         (App::new(Arc::new(parts), engine, send), receive)
     }
 
-    /// Two panes, the second built to the `side` of the first, without starting a real session.
-    fn split(side: Side) -> (Panes, Inlets) {
+    /// Two panes, the second built beside the main one, without starting a real session.
+    fn split() -> (Panes, Inlets) {
         let (first, reports) = app();
         let (mut panes, inlets) = Panes::new(first, reports, true, Servers::Owner);
         let (sender, _) = mpsc::unbounded_channel();
         panes.building = Some(Building {
             id: 2,
             number: 2,
-            side,
             resume: false,
             tree: None,
             role: None,
@@ -1997,7 +2261,6 @@ mod tests {
         panes.building = Some(Building {
             id: 2,
             number: 2,
-            side: Side::Right,
             resume: false,
             tree: None,
             role: None,
@@ -2019,40 +2282,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_new_pane_takes_the_next_number_where_it_was_asked_for_and_the_keys() {
-        let (panes, _inlets) = split(Side::Right);
+    async fn a_new_pane_takes_the_next_number_beside_the_main_one_and_the_keys() {
+        let (mut panes, _inlets) = split();
         assert_eq!(
             (numbers_of(&panes), panes.active, panes.needs(60)),
             (vec![1, 2], 1, 121)
         );
-        let (panes, _inlets) = split(Side::Left);
-        assert_eq!(
-            (numbers_of(&panes), panes.active),
-            (vec![2, 1], 0),
-            "2 stands left"
-        );
-        let (panes, _inlets) = split(Side::Down);
-        assert_eq!(panes.needs(60), 60, "one above the other share the width");
-        let (areas, lines) = panes.areas(Rect::new(0, 0, 100, 41));
-        assert_eq!((areas[0].height, areas[1].y, areas[1].height), (20, 20, 21));
-        assert!(lines.is_empty(), "one above the other: no column between");
-        let (panes, _inlets) = split(Side::Right);
-        let (areas, lines) = panes.areas(Rect::new(0, 0, 101, 40));
+        let (areas, placed) = panes.areas(Rect::new(0, 0, 101, 40));
         assert_eq!(
             (areas[0].width, areas[1].x, areas[1].width),
             (50, 51, 50),
             "a column parts them"
         );
-        assert_eq!(lines, [Rect::new(50, 0, 1, 40)]);
+        assert_eq!(placed.lines, [Rect::new(50, 0, 1, 40)]);
+        assert_eq!(placed.border, Some(Rect::new(50, 0, 1, 40)));
     }
 
-    /// Pane `number` built at `side` of the active one, as `on_built` makes it.
-    fn add(panes: &mut Panes, number: u8, side: Side) {
+    /// Pane `number` built into the grid, as `on_built` makes it.
+    fn add(panes: &mut Panes, number: u8) {
         let (sender, _) = mpsc::unbounded_channel();
         panes.building = Some(Building {
             id: u64::from(number),
             number,
-            side,
             resume: false,
             tree: None,
             role: None,
@@ -2064,44 +2315,92 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_pane_split_again_stands_where_asked_and_closing_one_closes_the_gap() {
-        let (mut panes, _inlets) = split(Side::Right);
-        // Pane 2 on the right, split below: 1 | (2 over 3).
-        add(&mut panes, 3, Side::Down);
+    async fn panes_fill_the_grid_beside_the_main_one_and_closing_one_closes_the_gap() {
+        let (mut panes, _inlets) = split();
+        // 1 | (2 over 3): the main pane keeps its full height.
+        add(&mut panes, 3);
         assert_eq!(numbers_of(&panes), vec![1, 2, 3]);
-        assert_eq!(panes.needs(60), 121);
-        let (areas, lines) = panes.areas(Rect::new(0, 0, 101, 40));
+        let (areas, placed) = panes.areas(Rect::new(0, 0, 101, 40));
         assert_eq!(areas[0], Rect::new(0, 0, 50, 40));
         assert_eq!(
             (areas[1], areas[2]),
             (Rect::new(51, 0, 50, 20), Rect::new(51, 20, 50, 20))
         );
-        assert_eq!(lines.len(), 1);
-        // Back to pane 1, split below too: (1 over 4) | (2 over 3); ⌃P goes round in reading order.
+        assert_eq!(placed.lines.len(), 1);
+        // From any pane a new one goes last into the grid: 1 | (2 4 over 3 … ) — 2 + 1, then 2 + 2, then 3 + 2.
         panes.focus(0);
-        add(&mut panes, 4, Side::Down);
-        assert_eq!(numbers_of(&panes), vec![1, 4, 2, 3]);
-        let (areas, _) = panes.areas(Rect::new(0, 0, 101, 40));
-        assert_eq!(areas[1], Rect::new(0, 20, 50, 20));
+        add(&mut panes, 4);
+        assert_eq!(numbers_of(&panes), vec![1, 2, 3, 4]);
+        let (areas, _) = panes.areas(Rect::new(0, 0, 201, 40));
+        assert_eq!(
+            (areas[1], areas[2], areas[3]),
+            (
+                Rect::new(101, 0, 49, 20),
+                Rect::new(151, 0, 50, 20),
+                Rect::new(101, 20, 100, 20)
+            )
+        );
+        add(&mut panes, 5);
+        add(&mut panes, 6);
+        assert_eq!(panes.visible(), MOST);
         press(&mut panes, KeyCode::Char('x'), KeyModifiers::CONTROL);
         press(&mut panes, KeyCode::Char('2'), KeyModifiers::NONE);
-        assert!(panes.building.is_none(), "at most four");
-        // Closing pane 2: pane 3 takes its whole column.
-        panes.focus(2);
+        assert!(panes.building.is_none(), "at most six");
+        // Closing pane 2: the others move up in reading order.
+        panes.focus(1);
         press(&mut panes, KeyCode::Char('x'), KeyModifiers::CONTROL);
         press(&mut panes, KeyCode::Char('0'), KeyModifiers::NONE);
-        assert_eq!(numbers_of(&panes), vec![1, 4, 3]);
-        let (areas, _) = panes.areas(Rect::new(0, 0, 101, 40));
-        assert_eq!(areas[2], Rect::new(51, 0, 50, 40));
-        assert_eq!(
-            panes.list[panes.active].number, 3,
-            "the keys go to a neighbour"
-        );
+        assert_eq!(numbers_of(&panes), vec![1, 3, 4, 5, 6]);
+        assert_eq!(panes.grid.others, [3, 4, 5, 6]);
+        // The main pane is never closed; /swap puts another in its place, the keys staying where they are.
+        panes.focus(0);
+        press(&mut panes, KeyCode::Char('x'), KeyModifiers::CONTROL);
+        press(&mut panes, KeyCode::Char('0'), KeyModifiers::NONE);
+        assert_eq!(panes.visible(), 5, "the main pane stays");
+        panes.active().pane_request = Some(Request::Swap(Some("4".into())));
+        panes.settle(&(Arc::new(crate::Standalone) as Arc<dyn Host>));
+        assert_eq!(numbers_of(&panes), vec![4, 3, 1, 5, 6]);
+        assert_eq!(panes.list[panes.active].number, 1, "the keys stay");
+    }
+
+    #[tokio::test]
+    async fn a_new_pane_waits_for_room_and_the_border_moves_by_key_and_mouse() {
+        let host = Arc::new(crate::Standalone) as Arc<dyn Host>;
+        let (mut panes, _inlets) = split();
+        // A window just wide enough for two: a third would be under 40 columns or 8 rows nowhere — two over each other
+        // fit, but a narrow low window refuses it.
+        let _ = panes.areas(Rect::new(0, 0, 90, 14));
+        assert!(!panes.room_for_one_more(), "7 rows each");
+        let _ = panes.areas(Rect::new(0, 0, 90, 40));
+        assert!(panes.room_for_one_more());
+        press(&mut panes, KeyCode::Char('x'), KeyModifiers::CONTROL);
+        press(&mut panes, KeyCode::Char('}'), KeyModifiers::NONE);
+        assert_eq!(panes.grid.share, SHARE + 5);
+        for _ in 0..20 {
+            panes.active().pane_request = Some(Request::Widen(-SHARE_STEP));
+            panes.settle(&host);
+        }
+        assert_eq!(panes.grid.share, SHARE_LEAST, "within its bounds");
+        // The border dragged by the mouse.
+        let _ = panes.areas(Rect::new(0, 0, 100, 40));
+        let border = panes.placed.border.unwrap();
+        let mouse = |kind, column| {
+            TermEvent::Mouse(MouseEvent {
+                kind,
+                column,
+                row: 5,
+                modifiers: KeyModifiers::NONE,
+            })
+        };
+        panes.on_terminal(mouse(MouseEventKind::Down(MouseButton::Left), border.x));
+        panes.on_terminal(mouse(MouseEventKind::Drag(MouseButton::Left), 70));
+        panes.on_terminal(mouse(MouseEventKind::Up(MouseButton::Left), 70));
+        assert_eq!((panes.grid.share, panes.dragging), (70, false));
     }
 
     #[tokio::test]
     async fn ctrl_bracket_moves_the_keys_and_a_click_moves_into_the_pane_under_it() {
-        let (mut panes, _inlets) = split(Side::Right);
+        let (mut panes, _inlets) = split();
         press(&mut panes, KeyCode::Char(']'), KeyModifiers::CONTROL);
         assert_eq!(panes.active, 0);
         press(&mut panes, KeyCode::Char('5'), KeyModifiers::CONTROL);
@@ -2146,15 +2445,17 @@ mod tests {
     #[tokio::test]
     async fn quit_ends_all_but_asks_once_more_while_another_pane_works_and_close_keeps_the_numbers()
     {
-        let (mut panes, _inlets) = split(Side::Right);
+        let (mut panes, _inlets) = split();
         panes.list[0].app.working_for_tests();
         panes.list[1].app.quit = true;
         assert!(!panes.quitting(), "pane 1 still works");
         assert!(!panes.list[1].app.quit);
         panes.list[1].app.quit = true;
         assert!(panes.quitting(), "the second /quit ends all");
-        let (mut panes, _inlets) = split(Side::Right);
-        panes.active = 0;
+        let (mut panes, _inlets) = split();
+        panes.active().pane_request = Some(Request::Swap(None));
+        panes.settle(&(Arc::new(crate::Standalone) as Arc<dyn Host>));
+        panes.active = 1;
         press(&mut panes, KeyCode::Char('x'), KeyModifiers::CONTROL);
         press(&mut panes, KeyCode::Char('0'), KeyModifiers::NONE);
         assert_eq!(numbers_of(&panes), vec![2], "pane 2 keeps its number");
@@ -2167,7 +2468,7 @@ mod tests {
     async fn a_switch_goes_at_once_while_nothing_works_and_asks_first_while_a_pane_does() {
         let host: Arc<dyn Host> = Arc::new(crate::Standalone);
         let there = std::path::PathBuf::from("/elsewhere");
-        let (mut panes, _inlets) = split(Side::Right);
+        let (mut panes, _inlets) = split();
         // The window's own folder — asked from any of its panes — is no switch.
         let own = panes.cwd.clone();
         panes.list[1].app.pane_request = Some(Request::Switch(own));
@@ -2177,7 +2478,7 @@ mod tests {
         panes.settle(&host);
         assert_eq!(panes.switch_to, Some(there.clone()));
         assert!(panes.quitting(), "the window ends as at a /quit");
-        let (mut panes, _inlets) = split(Side::Right);
+        let (mut panes, _inlets) = split();
         panes.list[0].app.working_for_tests();
         panes.list[1].app.pane_request = Some(Request::Switch(there.clone()));
         panes.settle(&host);
@@ -2200,7 +2501,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_kill_ends_every_pane_even_while_one_works() {
-        let (mut panes, _inlets) = split(Side::Right);
+        let (mut panes, _inlets) = split();
         panes.list[0].app.working_for_tests();
         panes.list[1].app.abandon();
         assert!(panes.quitting());
@@ -2209,7 +2510,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_closed_sessions_late_report_reaches_no_pane_though_its_number_is_taken_again() {
-        let (mut panes, _inlets) = split(Side::Right);
+        let (mut panes, _inlets) = split();
         let old = panes.list[1].id;
         press(&mut panes, KeyCode::Char('x'), KeyModifiers::CONTROL);
         press(&mut panes, KeyCode::Char('0'), KeyModifiers::NONE);
@@ -2217,7 +2518,6 @@ mod tests {
         panes.building = Some(Building {
             id: 7,
             number: 2,
-            side: Side::Right,
             resume: false,
             tree: None,
             role: None,
@@ -2245,7 +2545,6 @@ mod tests {
         panes.building = Some(Building {
             id: 2,
             number: 2,
-            side: Side::Left,
             resume: false,
             tree: None,
             role: None,
@@ -2256,53 +2555,48 @@ mod tests {
         panes.on_built(Ok(session::for_tests()));
         assert_eq!(
             (numbers_of(&panes), panes.active),
-            (vec![2, 1], 1),
+            (vec![1, 2], 0),
             "pane 1 keeps the keys"
         );
     }
 
     #[test]
-    fn split_reads_its_side_resume_and_where() {
+    fn split_reads_resume_where_and_a_role_but_no_side() {
         assert_eq!(
             parse_split("").unwrap(),
             Request::Split {
-                side: Side::Right,
                 resume: false,
                 place: Place::Ask,
                 role: None,
             }
         );
         assert_eq!(
-            parse_split("d resume here").unwrap(),
+            parse_split("resume here").unwrap(),
             Request::Split {
-                side: Side::Down,
                 resume: true,
                 place: Place::Here,
                 role: None,
             }
         );
         assert_eq!(
-            parse_split("tree glut/plan r").unwrap(),
+            parse_split("tree glut/plan").unwrap(),
             Request::Split {
-                side: Side::Right,
                 resume: false,
                 place: Place::Tree("glut/plan".into()),
                 role: None,
             }
         );
         assert_eq!(
-            parse_split("l tree").unwrap(),
+            parse_split("tree").unwrap(),
             Request::Split {
-                side: Side::Left,
                 resume: false,
                 place: Place::Tree(String::new()),
                 role: None,
             }
         );
         assert_eq!(
-            parse_split("d as reviewer tree").unwrap(),
+            parse_split("as reviewer tree").unwrap(),
             Request::Split {
-                side: Side::Down,
                 resume: false,
                 place: Place::Tree(String::new()),
                 role: Some("reviewer".into()),
@@ -2310,6 +2604,8 @@ mod tests {
         );
         assert!(parse_split("as").is_err());
         assert!(parse_split("sideways").is_err());
+        let side = parse_split("d").unwrap_err();
+        assert!(side.contains("no side"), "{side}");
     }
 
     #[tokio::test]
@@ -2345,7 +2641,7 @@ mod tests {
         }
         press(&mut panes, KeyCode::Down, KeyModifiers::NONE);
         press(&mut panes, KeyCode::Enter, KeyModifiers::NONE);
-        assert_eq!(panes.active().input.text(), "/split d tree glut/pane-2");
+        assert_eq!(panes.active().input.text(), "/split tree glut/pane-2");
         let _ = std::fs::remove_dir_all(repo.parent().unwrap());
     }
 
@@ -2355,7 +2651,7 @@ mod tests {
         let repo = crate::worktree::repo_of(&repo).unwrap().unwrap();
         let tree = crate::worktree::add(&home, &repo, "glut/pane-2").unwrap();
         crate::worktree::testing::commit(&tree.place, "b.txt", "two\n");
-        let (mut panes, _inlets) = split(Side::Right);
+        let (mut panes, _inlets) = split();
         panes.list[1].tree = Some(tree.clone());
         press(&mut panes, KeyCode::Char('x'), KeyModifiers::CONTROL);
         press(&mut panes, KeyCode::Char('0'), KeyModifiers::NONE);
@@ -2436,7 +2732,7 @@ mod tests {
                 })
                 .collect()
         };
-        let (mut panes, _inlets) = split(Side::Right);
+        let (mut panes, _inlets) = split();
         panes.active = 0;
         panes.sync();
         panes.active().pane_request = Some(parse_send("look at a.rs").unwrap());
@@ -2468,7 +2764,7 @@ mod tests {
             "{notes:?}"
         );
         // A first number naming no other pane is the message's own word.
-        let (mut panes, _inlets) = split(Side::Right);
+        let (mut panes, _inlets) = split();
         panes.active = 0;
         panes.active().pane_request = Some(parse_send("3 files changed").unwrap());
         panes.settle(&(Arc::new(crate::Standalone) as Arc<dyn Host>));
@@ -2490,7 +2786,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_models_message_is_no_word_of_the_owners_and_a_long_chain_waits_for_one() {
-        let (mut panes, _inlets) = split(Side::Right);
+        let (mut panes, _inlets) = split();
         panes.sync();
         let (first, second) = (panes.list[0].id, panes.list[1].id);
         let said = told(&mut panes, first, None, "which test fails?").unwrap();
@@ -2724,7 +3020,7 @@ mod tests {
                 .starts_with("delivered")
         );
         panes.active = 1;
-        panes.active().pane_request = Some(parse_split("d as nobody here").unwrap());
+        panes.active().pane_request = Some(parse_split("as nobody here").unwrap());
         panes.settle(&(Arc::new(crate::Standalone) as Arc<dyn Host>));
         assert!(
             panes.building.is_none(),
@@ -2739,11 +3035,13 @@ mod tests {
             Request::Background {
                 name: None,
                 role: None,
-                place: Place::Ask
+                place: Place::Ask,
+                sure: false
             }
         ));
-        let Request::Background { name, role, place } =
-            parse_background("critic as reviewer tree fix-x").unwrap()
+        let Request::Background {
+            name, role, place, ..
+        } = parse_background("critic as reviewer tree fix-x").unwrap()
         else {
             panic!("not a background request");
         };
@@ -2820,6 +3118,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_seventh_agent_in_the_background_is_asked_for_once() {
+        let host = Arc::new(crate::Standalone) as Arc<dyn Host>;
+        let (mut panes, _inlets) = with_background("a1");
+        for n in 2..=BACKGROUND_ASKED {
+            let (sender, _) = mpsc::unbounded_channel();
+            panes.building = Some(Building {
+                id: 10 + n as u64,
+                number: 10 + n as u8,
+                resume: false,
+                tree: None,
+                role: None,
+                background: Some(format!("a{n}")),
+                restore: None,
+                reports: sender,
+            });
+            panes.on_built(Ok(session::for_tests()));
+        }
+        assert_eq!(panes.list.len() - panes.visible(), BACKGROUND_ASKED);
+        panes.active().pane_request = Some(parse_background("a7 here").unwrap());
+        panes.settle(&host);
+        assert!(panes.building.is_none(), "nothing starts before the answer");
+        let picker = panes.active().picker.as_ref().expect("asked");
+        assert!(
+            picker.guarded && picker.title.starts_with("7 agents"),
+            "{}",
+            picker.title
+        );
+        assert_eq!(
+            picker.chosen(),
+            Some(crate::picker::Pick::Shown),
+            "no is the default"
+        );
+        let yes = picker
+            .shown()
+            .iter()
+            .find(|item| item.label.starts_with("yes"))
+            .map(|item| item.pick.clone());
+        assert_eq!(
+            yes,
+            Some(crate::picker::Pick::Pane(Request::Background {
+                name: Some("a7".into()),
+                role: None,
+                place: Place::Here,
+                sure: true,
+            }))
+        );
+    }
+
+    #[tokio::test]
     async fn a_model_tells_an_agent_in_the_background_by_its_name() {
         let (mut panes, _inlets) = with_background("critic");
         panes.sync();
@@ -2840,7 +3187,6 @@ mod tests {
         panes.building = Some(Building {
             id: 3,
             number: 3,
-            side: Side::Right,
             resume: false,
             tree: None,
             role: None,
@@ -2905,12 +3251,11 @@ mod tests {
     #[tokio::test]
     async fn a_click_where_a_hidden_pane_stood_never_moves_the_keys_behind_the_screen() {
         let host = Arc::new(crate::Standalone) as Arc<dyn Host>;
-        let (mut panes, _inlets) = split(Side::Right);
+        let (mut panes, _inlets) = split();
         let (sender, _) = mpsc::unbounded_channel();
         panes.building = Some(Building {
             id: 3,
             number: 3,
-            side: Side::Right,
             resume: false,
             tree: None,
             role: None,
@@ -2942,14 +3287,13 @@ mod tests {
     async fn a_window_keeps_its_layout_and_gets_it_back_pane_by_pane() {
         let dir = std::env::temp_dir().join(format!("glut-kept-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        // Two panes side by side, the second split below, and an agent behind them.
-        let (mut panes, _inlets) = split(Side::Right);
+        // The main pane, two beside it, and an agent behind them.
+        let (mut panes, _inlets) = split();
         panes.cwd = dir.clone();
         let (sender, _) = mpsc::unbounded_channel();
         panes.building = Some(Building {
             id: 3,
             number: 3,
-            side: Side::Down,
             resume: false,
             tree: None,
             role: None,
@@ -2961,7 +3305,6 @@ mod tests {
         panes.building = Some(Building {
             id: 4,
             number: 4,
-            side: Side::Right,
             resume: false,
             tree: None,
             role: None,
@@ -2970,12 +3313,12 @@ mod tests {
             reports: sender.clone(),
         });
         panes.on_built(Ok(session::for_tests()));
-        let shape_before = panes.layout.shape(&[1, 2, 3]);
+        panes.grid.share = 60;
         let home = panes.list[0].app.parts.home.clone();
         panes.keep_layout();
         let kept = crate::layout::load(&home, &dir).unwrap();
         assert_eq!(kept.summary(), "3 panes, 1 agent");
-        assert_eq!(kept.shape, shape_before);
+        assert_eq!(kept.share, 60);
         assert_eq!(kept.panes[3].agent.as_deref(), Some("critic"));
         // A new window of one pane takes it back: each kept pane built in turn, then the split as it stood.
         let (first, reports) = app();
@@ -2993,7 +3336,6 @@ mod tests {
             back.building = Some(Building {
                 id: next_id,
                 number: u8::try_from(at + 1).unwrap(),
-                side: Side::Right,
                 resume: false,
                 tree: None,
                 role: None,
@@ -3007,9 +3349,13 @@ mod tests {
         back.restore_step(&(Arc::new(crate::Standalone) as Arc<dyn Host>));
         assert!(back.restoring.is_none());
         assert_eq!(
-            back.layout.shape(&[1, 10, 11]),
-            shape_before,
-            "the split as it stood"
+            back.grid,
+            Grid {
+                main: 1,
+                others: vec![10, 11],
+                share: 60
+            },
+            "the grid as it stood"
         );
         assert_eq!((back.visible(), back.list.len()), (3, 4));
         // A window ending with one pane forgets it.
@@ -3040,7 +3386,7 @@ mod tests {
 
     #[tokio::test]
     async fn each_pane_has_its_footer_with_its_number_and_the_cursor_is_the_active_ones() {
-        let (mut panes, _inlets) = split(Side::Right);
+        let (mut panes, _inlets) = split();
         for pane in &mut panes.list {
             pane.app.separators = crate::footer::Separators::Plain;
         }
@@ -3063,35 +3409,65 @@ mod tests {
     }
 
     #[test]
-    fn closing_a_pane_shares_its_room_evenly_again() {
-        // 1 | (2 over (3 | 4)): the inner pair takes a quarter each, so all four need 4 × 60 and three columns.
-        let mut layout = Node::Pane(1);
-        assert!(layout.split(1, 2, Side::Right));
-        assert!(layout.split(2, 3, Side::Down));
-        assert!(layout.split(3, 4, Side::Right));
-        assert_eq!(layout.needs(60), 243);
-        layout.remove(2);
+    fn the_grid_beside_the_main_pane_fills_two_rows_and_takes_one_out_evenly() {
         assert_eq!(
-            layout,
-            Node::Split {
-                stacked: false,
-                parts: vec![Node::Pane(1), Node::Pane(3), Node::Pane(4)],
-            },
-            "one row of three, not a pair inside a pair"
+            (1..=5).map(Grid::rows).collect::<Vec<_>>(),
+            [(1, 0), (1, 1), (2, 1), (2, 2), (3, 2)]
         );
-        assert_eq!(layout.needs(60), 182);
-        layout.remove(3);
-        layout.remove(4);
-        assert_eq!(layout, Node::Pane(1));
+        let mut grid = Grid::new(1);
+        grid.others = vec![2, 3, 4, 5, 6];
+        // 3 + 2 beside the main half: the top row's three need 3 × 60 and two columns, the main half as much.
+        assert_eq!(grid.needs(60), 365);
+        grid.remove(4);
+        assert_eq!(grid.others, [2, 3, 5, 6]);
+        grid.remove(1);
+        assert_eq!(
+            (grid.main, grid.order()),
+            (2, vec![2, 3, 5, 6]),
+            "the first of the others takes the main place"
+        );
+        assert!(
+            grid.swap(5) && grid.order() == [5, 3, 2, 6],
+            "trading places"
+        );
+        assert!(!grid.swap(9));
     }
 
     #[test]
-    fn a_side_is_a_letter_or_its_word() {
-        assert_eq!(Side::parse("l"), Some(Side::Left));
-        assert_eq!(Side::parse("down"), Some(Side::Down));
-        assert_eq!(Side::parse("x"), None);
-        assert!(Side::Up.stacked() && Side::Up.before());
-        assert!(!Side::Right.stacked() && !Side::Right.before());
+    fn a_window_too_small_for_its_panes_shows_them_as_tabs() {
+        let mut grid = Grid::new(1);
+        grid.others = vec![2, 3, 4];
+        // Wide: the right side in a grid, no tabs.
+        let placed = grid.place(Rect::new(0, 0, 200, 40), 2, 1);
+        assert!(placed.tabs.is_none() && placed.areas.len() == 4);
+        // The right side too narrow for two columns of 40: its panes as tabs, the one last in front shown whole.
+        let placed = grid.place(Rect::new(0, 0, 120, 40), 3, 1);
+        let tabs = placed.tabs.unwrap();
+        assert_eq!((tabs.panes.clone(), tabs.shown), (vec![2, 3, 4], 3));
+        assert_eq!(
+            placed.areas,
+            [(1, Rect::new(0, 0, 60, 40)), (3, Rect::new(61, 1, 59, 39))]
+        );
+        // The pane with the keys is always the one shown, whatever was in front before.
+        let placed = grid.place(Rect::new(0, 0, 120, 40), 3, 4);
+        assert_eq!(placed.tabs.unwrap().shown, 4);
+        // Too narrow for two panes at all: every one a tab, the active one whole.
+        let placed = grid.place(Rect::new(0, 0, 70, 40), 3, 1);
+        assert_eq!(placed.tabs.unwrap().panes, [1, 2, 3, 4]);
+        assert_eq!(placed.areas, [(1, Rect::new(0, 1, 70, 39))]);
+        assert!(placed.border.is_none());
+        // A tab is found where it was drawn.
+        let names = [(1, "1".to_owned()), (2, "2 reviewer".to_owned())];
+        let spots = tab_spots(Rect::new(0, 0, 70, 1), &names, 1);
+        assert_eq!(
+            spots,
+            [(1, Rect::new(0, 0, 3, 1)), (2, Rect::new(4, 0, 12, 1))]
+        );
+        assert_eq!(tab_under(Rect::new(0, 0, 70, 1), &names, 1, 6), Some(2));
+        assert_eq!(tab_under(Rect::new(0, 0, 70, 1), &names, 1, 3), None);
+        // A line too short for all: it starts late enough to hold the tab shown.
+        let spots = tab_spots(Rect::new(0, 0, 14, 1), &names, 2);
+        assert_eq!(spots, [(2, Rect::new(0, 0, 12, 1))]);
     }
 
     #[test]
