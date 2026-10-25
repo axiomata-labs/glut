@@ -23,11 +23,11 @@ pub async fn first_provider(home: &Path) -> Result<bool, String> {
     if !list.providers.is_empty() {
         return Ok(false);
     }
-    println!("Glut has no model provider yet. Pick one (the number), or Enter to stop:\n");
+    println!("{}\n", tr!(setup_pick_provider));
     for (at, known) in CATALOG.iter().enumerate() {
         println!("  {:>2}  {:<26} {}", at + 1, known.name, known.note);
     }
-    let answer = ask("\nProvider: ")?;
+    let answer = ask(&format!("\n{} ", tr!(setup_provider_prompt)))?;
     let known = answer
         .trim()
         .parse::<usize>()
@@ -35,7 +35,7 @@ pub async fn first_provider(home: &Path) -> Result<bool, String> {
         .and_then(|at| at.checked_sub(1))
         .and_then(|at| CATALOG.get(at))
         .or_else(|| catalog::known(answer.trim()))
-        .ok_or("no provider chosen — `glut` again starts the setup")?;
+        .ok_or(tr!(setup_no_provider))?;
     let mut entry = Entry {
         kind: known.id.to_owned(),
         root: None,
@@ -47,22 +47,19 @@ pub async fn first_provider(home: &Path) -> Result<bool, String> {
     let store = list.store(home).map_err(|err| err.to_string())?;
     let account = providers::account(known.id, &entry);
     if known.sign_in == SignIn::Key {
-        let key = secret(&format!("Key for {} (not shown): ", known.name))?;
+        let key = secret(&format!("{} ", tr!(setup_key, provider = known.name)))?;
         if key.is_empty() {
-            return Err("no key given — `glut` again starts the setup".into());
+            return Err(tr!(setup_no_key).into());
         }
         store.set(&account, &key).map_err(|err| err.to_string())?;
-        println!("The key is in {}.", store.place());
+        println!("{}", tr!(setup_key_kept, place = store.place()));
     }
     list.providers.insert(known.id.to_owned(), entry.clone());
     entry.model = Some(choose_model(home, &list, store.as_ref(), known.id, known.name).await?);
     list.providers.insert(known.id.to_owned(), entry);
     list.default = Some(known.id.to_owned());
     list.save(home).map_err(|err| err.to_string())?;
-    println!(
-        "Done — {} is your provider; /model and /provider change it later.\n",
-        known.name
-    );
+    println!("{}\n", tr!(setup_provider_done, provider = known.name));
     Ok(true)
 }
 
@@ -90,14 +87,14 @@ pub async fn missing_model(
     let name = catalog::known(&entry.kind)
         .map_or(id.as_str(), |known| known.name)
         .to_owned();
-    println!("{name} has no model yet. Pick the one Glut takes when none is named:\n");
+    println!("{}\n", tr!(setup_pick_model, provider = name));
     let store = list.store(home).map_err(|err| err.to_string())?;
     let chosen = choose_model(home, &list, store.as_ref(), &id, &name).await?;
     if let Some(entry) = list.providers.get_mut(&id) {
         entry.model = Some(chosen);
     }
     list.save(home).map_err(|err| err.to_string())?;
-    println!("Done — /model changes it later.\n");
+    println!("{}\n", tr!(setup_model_done));
     Ok(())
 }
 
@@ -113,7 +110,7 @@ async fn choose_model(
     let resolved = providers::resolve(list, store, Some(id), Some("-"), |name| {
         std::env::var(name).ok()
     })?;
-    println!("Asking {name} for its models…");
+    println!("{}", tr!(setup_asking_models, provider = name));
     let offered = match models::fetch(&resolved.endpoint, resolved.protocol).await {
         Ok(found) => {
             let _ = models::keep(home, id, &found);
@@ -130,14 +127,14 @@ async fn choose_model(
                 .collect()
         }
         Err(reason) => {
-            println!("No model list ({reason}); type the model's id.");
+            println!("{}", tr!(setup_no_list, reason = reason));
             Vec::new()
         }
     };
     for (at, id) in offered.iter().enumerate() {
         println!("  {:>2}  {}", at + 1, models::printable(id));
     }
-    let answer = ask("Model (the number, or its id): ")?;
+    let answer = ask(&format!("{} ", tr!(setup_model_prompt)))?;
     answer
         .trim()
         .parse::<usize>()
@@ -145,7 +142,7 @@ async fn choose_model(
         .and_then(|at| at.checked_sub(1))
         .and_then(|at| offered.get(at).cloned())
         .or_else(|| Some(answer.trim().to_owned()).filter(|id| !id.is_empty()))
-        .ok_or_else(|| "no model chosen — `glut` again asks for one".to_owned())
+        .ok_or_else(|| tr!(setup_no_model).to_owned())
 }
 
 /// A line typed by the owner.
@@ -171,7 +168,7 @@ fn secret(prompt: &str) -> Result<String, String> {
                 Event::Key(key) if key.kind != KeyEventKind::Release => match key.code {
                     KeyCode::Enter => return Ok(secret),
                     KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        return Err("setup stopped".into());
+                        return Err(tr!(setup_stopped).into());
                     }
                     KeyCode::Backspace => {
                         secret.pop();

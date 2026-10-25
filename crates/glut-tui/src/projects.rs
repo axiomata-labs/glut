@@ -83,7 +83,7 @@ impl Picks {
     /// its shape — a change of the picks must not write over it.
     pub fn read(home: &Path) -> Result<Picks, String> {
         let file = path(home);
-        let odd = || format!("{} is not what Glut writes — left as it is", file.display());
+        let odd = || tr!(not_glut_file, path = file.display());
         match std::fs::symlink_metadata(&file) {
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Picks::default()),
             // A plain file only: a FIFO would hold the list up on its opening.
@@ -202,7 +202,7 @@ pub fn list(home: &Path) -> Vec<Project> {
 pub fn folder_of(typed: &str, home: &Path, cwd: &Path) -> Result<PathBuf, String> {
     let typed = typed.trim();
     if typed.is_empty() {
-        return Err("no folder — /projects <path>".into());
+        return Err(tr!(projects_no_folder).into());
     }
     let named = match typed.strip_prefix('~') {
         Some(rest) if rest.is_empty() || rest.starts_with('/') => {
@@ -213,14 +213,12 @@ pub fn folder_of(typed: &str, home: &Path, cwd: &Path) -> Result<PathBuf, String
     let shown = crate::transcript::clean(typed);
     let folder = named
         .canonicalize()
-        .map_err(|_| format!("{shown}: no such folder"))?;
+        .map_err(|_| tr!(no_such_folder, folder = shown))?;
     if !folder.is_dir() {
-        return Err(format!("{shown}: not a folder"));
+        return Err(tr!(not_a_folder, folder = shown));
     }
     if is_worktree(home, &folder) {
-        return Err(format!(
-            "{shown}: one of Glut's worktrees — its pane opens with the project it was split from"
-        ));
+        return Err(tr!(is_glut_worktree, folder = shown));
     }
     Ok(folder)
 }
@@ -269,12 +267,13 @@ pub fn shown_path(folder: &Path, home: &Path) -> String {
 /// How long ago `then` was, in a few words.
 pub fn ago(then: DateTime<Utc>, now: DateTime<Utc>) -> String {
     let minutes = (now - then).num_minutes().max(0);
+    let texts = crate::texts::t();
     match minutes {
-        0 => "just now".into(),
-        1..=59 => format!("{minutes} min ago"),
-        60..=1439 => format!("{} h ago", minutes / 60),
-        1440..=2879 => "yesterday".into(),
-        _ => format!("{} days ago", minutes / 1440),
+        0 => tr!(just_now).into(),
+        1..=59 => tr!(minutes_ago, n = minutes),
+        60..=1439 => tr!(hours_ago, n = minutes / 60),
+        1440..=2879 => tr!(yesterday).into(),
+        _ => texts.days_ago.of((minutes / 1440) as u64),
     }
 }
 

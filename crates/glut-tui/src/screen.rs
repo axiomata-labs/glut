@@ -63,6 +63,11 @@ pub async fn standalone_switching(
     open: Open,
 ) -> (std::process::ExitCode, Option<std::path::PathBuf>) {
     if let Ok(home) = glut::permissions::settings::home_dir() {
+        // The language read from the first line on: the setup and the start speak it too (T48).
+        crate::texts::apply(
+            crate::prefs::Prefs::load(&home).language.as_deref(),
+            launch.language,
+        );
         if let Err(reason) = setup::first_provider(&home).await {
             eprintln!("glut: {reason}");
             return (std::process::ExitCode::from(1), None);
@@ -87,7 +92,10 @@ pub fn restart_in(folder: &std::path::Path) -> std::process::ExitCode {
     let program = match std::env::current_exe() {
         Ok(program) => program,
         Err(err) => {
-            eprintln!("glut: cannot start again in {shown}: {err}");
+            eprintln!(
+                "glut: {}",
+                tr!(restart_failed, folder = shown, reason = err)
+            );
             return std::process::ExitCode::from(1);
         }
     };
@@ -99,7 +107,10 @@ pub fn restart_in(folder: &std::path::Path) -> std::process::ExitCode {
     ));
     // Only comes back when it could not start.
     let err = command.exec();
-    eprintln!("glut: cannot start again in {shown}: {err}");
+    eprintln!(
+        "glut: {}",
+        tr!(restart_failed, folder = shown, reason = err)
+    );
     std::process::ExitCode::from(1)
 }
 
@@ -125,7 +136,7 @@ async fn run_switching(
     let (reports, from_session) = mpsc::unbounded_channel();
     // A pane split off later starts the same servers, never more (`--strict-mcp-config` stays strict).
     let servers = launch.servers.clone();
-    eprintln!("Glut is starting…");
+    eprintln!("{}", tr!(starting));
     let (parts, engine) = match session::build(launch, Arc::clone(&host), reports.clone()).await {
         Ok((parts, engine)) => (Arc::new(parts), engine),
         Err(reason) => {
@@ -144,10 +155,9 @@ async fn run_switching(
             .next()
         {
             Some(session) => app.open(session),
-            None => app.transcript.note(
-                "no earlier session in this folder — a new one starts",
-                transcript::Tone::Quiet,
-            ),
+            None => app
+                .transcript
+                .note(tr!(no_earlier_session), transcript::Tone::Quiet),
         }
     }
     if !open.conversation.is_empty() {
@@ -187,7 +197,7 @@ async fn screen(
         Ok(enhanced) => enhanced,
         Err(err) => {
             leave(false);
-            eprintln!("glut: cannot use this terminal: {err}");
+            eprintln!("glut: {}", tr!(terminal_unusable, reason = err));
             return std::process::ExitCode::from(1);
         }
     };
@@ -235,18 +245,24 @@ async fn screen(
             for pane in &panes.list {
                 let app = &pane.app;
                 let which = if split {
-                    format!(" (pane {})", pane.number)
+                    format!(" ({})", tr!(pane_named, n = pane.number))
                 } else {
                     String::new()
                 };
+                let cost = app
+                    .cost
+                    .map(|cost| format!(", ${cost:.4}"))
+                    .unwrap_or_default();
                 let _ = writeln!(
                     io::stdout(),
-                    "Glut: session ended{which} — {} tokens in, {} out{}",
-                    app.usage.input_tokens,
-                    app.usage.output_tokens,
-                    app.cost
-                        .map(|cost| format!(", ${cost:.4}"))
-                        .unwrap_or_default()
+                    "Glut: {}",
+                    tr!(
+                        session_ended,
+                        which = which,
+                        input = app.usage.input_tokens,
+                        output = app.usage.output_tokens,
+                        cost = cost
+                    )
                 );
             }
             std::process::ExitCode::SUCCESS
@@ -408,9 +424,7 @@ async fn run_loop(
             let width = terminal::size().map_or(80, |(width, _)| width);
             let lines = app.stream_at(width);
             let shown = scrollback::print(&mut io::stdout(), &lines).and_then(|()| {
-                print!(
-                    "\n— Glut: the conversation is in your terminal's scrollback. ⏎ or ⌃C goes back. "
-                );
+                print!("\n— Glut: {} ", tr!(scrollback_shown));
                 io::stdout().flush()
             });
             if shown.is_ok() {
@@ -429,7 +443,7 @@ async fn run_loop(
             app.mouse_held = true;
             // A view that could not be printed is said; the session goes on.
             if let Err(err) = shown {
-                app.say(format!("the scrollback could not be printed: {err}"));
+                app.say(tr!(scrollback_failed, reason = err));
             }
             entered?;
             execute!(io::stdout(), Clear(ClearType::All))?;
@@ -574,17 +588,12 @@ pub(crate) fn terminal_events(
 /// back and removed. Without an editor set (and no `$VISUAL`/`$EDITOR`) it says how to set one.
 /// `file` in the owner's editor, until it ends.
 fn open_in_editor(home: &std::path::Path, file: &std::path::Path) -> Result<(), String> {
-    let template = prefs::Prefs::load(home)
-        .editor()
-        .ok_or("no editor yet — /editor picks one")?;
-    let (program, args) = prefs::editor_command(&template, file, 1)
-        .ok_or("the editor's command is empty — /editor picks one")?;
+    let template = prefs::Prefs::load(home).editor().ok_or(tr!(no_editor))?;
+    let (program, args) = prefs::editor_command(&template, file, 1).ok_or(tr!(editor_empty))?;
     match std::process::Command::new(&program).args(&args).status() {
         Ok(status) if status.success() => Ok(()),
-        Ok(status) => Err(format!("{program} ended with {status}")),
-        Err(err) => Err(format!(
-            "cannot start {program}: {err} — /editor picks another"
-        )),
+        Ok(status) => Err(tr!(editor_ended, program = program, status = status)),
+        Err(err) => Err(tr!(editor_unstartable, program = program, reason = err)),
     }
 }
 
@@ -601,13 +610,11 @@ fn edit_in_editor(home: &std::path::Path, text: &str) -> Result<String, String> 
         }
     }
 
-    let template = prefs::Prefs::load(home)
-        .editor()
-        .ok_or("no editor yet — /editor picks one")?;
+    let template = prefs::Prefs::load(home).editor().ok_or(tr!(no_editor))?;
     // A folder only the owner can list: the name of the file is nobody else's to guess.
     let dir = home.join(glut::providers::DIR).join("tmp");
     glut::providers::make_private_dir(&dir)
-        .map_err(|err| format!("cannot use {}: {err}", dir.display()))?;
+        .map_err(|err| tr!(cannot_use, path = dir.display(), reason = err))?;
     let file = dir.join(format!(
         "message-{}-{}.md",
         std::process::id(),
@@ -618,23 +625,18 @@ fn edit_in_editor(home: &std::path::Path, text: &str) -> Result<String, String> 
         .create_new(true)
         .mode(0o600)
         .open(&file)
-        .map_err(|err| format!("cannot write {}: {err}", file.display()))?;
+        .map_err(|err| tr!(cannot_write, path = file.display(), reason = err))?;
     let _gone = Gone(file.clone());
     out.write_all(text.as_bytes())
-        .map_err(|err| format!("cannot write {}: {err}", file.display()))?;
+        .map_err(|err| tr!(cannot_write, path = file.display(), reason = err))?;
     drop(out);
     let line = text.lines().count().max(1);
-    let (program, args) = prefs::editor_command(&template, &file, line)
-        .ok_or("the editor's command is empty — /editor picks one")?;
+    let (program, args) = prefs::editor_command(&template, &file, line).ok_or(tr!(editor_empty))?;
     match std::process::Command::new(&program).args(&args).status() {
         Ok(status) if status.success() => std::fs::read_to_string(&file)
-            .map_err(|err| format!("cannot read {}: {err}", file.display())),
-        Ok(status) => Err(format!(
-            "{program} ended with {status}: the input stays as it was"
-        )),
-        Err(err) => Err(format!(
-            "cannot start {program}: {err} — /editor picks another"
-        )),
+            .map_err(|err| tr!(cannot_read_path, path = file.display(), reason = err)),
+        Ok(status) => Err(tr!(editor_ended_input, program = program, status = status)),
+        Err(err) => Err(tr!(editor_unstartable, program = program, reason = err)),
     }
 }
 

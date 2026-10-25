@@ -65,15 +65,14 @@ impl Layout {
     pub fn summary(&self) -> String {
         let agents = self.agents().count();
         let panes = self.panes.len() - agents;
-        let said = |count: usize, one: &str, many: &str| {
-            format!("{count} {}", if count == 1 { one } else { many })
-        };
+        let texts = crate::texts::t();
+        let panes = texts.panes_count.of(panes as u64);
         match agents {
-            0 => said(panes, "pane", "panes"),
-            _ => format!(
-                "{}, {}",
-                said(panes, "pane", "panes"),
-                said(agents, "agent", "agents")
+            0 => panes,
+            _ => tr!(
+                two_counts,
+                first = panes,
+                second = texts.agents_count.of(agents as u64)
             ),
         }
     }
@@ -86,16 +85,16 @@ impl Layout {
             .map(|kept| {
                 let mut parts = Vec::new();
                 if let Some(agent) = &kept.agent {
-                    parts.push(format!("agent {agent}"));
+                    parts.push(tr!(layout_agent, name = agent));
                 }
                 if let Some(role) = &kept.role {
-                    parts.push(format!("as {role}"));
+                    parts.push(tr!(layout_role, role = role));
                 }
                 if let Some(branch) = &kept.branch {
-                    parts.push(format!("on {branch}"));
+                    parts.push(tr!(layout_branch, branch = branch));
                 }
                 if parts.is_empty() {
-                    "a pane".to_owned()
+                    tr!(layout_a_pane).to_owned()
                 } else {
                     parts.join(" ")
                 }

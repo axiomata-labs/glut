@@ -80,6 +80,10 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::from(1);
         }
     };
+    // A language given for the run holds for every command: `glut --lang de watch` too.
+    if let Some(lang) = cli.lang {
+        glut_tui::force_language(lang);
+    }
     let (code, switch) = runtime.block_on(async {
         match cli.command.take() {
             Some(Command::Watch { what }) => (watch(&cli.cwd, what.as_deref()).await, None),
@@ -87,9 +91,6 @@ fn main() -> std::process::ExitCode {
             None => {
                 if cli.reader {
                     glut_tui::motion::force_reader();
-                }
-                if let Some(lang) = cli.lang {
-                    glut_tui::force_language(lang);
                 }
                 glut_tui::standalone_switching(launch(&cli), open(cli)).await
             }

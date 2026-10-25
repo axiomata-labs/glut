@@ -51,14 +51,11 @@ pub fn resolve(home: &Path, cwd: &Path, what: Option<&str>) -> Result<PathBuf, S
             if path.is_file() || store::Session::load(home, id).is_ok() {
                 Ok(path)
             } else {
-                Err(format!("no session or log called {id:?}"))
+                Err(tr!(no_session_or_log, name = format!("{id:?}")))
             }
         }
-        Some(other) => Err(format!("no session or log called {other:?}")),
-        None => log::newest(home, cwd).ok_or_else(|| {
-            "this folder has no session to watch; name one (glut -r lists them) or a log file"
-                .into()
-        }),
+        Some(other) => Err(tr!(no_session_or_log, name = format!("{other:?}"))),
+        None => log::newest(home, cwd).ok_or_else(|| tr!(nothing_to_watch).into()),
     }
 }
 
@@ -100,10 +97,7 @@ impl Followed {
                 Some(Logged::Event(event)) => self.event(&event),
                 Some(Logged::Full) => {
                     self.full = true;
-                    self.transcript.note(
-                        "the session's log is full: nothing after this is shown",
-                        Tone::Fault,
-                    );
+                    self.transcript.note(tr!(log_full_note), Tone::Fault);
                 }
                 Some(Logged::Head(_)) | None => {}
             }
@@ -190,7 +184,7 @@ pub async fn watch(home: PathBuf, path: PathBuf) -> std::process::ExitCode {
         Ok(enhanced) => enhanced,
         Err(err) => {
             screen::leave(false);
-            eprintln!("glut: cannot use this terminal: {err}");
+            eprintln!("glut: {}", tr!(terminal_unusable, reason = err));
             return std::process::ExitCode::from(1);
         }
     };
@@ -276,11 +270,11 @@ fn draw(frame: &mut ratatui::Frame, followed: &mut Followed, name: &str, view: &
     ])
     .areas(frame.area());
     let state = if followed.full {
-        "log full"
+        tr!(watch_log_full)
     } else if followed.working {
-        "working"
+        tr!(watch_working)
     } else {
-        "idle"
+        tr!(watch_idle)
     };
     let shown = if followed.title.is_empty() {
         name
@@ -289,9 +283,9 @@ fn draw(frame: &mut ratatui::Frame, followed: &mut Followed, name: &str, view: &
     };
     frame.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled("Glut · watching ", theme::quiet()),
+            Span::styled(format!("Glut · {} ", tr!(watching)), theme::quiet()),
             Span::styled(shown.to_owned(), theme::strong()),
-            Span::styled(" — read-only · ", theme::quiet()),
+            Span::styled(format!(" — {} · ", tr!(read_only)), theme::quiet()),
             Span::styled(
                 state,
                 if followed.working {
@@ -323,24 +317,23 @@ fn draw(frame: &mut ratatui::Frame, followed: &mut Followed, name: &str, view: &
     let start = most - scroll;
     let end = (start + height).min(total);
     let visible = if total == 0 {
-        vec![Line::styled(
-            "waiting for the session's first step…",
-            theme::quiet(),
-        )]
+        vec![Line::styled(tr!(watch_waiting), theme::quiet())]
     } else {
         visible_lines(&mut followed.transcript, body.width, start, end)
     };
     frame.render_widget(Paragraph::new(visible), body);
     let place = if scroll == 0 {
-        "following".to_owned()
+        tr!(watch_following).to_owned()
     } else {
-        format!("{scroll} lines up")
+        tr!(watch_lines_up, n = scroll)
     };
     frame.render_widget(
         Paragraph::new(Line::styled(
-            format!(
-                "{} in · {} out · {place} · ↑↓ PgUp PgDn scroll · End follows · q quits",
-                followed.input_tokens, followed.output_tokens
+            tr!(
+                watch_footer,
+                input = followed.input_tokens,
+                output = followed.output_tokens,
+                place = place
             ),
             theme::quiet(),
         )),

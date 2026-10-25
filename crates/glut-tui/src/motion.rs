@@ -114,24 +114,23 @@ fn system_reduced() -> bool {
     })
 }
 
-/// The keys' symbols and their words, as a screen reader should say them. The modifiers end in `+` and join the key
-/// after them; any other two symbols side by side are parted by a space (`↑↓` is "Up Down", `⎋⎋` "Esc Esc").
+/// The keys' symbols and their words, as a screen reader should say them — by the system's names in the language read
+/// now (T48). The modifiers end in `+` and join the key after them; any other two symbols side by side are parted by a
+/// space (`↑↓` is "Up Down", `⎋⎋` "Esc Esc").
 fn word(symbol: char, arrows: bool) -> Option<&'static str> {
-    Some(match symbol {
-        '⌃' => "Ctrl+",
-        '⇧' => "Shift+",
-        '⌥' => "Alt+",
-        '⏎' => "Enter",
-        '⎋' => "Esc",
-        '⇥' => "Tab",
-        '⌫' => "Backspace",
-        '↑' if arrows => "Up",
-        '↓' if arrows => "Down",
-        '←' if arrows => "Left",
-        '→' if arrows => "Right",
-        _ => return None,
-    })
+    // The places of the catalog's `key_words`, as it orders them.
+    const SYMBOLS: [char; 11] = ['⌃', '⇧', '⌥', '⏎', '⎋', '⇥', '⌫', '↑', '↓', '←', '→'];
+    let at = SYMBOLS.iter().position(|known| *known == symbol)?;
+    // An arrow in running text is no key ("20k → 5k").
+    if at >= 7 && !arrows {
+        return None;
+    }
+    crate::texts::t().key_words.get(at).copied()
 }
+
+/// The words of Page Up and Page Down, after the keys' symbols in `key_words`.
+const PAGE_UP: usize = 11;
+const PAGE_DOWN: usize = 12;
 
 /// A key hint as the reader mode says it: the key symbols as words (`⌃X ⇥` is "Ctrl+X Tab", `↑↓` "Up Down");
 /// unchanged otherwise. Only for text that is all keys and what they do — prose keeps its arrows.
@@ -176,7 +175,11 @@ fn words(text: &str, arrows: bool) -> Cow<'_, str> {
             }
         }
     }
-    Cow::Owned(said.replace("PgUp", "Page Up").replace("PgDn", "Page Down"))
+    let keys = crate::texts::t().key_words;
+    Cow::Owned(
+        said.replace("PgUp", keys[PAGE_UP])
+            .replace("PgDn", keys[PAGE_DOWN]),
+    )
 }
 
 /// The cell `symbol` drawn as plain ASCII, if it is a frame's, one of Glut's marks or one of Powerline's: one cell for
@@ -251,6 +254,13 @@ mod tests {
             "20k → 5k tokens · Ctrl+C again"
         );
         assert_eq!(words("plain text", true), "plain text");
+        // Said by the system's names in the language read now (T48).
+        glut::lang::set_for_thread(Some(glut::lang::Lang::De));
+        assert_eq!(
+            words("⌃X ⇥ · ⇧⏎ · ↑ · PgDn", true),
+            "Control+X Tab · Umschalt+Return · Pfeil nach oben · Bild ab"
+        );
+        glut::lang::set_for_thread(None);
         assert_eq!(plain("╭"), Some("+"));
         assert_eq!(plain("─"), Some("-"));
         assert_eq!(plain("█"), Some("#"));

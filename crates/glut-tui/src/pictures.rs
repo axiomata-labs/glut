@@ -24,10 +24,10 @@ pub fn from_clipboard() -> Result<Vec<u8>, String> {
             .output()
             .map_err(|err| format!("osascript: {err}"))?;
         if !out.status.success() {
-            return Err("no image in the clipboard".into());
+            return Err(tr!(no_clipboard_image).into());
         }
         return hex_data(&String::from_utf8_lossy(&out.stdout))
-            .ok_or_else(|| "no image in the clipboard".into());
+            .ok_or_else(|| tr!(no_clipboard_image).into());
     }
     let (program, args): (&str, &[&str]) = if std::env::var_os("WAYLAND_DISPLAY").is_some() {
         ("wl-paste", &["--type", "image/png"])
@@ -42,9 +42,9 @@ pub fn from_clipboard() -> Result<Vec<u8>, String> {
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .output()
-        .map_err(|_| format!("{program} reads the clipboard's images — it is not installed"))?;
+        .map_err(|_| tr!(clipboard_program_missing, program = program))?;
     if !out.status.success() || out.stdout.is_empty() {
-        return Err("no image in the clipboard".into());
+        return Err(tr!(no_clipboard_image).into());
     }
     Ok(out.stdout)
 }
@@ -131,7 +131,7 @@ fn shell_words(text: &str) -> Option<Vec<String>> {
 /// A message when the file is gone or the opener cannot start.
 pub fn open(path: &Path) -> Result<(), String> {
     if !path.is_file() {
-        return Err(format!("{} is gone", path.display()));
+        return Err(tr!(path_gone, path = path.display()));
     }
     let opener = if cfg!(target_os = "macos") {
         "open"

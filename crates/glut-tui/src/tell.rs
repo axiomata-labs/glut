@@ -37,9 +37,10 @@ pub fn shown(message: &str) -> Option<String> {
     let (from, rest) = rest.split_once('"')?;
     let body = rest.split_once(">\n")?.1;
     let body = body.strip_suffix(CLOSE).unwrap_or(body).trim_end();
-    Some(format!(
-        "pane {from}'s model (not the owner): {}",
-        body.replace("&lt;", "<")
+    Some(tr!(
+        from_pane_model,
+        pane = from,
+        text = body.replace("&lt;", "<")
     ))
 }
 

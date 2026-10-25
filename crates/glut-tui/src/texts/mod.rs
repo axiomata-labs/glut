@@ -1175,6 +1175,162 @@ glut::catalog! {
         clause_join: &'static str,
         /// A worktree that could not be removed: `{place}`, `{reason}`.
         worktree_stays_why: &'static str,
+        /// Glut could not start anew in another project: `{folder}`, `{reason}`.
+        restart_failed: &'static str,
+        /// While the first session is built.
+        starting: &'static str,
+        /// `glut -c` in a folder with no session.
+        no_earlier_session: &'static str,
+        /// The terminal cannot be used: `{reason}`.
+        terminal_unusable: &'static str,
+        /// The line printed at the end: `{which}` the pane or nothing, `{input}`, `{output}` tokens, `{cost}` or
+        /// nothing.
+        session_ended: &'static str,
+        /// Under the conversation printed into the terminal's scrollback.
+        scrollback_shown: &'static str,
+        /// The scrollback could not be printed: `{reason}`.
+        scrollback_failed: &'static str,
+        /// No editor chosen.
+        no_editor: &'static str,
+        /// An editor whose command is empty.
+        editor_empty: &'static str,
+        /// An editor that ended badly: `{program}`, `{status}`.
+        editor_ended: &'static str,
+        /// An editor that cannot start: `{program}`, `{reason}`.
+        editor_unstartable: &'static str,
+        /// A folder that cannot be used: `{path}`, `{reason}`.
+        cannot_use: &'static str,
+        /// A file that cannot be written: `{path}`, `{reason}`.
+        cannot_write: &'static str,
+        /// A file that cannot be read: `{path}`, `{reason}`.
+        cannot_read_path: &'static str,
+        /// An editor for the input that ended badly: `{program}`, `{status}`.
+        editor_ended_input: &'static str,
+        /// The guides a session read: `{guides}`.
+        guides_read: &'static str,
+        /// A skill left out: `{note}` why.
+        skill_left_out: &'static str,
+        /// A provider's model list that could not be had: `{provider}`, `{reason}`.
+        no_model_list: &'static str,
+        /// A model its provider does not list: `{model}`, `{provider}`.
+        model_not_listed: &'static str,
+        /// A provider missing from providers.json: `{provider}`.
+        no_provider_entry: &'static str,
+        /// A turn stopped before it began.
+        stopped_before_turn: &'static str,
+        /// A summary that broke off: `{reason}`.
+        summary_broke_off: &'static str,
+        /// A switch of model that broke off: `{reason}`.
+        switch_broke_off: &'static str,
+        /// A handoff of an empty conversation.
+        nothing_to_hand_over: &'static str,
+        /// A model that wrote no handoff.
+        no_handoff_written: &'static str,
+        /// A model that called tools instead of writing the handoff.
+        handoff_tool_calls: &'static str,
+        /// No folder for the handoff.
+        no_handoff_folder: &'static str,
+        /// A handoff that broke off: `{reason}`.
+        handoff_broke_off: &'static str,
+        /// `/handoff read` without a handoff.
+        no_handoff_here: &'static str,
+        /// A path that is no regular file: `{path}`.
+        not_regular_file: &'static str,
+        /// No folder for handoffs once read.
+        no_read_folder: &'static str,
+        /// The first start's question for a provider.
+        setup_pick_provider: &'static str,
+        /// The setup without a provider chosen.
+        setup_no_provider: &'static str,
+        /// The setup's question for a key: `{provider}`.
+        setup_key: &'static str,
+        /// The setup without a key given.
+        setup_no_key: &'static str,
+        /// Where the key was kept: `{place}`.
+        setup_key_kept: &'static str,
+        /// The setup done: `{provider}`.
+        setup_provider_done: &'static str,
+        /// The setup's question for a model: `{provider}`.
+        setup_pick_model: &'static str,
+        /// The setup's model chosen.
+        setup_model_done: &'static str,
+        /// While the setup asks for the models: `{provider}`.
+        setup_asking_models: &'static str,
+        /// The setup without a model list: `{reason}`.
+        setup_no_list: &'static str,
+        /// The setup's prompt for a model.
+        setup_model_prompt: &'static str,
+        /// The setup without a model chosen.
+        setup_no_model: &'static str,
+        /// The setup stopped.
+        setup_stopped: &'static str,
+        /// A file Glut did not write, left alone: `{path}`.
+        not_glut_file: &'static str,
+        /// `/projects` with an empty path.
+        projects_no_folder: &'static str,
+        /// A path that names no folder: `{folder}`.
+        no_such_folder: &'static str,
+        /// A path that is no folder: `{folder}`.
+        not_a_folder: &'static str,
+        /// A path that is one of Glut's worktrees: `{folder}`.
+        is_glut_worktree: &'static str,
+        /// When: under a minute ago.
+        just_now: &'static str,
+        /// When: `{n}` minutes ago.
+        minutes_ago: &'static str,
+        /// When: `{n}` hours ago.
+        hours_ago: &'static str,
+        /// When: a day ago.
+        yesterday: &'static str,
+        /// `glut watch` with a name that is none: `{name}`.
+        no_session_or_log: &'static str,
+        /// `glut watch` in a folder with no session.
+        nothing_to_watch: &'static str,
+        /// A watched log that is full.
+        log_full_note: &'static str,
+        /// The watched session's state: its log is full.
+        watch_log_full: &'static str,
+        /// The watched session's state: at work.
+        watch_working: &'static str,
+        /// The watched session's state: at rest.
+        watch_idle: &'static str,
+        /// `glut watch`'s header: before the session's name.
+        watching: &'static str,
+        /// `glut watch`'s header: only to read.
+        read_only: &'static str,
+        /// `glut watch` before the first step.
+        watch_waiting: &'static str,
+        /// `glut watch` following the end.
+        watch_following: &'static str,
+        /// `glut watch` scrolled up: `{n}` lines.
+        watch_lines_up: &'static str,
+        /// `glut watch`'s footer: `{input}`, `{output}` tokens, `{place}` following or how far up.
+        watch_footer: &'static str,
+        /// ⌃V with no image in the clipboard.
+        no_clipboard_image: &'static str,
+        /// The program that reads images from the clipboard is missing: `{program}`.
+        clipboard_program_missing: &'static str,
+        /// A file gone: `{path}`.
+        path_gone: &'static str,
+        /// In a kept layout's details: an agent, `{name}`.
+        layout_agent: &'static str,
+        /// In a kept layout's details: a role, `{role}`.
+        layout_role: &'static str,
+        /// In a kept layout's details: a branch, `{branch}`.
+        layout_branch: &'static str,
+        /// In a kept layout's details: a plain pane.
+        layout_a_pane: &'static str,
+        /// Another model's message in the stream: `{pane}`, `{text}`.
+        from_pane_model: &'static str,
+        /// When: `{n}` days ago.
+        days_ago: Plural,
+        /// How many agents in the background a layout keeps: `{n}`.
+        agents_count: Plural,
+        /// The keys a screen reader says, by the system's names: ⌃ ⇧ ⌥ (each ending in `+`), ⏎ ⎋ ⇥ ⌫, ↑ ↓ ← →,
+        /// Page Up, Page Down — in this order.
+        key_words: &'static [&'static str],
+        /// The setup's prompt for a provider's number.
+        setup_provider_prompt: &'static str,
     }
 }
 
@@ -1412,6 +1568,12 @@ mod tests {
             assert_eq!(texts.tab_names.len(), 6, "{}", lang.code());
             assert_eq!(texts.tab_words.len(), 6, "{}", lang.code());
             assert_eq!(texts.sort_names.len(), 4, "{}", lang.code());
+            assert_eq!(texts.key_words.len(), 13, "{}", lang.code());
+            assert!(
+                texts.key_words[..3].iter().all(|key| key.ends_with('+')),
+                "{}",
+                lang.code()
+            );
             // A finished walk finds the file list open by its title's start.
             assert!(
                 texts.files_looking.starts_with(texts.files_title),

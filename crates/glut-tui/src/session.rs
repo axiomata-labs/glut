@@ -242,7 +242,7 @@ pub async fn build(
     let cwd = launch
         .cwd
         .canonicalize()
-        .map_err(|err| format!("cannot use {}: {err}", launch.cwd.display()))?;
+        .map_err(|err| tr!(cannot_use, path = launch.cwd.display(), reason = err))?;
     let mut notes = Vec::new();
 
     let host_mode = launch.gate.mode.is_some();
@@ -297,14 +297,11 @@ pub async fn build(
             memory = Some(found.memory);
             notes.extend(guide_notes);
             if !guides.is_empty() {
-                notes.push(format!(
-                    "read {}",
-                    guides
-                        .iter()
-                        .map(|guide| shown_folder(&guide.path))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ));
+                let read: Vec<String> = guides
+                    .iter()
+                    .map(|guide| shown_folder(&guide.path))
+                    .collect();
+                notes.push(tr!(guides_read, guides = read.join(", ")));
             }
             match glut::guide::instructions(&guides, &home) {
                 Some(guides) => format!("{SESSION_NOTE}\n\n{map}\n\n{guides}"),
@@ -335,7 +332,7 @@ pub async fn build(
     notes.extend(
         skill_notes
             .into_iter()
-            .map(|note| format!("skill left out: {note}")),
+            .map(|note| tr!(skill_left_out, note = note)),
     );
     // T37c: Glut's own maker skills, where no skill of the owner's, the project's or the host's has their name.
     let catalog = Arc::new(catalog.with_glut_own());
@@ -492,14 +489,14 @@ pub async fn engine(
     {
         Ok(models) => Some(models),
         Err(reason) => {
-            notes.push(format!("no model list of {}: {reason}", resolved.id));
+            notes.push(tr!(no_model_list, provider = resolved.id, reason = reason));
             None
         }
     };
     let name = resolved.endpoint.model.clone();
     let listed = models.as_ref().and_then(|list| list.get(&name)).cloned();
     if models.is_some() && listed.is_none() {
-        notes.push(format!("{name} is not in {}'s model list", resolved.id));
+        notes.push(tr!(model_not_listed, model = name, provider = resolved.id));
     }
     let set = list
         .providers
@@ -621,7 +618,7 @@ async fn without_model(parts: &Parts, id: Option<&str>) -> Option<String> {
 pub fn keep_choice(home: &Path, engine: &Engine) -> Result<(), String> {
     let mut list = Providers::load(home).map_err(|err| err.to_string())?;
     let Some(entry) = list.providers.get_mut(&engine.provider) else {
-        return Err(format!("no provider {} in providers.json", engine.provider));
+        return Err(tr!(no_provider_entry, provider = engine.provider));
     };
     let model = Some(engine.model_name().to_owned());
     let default = Some(engine.provider.clone());
@@ -641,7 +638,7 @@ pub fn keep_choice(home: &Path, engine: &Engine) -> Result<(), String> {
 pub fn keep_window(home: &Path, engine: &Engine, tokens: u32) -> Result<(), String> {
     let mut list = Providers::load(home).map_err(|err| err.to_string())?;
     let Some(entry) = list.providers.get_mut(&engine.provider) else {
-        return Err(format!("no provider {} in providers.json", engine.provider));
+        return Err(tr!(no_provider_entry, provider = engine.provider));
     };
     entry.windows.insert(engine.model_name().to_owned(), tokens);
     entry.check()?;
@@ -713,7 +710,7 @@ pub fn turn(
         match until_cancelled(parts.host.before_turn(&mut config, kind), &cancel).await {
             Some(Ok(())) => {}
             Some(Err(reason)) => return Ended::Refused(reason),
-            None => return Ended::Refused("stopped before the turn began".to_owned()),
+            None => return Ended::Refused(tr!(stopped_before_turn).to_owned()),
         }
         let (outcome, after) = match input {
             TurnInput::Message(prompt, images) => {
@@ -834,7 +831,7 @@ pub fn compact(engine: Engine, conversation: Vec<Message>, reports: mpsc::Unboun
     tokio::spawn(async move {
         let result = summary
             .await
-            .unwrap_or_else(|err| Err(format!("the summary broke off: {err}")));
+            .unwrap_or_else(|err| Err(tr!(summary_broke_off, reason = err)));
         let _ = reports.send(Report::Compacted(result, kept));
     });
 }
@@ -868,7 +865,7 @@ pub fn switch(
         });
         let result = built
             .await
-            .unwrap_or_else(|err| Err(format!("the switch broke off: {err}")));
+            .unwrap_or_else(|err| Err(tr!(switch_broke_off, reason = err)));
         let _ = reports.send(Report::Switched(result));
     });
 }
@@ -948,7 +945,7 @@ pub fn write_handoff(
     let kept = conversation.clone();
     let written = tokio::spawn(async move {
         if conversation.is_empty() {
-            return Err("nothing to hand over yet".to_owned());
+            return Err(tr!(nothing_to_hand_over).to_owned());
         }
         let room = engine
             .window
@@ -973,12 +970,12 @@ pub fn write_handoff(
             .message
             .content
             .filter(|text| !text.trim().is_empty())
-            .ok_or("the model wrote no handoff")?;
+            .ok_or(tr!(no_handoff_written))?;
         if calls_tools(&text) {
-            return Err("the model answered with tool calls instead of a handoff — try /handoff write again".into());
+            return Err(tr!(handoff_tool_calls).into());
         }
         let path = handoff_path(&parts.home, &parts.config.cwd);
-        let dir = path.parent().ok_or("no folder for the handoff")?;
+        let dir = path.parent().ok_or(tr!(no_handoff_folder))?;
         glut::providers::make_private_dir(dir)
             .and_then(|()| {
                 glut::providers::write_replacing(
@@ -994,7 +991,7 @@ pub fn write_handoff(
     tokio::spawn(async move {
         let result = written
             .await
-            .unwrap_or_else(|err| Err(format!("the handoff broke off: {err}")));
+            .unwrap_or_else(|err| Err(tr!(handoff_broke_off, reason = err)));
         let _ = reports.send(Report::HandedOff(result, kept));
     });
 }
@@ -1067,20 +1064,18 @@ pub fn read_handoff(parts: &Parts) -> Result<(Message, String, PathBuf), String>
     use std::io::Read as _;
     let path = handoff_path(&parts.home, &parts.config.cwd);
     let file = glut::providers::open_no_follow(&path).map_err(|err| match err.kind() {
-        std::io::ErrorKind::NotFound => {
-            "no handoff for this folder — /handoff write makes one (a handoff read once is not read again)".to_owned()
-        }
+        std::io::ErrorKind::NotFound => tr!(no_handoff_here).to_owned(),
         _ => format!("{}: {err}", path.display()),
     })?;
     if !file.metadata().is_ok_and(|meta| meta.is_file()) {
-        return Err(format!("{}: not a regular file", path.display()));
+        return Err(tr!(not_regular_file, path = path.display()));
     }
     let mut text = String::new();
     file.take(MAX_HANDOFF_BYTES)
         .read_to_string(&mut text)
         .map_err(|err| format!("{}: {err}", path.display()))?;
     let moved = read_path(&path);
-    let dir = moved.parent().ok_or("no folder for read handoffs")?;
+    let dir = moved.parent().ok_or(tr!(no_read_folder))?;
     glut::providers::make_private_dir(dir)
         .and_then(|()| std::fs::rename(&path, &moved))
         .map_err(|err| format!("{}: {err}", moved.display()))?;
