@@ -374,6 +374,549 @@ glut::catalog! {
         tab_words: &'static [&'static str],
         /// How a model list is sorted: by name, newest, cheapest, largest window — in this order.
         sort_names: &'static [&'static str],
+        /// The session could not be saved: `{reason}`.
+        session_unkept: &'static str,
+        /// A session without a title opened: `{when}` it was last worked on.
+        session_opened: &'static str,
+        /// A session opened: `{when}`, `{title}`.
+        session_opened_titled: &'static str,
+        /// The reader mode's line: one turn ended and the next began.
+        state_next_message: &'static str,
+        /// The reader mode's line: work goes on after an answer.
+        state_works_on: &'static str,
+        /// The reader mode's line: work begins.
+        state_works: &'static str,
+        /// The reader mode's line: a question, `{tool}` and `{target}`.
+        state_asks_tool: &'static str,
+        /// The reader mode's line: a list waits for a choice.
+        state_asks_choose: &'static str,
+        /// The reader mode's line: the turn answered.
+        state_done: &'static str,
+        /// The reader mode's line: the turn failed.
+        state_failed: &'static str,
+        /// The reader mode's line: the turn was stopped.
+        state_stopped: &'static str,
+        /// F2 gave the mouse back to Glut.
+        mouse_glut: &'static str,
+        /// F2 gave the mouse to the terminal.
+        mouse_terminal: &'static str,
+        /// A turn cut off goes on.
+        turn_resumed: &'static str,
+        /// Under a plan whose event was cut.
+        plan_head_only: &'static str,
+        /// Above a file of Glut's own, whole, before it is written.
+        glut_file_whole: &'static str,
+        /// A turn the owner stopped.
+        stopped: &'static str,
+        /// A turn that ended early: `{reason}`.
+        turn_ended: &'static str,
+        /// Why a model's message is held: the pane runs wider now.
+        held_wider: &'static str,
+        /// The conversation was compacted: `{n}` messages.
+        compacted: &'static str,
+        /// The conversation could not be compacted: `{reason}`.
+        not_compacted: &'static str,
+        /// The handoff was written: `{path}`.
+        handoff_written: &'static str,
+        /// The handoff could not be written: `{reason}`.
+        no_handoff: &'static str,
+        /// A message the host refused, back in the input: `{reason}`.
+        not_sent_back: &'static str,
+        /// A message the host refused: `{reason}`.
+        not_sent: &'static str,
+        /// The cache keeping stopped: `{reason}`.
+        warm_ended: &'static str,
+        /// The title of the list when Glut asks for an agent's or a skill's model.
+        pick_own_model: &'static str,
+        /// A provider with no model chosen: `{provider}`.
+        provider_no_model: &'static str,
+        /// A `!cmd`'s output joins the next message.
+        shell_to_model: &'static str,
+        /// A step whose change is empty: `{turn}`.
+        step_changed_nothing: &'static str,
+        /// The block showing a step's change: `{turn}`.
+        step_changes: &'static str,
+        /// A change that cannot be shown: `{reason}`.
+        no_change_to_show: &'static str,
+        /// A change that cannot be reviewed: `{reason}`.
+        no_change_to_review: &'static str,
+        /// The files went back: `{snapshot}`, and what they were is kept as run `{kept}`.
+        files_restored: &'static str,
+        /// The files could not go back: `{reason}`.
+        files_not_restored: &'static str,
+        /// A model without prices: `{model}`.
+        no_prices: &'static str,
+        /// The model chosen could not be kept for the next start: `{reason}`.
+        choice_unkept: &'static str,
+        /// The model switched to: `{provider}`, `{model}`.
+        model_now: &'static str,
+        /// Why a turn ended: it answered.
+        ended_answered: &'static str,
+        /// Why a turn ended: its steps ran out.
+        ended_steps: &'static str,
+        /// Why a turn ended: its time ran out.
+        ended_time: &'static str,
+        /// Why a turn ended: the model's API failed.
+        ended_failed: &'static str,
+        /// Why a turn ended: too many refusals.
+        ended_refused: &'static str,
+        /// Why a turn ended: the budget is spent.
+        ended_budget: &'static str,
+        /// A paste that lost its mark to an edit.
+        paste_lost: &'static str,
+        /// Enter while an image is still being read.
+        image_reading: &'static str,
+        /// A command that waits for the turn: `{name}`.
+        command_waits: &'static str,
+        /// A `!cmd` while Glut works.
+        shell_waits: &'static str,
+        /// A message with images to a model that sees none: `{model}`.
+        model_no_images: &'static str,
+        /// A message with images while Glut works.
+        images_wait: &'static str,
+        /// Enter while Glut works: the message steers it.
+        steer_taken: &'static str,
+        /// Enter while Glut compacts or switches: the message waits.
+        queued_free: &'static str,
+        /// Tab while Glut works: the message waits for the turn's end.
+        queued_turn: &'static str,
+        /// ⌥↑ while the input holds a message.
+        input_full: &'static str,
+        /// ⌥↑ with nothing waiting.
+        nothing_waits: &'static str,
+        /// A `!cmd` in a session that keeps them off.
+        no_shell: &'static str,
+        /// Whose a `!cmd` is: the owner's, its output for Glut.
+        shell_for_glut: &'static str,
+        /// Whose a `!!cmd` is: the owner's alone.
+        shell_alone: &'static str,
+        /// The file list's title after `@`.
+        files_title: &'static str,
+        /// The file list while the folder is still walked: it starts with `files_title`.
+        files_looking: &'static str,
+        /// The file list of a large folder: it starts with `files_title`.
+        files_truncated: &'static str,
+        /// ⇧⇥ in a session whose mode is the host's.
+        mode_locked: &'static str,
+        /// The mode switched to plan — the mode's name stays.
+        mode_plan: &'static str,
+        /// The mode switched to ask.
+        mode_ask: &'static str,
+        /// The mode switched to build.
+        mode_build: &'static str,
+        /// The mode switched to auto, in the sandbox.
+        mode_auto: &'static str,
+        /// The mode switched to auto where there is no sandbox.
+        mode_auto_unsandboxed: &'static str,
+        /// The mode switched to don't ask.
+        mode_dont_ask: &'static str,
+        /// After a mode switched while a turn runs.
+        mode_next_message: &'static str,
+        /// While the conversation is compacted.
+        compacting: &'static str,
+        /// `/handoff` alone.
+        handoff_usage: &'static str,
+        /// While the handoff is written.
+        handoff_writing: &'static str,
+        /// A handoff taken in: `{path}` where it moved.
+        handoff_read: &'static str,
+        /// `/handoff` with a word it does not take: `{word}`.
+        handoff_unknown: &'static str,
+        /// `/projects` where the host picks the folder.
+        projects_hosted: &'static str,
+        /// `/plan` before any plan.
+        no_plan_yet: &'static str,
+        /// `/vim` with a word it does not take.
+        vim_unknown: &'static str,
+        /// Why the footer's joins are what they are: guessed from `{terminal}`.
+        footer_guessed: &'static str,
+        /// Why the footer is plain: an unknown terminal.
+        footer_guessed_unknown: &'static str,
+        /// A setting the owner picked.
+        your_choice: &'static str,
+        /// `/footer` alone: `{footer}` the joins, `{why}`.
+        footer_now: &'static str,
+        /// `/footer` with a word it does not take.
+        footer_unknown: &'static str,
+        /// `/show` alone.
+        show_usage: &'static str,
+        /// `/cache` alone: `{cache}` how it is kept now.
+        cache_now: &'static str,
+        /// Why full motion holds still.
+        motion_held: &'static str,
+        /// `/motion` alone: `{motion}`, `{still}` why it holds still or nothing.
+        motion_now: &'static str,
+        /// Links set clickable.
+        links_clickable: &'static str,
+        /// Links set plain.
+        links_plain: &'static str,
+        /// `/links` alone: `{links}` how they are drawn.
+        links_now: &'static str,
+        /// Images set to be drawn so: `{images}`.
+        images_set: &'static str,
+        /// `/images` alone: `{images}` how they are drawn.
+        images_now: &'static str,
+        /// `/reader` alone: `{reader}` on or off.
+        reader_now: &'static str,
+        /// `/thinking` with a word it does not take.
+        thinking_unknown: &'static str,
+        /// A command that is none: `{name}`.
+        no_command: &'static str,
+        /// A switch of model where the host fixes it.
+        model_locked: &'static str,
+        /// `/context` alone with a known window: `{used}` of `{window}` tokens, `{share}` percent, `{from}` where the
+        /// window came from.
+        context_known: &'static str,
+        /// `/context` alone with no window known: `{used}` tokens, `{model}`.
+        context_unknown: &'static str,
+        /// What the guides cost each turn: `{tokens}`.
+        guides_cost: &'static str,
+        /// `/context` with a word that is no count: `{word}`.
+        context_unknown_word: &'static str,
+        /// `/context` set the window: `{model}`, `{tokens}`.
+        context_set: &'static str,
+        /// `/init` with a word it does not take.
+        init_usage: &'static str,
+        /// `/init`'s question where the guide is a CLAUDE.md.
+        init_claude_title: &'static str,
+        /// Its yes.
+        init_claude_yes: &'static str,
+        /// What its yes does.
+        init_claude_yes_detail: &'static str,
+        /// Its no.
+        init_claude_no: &'static str,
+        /// What its no does.
+        init_claude_no_detail: &'static str,
+        /// `/memory` in a session without a memory.
+        no_memory: &'static str,
+        /// A memory that keeps nothing yet: `{folder}`.
+        memory_empty: &'static str,
+        /// The list `/memory` opens: `{folder}`.
+        memory_title: &'static str,
+        /// `/memory` with a word it does not take.
+        memory_usage: &'static str,
+        /// A file of the memory that cannot be read: `{name}`.
+        cannot_read: &'static str,
+        /// `/todo clean` with nothing done: `{name}`.
+        todos_nothing_done: &'static str,
+        /// `/todo clean`'s question: `{done}` items, `{name}`.
+        todos_drop_title: &'static str,
+        /// Its yes.
+        todos_drop_yes: &'static str,
+        /// What its yes does.
+        todos_drop_yes_detail: &'static str,
+        /// Its no.
+        todos_drop_no: &'static str,
+        /// An item added: `{name}` the list, `{item}`.
+        todos_added: &'static str,
+        /// `/skill` where there is none.
+        no_skills: &'static str,
+        /// The list `/skill` opens.
+        skills_title: &'static str,
+        /// `/skill` with a name that is none: `{name}`, `{known}` those there are.
+        no_skill: &'static str,
+        /// Where a list names nothing.
+        there_are_none: &'static str,
+        /// Items dropped by `/todo clean`: `{n}`, `{name}`.
+        todos_dropped: &'static str,
+        /// `/todo open` with no list yet: `{name}`.
+        todos_no_file: &'static str,
+        /// The panel opened in a narrow window.
+        panel_needs_room: &'static str,
+        /// A token budget: `{left}` of `{max}`.
+        budget_tokens_left: &'static str,
+        /// A money budget: `{left}` of `{max}`.
+        budget_money_left: &'static str,
+        /// A money budget without prices: `{max}`.
+        budget_uncounted: &'static str,
+        /// `/gate` where no gate guards the session.
+        no_gate: &'static str,
+        /// Beside an "always" answer in `/gate`.
+        gate_always_detail: &'static str,
+        /// Beside a rule from the settings in `/gate`.
+        gate_from_settings: &'static str,
+        /// `/gate`'s title: `{mode}`, `{always}` how many "always" answers.
+        gate_title: &'static str,
+        /// No "always" answer yet.
+        gate_no_always: &'static str,
+        /// "Always" answers given: `{n}`.
+        gate_always_given: &'static str,
+        /// An "always" taken back: `{rule}`.
+        taken_back: &'static str,
+        /// A rule that was no "always": `{rule}`.
+        not_always: &'static str,
+        /// The thinking set hidden.
+        thinking_hidden: &'static str,
+        /// The thinking set folded.
+        thinking_folded: &'static str,
+        /// The thinking set open.
+        thinking_open: &'static str,
+        /// Beside a message to rewind to: files changed since.
+        rewind_files_changed: &'static str,
+        /// Beside a message to rewind to: no file changed since.
+        rewind_no_file_changed: &'static str,
+        /// Beside a message to rewind to: compacted since, files changed.
+        rewind_compacted_files: &'static str,
+        /// Beside a message to rewind to: compacted since, no file changed.
+        rewind_compacted_nothing: &'static str,
+        /// The rewind list with nothing to rewind to.
+        rewind_none: &'static str,
+        /// The rewind list's title.
+        rewind_title: &'static str,
+        /// Rewind choice: the conversation and the files.
+        rewind_both: &'static str,
+        /// What it does.
+        rewind_both_detail: &'static str,
+        /// Rewind choice: the conversation only.
+        rewind_talk: &'static str,
+        /// What it does.
+        rewind_talk_detail: &'static str,
+        /// Rewind choice: the files only.
+        rewind_files: &'static str,
+        /// What it does.
+        rewind_files_detail: &'static str,
+        /// Rewind choice: a fork.
+        rewind_fork: &'static str,
+        /// What it does.
+        rewind_fork_detail: &'static str,
+        /// The rewind's second question.
+        rewind_how: &'static str,
+        /// The rewind's second question where only the files can go back.
+        rewind_how_files: &'static str,
+        /// A rewind while Glut works.
+        rewind_waits: &'static str,
+        /// A rewind of the conversation that cannot be.
+        rewind_compacted: &'static str,
+        /// A rewind of the files without a snapshot.
+        no_snapshot: &'static str,
+        /// A rewind while the input holds text.
+        rewind_input_full: &'static str,
+        /// The conversation rewound.
+        rewound: &'static str,
+        /// A fork while Glut works.
+        fork_waits: &'static str,
+        /// A fork that cannot be.
+        fork_compacted: &'static str,
+        /// A fork made.
+        forked: &'static str,
+        /// `/steps` without snapshots.
+        steps_no_snapshots: &'static str,
+        /// A step in `/steps`: `{turn}`, `{prompt}` the message it served.
+        step_of: &'static str,
+        /// `/steps` where no step changed a file.
+        steps_none: &'static str,
+        /// `/steps`' title.
+        steps_title: &'static str,
+        /// `/diff` without snapshots.
+        review_no_snapshots: &'static str,
+        /// `/diff` where no turn changed a file.
+        review_no_change: &'static str,
+        /// A hunk rejected while Glut works.
+        hunk_waits: &'static str,
+        /// A hunk put back.
+        hunk_put_back: &'static str,
+        /// A comment on a hunk.
+        comment_sent: &'static str,
+        /// A hunk that cannot go back: `{path}`, `{reason}`.
+        cannot_put_back: &'static str,
+        /// Files to go back while Glut works.
+        files_wait: &'static str,
+        /// The vi mode on.
+        vim_on: &'static str,
+        /// The vi mode off.
+        vim_off: &'static str,
+        /// The footer's joins set: `{footer}`.
+        footer_set: &'static str,
+        /// Full motion set while something holds the screen still.
+        motion_full_held: &'static str,
+        /// Motion set: `{motion}`.
+        motion_set: &'static str,
+        /// The reader mode off while `--reader` holds it for this run.
+        reader_off_next: &'static str,
+        /// The reader mode on.
+        reader_on: &'static str,
+        /// The reader mode off.
+        reader_off: &'static str,
+        /// A theme that is none: `{name}`, `{known}` those there are.
+        no_theme: &'static str,
+        /// A theme set for this session alone: `{name}`.
+        theme_session: &'static str,
+        /// A theme set: `{name}`.
+        theme_set: &'static str,
+        /// The host refuses a paid call now: `{reason}`.
+        not_now: &'static str,
+        /// The host stopped the turn: `{reason}`.
+        stopped_by: &'static str,
+        /// An ask the host's app answered.
+        answered_elsewhere: &'static str,
+        /// The editor set: `{command}`.
+        editor_set: &'static str,
+        /// The model list of one provider: `{provider}`.
+        model_of: &'static str,
+        /// The model list of every provider.
+        model_title: &'static str,
+        /// Providers whose model list is not kept yet: `{providers}`.
+        models_missing: &'static str,
+        /// A project with no session yet.
+        no_session_yet: &'static str,
+        /// The project or session this window is in.
+        this_one: &'static str,
+        /// `/projects`' last entry.
+        another_folder: &'static str,
+        /// What it does.
+        another_folder_detail: &'static str,
+        /// `/projects`' title.
+        projects_title: &'static str,
+        /// `x` on the project open now.
+        project_open: &'static str,
+        /// A project pinned: `{name}`.
+        project_pinned: &'static str,
+        /// A project no longer pinned: `{name}`.
+        project_unpinned: &'static str,
+        /// A project hidden: `{name}`.
+        project_hidden: &'static str,
+        /// A switch to the project open now.
+        project_same: &'static str,
+        /// A session's title where it has none.
+        no_message: &'static str,
+        /// `/resume` where no other session is kept.
+        sessions_none: &'static str,
+        /// `/resume`'s title.
+        sessions_title: &'static str,
+        /// `/resume`'s first entry, the panes kept: `{layout}`.
+        as_it_stood: &'static str,
+        /// ⌫ on a session open in a pane.
+        session_open_undeletable: &'static str,
+        /// ⌫ on a session gone already.
+        session_gone: &'static str,
+        /// What deleting a session does.
+        delete_detail: &'static str,
+        /// What deleting a session with one image does.
+        delete_detail_image: &'static str,
+        /// What deleting a session with images does: `{n}` of them.
+        delete_detail_images: &'static str,
+        /// Sessions forked from it: `{n}`.
+        delete_forks_stay: Plural,
+        /// The delete question's yes: `{title}`.
+        delete_yes: &'static str,
+        /// The delete question's no.
+        delete_no: &'static str,
+        /// The delete question.
+        delete_title: &'static str,
+        /// A session deleted.
+        session_deleted: &'static str,
+        /// A session deleted with its image.
+        session_deleted_image: &'static str,
+        /// A session deleted with images: `{n}`.
+        session_deleted_images: &'static str,
+        /// A provider without a default model.
+        no_default_model: &'static str,
+        /// The provider list's title.
+        provider_title: &'static str,
+        /// A session picked while Glut works.
+        session_opens_later: &'static str,
+        /// A session picked that another pane holds.
+        session_in_other_pane: &'static str,
+        /// A command picked while the input holds a draft: `{command}`.
+        draft_stays: &'static str,
+        /// `x` on a subagent that has ended.
+        subagent_ended: &'static str,
+        /// A subagent stopped: `{task}`.
+        subagent_stopping: &'static str,
+        /// A subagent that cannot be stopped on its own.
+        subagent_not_alone: &'static str,
+        /// `/agents` with no subagent yet.
+        no_subagent_yet: &'static str,
+        /// `/agents`' title.
+        subagents_title: &'static str,
+        /// Why a model's message is held: the owner's Enter lets it go, `{pane}` its sender.
+        held_enter: &'static str,
+        /// Under a held message: `{why}`.
+        held_why: &'static str,
+        /// The cache kept by reading.
+        cache_ping: &'static str,
+        /// The cache kept an hour.
+        cache_hour: &'static str,
+        /// The cache not kept.
+        cache_off: &'static str,
+        /// A role set: `{name}`, `{about}` where it comes from and its tools.
+        role_played: &'static str,
+        /// The role taken off.
+        role_none: &'static str,
+        /// A role that is none: `{name}`, `{known}` those there are.
+        no_role: &'static str,
+        /// A role that narrows the tools in a session without a gate: `{name}`.
+        role_needs_gate: &'static str,
+        /// Where a role comes from: the project.
+        source_project: &'static str,
+        /// Where a role comes from: the owner.
+        source_yours: &'static str,
+        /// Where a role or a theme comes from: Glut itself.
+        source_glut: &'static str,
+        /// A role that names no tool.
+        no_tool: &'static str,
+        /// A role whose file names no tools.
+        role_all_tools: &'static str,
+        /// A role's source and tools: `{source}`, `{tools}`.
+        role_source: &'static str,
+        /// The role list for an agent in the background.
+        background_role_title: &'static str,
+        /// The role list's entry for no role.
+        all_rounder: &'static str,
+        /// What it does.
+        all_rounder_detail: &'static str,
+        /// `/role`'s title.
+        role_title: &'static str,
+        /// The first ⌃C on an empty line.
+        quit_again: &'static str,
+        /// An image that cannot be decoded.
+        image_undecodable: &'static str,
+        /// The reading mode with nothing in the stream.
+        nothing_to_read: &'static str,
+        /// An image attached for a model that sees none: `{image}`, `{model}`.
+        image_unseen: &'static str,
+        /// An image file attached: `{name}`, `{image}` its line.
+        image_attached_named: &'static str,
+        /// An image from the clipboard attached: `{image}`.
+        image_attached: &'static str,
+        /// An image opened in the system's viewer: `{n}`.
+        image_opens: &'static str,
+        /// An image Glut does not keep: `{n}`.
+        image_not_kept: &'static str,
+        /// Copied by way of the terminal.
+        through_terminal: &'static str,
+        /// A step's choice: show its change.
+        step_show: &'static str,
+        /// What it does.
+        step_show_detail: &'static str,
+        /// A step's choice: the files back.
+        step_restore: &'static str,
+        /// What it does.
+        step_restore_detail: &'static str,
+        /// A step's choices: `{turn}`.
+        step_title: &'static str,
+        /// A theme for a light terminal.
+        theme_light: &'static str,
+        /// A theme of Axiomata's.
+        theme_axiomata: &'static str,
+        /// `/theme`'s title.
+        theme_title: &'static str,
+        /// The effort list's entry for the provider's own.
+        effort_default: &'static str,
+        /// What it does.
+        effort_default_detail: &'static str,
+        /// `/effort`'s title.
+        effort_title: &'static str,
+        /// `/editor`'s title: `{now}`, and `{file}`, `{line}` written as `/editor` takes them.
+        editor_title: &'static str,
+        /// How many sessions a project keeps: `{n}`.
+        sessions_count: Plural,
+        /// How many characters were copied: `{n}`.
+        copied: Plural,
+        /// `a` in the To-dos tab while the input holds a message.
+        todo_input_full: &'static str,
+        /// A plan approved to run in auto where there is no sandbox.
+        plan_auto_unsandboxed: &'static str,
     }
 }
 
@@ -594,6 +1137,17 @@ mod tests {
             assert_eq!(texts.tab_names.len(), 6, "{}", lang.code());
             assert_eq!(texts.tab_words.len(), 6, "{}", lang.code());
             assert_eq!(texts.sort_names.len(), 4, "{}", lang.code());
+            // A finished walk finds the file list open by its title's start.
+            assert!(
+                texts.files_looking.starts_with(texts.files_title),
+                "{}",
+                lang.code()
+            );
+            assert!(
+                texts.files_truncated.starts_with(texts.files_title),
+                "{}",
+                lang.code()
+            );
         }
     }
 

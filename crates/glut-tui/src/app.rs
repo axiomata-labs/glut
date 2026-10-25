@@ -540,10 +540,8 @@ impl App {
             return;
         }
         if let Err(reason) = self.session.save(&self.parts.home) {
-            self.transcript.note(
-                format!("the session could not be kept: {reason}"),
-                Tone::Fault,
-            );
+            self.transcript
+                .note(tr!(session_unkept, reason = reason), Tone::Fault);
         }
     }
 
@@ -559,21 +557,20 @@ impl App {
             ..Transcript::default()
         };
         session.transcript(&mut self.transcript);
-        let title = if session.title.is_empty() {
-            "it".to_owned()
+        let when = session
+            .updated
+            .with_timezone(&chrono::Local)
+            .format("%Y-%m-%d %H:%M");
+        let said = if session.title.is_empty() {
+            tr!(session_opened, when = when)
         } else {
-            crate::transcript::clean(&session.title)
+            tr!(
+                session_opened_titled,
+                when = when,
+                title = crate::transcript::clean(&session.title)
+            )
         };
-        self.transcript.note(
-            format!(
-                "session of {} opened — {title} goes on from here",
-                session
-                    .updated
-                    .with_timezone(&chrono::Local)
-                    .format("%Y-%m-%d %H:%M"),
-            ),
-            Tone::Fine,
-        );
+        self.transcript.note(said, Tone::Fine);
         self.conversation.clone_from(&session.conversation);
         self.todos.clear();
         self.forget_views();
@@ -617,34 +614,32 @@ impl App {
             State::Asks => {}
         }
         if next_turn && saying {
-            return self
-                .transcript
-                .note("Glut is done — Glut works on the next message", Tone::Quiet);
+            return self.transcript.note(tr!(state_next_message), Tone::Quiet);
         }
         if !saying || before.is_none() {
             return;
         }
         let said = match now {
-            State::Works if before == Some(State::Asks) => "Glut works on",
-            State::Works => "Glut works",
+            State::Works if before == Some(State::Asks) => tr!(state_works_on),
+            State::Works => tr!(state_works),
             State::Asks => match &self.ask {
                 Some(open) => {
-                    let said = format!(
-                        "Glut asks: {} {} — y once, n refuse",
-                        open.request.tool,
-                        crate::transcript::cut(
+                    let said = tr!(
+                        state_asks_tool,
+                        tool = open.request.tool,
+                        target = crate::transcript::cut(
                             &glut::permissions::printable(&open.request.target),
                             120
                         )
                     );
                     return self.transcript.note(said, Tone::Heed);
                 }
-                None => "Glut asks you to choose",
+                None => tr!(state_asks_choose),
             },
             State::Rests => match self.last_turn {
-                Some(true) => "Glut is done",
-                Some(false) => "Glut stopped: something failed",
-                None => "Glut stopped",
+                Some(true) => tr!(state_done),
+                Some(false) => tr!(state_failed),
+                None => tr!(state_stopped),
             },
         };
         self.transcript.note(said, Tone::Quiet);
@@ -690,9 +685,9 @@ impl App {
     /// Says where the mouse went.
     pub fn mouse_said(&mut self, held: bool) {
         self.say(if held {
-            "the mouse is Glut's again: drag to copy, click to unfold"
+            tr!(mouse_glut)
         } else {
-            "the mouse is the terminal's: its own selection works — F2 takes it back"
+            tr!(mouse_terminal)
         });
     }
 
@@ -799,10 +794,7 @@ impl App {
         if self.working() {
             return;
         }
-        self.transcript.note(
-            "a turn of this session was cut off — it goes on; ⎋ stops it",
-            Tone::Quiet,
-        );
+        self.transcript.note(tr!(turn_resumed), Tone::Quiet);
         self.after_resume = then;
         self.parts.log.follow(&self.session.id);
         let cancel = Cancel::new();
@@ -906,13 +898,19 @@ impl App {
                 // The plan's ask opens the plan's dialog (T19) over everything else: what was open goes, so no key
                 // meant for it answers the plan. A plan its event could not carry whole is the ask's line, said so.
                 if request.tool == glut::planning::EXIT_PLAN {
-                    let plan = self.offered_plan.take().flatten().unwrap_or_else(|| crate::plan::Plan {
-                        text: format!(
-                            "{}\n\n*Only the head of the plan reached the screen: its event was cut.*",
-                            request.target
-                        ),
-                        state: crate::plan::State::Waiting,
-                    });
+                    let plan =
+                        self.offered_plan
+                            .take()
+                            .flatten()
+                            .unwrap_or_else(|| crate::plan::Plan {
+                                // The plan's text may go to another pane's model (`/send plan`): its note stays English.
+                                text: format!(
+                                    "{}\n\n*{}*",
+                                    request.target,
+                                    crate::texts::of(glut::lang::Lang::En).plan_head_only
+                                ),
+                                state: crate::plan::State::Waiting,
+                            });
                     self.plan = Some(plan);
                     if self.panel.is_none() {
                         self.panel = Some(true);
@@ -930,9 +928,11 @@ impl App {
                 }
                 // T37b/c: what `glut_file` would write stands whole in the stream (PgUp reads it); the card shows its
                 // head and tail.
-                if request.tool == glut::tools::glut_files::NAME && request.target.lines().count() > 1 {
+                if request.tool == glut::tools::glut_files::NAME
+                    && request.target.lines().count() > 1
+                {
                     self.transcript.note(
-                        format!("Glut's own file, whole, as it would be written:\n{}", request.target),
+                        format!("{}\n{}", tr!(glut_file_whole), request.target),
                         Tone::Heed,
                     );
                 }
@@ -1013,10 +1013,10 @@ impl App {
                 };
                 match outcome.reason {
                     FinishReason::Answered => {}
-                    FinishReason::Cancelled => self.transcript.note("stopped", Tone::Quiet),
+                    FinishReason::Cancelled => self.transcript.note(tr!(stopped), Tone::Quiet),
                     other => self
                         .transcript
-                        .note(format!("the turn ended: {}", reason(other)), Tone::Fault),
+                        .note(tr!(turn_ended, reason = reason(other)), Tone::Fault),
                 }
                 // The host's first message follows a cut-off turn however it ended — unless that turn had it already: a
                 // session nobody watches must not stand idle with its work unsent.
@@ -1034,7 +1034,7 @@ impl App {
                     if self.no_wider_than(&sender) {
                         self.send(message);
                     } else {
-                        self.hold(message, "this pane runs wider now than when it was written");
+                        self.hold(message, tr!(held_wider));
                     }
                 } else if outcome.reason == FinishReason::Answered && !self.queue.is_empty() {
                     let next = self.queue.remove(0);
@@ -1057,18 +1057,13 @@ impl App {
                             mark.at = None;
                         }
                         self.keep();
-                        self.transcript.note(
-                            format!(
-                                "compacted: {} messages became a summary",
-                                compacted.replaced
-                            ),
-                            Tone::Fine,
-                        );
+                        self.transcript
+                            .note(tr!(compacted, n = compacted.replaced), Tone::Fine);
                     }
                     Err(reason) => {
                         self.conversation = before;
                         self.transcript
-                            .note(format!("not compacted: {reason}"), Tone::Fault);
+                            .note(tr!(not_compacted, reason = reason), Tone::Fault);
                     }
                 }
             }
@@ -1084,16 +1079,13 @@ impl App {
                         }
                         self.usage += usage;
                         self.transcript.note(
-                            format!(
-                                "handoff written to {} — /handoff read in the next session",
-                                session::shown_folder(&path)
-                            ),
+                            tr!(handoff_written, path = session::shown_folder(&path)),
                             Tone::Fine,
                         );
                     }
                     Err(reason) => self
                         .transcript
-                        .note(format!("no handoff: {reason}"), Tone::Fault),
+                        .note(tr!(no_handoff, reason = reason), Tone::Fault),
                 }
             }
             Report::Host(signal) => self.on_host(signal),
@@ -1105,7 +1097,8 @@ impl App {
                 if self.session.marks.last().and_then(|mark| mark.at) == Some(conversation.len()) {
                     self.session.marks.pop();
                 }
-                if conversation.is_empty() && self.session.title == crate::store::title_of(&prompt) {
+                if conversation.is_empty() && self.session.title == crate::store::title_of(&prompt)
+                {
                     self.session.title.clear();
                 }
                 self.conversation = conversation;
@@ -1128,9 +1121,9 @@ impl App {
                 }
                 self.transcript.note(
                     if back {
-                        format!("not sent: {reason} — the message is back in the input")
+                        tr!(not_sent_back, reason = reason)
                     } else {
-                        format!("not sent: {reason}")
+                        tr!(not_sent, reason = reason)
                     },
                     Tone::Fault,
                 );
@@ -1151,7 +1144,7 @@ impl App {
             Report::Warmed(Err(reason)) => {
                 self.keeper = None;
                 self.transcript
-                    .note(format!("the cache is kept warm no more: {reason}"), Tone::Quiet);
+                    .note(tr!(warm_ended, reason = reason), Tone::Quiet);
             }
             // T36c: only the screen of several panes delivers; a pane alone has no one to tell.
             Report::Tell { reply, .. } => {
@@ -1164,20 +1157,15 @@ impl App {
                     let _ = earlier.send(None);
                 }
                 let mut picker = self.models_picker(None, true);
-                picker.title = format!(
-                    "Glut asks: the model of an agent or a skill of its own · ⏎ picks it, ⎋ none · {}",
-                    picker.title
-                );
+                picker.title = format!("{} · {}", tr!(pick_own_model), picker.title);
                 picker.asks_model = true;
                 self.picker = Some(picker);
                 self.model_pick_opened = Instant::now();
             }
             Report::ChooseModel(provider) => {
                 self.busy = None;
-                self.transcript.note(
-                    format!("{provider} has no model yet: pick the one it takes"),
-                    Tone::Quiet,
-                );
+                self.transcript
+                    .note(tr!(provider_no_model, provider = provider), Tone::Quiet);
                 self.picker = Some(self.models_picker(Some(&provider), false));
             }
             Report::Shell {
@@ -1199,21 +1187,21 @@ impl App {
                 if to_model {
                     self.pending
                         .push(Message::user(crate::shell::for_the_model(&command, &ran)));
-                    self.say("Glut reads this output with your next message");
+                    self.say(tr!(shell_to_model));
                 }
             }
             Report::Attached { name, kept } => self.attached(name, kept),
             Report::Diff(turn, change) => match change {
                 Ok(change) if change.trim().is_empty() => self
                     .transcript
-                    .note(format!("step {turn} changed no recorded file"), Tone::Quiet),
+                    .note(tr!(step_changed_nothing, turn = turn), Tone::Quiet),
                 Ok(change) => {
                     self.shells += 1;
                     let id = format!("diff-{}", self.shells);
                     self.transcript.push(crate::transcript::Kind::Tool {
                         id,
                         name: "diff".into(),
-                        target: format!("what step {turn} changed"),
+                        target: tr!(step_changes, turn = turn),
                         state: crate::transcript::ToolState::Done,
                         gate: None,
                         output: change,
@@ -1224,34 +1212,37 @@ impl App {
                 }
                 Err(reason) => self
                     .transcript
-                    .note(format!("no change to show: {reason}"), Tone::Fault),
+                    .note(tr!(no_change_to_show, reason = reason), Tone::Fault),
             },
             Report::Review(scope, since, change) => match change {
                 Ok(change) => self.review.show(scope, since, &change),
-                Err(reason) => self
-                    .transcript
-                    .note(format!("no change to review: {}", crate::transcript::clean(&reason)), Tone::Fault),
+                Err(reason) => self.transcript.note(
+                    tr!(
+                        no_change_to_review,
+                        reason = crate::transcript::clean(&reason)
+                    ),
+                    Tone::Fault,
+                ),
             },
             Report::Restored(result) => match result {
                 Ok((commit, kept)) => self.transcript.note(
-                    format!(
-                        "the files are back as they were (snapshot {}); what they were just now is kept as run \
-                         {kept} — glut undo --run {kept} brings it back",
-                        &commit[..commit.len().min(8)]
+                    tr!(
+                        files_restored,
+                        snapshot = &commit[..commit.len().min(8)],
+                        kept = kept
                     ),
                     Tone::Fine,
                 ),
-                Err(reason) => self.transcript.note(
-                    format!("the files could not go back: {reason}"),
-                    Tone::Fault,
-                ),
+                Err(reason) => self
+                    .transcript
+                    .note(tr!(files_not_restored, reason = reason), Tone::Fault),
             },
             Report::Files(found) => {
                 let (files, truncated) = found;
                 self.files = Some((Instant::now(), files, truncated));
                 // A file picker still waiting for the walk gets its files, with what was typed in it kept.
                 if let Some(picker) = &self.picker
-                    && picker.title.starts_with(FILE_PICKER)
+                    && picker.title.starts_with(tr!(files_title))
                 {
                     let query = picker.query.clone();
                     let mut fresh = self.file_picker();
@@ -1264,13 +1255,8 @@ impl App {
                 match result {
                     Ok((engine, notes)) => {
                         if self.cost.is_some() && engine.prices.is_none() {
-                            self.transcript.note(
-                                format!(
-                                    "no prices for {}: the cost shown counts no further",
-                                    engine.model_name()
-                                ),
-                                Tone::Quiet,
-                            );
+                            self.transcript
+                                .note(tr!(no_prices, model = engine.model_name()), Tone::Quiet);
                         }
                         self.engine = engine;
                         // Another model has a cache of its own: the old one's keeping ends, the life is asked anew.
@@ -1280,10 +1266,8 @@ impl App {
                             .set_cache_hour(self.cache_mode == crate::warm::CacheMode::Hour);
                         // The next start begins where the owner switched to.
                         if let Err(reason) = session::keep_choice(&self.parts.home, &self.engine) {
-                            self.transcript.note(
-                                format!("not kept for the next start: {reason}"),
-                                Tone::Quiet,
-                            );
+                            self.transcript
+                                .note(tr!(choice_unkept, reason = reason), Tone::Quiet);
                         }
                         // The new model has read nothing of this session yet: the window fills on its next call.
                         self.context_used = 0;
@@ -1291,10 +1275,10 @@ impl App {
                             self.transcript.note(note, Tone::Quiet);
                         }
                         self.transcript.note(
-                            format!(
-                                "now {} · {}",
-                                self.engine.provider,
-                                self.engine.model_name()
+                            tr!(
+                                model_now,
+                                provider = self.engine.provider,
+                                model = self.engine.model_name()
                             ),
                             Tone::Fine,
                         );
@@ -1714,10 +1698,7 @@ impl App {
             }
         }
         if self.input.broken_pastes() > 0 {
-            self.transcript.note(
-                "a paste lost its mark to an edit and is left out; ⌃U clears the line, paste it again",
-                Tone::Fault,
-            );
+            self.transcript.note(tr!(paste_lost), Tone::Fault);
             return;
         }
         // A message waits for the images still read — a while, not for good: a clipboard program that hangs leaves
@@ -1727,19 +1708,15 @@ impl App {
                 .attaching_since
                 .is_some_and(|since| since.elapsed() < ATTACH_WAIT)
         {
-            self.say("an image is still being read — ⏎ once it is in the input");
+            self.say(tr!(image_reading));
             return;
         }
         if let Some(command) = text.trim().strip_prefix('/') {
             let (name, rest) = command.split_once(' ').unwrap_or((command, ""));
             if !name.is_empty() && !name.contains('/') {
                 if self.working() && waits(name, rest.trim()) {
-                    self.transcript.note(
-                        format!(
-                            "/{name} waits until Glut is done — it stays in the input; ⎋ stops Glut"
-                        ),
-                        Tone::Quiet,
-                    );
+                    self.transcript
+                        .note(tr!(command_waits, name = name), Tone::Quiet);
                     return;
                 }
                 let command = command.to_owned();
@@ -1751,10 +1728,7 @@ impl App {
         // turn holds the conversation. Only a first `!` right before the command makes one (the input shows it).
         if let Some((alone, command)) = owners_command(&text) {
             if !alone && self.working() {
-                self.transcript.note(
-                    "!cmd hands its output to Glut: it waits until Glut is done (!!cmd runs now, for you alone)",
-                    Tone::Quiet,
-                );
+                self.transcript.note(tr!(shell_waits), Tone::Quiet);
                 return;
             }
             // The command as sent: a paste in it given back.
@@ -1767,16 +1741,12 @@ impl App {
         if !images.is_empty() {
             if self.engine.images == Some(false) {
                 return self.transcript.note(
-                    format!(
-                        "{} sees no images, says its provider's list — /model picks one that does; the message waits",
-                        self.engine.model_name()
-                    ),
+                    tr!(model_no_images, model = self.engine.model_name()),
                     Tone::Fault,
                 );
             }
             if self.working() {
-                return self
-                    .say("a message with images goes once Glut is done — it waits in the input");
+                return self.say(tr!(images_wait));
             }
             // Numbered now, on from the whole conversation.
             let first = self.first_to_send();
@@ -1803,12 +1773,12 @@ impl App {
             match &self.steering {
                 Some(inbox) => {
                     inbox.send(text);
-                    self.say("Glut takes this in before its next step — ⌥↑ takes it back");
+                    self.say(tr!(steer_taken));
                 }
                 None => {
                     self.queue.push(text);
                     self.send_when_free = true;
-                    self.say("queued: it goes when Glut is free — ⌥↑ takes it back");
+                    self.say(tr!(queued_free));
                 }
             }
             return;
@@ -1840,20 +1810,19 @@ impl App {
         }
         // A queued message is text: one with images waits in the input until the turn is done (T45).
         if !self.input.images().is_empty() {
-            return self
-                .say("a message with images goes once Glut is done — it waits in the input");
+            return self.say(tr!(images_wait));
         }
         let text = self.input.take();
         self.queue.push(text);
         self.owner_spoke = true;
-        self.say("queued for after this turn — ⌥↑ takes it back");
+        self.say(tr!(queued_turn));
     }
 
     /// Alt+↑ (or Ctrl+↑, which macOS keeps for Mission Control): the last message waiting — queued, or sent to steer
     /// and not yet taken — back into the input.
     fn take_back(&mut self) {
         if !self.input.is_empty() {
-            return self.say("the input holds a message: send or clear it first");
+            return self.say(tr!(input_full));
         }
         let back = self
             .queue
@@ -1861,17 +1830,14 @@ impl App {
             .or_else(|| self.steering.as_ref().and_then(glut::Inbox::take_back));
         match back {
             Some(text) => self.input.insert_text(&text),
-            None => self.say("nothing waits to be taken back"),
+            None => self.say(tr!(nothing_waits)),
         }
     }
 
     /// Runs the owner's own command in the folder, beside the session; its output comes back as a report.
     fn shell(&mut self, command: String, to_model: bool) {
         if !self.parts.owner_shell {
-            return self.transcript.note(
-                "no !commands in this session: the program that started it keeps them off",
-                Tone::Fault,
-            );
+            return self.transcript.note(tr!(no_shell), Tone::Fault);
         }
         self.shells += 1;
         let id = format!("shell-{}", self.shells);
@@ -1882,9 +1848,9 @@ impl App {
             state: crate::transcript::ToolState::Running,
             gate: Some(
                 if to_model {
-                    "yours, for Glut"
+                    tr!(shell_for_glut)
                 } else {
-                    "yours alone"
+                    tr!(shell_alone)
                 }
                 .into(),
             ),
@@ -1934,7 +1900,7 @@ impl App {
     /// runs, an empty list that says so. A name a terminal would act on, or that hides what it is, is left out.
     fn file_picker(&self) -> Picker {
         let Some((_, files, truncated)) = &self.files else {
-            return Picker::new(format!("{FILE_PICKER} (looking …)"), Vec::new(), None);
+            return Picker::new(tr!(files_looking), Vec::new(), None);
         };
         let items = files
             .iter()
@@ -1942,9 +1908,9 @@ impl App {
             .map(|path| Item::plain(path.clone(), "", Pick::File(path.clone())))
             .collect();
         let title = if *truncated {
-            format!("{FILE_PICKER} (more than 50,000 files: not all of them)")
+            tr!(files_truncated).to_owned()
         } else {
-            FILE_PICKER.to_owned()
+            tr!(files_title).to_owned()
         };
         Picker::new(title, items, None)
     }
@@ -1954,10 +1920,7 @@ impl App {
         // Another mode offers other tools: the kept head is no longer the next turn's.
         self.forget_warm();
         if self.parts.mode_locked {
-            return self.transcript.note(
-                "this session's mode is set by the program that started it, for its role",
-                Tone::Fault,
-            );
+            return self.transcript.note(tr!(mode_locked), Tone::Fault);
         }
         let Some(gate) = self.parts.tools.gate() else {
             return;
@@ -1965,26 +1928,16 @@ impl App {
         let next = session::next_mode(gate.mode());
         gate.set_mode(next);
         let mut what = match next {
-            Mode::Plan => "plan: Glut reads and plans, it changes nothing".to_owned(),
-            Mode::Default => {
-                "ask: Glut reads freely, it asks before it changes a file or runs a command".to_owned()
-            }
-            Mode::AcceptEdits => {
-                "build: Glut reads and edits freely, it asks before a command that does more than read".to_owned()
-            }
+            Mode::Plan => tr!(mode_plan).to_owned(),
+            Mode::Default => tr!(mode_ask).to_owned(),
+            Mode::AcceptEdits => tr!(mode_build).to_owned(),
             // Auto leans on the sandbox; where there is none, the owner hears it before Glut does anything.
-            Mode::Auto if session::sandboxed(&self.parts) => {
-                "auto: Glut does what no rule forbids, in the sandbox — asked only before a heavy command (rm -rf, \
-                 git push, sudo, …)"
-                    .to_owned()
-            }
-            Mode::Auto => "auto: Glut does what no rule forbids — and commands run WITHOUT a sandbox here; only \
-                           the rules and the question before a heavy command hold them"
-                .to_owned(),
-            Mode::DontAsk => "don't ask: what no rule allows is refused".to_owned(),
+            Mode::Auto if session::sandboxed(&self.parts) => tr!(mode_auto).to_owned(),
+            Mode::Auto => tr!(mode_auto_unsandboxed).to_owned(),
+            Mode::DontAsk => tr!(mode_dont_ask).to_owned(),
         };
         if self.running.is_some() {
-            what.push_str(" (the tools on offer change with the next message)");
+            what.push_str(&format!(" ({})", tr!(mode_next_message)));
         }
         let tone = if next == Mode::Auto && !session::sandboxed(&self.parts) {
             Tone::Fault
@@ -2020,10 +1973,10 @@ impl App {
                 self.search = None;
                 self.pending.clear();
                 self.queue.clear();
-        self.forget_models();
+                self.forget_models();
                 self.conversation.clear();
                 self.todos.clear();
-        self.forget_views();
+                self.forget_views();
                 self.last_turn = None;
                 // A new session counts from nothing.
                 self.cost = None;
@@ -2072,8 +2025,7 @@ impl App {
             "compact" if self.refused_spend() => {}
             "compact" => {
                 self.busy = Some(Busy::Compacting);
-                self.transcript
-                    .note("compacting the conversation…", Tone::Quiet);
+                self.transcript.note(tr!(compacting), Tone::Quiet);
                 session::compact(
                     self.engine.clone(),
                     std::mem::take(&mut self.conversation),
@@ -2089,15 +2041,11 @@ impl App {
             "skill" => self.skill(rest),
             "handoff" => match rest {
                 // A paid call: written only when asked by name.
-                "" => self.transcript.note(
-                    "/handoff write — what was done and what comes next, for the next session; /handoff read — \
-                     take the folder's handoff into this one",
-                    Tone::Quiet,
-                ),
+                "" => self.transcript.note(tr!(handoff_usage), Tone::Quiet),
                 "write" if self.refused_spend() => {}
                 "write" => {
                     self.busy = Some(Busy::HandingOff);
-                    self.transcript.note("writing the handoff…", Tone::Quiet);
+                    self.transcript.note(tr!(handoff_writing), Tone::Quiet);
                     session::write_handoff(
                         Arc::clone(&self.parts),
                         self.engine.clone(),
@@ -2111,9 +2059,8 @@ impl App {
                         self.keep();
                         self.transcript.note(
                             format!(
-                                "handoff read — Glut knows it from the next message on; it moved to {} so no later \
-                                 session reads it again:\n{}",
-                                session::shown_folder(&moved),
+                                "{}\n{}",
+                                tr!(handoff_read, path = session::shown_folder(&moved)),
                                 text.trim()
                             ),
                             Tone::Fine,
@@ -2123,33 +2070,26 @@ impl App {
                 },
                 other => self
                     .transcript
-                    .note(format!("/handoff {other}: write or read"), Tone::Fault),
+                    .note(tr!(handoff_unknown, word = other), Tone::Fault),
             },
             "editor" => self.set_editor(rest),
             "resume" => self.picker = Some(self.session_picker()),
             // T44: the host picks the folder where it keeps Glut in its own pane.
-            "projects" if !self.parts.projects => {
-                self.tell("this window's folder is its host's to pick — no /projects here")
-            }
+            "projects" if !self.parts.projects => self.tell(tr!(projects_hosted)),
             "projects" if rest.trim().is_empty() => self.picker = Some(self.projects_picker()),
-            "projects" => match crate::projects::folder_of(
-                rest,
-                &self.parts.home,
-                &self.parts.config.cwd,
-            ) {
-                Ok(folder) => self.switch_project(folder),
-                Err(reason) => self.tell(reason),
-            },
+            "projects" => {
+                match crate::projects::folder_of(rest, &self.parts.home, &self.parts.config.cwd) {
+                    Ok(folder) => self.switch_project(folder),
+                    Err(reason) => self.tell(reason),
+                }
+            }
             "panel" => self.show_tab(Tab::Plan),
             "gate" => self.picker = Some(self.gate_picker()),
             "meter" => self.show_tab(Tab::Meter),
             "agents" => self.agents_picker(),
             "plan" => match &self.plan {
                 Some(_) => self.plan_view = Some(crate::plan::Dialog::reading()),
-                None => self.transcript.note(
-                    "no plan yet: in plan mode (⇧⇥) Glut sends its plan for you to approve",
-                    Tone::Quiet,
-                ),
+                None => self.transcript.note(tr!(no_plan_yet), Tone::Quiet),
             },
             "diff" | "review" => self.open_review(match rest {
                 "session" => crate::review::Scope::Session,
@@ -2159,28 +2099,27 @@ impl App {
             "vim" => match rest {
                 "on" | "" => self.set_vi(true),
                 "off" => self.set_vi(false),
-                other => self.transcript.note(format!("/vim {other}: on or off"), Tone::Fault),
+                other => self
+                    .transcript
+                    .note(tr!(vim_unknown, word = other), Tone::Fault),
             },
             "footer" => match rest {
                 "powerline" => self.set_footer(crate::footer::Separators::Powerline),
                 "plain" => self.set_footer(crate::footer::Separators::Plain),
                 "" => {
                     let why = match self.separators_from {
-                        Some(Some(terminal)) => format!("guessed: {terminal} draws Powerline's glyphs"),
-                        Some(None) => "guessed: a terminal that may lack Powerline's glyphs".to_owned(),
-                        None => "your choice".to_owned(),
+                        Some(Some(terminal)) => tr!(footer_guessed, terminal = terminal),
+                        Some(None) => tr!(footer_guessed_unknown).to_owned(),
+                        None => tr!(your_choice).to_owned(),
                     };
                     self.transcript.note(
-                        format!(
-                            "footer: {} ({why}) — /footer powerline or /footer plain keeps one",
-                            self.separators.label()
-                        ),
+                        tr!(footer_now, footer = self.separators.label(), why = why),
                         Tone::Quiet,
                     );
                 }
                 other => self
                     .transcript
-                    .note(format!("/footer {other}: powerline or plain"), Tone::Fault),
+                    .note(tr!(footer_unknown, word = other), Tone::Fault),
             },
             "split" => match crate::panes::parse_split(rest) {
                 Ok(request) => self.pane_request = Some(request),
@@ -2192,19 +2131,20 @@ impl App {
                 Ok(request) => self.pane_request = Some(request),
                 Err(reason) => self.transcript.note(reason, Tone::Fault),
             },
-            "show" if rest.is_empty() => self.tell("/show <name> — ⌃X A lists the agents in the background"),
+            "show" if rest.is_empty() => self.tell(tr!(show_usage)),
             "show" => self.pane_request = Some(crate::panes::Request::Show(rest.to_owned())),
             "hide" => self.pane_request = Some(crate::panes::Request::Hide),
-            "swap" if rest.is_empty() => self.pane_request = Some(crate::panes::Request::Swap(None)),
+            "swap" if rest.is_empty() => {
+                self.pane_request = Some(crate::panes::Request::Swap(None))
+            }
             "swap" => self.pane_request = Some(crate::panes::Request::Swap(Some(rest.to_owned()))),
-            "peek" if rest.is_empty() => self.pane_request = Some(crate::panes::Request::Peek(None)),
+            "peek" if rest.is_empty() => {
+                self.pane_request = Some(crate::panes::Request::Peek(None))
+            }
             "peek" => self.pane_request = Some(crate::panes::Request::Peek(Some(rest.to_owned()))),
             "cache" => match crate::warm::CacheMode::parse(rest) {
                 Some(mode) => self.set_cache(mode),
-                None => self.tell(format!(
-                    "cache: {} — /cache ping, /cache 1h or /cache off",
-                    self.cache_mode.label()
-                )),
+                None => self.tell(tr!(cache_now, cache = self.cache_mode.label())),
             },
             "role" if rest.is_empty() => self.picker = Some(self.roles_picker()),
             "role" => match rest {
@@ -2221,14 +2161,11 @@ impl App {
                 None => {
                     let now = Prefs::load(&self.parts.home).motion.unwrap_or_default();
                     let still = if crate::motion::still() && now == crate::motion::Motion::Full {
-                        " (held still: the reader mode or the system's Reduce motion)"
+                        format!(" ({})", tr!(motion_held))
                     } else {
-                        ""
+                        String::new()
                     };
-                    self.tell(format!(
-                        "motion: {}{still} — /motion full, calm or off",
-                        now.label()
-                    ));
+                    self.tell(tr!(motion_now, motion = now.label(), still = still));
                 }
             },
             "links" => match crate::links::Links::parse(rest) {
@@ -2237,15 +2174,19 @@ impl App {
                     crate::motion::relook();
                     match prefs::set_links(&self.parts.home, links) {
                         Ok(()) if links == crate::links::Links::Clickable => {
-                            self.say("links: clickable — the text is the link")
+                            self.say(tr!(links_clickable))
                         }
-                        Ok(()) => self.say("links: plain — the URL after the text"),
+                        Ok(()) => self.say(tr!(links_plain)),
                         Err(reason) => self.transcript.note(reason, Tone::Fault),
                     }
                 }
-                None => self.tell(format!(
-                    "links: {} — /links clickable or /links plain",
-                    if crate::links::clickable() { "clickable" } else { "plain" }
+                None => self.tell(tr!(
+                    links_now,
+                    links = if crate::links::clickable() {
+                        "clickable"
+                    } else {
+                        "plain"
+                    }
                 )),
             },
             "images" => match crate::pictures::Drawing::parse(rest) {
@@ -2253,21 +2194,18 @@ impl App {
                     crate::pictures::set_drawing(Some(drawing));
                     crate::motion::relook();
                     match prefs::set_images(&self.parts.home, drawing) {
-                        Ok(()) => self.say(format!("images: {}", drawing.label())),
+                        Ok(()) => self.say(tr!(images_set, images = drawing.label())),
                         Err(reason) => self.transcript.note(reason, Tone::Fault),
                     }
                 }
-                None => self.tell(format!(
-                    "images: {} — /images inline, blocks or off",
-                    crate::pictures::drawing().label()
-                )),
+                None => self.tell(tr!(images_now, images = crate::pictures::drawing().label())),
             },
             "reader" => match rest {
                 "on" => self.set_reader(true),
                 "off" => self.set_reader(false),
-                _ => self.tell(format!(
-                    "reader: {} — /reader on or off",
-                    if crate::motion::reader() { "on" } else { "off" }
+                _ => self.tell(tr!(
+                    reader_now,
+                    reader = if crate::motion::reader() { "on" } else { "off" }
                 )),
             },
             "theme" if rest.is_empty() => self.picker = Some(theme_picker()),
@@ -2275,7 +2213,10 @@ impl App {
             "language" => match glut::lang::Lang::parse(rest) {
                 Some(lang) => self.set_language(lang),
                 None => {
-                    let known: Vec<&str> = glut::lang::Lang::ALL.iter().map(|lang| lang.code()).collect();
+                    let known: Vec<&str> = glut::lang::Lang::ALL
+                        .iter()
+                        .map(|lang| lang.code())
+                        .collect();
                     let said = tr!(
                         language_unknown,
                         name = crate::transcript::clean(rest),
@@ -2289,15 +2230,13 @@ impl App {
                 "off" => self.set_thinking(Thinking::Off),
                 "folded" | "fold" | "" => self.set_thinking(Thinking::Folded),
                 "open" | "on" => self.set_thinking(Thinking::Open),
-                other => self.transcript.note(
-                    format!("/thinking {other}: off, folded or open"),
-                    Tone::Fault,
-                ),
+                other => self
+                    .transcript
+                    .note(tr!(thinking_unknown, word = other), Tone::Fault),
             },
-            other => self.transcript.note(
-                format!("no command /{other} — /help lists them"),
-                Tone::Fault,
-            ),
+            other => self
+                .transcript
+                .note(tr!(no_command, name = other), Tone::Fault),
         }
     }
 
@@ -2310,10 +2249,7 @@ impl App {
         effort: Option<Option<Effort>>,
     ) {
         if self.parts.fixed_engine {
-            return self.transcript.note(
-                "this session's model is set by the program that started it — no switch here",
-                Tone::Fault,
-            );
+            return self.transcript.note(tr!(model_locked), Tone::Fault);
         }
         self.busy = Some(Busy::Switching);
         let provider = provider.or_else(|| Some(self.engine.provider.clone()));
@@ -2335,45 +2271,46 @@ impl App {
     fn context(&mut self, rest: &str) {
         if rest.is_empty() {
             let text = match self.engine.window {
-                Some((window, from)) => format!(
-                    "context: {} of {window} tokens used ({}%), the window from {from}; Glut compacts shortly \
-                     before it is full — /context <tokens> sets another",
-                    self.context_used,
-                    self.context_used * 100 / u64::from(window.max(1))
+                Some((window, from)) => tr!(
+                    context_known,
+                    used = self.context_used,
+                    window = window,
+                    share = self.context_used * 100 / u64::from(window.max(1)),
+                    from = match from {
+                        session::WINDOW_SET_HERE => tr!(window_set_here),
+                        session::WINDOW_FROM_LIST => tr!(window_from_list),
+                        other => other,
+                    }
                 ),
-                None => format!(
-                    "context: {} tokens used; the window of {} is unknown — /context <tokens> sets it",
-                    self.context_used,
-                    self.engine.model_name()
+                None => tr!(
+                    context_unknown,
+                    used = self.context_used,
+                    model = self.engine.model_name()
                 ),
             };
             self.transcript.note(text, Tone::Quiet);
             // T35: the guides ride along on every turn — what they cost, so a growing one is seen.
             if self.parts.guide_chars > 0 {
                 self.transcript.note(
-                    format!(
-                        "the guides take about {} tokens of it on every turn (/init checks and shortens them)",
-                        self.parts.guide_chars / 4
-                    ),
+                    tr!(guides_cost, tokens = self.parts.guide_chars / 4),
                     Tone::Quiet,
                 );
             }
             return;
         }
         let Some(tokens) = parse_tokens(rest) else {
-            self.transcript.note(
-                format!("/context {rest}: a number of tokens (65536, 64k, 1M)"),
-                Tone::Fault,
-            );
+            self.transcript
+                .note(tr!(context_unknown_word, word = rest), Tone::Fault);
             return;
         };
         match session::keep_window(&self.parts.home, &self.engine, tokens) {
             Ok(()) => {
                 self.engine.window = Some((tokens, session::WINDOW_SET_HERE));
                 self.transcript.note(
-                    format!(
-                        "{} counts with {tokens} tokens from now on",
-                        self.engine.model_name()
+                    tr!(
+                        context_set,
+                        model = self.engine.model_name(),
+                        tokens = tokens
                     ),
                     Tone::Fine,
                 );
@@ -2387,10 +2324,7 @@ impl App {
     fn init(&mut self, rest: &str) {
         let migrate = rest.trim() == "--migrate";
         if !rest.trim().is_empty() && !migrate {
-            return self.transcript.note(
-                "/init, or /init --migrate to be asked about CLAUDE.md again",
-                Tone::Fault,
-            );
+            return self.transcript.note(tr!(init_usage), Tone::Fault);
         }
         // The nearest guide the session read decides: an `AGENTS.md` is checked, a `CLAUDE.md` (read only where its
         // folder has no `AGENTS.md`) is the question — none, and a new one is written in the working folder.
@@ -2418,16 +2352,16 @@ impl App {
         {
             self.init_claude = Some(shown(claude));
             self.picker = Some(Picker::new(
-                "This folder's guide is CLAUDE.md: move it into AGENTS.md?",
+                tr!(init_claude_title),
                 vec![
                     Item::plain(
-                        "yes, into AGENTS.md",
-                        "CLAUDE.md then only imports it (@AGENTS.md): one guide for every harness",
+                        tr!(init_claude_yes),
+                        tr!(init_claude_yes_detail),
                         Pick::Init(true),
                     ),
                     Item::plain(
-                        "no, keep CLAUDE.md",
-                        "it stays the guide, checked and kept short; not asked again here",
+                        tr!(init_claude_no),
+                        tr!(init_claude_no_detail),
                         Pick::Init(false),
                     ),
                 ],
@@ -2446,9 +2380,7 @@ impl App {
     /// `/memory open` hands the index to the owner's editor.
     fn memory(&mut self, rest: &str) {
         let Some(dir) = self.parts.memory.clone() else {
-            return self
-                .transcript
-                .note("this session has no memory of its own", Tone::Quiet);
+            return self.transcript.note(tr!(no_memory), Tone::Quiet);
         };
         match rest.trim() {
             "open" => {
@@ -2456,33 +2388,28 @@ impl App {
                 if index.is_file() {
                     self.open_request = Some(index);
                 } else {
-                    self.transcript.note(
-                        format!("nothing kept yet in {}", dir.display()),
-                        Tone::Quiet,
-                    );
+                    self.transcript
+                        .note(tr!(memory_empty, folder = dir.display()), Tone::Quiet);
                 }
             }
             "" => {
                 let facts = crate::memory::facts(&dir);
                 if facts.is_empty() {
-                    return self.transcript.note(
-                        format!("nothing kept yet in {}", dir.display()),
-                        Tone::Quiet,
-                    );
+                    return self
+                        .transcript
+                        .note(tr!(memory_empty, folder = dir.display()), Tone::Quiet);
                 }
                 let items = facts
                     .into_iter()
                     .map(|(name, about)| Item::plain(name.clone(), about, Pick::MemoryFact(name)))
                     .collect();
                 self.picker = Some(Picker::new(
-                    format!("Memory — {} · ⏎ shows one", dir.display()),
+                    tr!(memory_title, folder = dir.display()),
                     items,
                     None,
                 ));
             }
-            _ => self
-                .transcript
-                .note("/memory, or /memory open to edit its index", Tone::Fault),
+            _ => self.transcript.note(tr!(memory_usage), Tone::Fault),
         }
     }
 
@@ -2497,7 +2424,7 @@ impl App {
                 .note(format!("{name}:\n{text}"), Tone::Quiet),
             None => self
                 .transcript
-                .note(format!("{name} cannot be read"), Tone::Fault),
+                .note(tr!(cannot_read, name = name), Tone::Fault),
         }
     }
 
@@ -2515,17 +2442,17 @@ impl App {
                 if done == 0 {
                     return self
                         .transcript
-                        .note(format!("nothing done in {name} to drop"), Tone::Quiet);
+                        .note(tr!(todos_nothing_done, name = name), Tone::Quiet);
                 }
                 self.picker = Some(Picker::new(
-                    format!("Drop the {done} done from {name}?"),
+                    tr!(todos_drop_title, done = done, name = name),
                     vec![
                         Item::plain(
-                            "yes, drop them",
-                            "an item goes with what stands under it when that is done too",
+                            tr!(todos_drop_yes),
+                            tr!(todos_drop_yes_detail),
                             Pick::TodoClean,
                         ),
-                        Item::plain("no, keep them", "", Pick::Shown),
+                        Item::plain(tr!(todos_drop_no), "", Pick::Shown),
                     ],
                     None,
                 ));
@@ -2533,7 +2460,7 @@ impl App {
             item => match self.project_todos.add(&cwd, item) {
                 Ok(()) => self
                     .transcript
-                    .note(format!("added to {name}: {item}"), Tone::Quiet),
+                    .note(tr!(todos_added, name = name, item = item), Tone::Quiet),
                 Err(failure) => self.transcript.note(failure.message(&name), Tone::Fault),
             },
         }
@@ -2545,7 +2472,7 @@ impl App {
         let (name, text) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
         if name.is_empty() {
             if self.parts.skills.is_empty() {
-                return self.transcript.note("no skills here", Tone::Quiet);
+                return self.transcript.note(tr!(no_skills), Tone::Quiet);
             }
             let items = self
                 .parts
@@ -2559,11 +2486,7 @@ impl App {
                     )
                 })
                 .collect();
-            self.picker = Some(Picker::new(
-                "Skills · ⏎ takes one into the input",
-                items,
-                None,
-            ));
+            self.picker = Some(Picker::new(tr!(skills_title), items, None));
             return;
         }
         if !self.parts.skills.iter().any(|(known, _)| known == name) {
@@ -2574,10 +2497,11 @@ impl App {
                 .map(|(known, _)| known.as_str())
                 .collect();
             return self.transcript.note(
-                format!(
-                    "no skill {name}: {}",
-                    if known.is_empty() {
-                        "there are none".to_owned()
+                tr!(
+                    no_skill,
+                    name = name,
+                    known = if known.is_empty() {
+                        tr!(there_are_none).to_owned()
                     } else {
                         known.join(", ")
                     }
@@ -2611,7 +2535,7 @@ impl App {
         match self.project_todos.clean(&cwd) {
             Ok(dropped) => self
                 .transcript
-                .note(format!("{dropped} done dropped from {name}"), Tone::Quiet),
+                .note(tr!(todos_dropped, n = dropped, name = name), Tone::Quiet),
             Err(failure) => self.transcript.note(failure.message(&name), Tone::Fault),
         }
     }
@@ -2621,10 +2545,7 @@ impl App {
         match self.project_todos.path() {
             Some(path) => self.open_request = Some(path.to_path_buf()),
             None => self.transcript.note(
-                format!(
-                    "no {} yet: /todo <text> adds the first",
-                    self.project_todos.name()
-                ),
+                tr!(todos_no_file, name = self.project_todos.name()),
                 Tone::Quiet,
             ),
         }
@@ -2701,10 +2622,7 @@ impl App {
                         vi.mode = crate::vi::Mode::Insert;
                     }
                 } else {
-                    self.transcript.note(
-                        "the input holds a message: /todo <text> after it is sent adds the item",
-                        Tone::Quiet,
-                    );
+                    self.transcript.note(tr!(todo_input_full), Tone::Quiet);
                 }
             }
             KeyCode::Char('o') => self.open_todos(),
@@ -2793,10 +2711,7 @@ impl App {
         let shown = !self.panel.unwrap_or(false);
         self.panel = Some(shown);
         if shown && self.stream_width < crate::view::PANEL_MIN_SCREEN {
-            self.transcript.note(
-                "the panel shows when the window is at least 100 columns wide",
-                Tone::Quiet,
-            );
+            self.transcript.note(tr!(panel_needs_room), Tone::Quiet);
         }
         if let Err(reason) = prefs::set_panel(&self.parts.home, shown) {
             self.transcript.note(reason, Tone::Fault);
@@ -2883,17 +2798,21 @@ impl App {
                 + turn.usage.output_tokens
         });
         let budget = match (budget.max_tokens, budget.max_usd) {
-            (Some(max), _) => Some(format!(
-                "{} of {} tokens left this turn",
-                crate::meter::tokens(max.saturating_sub(spent_tokens)),
-                crate::meter::tokens(max)
+            (Some(max), _) => Some(tr!(
+                budget_tokens_left,
+                left = crate::meter::tokens(max.saturating_sub(spent_tokens)),
+                max = crate::meter::tokens(max)
             )),
             // Glut counts money only with the budget's prices.
-            (None, Some(max)) if budget.prices.is_some() => Some(format!(
-                "${:.2} of ${max:.2} left this turn",
-                (max - turn.and_then(|turn| turn.cost).unwrap_or(0.0)).max(0.0)
+            (None, Some(max)) if budget.prices.is_some() => Some(tr!(
+                budget_money_left,
+                left = format!(
+                    "${:.2}",
+                    (max - turn.and_then(|turn| turn.cost).unwrap_or(0.0)).max(0.0)
+                ),
+                max = format!("${max:.2}")
             )),
-            (None, Some(max)) => Some(format!("${max:.2}, not counted: no price known")),
+            (None, Some(max)) => Some(tr!(budget_uncounted, max = format!("${max:.2}"))),
             (None, None) => None,
         };
         crate::meter::Window {
@@ -2937,7 +2856,7 @@ impl App {
     /// `/gate`: what an "always" answer allowed this session, each to take back, then the settings' rules in force.
     fn gate_picker(&self) -> Picker {
         let Some(gate) = self.parts.tools.gate() else {
-            return Picker::new("No gate: every call runs", Vec::new(), None);
+            return Picker::new(tr!(no_gate), Vec::new(), None);
         };
         let granted = gate.granted();
         let mut items: Vec<Item> = granted
@@ -2949,7 +2868,7 @@ impl App {
                         "allow {}",
                         crate::transcript::clean(&given.rules.join(", "))
                     ),
-                    "your \"always\" this session · ⏎ takes it back",
+                    tr!(gate_always_detail),
                     Pick::TakeBack(given.rules.clone()),
                 )
             })
@@ -2979,17 +2898,17 @@ impl App {
         items.extend(settings.into_iter().map(|(verdict, text)| {
             Item::plain(
                 format!("{verdict} {}", crate::transcript::clean(&text)),
-                "from the settings (~/.glut/settings.json, the project's .glut/)",
+                tr!(gate_from_settings),
                 Pick::Shown,
             )
         }));
-        let title = format!(
-            "Gate · mode {} · {} — the rules in force",
-            session::mode_label(gate.mode()),
-            if granted.is_empty() {
-                "no \"always\" given yet".to_owned()
+        let title = tr!(
+            gate_title,
+            mode = session::mode_label(gate.mode()),
+            always = if granted.is_empty() {
+                tr!(gate_no_always).to_owned()
             } else {
-                format!("{} \"always\" given", granted.len())
+                tr!(gate_always_given, n = granted.len())
             }
         );
         Picker::new(title, items, None)
@@ -3004,15 +2923,11 @@ impl App {
             .is_some_and(|gate| gate.take_back(rules));
         let clean = crate::transcript::clean(&rules.join(", "));
         if taken {
-            self.transcript.note(
-                format!("taken back: {clean} — Glut asks again next time"),
-                Tone::Quiet,
-            );
+            self.transcript
+                .note(tr!(taken_back, rule = clean), Tone::Quiet);
         } else {
-            self.transcript.note(
-                format!("{clean} was not allowed with \"always\""),
-                Tone::Fault,
-            );
+            self.transcript
+                .note(tr!(not_always, rule = clean), Tone::Fault);
         }
     }
 
@@ -3031,9 +2946,9 @@ impl App {
     fn set_thinking(&mut self, thinking: Thinking) {
         self.transcript.show_thinking(thinking);
         let said = match thinking {
-            Thinking::Off => "thinking: hidden",
-            Thinking::Folded => "thinking: folded — a click opens one, ⌃T all",
-            Thinking::Open => "thinking: open — a click folds one, ⌃T folds all",
+            Thinking::Off => tr!(thinking_hidden),
+            Thinking::Folded => tr!(thinking_folded),
+            Thinking::Open => tr!(thinking_open),
         };
         match prefs::set_thinking(&self.parts.home, thinking) {
             Ok(()) => self.say_switch(Switch::Thinking, said, Tone::Quiet),
@@ -3051,10 +2966,10 @@ impl App {
             .rev()
             .map(|(at, mark)| {
                 let detail = match (mark.at.is_some(), self.files_run(at).is_some()) {
-                    (true, true) => "files changed since",
-                    (true, false) => "no file changed since",
-                    (false, true) => "compacted since: files only",
-                    (false, false) => "compacted since, no file changed",
+                    (true, true) => tr!(rewind_files_changed),
+                    (true, false) => tr!(rewind_no_file_changed),
+                    (false, true) => tr!(rewind_compacted_files),
+                    (false, false) => tr!(rewind_compacted_nothing),
                 };
                 Item::plain(
                     crate::transcript::clean(&mark.prompt),
@@ -3064,9 +2979,9 @@ impl App {
             })
             .collect();
         let title = if items.is_empty() {
-            "Rewind (none of your messages yet — or the session is older than rewinding)"
+            tr!(rewind_none)
         } else {
-            "Rewind to before which message?"
+            tr!(rewind_title)
         };
         Picker::new(title, items, None)
     }
@@ -3091,39 +3006,39 @@ impl App {
         };
         if files && talk {
             items.push(choice(
-                "conversation and files",
-                "your edits since go too (kept aside first: /steps or glut undo)",
+                tr!(rewind_both),
+                tr!(rewind_both_detail),
                 true,
                 true,
             ));
         }
         if talk {
             items.push(choice(
-                "conversation only",
-                "the files stay as they are",
+                tr!(rewind_talk),
+                tr!(rewind_talk_detail),
                 true,
                 false,
             ));
         }
         if files {
             items.push(choice(
-                "files only",
-                "the conversation stays; your edits since are kept aside first",
+                tr!(rewind_files),
+                tr!(rewind_files_detail),
                 false,
                 true,
             ));
         }
         if talk {
             items.push(Item::plain(
-                "fork: a new session from here",
-                "this one stays as it is (/resume shows both); the files stay",
+                tr!(rewind_fork),
+                tr!(rewind_fork_detail),
                 Pick::Fork(mark),
             ));
         }
         let title = if talk {
-            "Rewind: what goes back?"
+            tr!(rewind_how)
         } else {
-            "Rewind: the conversation was compacted since — only the files can go back"
+            tr!(rewind_how_files)
         };
         Picker::new(title, items, None)
     }
@@ -3186,26 +3101,19 @@ impl App {
             self.forget_warm();
         }
         if self.working() {
-            return self
-                .transcript
-                .note("rewind waits until Glut is done; ⎋ stops it", Tone::Quiet);
+            return self.transcript.note(tr!(rewind_waits), Tone::Quiet);
         }
         let Some(target) = self.session.marks.get(mark).cloned() else {
             return;
         };
         let at = target.at.filter(|at| *at <= self.conversation.len());
         if conversation && at.is_none() {
-            return self.transcript.note(
-                "the conversation was compacted since: it cannot go back to before this message",
-                Tone::Fault,
-            );
+            return self.transcript.note(tr!(rewind_compacted), Tone::Fault);
         }
         if files {
             match self.files_run(mark) {
                 Some(run) => self.restore_files(run, None),
-                None => self
-                    .transcript
-                    .note("no snapshot to put the files back from", Tone::Quiet),
+                None => self.transcript.note(tr!(no_snapshot), Tone::Quiet),
             }
             // A conversation that stays is told: the model must not trust what it read of the files before.
             if !conversation {
@@ -3244,33 +3152,22 @@ impl App {
             self.input.insert_text(&message);
             self.input.adopt(images);
         } else {
-            self.transcript.note(
-                "the input held text: your earlier message is not put back",
-                Tone::Quiet,
-            );
+            self.transcript.note(tr!(rewind_input_full), Tone::Quiet);
         }
-        self.transcript.note(
-            "rewound: the conversation is as it was before this message",
-            Tone::Fine,
-        );
+        self.transcript.note(tr!(rewound), Tone::Fine);
     }
 
     /// A new session from before mark `mark` — this one kept as it is, the new one its fork (T14) — with that message
     /// back in the input.
     fn fork(&mut self, mark: usize) {
         if self.working() {
-            return self
-                .transcript
-                .note("a fork waits until Glut is done; ⎋ stops it", Tone::Quiet);
+            return self.transcript.note(tr!(fork_waits), Tone::Quiet);
         }
         let Some(target) = self.session.marks.get(mark).cloned() else {
             return;
         };
         let Some(at) = target.at.filter(|at| *at <= self.conversation.len()) else {
-            return self.transcript.note(
-                "the conversation was compacted since: no fork from before this message",
-                Tone::Fault,
-            );
+            return self.transcript.note(tr!(fork_compacted), Tone::Fault);
         };
         self.keep();
         let mut fork = Session::new(
@@ -3297,17 +3194,14 @@ impl App {
             self.input.insert_text(&message);
             self.input.adopt(images);
         }
-        self.transcript.note(
-            "forked: a new session from before this message; the one you left is in /resume",
-            Tone::Fine,
-        );
+        self.transcript.note(tr!(forked), Tone::Fine);
     }
 
     /// The snapshot steps of this session's runs, newest first (`/steps`, T13): a step's change, or the files back
     /// to before it.
     fn steps_picker(&self) -> Picker {
         let Some(root) = self.parts.config.snapshots.clone() else {
-            return Picker::new("Steps (no snapshots in this session)", Vec::new(), None);
+            return Picker::new(tr!(steps_no_snapshots), Vec::new(), None);
         };
         let runs = glut::snapshot::runs(&root, &self.parts.config.cwd);
         let mut items = Vec::new();
@@ -3318,10 +3212,10 @@ impl App {
             };
             for step in record.steps.iter().rev() {
                 items.push(Item::plain(
-                    format!(
-                        "step {} · {}",
-                        step.turn,
-                        crate::transcript::clean(&mark.prompt)
+                    tr!(
+                        step_of,
+                        turn = step.turn,
+                        prompt = crate::transcript::clean(&mark.prompt)
                     ),
                     &step.commit[..step.commit.len().min(8)],
                     Pick::Step {
@@ -3332,9 +3226,9 @@ impl App {
             }
         }
         let title = if items.is_empty() {
-            "Steps (no step changed a file yet)"
+            tr!(steps_none)
         } else {
-            "Steps that changed files"
+            tr!(steps_title)
         };
         Picker::new(title, items, None)
     }
@@ -3343,9 +3237,7 @@ impl App {
     /// session's first; the diff comes back as a report.
     pub fn open_review(&mut self, scope: crate::review::Scope) {
         let Some(root) = self.parts.config.snapshots.clone() else {
-            return self
-                .transcript
-                .note("no snapshots: nothing to review", Tone::Quiet);
+            return self.transcript.note(tr!(review_no_snapshots), Tone::Quiet);
         };
         let kept = glut::snapshot::runs(&root, &self.parts.config.cwd);
         let changed = |mark: &&crate::store::Mark| {
@@ -3360,10 +3252,7 @@ impl App {
         let Some((run, prompt)) =
             mark.and_then(|mark| Some((mark.run.clone()?, mark.prompt.clone())))
         else {
-            return self.transcript.note(
-                "nothing to review: no turn of this session changed a file",
-                Tone::Quiet,
-            );
+            return self.transcript.note(tr!(review_no_change), Tone::Quiet);
         };
         let cwd = self.parts.config.cwd.clone();
         let reports = self.reports.clone();
@@ -3387,10 +3276,7 @@ impl App {
                 why,
             } => {
                 if self.working() {
-                    return self.transcript.note(
-                        "a hunk goes back when Glut is done; ⎋ stops it",
-                        Tone::Quiet,
-                    );
+                    return self.transcript.note(tr!(hunk_waits), Tone::Quiet);
                 }
                 match self.put_back(&path, &hunk, created) {
                     Ok(()) => {
@@ -3399,7 +3285,7 @@ impl App {
                                 true, &path, &hunk, &why,
                             )));
                         self.keep();
-                        self.say("put back; Glut reads why with your next message");
+                        self.say(tr!(hunk_put_back));
                         let scope = self.review.scope.unwrap_or(crate::review::Scope::Turn);
                         self.open_review(scope);
                     }
@@ -3413,7 +3299,7 @@ impl App {
                         false, &path, &hunk, &text,
                     )));
                 self.keep();
-                self.say("Glut reads your comment with your next message");
+                self.say(tr!(comment_sent));
             }
         }
     }
@@ -3435,16 +3321,17 @@ impl App {
         let file = match axiomata_files::read_text(&root, path, MAX_READ_BYTES) {
             Ok(file) => Some(file),
             Err(axiomata_files::FilesError::NotFound { .. }) => None,
-            Err(err) => return Err(format!("cannot put {path} back: {err}")),
+            Err(err) => return Err(tr!(cannot_put_back, path = path, reason = err)),
         };
         let text = crate::review::put_back(file.as_ref().map(|file| file.content.as_str()), hunk)?;
-        let gone = |err: axiomata_files::FilesError| format!("cannot put {path} back: {err}");
+        let gone =
+            |err: axiomata_files::FilesError| tr!(cannot_put_back, path = path, reason = err);
         match file {
             Some(file) if created && text.is_empty() => {
                 // Deleted only as it was read: a write in between is not lost.
                 if axiomata_files::current_version(&root, path).map_err(gone)? != Some(file.version)
                 {
-                    return Err("the file changed since: open /diff again".into());
+                    return Err(tr!(review_changed_since).into());
                 }
                 axiomata_files::delete(&root, path).map_err(gone)
             }
@@ -3459,7 +3346,7 @@ impl App {
                     .map_err(gone)?
                     .is_some()
                 {
-                    return Err("the file changed since: open /diff again".into());
+                    return Err(tr!(review_changed_since).into());
                 }
                 axiomata_files::write_text(&root, path, &text, None, MAX_WRITE_BYTES)
                     .map(|_| ())
@@ -3477,10 +3364,7 @@ impl App {
         let reports = self.reports.clone();
         if restore {
             if self.working() {
-                return self.transcript.note(
-                    "the files go back when Glut is done; ⎋ stops it",
-                    Tone::Quiet,
-                );
+                return self.transcript.note(tr!(files_wait), Tone::Quiet);
             }
             return self.restore_files(run, Some(turn));
         }
@@ -3493,11 +3377,7 @@ impl App {
     /// Turns the vi mode on (in Insert mode, as a message starts) or off, and keeps it.
     fn set_vi(&mut self, on: bool) {
         self.vi = on.then(crate::vi::Vi::default);
-        let said = if on {
-            "vim: on — ⎋ to Normal mode, i a o to Insert; ⎋ in Normal mode stops Glut"
-        } else {
-            "vim: off"
-        };
+        let said = if on { tr!(vim_on) } else { tr!(vim_off) };
         match prefs::set_vi(&self.parts.home, on) {
             Ok(()) => self.transcript.note(said, Tone::Quiet),
             Err(reason) => self.transcript.note(reason, Tone::Fault),
@@ -3511,7 +3391,7 @@ impl App {
         match prefs::set_footer(&self.parts.home, separators) {
             Ok(()) => self
                 .transcript
-                .note(format!("footer: {}", separators.label()), Tone::Quiet),
+                .note(tr!(footer_set, footer = separators.label()), Tone::Quiet),
             Err(reason) => self.transcript.note(reason, Tone::Fault),
         }
     }
@@ -3521,11 +3401,10 @@ impl App {
         let prefs = Prefs::load(&self.parts.home);
         crate::motion::set(motion, prefs.reader.unwrap_or(false));
         match prefs::set_motion(&self.parts.home, motion) {
-            Ok(()) if motion == crate::motion::Motion::Full && crate::motion::still() => self.transcript.note(
-                "motion: full — held still all the same by the reader mode or the system's Reduce motion",
-                Tone::Quiet,
-            ),
-            Ok(()) => self.say(format!("motion: {}", motion.label())),
+            Ok(()) if motion == crate::motion::Motion::Full && crate::motion::still() => {
+                self.transcript.note(tr!(motion_full_held), Tone::Quiet)
+            }
+            Ok(()) => self.say(tr!(motion_set, motion = motion.label())),
             Err(reason) => self.transcript.note(reason, Tone::Fault),
         }
     }
@@ -3535,15 +3414,11 @@ impl App {
         let prefs = Prefs::load(&self.parts.home);
         crate::motion::set(prefs.motion.unwrap_or_default(), on);
         match prefs::set_reader(&self.parts.home, on) {
-            Ok(()) if !on && crate::motion::reader_forced() => self.transcript.note(
-                "reader mode off from the next start — glut --reader holds it on for this run",
-                Tone::Quiet,
-            ),
-            Ok(()) if on => self.transcript.note(
-                "reader mode on: keys in words, a plain screen, nothing moving, a line at each change of state",
-                Tone::Quiet,
-            ),
-            Ok(()) => self.say("reader mode off"),
+            Ok(()) if !on && crate::motion::reader_forced() => {
+                self.transcript.note(tr!(reader_off_next), Tone::Quiet)
+            }
+            Ok(()) if on => self.transcript.note(tr!(reader_on), Tone::Quiet),
+            Ok(()) => self.say(tr!(reader_off)),
             Err(reason) => self.transcript.note(reason, Tone::Fault),
         }
     }
@@ -3553,7 +3428,7 @@ impl App {
         if !crate::theme::set(name) {
             let names: Vec<&str> = crate::theme::all().map(|palette| palette.name).collect();
             return self.transcript.note(
-                format!("no theme {name} — {}", names.join(", ")),
+                tr!(no_theme, name = name, known = names.join(", ")),
                 Tone::Fault,
             );
         }
@@ -3561,10 +3436,10 @@ impl App {
         // In a hosted session the owner's choice stands for this session alone: the host's app has its own.
         if self.theme_from != ThemeFrom::Owner {
             self.theme_from = ThemeFrom::Pinned;
-            return self.say(format!("theme: {name} (this session)"));
+            return self.say(tr!(theme_session, name = name));
         }
         match prefs::set_theme(&self.parts.home, name) {
-            Ok(()) => self.say(format!("theme: {name}")),
+            Ok(()) => self.say(tr!(theme_set, name = name)),
             Err(reason) => self.transcript.note(reason, Tone::Fault),
         }
     }
@@ -3588,7 +3463,7 @@ impl App {
             Ok(()) => false,
             Err(reason) => {
                 self.transcript
-                    .note(format!("not now: {reason}"), Tone::Fault);
+                    .note(tr!(not_now, reason = reason), Tone::Fault);
                 true
             }
         }
@@ -3614,7 +3489,7 @@ impl App {
                 if let Some(cancel) = &self.running {
                     cancel.cancel();
                     self.transcript
-                        .note(format!("stopped: {reason}"), Tone::Fault);
+                        .note(tr!(stopped_by, reason = reason), Tone::Fault);
                 }
             }
             Signal::Theme(name) => {
@@ -3641,7 +3516,7 @@ impl App {
             }
             let called_off = self.running.as_ref().is_none_or(Cancel::is_cancelled);
             if !called_off {
-                self.say("answered elsewhere");
+                self.say(tr!(answered_elsewhere));
             }
         }
     }
@@ -3650,7 +3525,7 @@ impl App {
         match prefs::set_editor(&self.parts.home, command) {
             Ok(command) => self
                 .transcript
-                .note(format!("editor: {command}"), Tone::Fine),
+                .note(tr!(editor_set, command = command), Tone::Fine),
             Err(reason) => self.transcript.note(reason, Tone::Fault),
         }
     }
@@ -3701,13 +3576,13 @@ impl App {
             }
         }
         let mut title = match only {
-            Some(only) => format!("Model of {}", crate::transcript::clean(only)),
-            None => "Model".to_owned(),
+            Some(only) => tr!(model_of, provider = crate::transcript::clean(only)),
+            None => tr!(model_title).to_owned(),
         };
         if !missing.is_empty() {
             title.push_str(&format!(
-                " (no list yet: {} — glut models refresh)",
-                missing.join(", ")
+                " ({})",
+                tr!(models_missing, providers = missing.join(", "))
             ));
         }
         let current = Pick::Model {
@@ -3736,16 +3611,15 @@ impl App {
                 let when = project
                     .last
                     .map(|last| crate::projects::ago(last, now))
-                    .unwrap_or_else(|| "no session yet".into());
+                    .unwrap_or_else(|| tr!(no_session_yet).into());
                 let kept = match (&project.layout, project.sessions) {
                     (Some(layout), _) => layout.clone(),
-                    (None, 1) => "1 session".into(),
-                    (None, sessions) => format!("{sessions} sessions"),
+                    (None, sessions) => crate::texts::t().sessions_count.of(sessions as u64),
                 };
                 let note = if &project.folder == here {
-                    " · this one"
+                    format!(" · {}", tr!(this_one))
                 } else {
-                    ""
+                    String::new()
                 };
                 Item::plain(
                     format!("{mark}{}", crate::transcript::clean(&project.name())),
@@ -3761,27 +3635,22 @@ impl App {
             })
             .collect();
         items.push(Item::plain(
-            "another folder…",
-            "/projects <path> — ⇥ completes a folder's name",
+            tr!(another_folder),
+            tr!(another_folder_detail),
             Pick::Input("/projects ".into()),
         ));
         let first = projects
             .iter()
             .find(|project| &project.folder != here)
             .map(|project| Pick::Project(project.folder.clone()));
-        Picker::new(
-            "Projects — ★ pinned, ● this one · p pins, x hides",
-            items,
-            first.as_ref(),
-        )
-        .keyed()
+        Picker::new(tr!(projects_title), items, first.as_ref()).keyed()
     }
 
     /// `p` or `x` on a project of `/projects`: pinned (or no longer), or hidden — kept, and the list shown anew.
     fn pick_project_key(&mut self, key: char, folder: &std::path::Path) {
         let home = self.parts.home.clone();
         if key == 'x' && folder == self.project {
-            return self.say("this project is open — x hides another");
+            return self.say(tr!(project_open));
         }
         // A file Glut cannot read is not written over: the pins and hides in it would be gone.
         let mut picks = match crate::projects::Picks::read(&home) {
@@ -3794,13 +3663,13 @@ impl App {
         ));
         let said = if key == 'p' {
             if picks.toggle_pin(folder) {
-                format!("{name} pinned")
+                tr!(project_pinned, name = name)
             } else {
-                format!("{name} no longer pinned")
+                tr!(project_unpinned, name = name)
             }
         } else {
             picks.hide(folder, chrono::Utc::now());
-            format!("{name} hidden — until it is worked in again; /projects <path> opens it")
+            tr!(project_hidden, name = name)
         };
         if let Err(reason) = picks.save(&home) {
             return self.transcript.note(reason, Tone::Fault);
@@ -3852,7 +3721,7 @@ impl App {
     /// there — asking first while Glut works.
     fn switch_project(&mut self, folder: std::path::PathBuf) {
         if folder == self.project {
-            return self.tell("that is this project already");
+            return self.tell(tr!(project_same));
         }
         self.pane_request = Some(crate::panes::Request::Switch(folder));
     }
@@ -3887,7 +3756,7 @@ impl App {
                     String::new()
                 };
                 let title = match crate::transcript::clean(&session.title) {
-                    title if title.trim().is_empty() => "(no message)".to_owned(),
+                    title if title.trim().is_empty() => format!("({})", tr!(no_message)),
                     title => title,
                 };
                 let here = if session.id == own { "● " } else { "" };
@@ -3900,9 +3769,9 @@ impl App {
                     .map(|cost| format!(" · ${cost:.4}"))
                     .unwrap_or_default();
                 let note = if session.id == own {
-                    "this session · "
+                    format!("{} · ", tr!(review_session))
                 } else {
-                    ""
+                    String::new()
                 };
                 Item::plain(
                     format!("{branch}{here}{title}"),
@@ -3916,9 +3785,9 @@ impl App {
             .collect();
         let others = tree.iter().filter(|(_, session)| session.id != own).count();
         let title = if others == 0 {
-            "Sessions (no other kept for this folder yet)"
+            tr!(sessions_none)
         } else {
-            "Sessions of this folder — ⑂ a fork, ● this one, ⌫ deletes"
+            tr!(sessions_title)
         };
         // T44: the panes kept at the last end, first — into a window of one pane, as `glut -c` offers them.
         if self.parts.host.may_split()
@@ -3928,7 +3797,7 @@ impl App {
             items.insert(
                 0,
                 Item::plain(
-                    format!("as it stood: {}", layout.summary()),
+                    tr!(as_it_stood, layout = layout.summary()),
                     layout.details(),
                     Pick::Pane(crate::panes::Request::Restore),
                 ),
@@ -3941,10 +3810,10 @@ impl App {
     /// pane of this window; one forks came from says so.
     fn ask_delete_session(&mut self, id: &str) {
         if self.session.id == id || self.others_open.iter().any(|open| open == id) {
-            return self.say("that session is open in a pane — it cannot be deleted");
+            return self.say(tr!(session_open_undeletable));
         }
         let Ok(session) = Session::load(&self.parts.home, id) else {
-            return self.say("that session is gone already");
+            return self.say(tr!(session_gone));
         };
         let images = session.images().count();
         let forks = Session::all(&self.parts.home)
@@ -3952,30 +3821,29 @@ impl App {
             .filter(|other| other.parent.as_deref() == Some(id))
             .count();
         let title = match crate::transcript::clean(&session.title) {
-            title if title.trim().is_empty() => "(no message)".to_owned(),
+            title if title.trim().is_empty() => format!("({})", tr!(no_message)),
             title => title,
         };
         let mut detail = match images {
-            0 => "its conversation goes for good".to_owned(),
-            1 => "its conversation goes for good, and its image no other session holds".to_owned(),
-            many => format!(
-                "its conversation goes for good, and of its {many} images those no other session holds"
-            ),
+            0 => tr!(delete_detail).to_owned(),
+            1 => tr!(delete_detail_image).to_owned(),
+            many => tr!(delete_detail_images, n = many),
         };
         if forks > 0 {
             detail.push_str(&format!(
-                " — {forks} sessions forked from it stay, as sessions of their own"
+                " — {}",
+                crate::texts::t().delete_forks_stay.of(forks as u64)
             ));
         }
         let items = vec![
             Item::plain(
-                format!("yes, delete “{title}”"),
+                tr!(delete_yes, title = title),
                 detail,
                 Pick::DeleteSession(id.to_owned()),
             ),
-            Item::plain("no, keep it", "", Pick::Shown),
+            Item::plain(tr!(delete_no), "", Pick::Shown),
         ];
-        self.picker = Some(Picker::new("Delete this session?", items, None).guarded());
+        self.picker = Some(Picker::new(tr!(delete_title), items, None).guarded());
     }
 
     /// The session `id` deleted with its images no one holds any more; the list again, without it.
@@ -3989,9 +3857,9 @@ impl App {
             .map(|image| image.path.clone())
             .collect();
         match Session::delete(&self.parts.home, id, &keep) {
-            Ok(0) => self.say("the session is deleted"),
-            Ok(1) => self.say("the session is deleted, with its image"),
-            Ok(images) => self.say(format!("the session is deleted, with {images} images")),
+            Ok(0) => self.say(tr!(session_deleted)),
+            Ok(1) => self.say(tr!(session_deleted_image)),
+            Ok(images) => self.say(tr!(session_deleted_images, n = images)),
             Err(reason) => return self.transcript.note(reason, Tone::Fault),
         }
         self.picker = Some(self.session_picker());
@@ -4008,7 +3876,7 @@ impl App {
                             format!(
                                 "{} · {}",
                                 entry.kind,
-                                entry.model.as_deref().unwrap_or("no default model")
+                                entry.model.as_deref().unwrap_or(tr!(no_default_model))
                             ),
                             Pick::Provider(id.clone()),
                         )
@@ -4017,7 +3885,7 @@ impl App {
             })
             .unwrap_or_default();
         Picker::new(
-            "Provider",
+            tr!(provider_title),
             items,
             Some(&Pick::Provider(self.engine.provider.clone())),
         )
@@ -4095,18 +3963,14 @@ impl App {
                     Some(Pick::Effort(effort)) => self.switch_effort(effort),
                     Some(Pick::Editor(command)) => self.set_editor(&command),
                     // A turn under way holds the conversation: opening another now would save the turn into it.
-                    Some(Pick::Session(_)) if self.working() => self.transcript.note(
-                        "a session opens when Glut is done — /resume again then",
-                        Tone::Quiet,
-                    ),
+                    Some(Pick::Session(_)) if self.working() => {
+                        self.transcript.note(tr!(session_opens_later), Tone::Quiet)
+                    }
                     Some(Pick::Session(id)) if id == self.session.id => {}
                     // Two panes on one session file would write over each other's turns.
-                    Some(Pick::Session(id)) if self.others_open.contains(&id) => {
-                        self.transcript.note(
-                            "that session is open in the other pane — ⌃P goes there",
-                            Tone::Quiet,
-                        )
-                    }
+                    Some(Pick::Session(id)) if self.others_open.contains(&id) => self
+                        .transcript
+                        .note(tr!(session_in_other_pane), Tone::Quiet),
                     Some(Pick::Session(id)) => match Session::load(&self.parts.home, &id) {
                         Ok(session) => self.open(session),
                         Err(reason) => self.transcript.note(reason, Tone::Fault),
@@ -4129,10 +3993,9 @@ impl App {
                     Some(Pick::Input(text)) if !self.input.is_empty() => {
                         match text.strip_prefix("/split ").map(crate::panes::parse_split) {
                             Some(Ok(request)) => self.pane_request = Some(request),
-                            _ => self.transcript.note(
-                                format!("{text} — your draft stays in the input; run it after"),
-                                Tone::Quiet,
-                            ),
+                            _ => self
+                                .transcript
+                                .note(tr!(draft_stays, command = text), Tone::Quiet),
                         }
                     }
                     Some(Pick::Input(text)) => self.input.insert_text(&text),
@@ -4265,9 +4128,7 @@ impl App {
             return;
         };
         if agent.state != crate::transcript::ToolState::Running {
-            return self
-                .transcript
-                .note("that subagent has ended already", Tone::Quiet);
+            return self.transcript.note(tr!(subagent_ended), Tone::Quiet);
         }
         let (id, task) = (agent.id.clone(), agent.task.clone());
         let stopped = path.len() == 1
@@ -4277,17 +4138,11 @@ impl App {
                 .is_some_and(|cancel| cancel.cancel_subagent(&id));
         if stopped {
             self.transcript.note(
-                format!(
-                    "stopping the subagent “{}”",
-                    crate::transcript::clean(&task)
-                ),
+                tr!(subagent_stopping, task = crate::transcript::clean(&task)),
                 Tone::Quiet,
             );
         } else {
-            self.transcript.note(
-                "that subagent cannot be stopped alone: ⎋ stops the turn",
-                Tone::Quiet,
-            );
+            self.transcript.note(tr!(subagent_not_alone), Tone::Quiet);
         }
     }
 
@@ -4310,19 +4165,16 @@ impl App {
     fn agents_picker(&mut self) {
         let found = self.transcript.agents();
         if found.is_empty() {
-            return self.transcript.note(
-                "no subagent yet: Glut starts one with its task tool for a piece of work of its own",
-                Tone::Quiet,
-            );
+            return self.transcript.note(tr!(no_subagent_yet), Tone::Quiet);
         }
         let items = found
             .into_iter()
             .map(|(path, agent)| {
                 let state = match agent.state {
-                    crate::transcript::ToolState::Running => "running",
-                    crate::transcript::ToolState::Done => "done",
-                    crate::transcript::ToolState::Failed => "stopped",
-                    crate::transcript::ToolState::Refused => "refused",
+                    crate::transcript::ToolState::Running => tr!(agent_running),
+                    crate::transcript::ToolState::Done => tr!(agent_done),
+                    crate::transcript::ToolState::Failed => tr!(agent_stopped),
+                    crate::transcript::ToolState::Refused => tr!(agent_refused),
                 };
                 Item::plain(
                     format!(
@@ -4335,7 +4187,7 @@ impl App {
                 )
             })
             .collect();
-        self.picker = Some(Picker::new("Subagents — ⏎ opens one", items, None));
+        self.picker = Some(Picker::new(tr!(subagents_title), items, None));
     }
 
     /// A key in a subagent's view: scroll, open one of its own subagents, or go back one level.
@@ -4414,18 +4266,17 @@ impl App {
                 "{MOST_HELD} messages wait there for the owner already: tell the owner instead"
             ));
         }
-        self.hold(
-            message,
-            &format!("Enter here lets pane {from}'s message go on"),
-        );
+        self.hold(message, &tr!(held_enter, pane = from));
         Ok(Delivered::OnEnter)
     }
 
     /// Holds another model's message for the owner's Enter, its text shown with `why`.
     fn hold(&mut self, message: String, why: &str) {
         let shown = crate::tell::shown(&message).unwrap_or_default();
-        self.transcript
-            .note(format!("{shown}\n— held: {why}"), Tone::Heed);
+        self.transcript.note(
+            format!("{shown}\n— {}", tr!(held_why, why = why)),
+            Tone::Heed,
+        );
         self.held.push(message);
         self.held_since = Some(Instant::now());
     }
@@ -4526,15 +4377,9 @@ impl App {
             self.keeper = None;
         }
         let said = match mode {
-            crate::warm::CacheMode::Ping => {
-                "cache: kept warm by reading it while the session rests (up to 30 min)"
-            }
-            crate::warm::CacheMode::Hour => {
-                "cache: Anthropic keeps it an hour (each write costs twice); other providers are read to keep it"
-            }
-            crate::warm::CacheMode::Off => {
-                "cache: not kept — a pause past the provider's few minutes starts cold"
-            }
+            crate::warm::CacheMode::Ping => tr!(cache_ping),
+            crate::warm::CacheMode::Hour => tr!(cache_hour),
+            crate::warm::CacheMode::Off => tr!(cache_off),
         };
         match prefs::set_cache(&self.parts.home, mode) {
             Ok(()) => self.tell(said),
@@ -4547,11 +4392,8 @@ impl App {
         match self.set_role(name) {
             Ok(()) => {
                 let said = match name {
-                    Some(name) => format!(
-                        "this pane plays {name} ({}): its tools from now on, its prompt from the next turn",
-                        self.role_said(name)
-                    ),
-                    None => "this pane is an all-rounder again".to_owned(),
+                    Some(name) => tr!(role_played, name = name, about = self.role_said(name)),
+                    None => tr!(role_none).to_owned(),
                 };
                 self.tell(said);
             }
@@ -4578,9 +4420,10 @@ impl App {
             return Ok(());
         };
         let agent = self.parts.config.agents.get(name).cloned().ok_or_else(|| {
-            format!(
-                "no role {name}: {} (/role lists them)",
-                self.parts.config.agents.known()
+            tr!(
+                no_role,
+                name = name,
+                known = self.parts.config.agents.known()
             )
         })?;
         match (gate, &agent.tools) {
@@ -4591,9 +4434,7 @@ impl App {
             ),
             // A role that narrows needs the gate that narrows: without one it is no role at all.
             (None, Some(_)) => {
-                return Err(format!(
-                    "{name} narrows the tools, and this session has no gate"
-                ));
+                return Err(tr!(role_needs_gate, name = name));
             }
             (None, None) => {}
         }
@@ -4617,11 +4458,11 @@ impl App {
             .join(&file);
         let owner = self.parts.home.join(".glut").join("agents").join(&file);
         let source = if project.is_file() {
-            "the project's"
+            tr!(source_project)
         } else if owner.is_file() {
-            "yours"
+            tr!(source_yours)
         } else {
-            "Glut's own"
+            tr!(source_glut)
         };
         let tools = match self
             .parts
@@ -4630,14 +4471,14 @@ impl App {
             .get(name)
             .and_then(|agent| agent.tools.as_ref())
         {
-            Some(tools) if tools.is_empty() => "no tool".to_owned(),
+            Some(tools) if tools.is_empty() => tr!(no_tool).to_owned(),
             Some(tools) => {
                 let named: Vec<String> = tools.iter().map(|rule| rule.text().to_owned()).collect();
                 glut::permissions::printable(&named.join(", "))
             }
-            None => "its file names no tools: every tool, nothing narrowed".to_owned(),
+            None => tr!(role_all_tools).to_owned(),
         };
-        format!("{source}; tools: {tools}")
+        tr!(role_source, source = source, tools = tools)
     }
 
     /// `⌃X B` (T36e): the role of a new agent in the background — every role, or none.
@@ -4658,14 +4499,14 @@ impl App {
                 item
             })
             .collect();
-        Picker::new("An agent in the background: its role", roles, None)
+        Picker::new(tr!(background_role_title), roles, None)
     }
 
     /// `/role`: the roles to play — Glut's, the owner's and the project's agents — and none.
     fn roles_picker(&self) -> Picker {
         let mut items = vec![Item::plain(
-            "all-rounder",
-            "no role: every tool the session has",
+            tr!(all_rounder),
+            tr!(all_rounder_detail),
             Pick::Role(None),
         )];
         items.extend(self.parts.config.agents.list().iter().map(|agent| {
@@ -4680,7 +4521,7 @@ impl App {
             )
         }));
         let current = Pick::Role(self.role.clone());
-        Picker::new("Role of this pane", items, Some(&current))
+        Picker::new(tr!(role_title), items, Some(&current))
     }
 
     /// Other models' messages go with the conversation they were shown in.
@@ -4800,11 +4641,8 @@ impl App {
                 self.plan_view = None;
                 let mode = modes.get(at).cloned().unwrap_or_else(|| "build".into());
                 if mode == "auto" && !session::sandboxed(&self.parts) {
-                    self.transcript.note(
-                        "auto without a sandbox: commands run WITHOUT one here; only the rules and the question \
-                         before a heavy command hold them",
-                        Tone::Fault,
-                    );
+                    self.transcript
+                        .note(tr!(plan_auto_unsandboxed), Tone::Fault);
                 }
                 if let Some(plan) = &mut self.plan {
                     plan.state = State::Approved(mode);
@@ -4904,7 +4742,7 @@ impl App {
             Some(at) if at.elapsed() < QUIT_WINDOW => self.quit = true,
             _ => {
                 self.quit_armed = Some(Instant::now());
-                self.transcript.note("⌃C again to quit", Tone::Quiet);
+                self.transcript.note(tr!(quit_again), Tone::Quiet);
             }
         }
     }
@@ -5054,9 +4892,7 @@ impl App {
                 let kept = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     read().and_then(|bytes| glut::images::keep(&home, &bytes, 0))
                 }))
-                .unwrap_or_else(|_| {
-                    Err("the image cannot be read: its decoder gave up on it".into())
-                });
+                .unwrap_or_else(|_| Err(tr!(image_undecodable).into()));
                 let _ = reports.send(Report::Attached { name, kept });
             }
         });
@@ -5084,19 +4920,17 @@ impl App {
         self.input.attach(image);
         if self.engine.images == Some(false) {
             self.transcript.note(
-                format!(
-                    "{said}: {} sees no images, says its provider's list — /model picks one that does",
-                    self.engine.model_name()
-                ),
+                tr!(image_unseen, image = said, model = self.engine.model_name()),
                 Tone::Heed,
             );
         } else if let Some(name) = name {
-            self.say(format!(
-                "{} into the message as {said}",
-                crate::transcript::clean(&name)
+            self.say(tr!(
+                image_attached_named,
+                name = crate::transcript::clean(&name),
+                image = said
             ));
         } else {
-            self.say(format!("{said} into the message"));
+            self.say(tr!(image_attached, image = said));
         }
     }
 
@@ -5117,10 +4951,9 @@ impl App {
                     return;
                 };
                 let said = if glut::images::kept_media(&image.path).is_some() {
-                    crate::pictures::open(&image.path)
-                        .map(|()| format!("image #{} opens", image.number))
+                    crate::pictures::open(&image.path).map(|()| tr!(image_opens, n = image.number))
                 } else {
-                    Err(format!("image #{} is no image Glut keeps", image.number))
+                    Err(tr!(image_not_kept, n = image.number))
                 };
                 match said {
                     Ok(said) | Err(said) => self.say(said),
@@ -5134,10 +4967,12 @@ impl App {
     fn copy_text(&mut self, text: &str) {
         let count = text.chars().count();
         match select::copy(text) {
-            Ok(Copied::Pbcopy) => self.say(format!("copied {count} characters")),
-            Ok(Copied::Terminal) => {
-                self.say(format!("copied {count} characters (through the terminal)"))
-            }
+            Ok(Copied::Pbcopy) => self.say(crate::texts::t().copied.of(count as u64)),
+            Ok(Copied::Terminal) => self.say(format!(
+                "{} ({})",
+                crate::texts::t().copied.of(count as u64),
+                tr!(through_terminal)
+            )),
             Err(reason) => self.say(reason),
         }
     }
@@ -5145,7 +4980,7 @@ impl App {
     /// `⌃X ↑` (TUI9a): the reading mode on the stream's last block.
     fn start_reading(&mut self) {
         let Some(last) = self.transcript.blocks.len().checked_sub(1) else {
-            return self.say("nothing to read yet");
+            return self.say(tr!(nothing_to_read));
         };
         self.selection = None;
         self.search = None;
@@ -5493,8 +5328,8 @@ impl App {
 fn step_do(run: String, turn: u32) -> Picker {
     let items = vec![
         Item::plain(
-            "show what it changed",
-            "the change from before it to the next step, or to now",
+            tr!(step_show),
+            tr!(step_show_detail),
             Pick::StepDo {
                 run: run.clone(),
                 turn,
@@ -5502,8 +5337,8 @@ fn step_do(run: String, turn: u32) -> Picker {
             },
         ),
         Item::plain(
-            "files back to before it",
-            "your edits since go too; the conversation stays",
+            tr!(step_restore),
+            tr!(step_restore_detail),
             Pick::StepDo {
                 run,
                 turn,
@@ -5511,14 +5346,12 @@ fn step_do(run: String, turn: u32) -> Picker {
             },
         ),
     ];
-    Picker::new(format!("Step {turn}"), items, None)
+    Picker::new(tr!(step_title, turn = turn), items, None)
 }
 
 /// How soon a second Esc opens rewind.
 const DOUBLE_ESC: Duration = Duration::from_millis(600);
 
-/// The file picker's title, by which a finished walk finds it open.
-const FILE_PICKER: &str = "File to mention";
 /// How long a walk of the folder stands for its files.
 const FILES_FRESH: Duration = Duration::from_secs(60);
 
@@ -5586,17 +5419,15 @@ fn theme_picker() -> Picker {
         .map(|palette| {
             // Glut colours the text, never the terminal's background: a light theme reads on a light terminal.
             let detail = match palette.name {
-                "glut" => "Glut's own",
-                "catppuccin-latte" | "github-light" | "paper" => {
-                    "Axiomata's theme · for a light terminal"
-                }
-                _ => "Axiomata's theme",
+                "glut" => tr!(source_glut),
+                "catppuccin-latte" | "github-light" | "paper" => tr!(theme_light),
+                _ => tr!(theme_axiomata),
             };
             Item::plain(palette.name, detail, Pick::Theme(palette.name.to_owned()))
         })
         .collect();
     let current = Pick::Theme(crate::theme::c().name.to_owned());
-    Picker::new("Theme", items, Some(&current))
+    Picker::new(tr!(theme_title), items, Some(&current))
 }
 
 /// Glut's languages, each by its own name, the one read now marked (T48).
@@ -5619,8 +5450,8 @@ fn language_picker() -> Picker {
 /// The effort levels, and "the provider's default".
 fn effort_picker(current: Option<Effort>) -> Picker {
     let mut items = vec![Item::plain(
-        "default",
-        "the provider decides",
+        tr!(effort_default),
+        tr!(effort_default_detail),
         Pick::Effort(None),
     )];
     items.extend(
@@ -5628,7 +5459,7 @@ fn effort_picker(current: Option<Effort>) -> Picker {
             .iter()
             .map(|effort| Item::plain(effort.to_string(), "", Pick::Effort(Some(*effort)))),
     );
-    Picker::new("Effort", items, Some(&Pick::Effort(current)))
+    Picker::new(tr!(effort_title), items, Some(&Pick::Effort(current)))
 }
 
 /// The editors on the `PATH`, the one in use named in the title.
@@ -5637,8 +5468,9 @@ fn editor_picker(current: Option<String>) -> Picker {
         .into_iter()
         .map(|(program, command)| Item::plain(program, command, Pick::Editor(command.into())))
         .collect();
-    let now = current.as_deref().unwrap_or("none yet");
-    let title = format!("Editor — now {now} (or /editor <command with {{file}} and {{line}}>)");
+    let now = current.as_deref().unwrap_or(tr!(meter_none_yet));
+    // `{file}` and `{line}` stand in the title as `/editor` takes them: filled with themselves.
+    let title = tr!(editor_title, now = now, file = "{file}", line = "{line}");
     Picker::new(title, items, current.map(Pick::Editor).as_ref())
 }
 
@@ -5710,13 +5542,13 @@ fn waits(name: &str, rest: &str) -> bool {
 /// A finish reason in words.
 fn reason(reason: FinishReason) -> &'static str {
     match reason {
-        FinishReason::Answered => "answered",
-        FinishReason::MaxTurns => "the step limit was reached",
-        FinishReason::Timeout => "the time limit passed",
-        FinishReason::Cancelled => "stopped",
-        FinishReason::Failed => "the model API failed",
-        FinishReason::Refused => "too many refused calls",
-        FinishReason::Budget => "the budget is spent",
+        FinishReason::Answered => tr!(ended_answered),
+        FinishReason::MaxTurns => tr!(ended_steps),
+        FinishReason::Timeout => tr!(ended_time),
+        FinishReason::Cancelled => tr!(stopped),
+        FinishReason::Failed => tr!(ended_failed),
+        FinishReason::Refused => tr!(ended_refused),
+        FinishReason::Budget => tr!(ended_budget),
     }
 }
 
