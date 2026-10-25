@@ -38,6 +38,9 @@ struct Cli {
     /// The reader mode for this run, for a screen reader: keys in words, a plain screen, nothing moving.
     #[arg(long)]
     reader: bool,
+    /// The language Glut speaks for this run: en, de, fr, it, es, zh, ja or pt.
+    #[arg(long, value_parser = parse_lang)]
+    lang: Option<glut::lang::Lang>,
     /// Pick an earlier session of the folder to go on with.
     #[arg(short = 'r', long)]
     resume: bool,
@@ -55,6 +58,11 @@ enum Command {
     },
     #[command(flatten)]
     Headless(glut::cli::Command),
+}
+
+/// `--lang`'s word: a language Glut speaks.
+fn parse_lang(word: &str) -> Result<glut::lang::Lang, String> {
+    glut::lang::Lang::parse(word).ok_or_else(|| "one of en, de, fr, it, es, zh, ja, pt".to_owned())
 }
 
 /// How long the runtime's last tasks get to end before a switch starts Glut anew (T44).
@@ -79,6 +87,9 @@ fn main() -> std::process::ExitCode {
             None => {
                 if cli.reader {
                     glut_tui::motion::force_reader();
+                }
+                if let Some(lang) = cli.lang {
+                    glut_tui::force_language(lang);
                 }
                 glut_tui::standalone_switching(launch(&cli), open(cli)).await
             }

@@ -19,6 +19,8 @@ pub enum Pick {
     File(String),
     /// A theme by its name (`/theme`).
     Theme(String),
+    /// A language for Glut to speak (T48).
+    Language(glut::lang::Lang),
     /// Rewind (Esc Esc): the owner's message to go back to before, by its mark.
     RewindTo(usize),
     /// Fork (T14): a new session from before the owner's message `mark`, this one kept as it is.

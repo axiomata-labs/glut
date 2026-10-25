@@ -377,6 +377,7 @@ impl App {
         if let Some(name) = &prefs.theme {
             crate::theme::set(name);
         }
+        crate::texts::apply(prefs.language.as_deref(), parts.language);
         let mut transcript = Transcript {
             thinking: Prefs::load(&parts.home).thinking.unwrap_or_default(),
             ..Transcript::default()
@@ -2270,6 +2271,19 @@ impl App {
                 )),
             },
             "theme" if rest.is_empty() => self.picker = Some(theme_picker()),
+            "language" if rest.is_empty() => self.picker = Some(language_picker()),
+            "language" => match glut::lang::Lang::parse(rest) {
+                Some(lang) => self.set_language(lang),
+                None => {
+                    let known: Vec<&str> = glut::lang::Lang::ALL.iter().map(|lang| lang.code()).collect();
+                    let said = tr!(
+                        language_unknown,
+                        name = crate::transcript::clean(rest),
+                        known = known.join(" ")
+                    );
+                    self.transcript.note(said, Tone::Fault);
+                }
+            },
             "theme" => self.set_theme(rest),
             "thinking" => match rest {
                 "off" => self.set_thinking(Thinking::Off),
@@ -3555,6 +3569,19 @@ impl App {
         }
     }
 
+    /// `/language`: Glut speaks `lang` from the next frame on, and keeps it for the next start; the model answers in
+    /// whatever language the owner writes.
+    fn set_language(&mut self, lang: glut::lang::Lang) {
+        crate::texts::force(lang);
+        // Every pane lays its blocks out anew, as after a new look (TUI9b).
+        crate::motion::relook();
+        let said = match prefs::set_language(&self.parts.home, lang) {
+            Ok(()) => tr!(language_set, name = lang.name()),
+            Err(reason) => tr!(language_unkept, name = lang.name(), reason = reason),
+        };
+        self.say(said);
+    }
+
     /// Whether the host refuses a paid call outside a turn, said in the stream.
     fn refused_spend(&mut self) -> bool {
         match self.parts.host.may_spend() {
@@ -4090,6 +4117,7 @@ impl App {
                     }
                     Some(Pick::File(path)) => self.input.insert_text(&format!("{path} ")),
                     Some(Pick::Theme(name)) => self.set_theme(&name),
+                    Some(Pick::Language(lang)) => self.set_language(lang),
                     Some(Pick::TakeBack(rules)) => self.take_back_always(&rules),
                     Some(Pick::Agent(path)) => {
                         self.agent_view = Some(crate::agents::View::new(path));
@@ -5569,6 +5597,23 @@ fn theme_picker() -> Picker {
         .collect();
     let current = Pick::Theme(crate::theme::c().name.to_owned());
     Picker::new("Theme", items, Some(&current))
+}
+
+/// Glut's languages, each by its own name, the one read now marked (T48).
+fn language_picker() -> Picker {
+    let now = glut::lang::current();
+    let items = glut::lang::Lang::ALL
+        .into_iter()
+        .map(|lang| {
+            let detail = if lang == now {
+                format!("{} · {}", lang.code(), tr!(language_now))
+            } else {
+                lang.code().to_owned()
+            };
+            Item::plain(lang.name(), detail, Pick::Language(lang))
+        })
+        .collect();
+    Picker::new(tr!(language_title), items, Some(&Pick::Language(now)))
 }
 
 /// The effort levels, and "the provider's default".

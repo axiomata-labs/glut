@@ -92,9 +92,11 @@ pub fn restart_in(folder: &std::path::Path) -> std::process::ExitCode {
         }
     };
     let mut command = std::process::Command::new(program);
-    command
-        .current_dir(folder)
-        .args(restart_args(folder, crate::motion::reader_forced()));
+    command.current_dir(folder).args(restart_args(
+        folder,
+        crate::motion::reader_forced(),
+        crate::texts::forced(),
+    ));
     // Only comes back when it could not start.
     let err = command.exec();
     eprintln!("glut: cannot start again in {shown}: {err}");
@@ -258,11 +260,19 @@ async fn screen(
 
 /// What Glut is started with in `folder` (T44): the folder and `--continue` — nothing of this run's own flags (its
 /// provider, model or `--mcp-config` were for the folder it was started in) but the reader mode the owner holds on.
-fn restart_args(folder: &std::path::Path, reader: bool) -> Vec<std::ffi::OsString> {
+fn restart_args(
+    folder: &std::path::Path,
+    reader: bool,
+    lang: Option<glut::lang::Lang>,
+) -> Vec<std::ffi::OsString> {
     let mut args: Vec<std::ffi::OsString> =
         vec!["--cwd".into(), folder.into(), "--continue".into()];
     if reader {
         args.push("--reader".into());
+    }
+    // A language given for the run (T48) holds in the next folder too.
+    if let Some(lang) = lang {
+        args.extend(["--lang".into(), lang.code().into()]);
     }
     args
 }
@@ -675,10 +685,14 @@ mod tests {
     fn a_switch_starts_glut_in_the_folder_as_glut_c_typed_there_and_keeps_only_the_reader_mode() {
         let folder = std::path::Path::new("/projects/other");
         assert_eq!(
-            restart_args(folder, false),
+            restart_args(folder, false, None),
             ["--cwd", "/projects/other", "--continue"]
         );
         // `main.rs` parses these very flags (its test `a_switch_s_restart_is_a_start_by_hand`).
-        assert_eq!(restart_args(folder, true).last().unwrap(), "--reader");
+        assert_eq!(restart_args(folder, true, None).last().unwrap(), "--reader");
+        assert_eq!(
+            restart_args(folder, false, Some(glut::lang::Lang::Ja))[3..],
+            ["--lang", "ja"]
+        );
     }
 }

@@ -183,6 +183,7 @@ pub async fn watch(home: PathBuf, path: PathBuf) -> std::process::ExitCode {
     if let Some(name) = &prefs.theme {
         theme::set(name);
     }
+    crate::texts::apply(prefs.language.as_deref(), None);
     let mut followed = Followed::default();
     followed.transcript.thinking = prefs.thinking.unwrap_or_default();
     let enhanced = match screen::enter() {

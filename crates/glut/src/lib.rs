@@ -22,6 +22,7 @@ pub mod guide;
 pub mod hooks;
 pub mod images;
 pub mod journal;
+pub mod lang;
 pub mod lean;
 pub mod mcp;
 pub mod model;

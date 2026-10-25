@@ -2,6 +2,8 @@
 //! standalone `glut`, and by a host that runs Glut for its own ends (TUI8a): [`run`] takes the terminal for one
 //! session built as a [`Launch`] says, with a [`Host`] taking part in it.
 
+#[macro_use]
+mod texts;
 mod agents;
 mod app;
 mod branch;
@@ -51,3 +53,4 @@ pub use host::{
     Standalone, State, Turn,
 };
 pub use screen::{Open, restart_in, run, standalone, standalone_switching};
+pub use texts::force as force_language;

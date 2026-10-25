@@ -73,6 +73,9 @@ pub struct Prefs {
     /// The colours: `glut` or an app theme's name (TUI3c, `/theme`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
+    /// The language Glut speaks to the owner in, by its code (T48, `/language`); none: the system's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
     /// The folders whose owner said no to moving `CLAUDE.md` into `AGENTS.md` (T35, `/init`): not asked again.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub keep_claude: Vec<String>,
@@ -273,6 +276,17 @@ pub fn set_reader(home: &Path, on: bool) -> Result<(), String> {
 pub fn set_theme(home: &Path, name: &str) -> Result<(), String> {
     let mut prefs = Prefs::read(home)?;
     prefs.theme = Some(name.to_owned());
+    prefs.save(home)
+}
+
+/// Keeps the language Glut speaks to the owner in (T48).
+///
+/// # Errors
+///
+/// A message when the file cannot be read (it is not written over) or written.
+pub fn set_language(home: &Path, lang: glut::lang::Lang) -> Result<(), String> {
+    let mut prefs = Prefs::read(home)?;
+    prefs.language = Some(lang.code().to_owned());
     prefs.save(home)
 }
 

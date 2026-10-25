@@ -177,6 +177,8 @@ pub struct Parts {
     pub keep_lost_turns: bool,
     /// Whether `/projects` switches to another folder ([`Launch::projects`], on a host that may split).
     pub projects: bool,
+    /// The host's language ([`Launch::language`]).
+    pub language: Option<glut::lang::Lang>,
     /// The session's event log ([`Launch::log`]): the sink writes the steps, the screen the owner's messages.
     pub log: Arc<crate::log::EventLog>,
     /// How many characters the guides the session read hold: what they cost each turn (`/context`).
@@ -413,6 +415,7 @@ pub async fn build(
         owner_shell: launch.owner_shell,
         keep_lost_turns: launch.keep_lost_turns,
         projects,
+        language: launch.language,
         log,
         guide_chars,
         guide_paths,
@@ -1198,6 +1201,7 @@ pub fn for_tests() -> (Parts, Engine) {
         owner_shell: true,
         keep_lost_turns: false,
         projects: true,
+        language: None,
         log: Arc::new(crate::log::EventLog::new(
             crate::log::Target::Off,
             PathBuf::new(),

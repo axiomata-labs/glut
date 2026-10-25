@@ -81,7 +81,7 @@ const fn command(
 }
 
 /// Every command, grouped by topic in [`Topic::ALL`]'s order, the most used first inside a topic.
-pub const COMMANDS: [Command; 43] = [
+pub const COMMANDS: [Command; 44] = [
     command(Topic::Session, "clear", "", "start a new session"),
     command(
         Topic::Session,
@@ -288,6 +288,12 @@ pub const COMMANDS: [Command; 43] = [
         "reader",
         "on|off",
         "for a screen reader: keys in words, a plain screen, nothing moving, a line at each change of state",
+    ),
+    command(
+        Topic::Settings,
+        "language",
+        "[code]",
+        "the language Glut speaks to you: en de fr it es zh ja pt — the model answers in the one you write",
     ),
     command(
         Topic::Settings,

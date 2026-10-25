@@ -61,6 +61,9 @@ pub struct Launch {
     /// folder. A host that picks the folder itself (Axiomata's master) says no; a host that may not split never
     /// offers it.
     pub projects: bool,
+    /// The language the host shows its own app in (T48): Glut's owner's `/language` wins over it, and it over the
+    /// system's. `None` for Glut on its own.
+    pub language: Option<glut::lang::Lang>,
 }
 
 impl Launch {
@@ -88,6 +91,7 @@ impl Launch {
             keep_lost_turns: false,
             log: Log::Sessions,
             projects: true,
+            language: None,
         }
     }
 }
