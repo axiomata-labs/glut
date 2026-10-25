@@ -391,6 +391,12 @@ pub struct RunConfig {
     /// What the owner sends while the run works (T10 of `docs/plans/glut-tui.md`, steering): taken before the run's
     /// next model call, never between a reply and its results, and only by the run itself, never a subagent.
     pub inbox: Option<Inbox>,
+    /// Secrets masked before they leave (T58): every tool result and the instructions, before the model, the events
+    /// or a file of the run sees them. On by default — a host that started without the owner's
+    /// `~/.glut/secrets.json` still masks with Glut's own formats; `None` masks nothing. Shared with the subagents.
+    /// A host keeps one for a whole conversation (clone it into each turn's config): a new one numbers anew, and a
+    /// placeholder of an earlier turn is then no longer written back.
+    pub masks: Option<crate::masks::Masks>,
 }
 
 /// Messages for a run under way, from whoever started it (the TUI's Enter while Glut works). Shared: the sender keeps
@@ -468,6 +474,7 @@ impl RunConfig {
             refusals: RefusalLimits::DEFAULT,
             compaction: Compaction::default(),
             budget: Budget::default(),
+            masks: Some(crate::masks::Masks::default()),
             inbox: None,
         }
     }

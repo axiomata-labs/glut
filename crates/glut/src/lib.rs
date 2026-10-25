@@ -24,6 +24,7 @@ pub mod images;
 pub mod journal;
 pub mod lang;
 pub mod lean;
+pub mod masks;
 pub mod mcp;
 pub mod model;
 pub mod permissions;

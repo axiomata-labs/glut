@@ -232,8 +232,38 @@ impl Engine {
         // T45: a tool's images kept in the owner's home, and not sent to a model its list says sees none.
         config.images_home = Some(parts.home.clone());
         config.sees_images = self.images;
+        // T58: the key this engine sends is found exactly wherever a tool shows it.
+        if let (Some(masks), Some(key)) = (&config.masks, &self.endpoint.api_key) {
+            masks.know(&format!("{} key", self.provider), key);
+        }
         config
     }
+}
+
+/// The variables the web search takes its keys from ([`web_search`]).
+const SEARCH_KEYS: [&str; 3] = ["EXA_API_KEY", "TINYFISH_API_KEY", "TAVILY_API_KEY"];
+
+/// The rules every pane masks by (T58): read once, at the first pane — `/secrets` changes them for every pane.
+static MASK_RULES: std::sync::OnceLock<glut::masks::Masks> = std::sync::OnceLock::new();
+
+/// The session's masking (T58), as the owner's `~/.glut/secrets.json` says, under the rules every pane shares — kept
+/// even while off, so `/secrets on` goes on with the numbers given before: Glut's own formats alone, and said so,
+/// when the file is broken, never none for a file that cannot be read.
+fn masks(home: &Path, notes: &mut Vec<String>) -> Option<glut::masks::Masks> {
+    let rules = MASK_RULES.get_or_init(|| {
+        let owner = glut::masks::Owner::load(home).unwrap_or_else(|err| {
+            notes.push(tr!(secrets_file_broken, reason = err));
+            glut::masks::Owner::default()
+        });
+        let masks = glut::masks::Masks::new(&owner);
+        for name in SEARCH_KEYS {
+            if let Ok(value) = std::env::var(name) {
+                masks.know(name, &value);
+            }
+        }
+        masks
+    });
+    Some(rules.session())
 }
 
 /// Builds the session as `launch` says: the gate with the screen (and the host) as the one who answers, the tools,
@@ -331,6 +361,7 @@ pub async fn build(
     let notify = built.notify;
     config.snapshots = Some(home.join(".glut").join("snapshots"));
     config.savings = Some(home.join(".glut").join(glut::lean::FILE));
+    config.masks = masks(&home, &mut notes);
     host.configure(&mut config, &built);
 
     // T37a: the named subagents, the owner's and — in a trusted folder — the project's.

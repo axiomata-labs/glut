@@ -97,7 +97,7 @@ const fn command(
 }
 
 /// Every command, grouped by topic in [`Topic::ALL`]'s order, the most used first inside a topic.
-pub const COMMANDS: [Command; 49] = [
+pub const COMMANDS: [Command; 50] = [
     command(Topic::Session, "clear", "", "start a new session"),
     command(
         Topic::Session,
@@ -327,6 +327,13 @@ pub const COMMANDS: [Command; 49] = [
         "on|asks|off|system|after|tiles",
         "tell me when a turn ends or asks while the window is elsewhere: on, asks only, off, macOS's own (system); \
          /notify after <s>; /notify tiles on|off — the tiles at the top right",
+    ),
+    command(
+        Topic::Settings,
+        "secrets",
+        "[on|off|allow|add|remove]",
+        "the keys hidden from the model in this session; /secrets allow <n> [always] lets one through, \
+         /secrets add <name> <regex> hides a format of your own, /secrets remove <name>, /secrets on|off",
     ),
     command(
         Topic::Settings,

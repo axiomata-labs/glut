@@ -1548,6 +1548,54 @@ glut::catalog! {
         notify_tiles_on: &'static str,
         /// Tiles switched off.
         notify_tiles_off: &'static str,
+        /// `~/.glut/secrets.json` cannot be used (T58): `{reason}`; Glut's own formats mask alone.
+        secrets_file_broken: &'static str,
+        /// Beside a tool call whose result had keys hidden: `{n}` of them.
+        secrets_hidden_note: &'static str,
+        /// The owner's message holds what looks like a key: `{kinds}`, the kinds.
+        secrets_in_message: &'static str,
+        /// Send the message with the keys hidden.
+        secrets_send_masked: &'static str,
+        /// What the masked choice does.
+        secrets_send_masked_detail: &'static str,
+        /// Send the message as typed.
+        secrets_send_as_is: &'static str,
+        /// Back to the input to edit the message.
+        secrets_back: &'static str,
+        /// `/secrets` where the host turned masking off.
+        secrets_hosted: &'static str,
+        /// Masking switched on.
+        secrets_on: &'static str,
+        /// Masking switched off.
+        secrets_off: &'static str,
+        /// `/secrets` alone while masking is off.
+        secrets_off_now: &'static str,
+        /// `/secrets` alone with nothing hidden yet.
+        secrets_none: &'static str,
+        /// Above the list of hidden values.
+        secrets_heading: &'static str,
+        /// One hidden value: `{n}` its number, `{kind}`, `{chars}` its length, `{seen}` where it was seen.
+        secrets_row: &'static str,
+        /// How `/secrets` is used.
+        secrets_usage: &'static str,
+        /// `/secrets allow` with a number no value has: `{n}`.
+        secrets_no_such: &'static str,
+        /// Value `{n}` let through for this session.
+        secrets_allowed: &'static str,
+        /// Value `{n}` let through always.
+        secrets_allowed_always: &'static str,
+        /// `/secrets add` with a pattern that cannot be used: `{reason}`.
+        secrets_bad_regex: &'static str,
+        /// A format of the owner's added: `{name}`.
+        secrets_added: &'static str,
+        /// `/secrets remove` of a format the owner has not: `{name}`.
+        secrets_no_format: &'static str,
+        /// A format of the owner's removed: `{name}`.
+        secrets_removed: &'static str,
+        /// Exported to `{path}` while keys are masked (T58): what the owner typed may still hold one.
+        export_written_masked: &'static str,
+        /// Copied as Markdown while keys are masked.
+        export_copied_masked: &'static str,
     }
 }
 

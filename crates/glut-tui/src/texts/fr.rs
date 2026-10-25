@@ -184,6 +184,10 @@ pub const TEXTS: Texts = Texts {
              seulement (asks), off, par macOS (system) ; /notify after <s> ; /notify tiles on|off",
         ),
         (
+            "secrets",
+            "les clés cachées au modèle dans cette session ; /secrets allow <n> [always] en laisse passer une, /secrets add <name> <regex> cache un format à toi, /secrets remove <name>, /secrets on|off",
+        ),
+        (
             "motion",
             "à quel point l’écran bouge ; calm et off tiennent Glimm immobile (« Réduire les animations » de macOS \
              compte comme off)",
@@ -1017,6 +1021,10 @@ pub const TEXTS: Texts = Texts {
     setup_provider_prompt: "Fournisseur :",
     cli: &[
         (
+            "Send what the tools answer as it is, without hiding the keys in it (T58; `\"mask\": false` in ~/.glut/secrets.json, which `/secrets off` writes)",
+            "Envoyer ce que répondent les outils tel quel, sans y cacher les clés (T58 ; `\"mask\": false` dans ~/.glut/secrets.json, que `/secrets off` écrit)",
+        ),
+        (
             "The MCP servers: ~/.glut/mcp.json and the project's .mcp.json, signing in to a hosted one and out again",
             "Les serveurs MCP : ~/.glut/mcp.json et le .mcp.json du projet, se connecter à un serveur hébergé et s’en déconnecter",
         ),
@@ -1527,4 +1535,28 @@ pub const TEXTS: Texts = Texts {
     notify_tiles_now: "tuiles en haut à droite de la fenêtre : {now} — /notify tiles on|off",
     notify_tiles_on: "tuiles en haut à droite : activées",
     notify_tiles_off: "tuiles en haut à droite : désactivées",
+    secrets_file_broken: "~/.glut/secrets.json est inutilisable ({reason}) — seuls les formats de Glut masquent",
+    secrets_hidden_note: "secrets masqués : {n}",
+    secrets_in_message: "ton message contient ce qui ressemble à un secret : {kinds}",
+    secrets_send_masked: "envoyer masqué",
+    secrets_send_masked_detail: "chaque clé part comme ‹secret n: …›, le modèle ne la voit jamais",
+    secrets_send_as_is: "envoyer tel quel",
+    secrets_back: "retour à la saisie",
+    secrets_hosted: "ici, c'est l'hôte qui règle le masquage",
+    secrets_on: "clés cachées au modèle : activé",
+    secrets_off: "clés cachées au modèle : désactivé — ce que répondent les outils part tel quel",
+    secrets_off_now: "le masquage est désactivé — ce que répondent les outils part tel quel ; /secrets on",
+    secrets_none: "rien de masqué dans cette session pour l'instant — une clé dans une réponse d'outil s'affiche ‹secret n: …›",
+    secrets_heading: "masqué au modèle dans cette session — /secrets allow <n> [always] en laisse passer un :",
+    secrets_row: "  {n}  {kind} · {chars} caractères · vu dans {seen}",
+    secrets_usage: "/secrets · on|off · allow <n> [always] · add <name> <regex> · remove <name>",
+    secrets_no_such: "pas de secret {n} dans cette session — /secrets les liste",
+    secrets_allowed: "le secret {n} passe pour cette session",
+    secrets_allowed_always: "le secret {n} passe toujours (son empreinte gardée dans ~/.glut/secrets.json, jamais la valeur)",
+    secrets_bad_regex: "pas un motif utilisable par Glut : {reason}",
+    secrets_added: "format {name} ajouté : masqué dès le prochain résultat",
+    secrets_no_format: "aucun format à toi nommé {name}",
+    secrets_removed: "format {name} retiré",
+    export_written_masked: "exporté vers {path} — les clés vues par Glut sont masquées ; ce que tu as tapé toi-même, ou une session plus ancienne, peut encore en contenir",
+    export_copied_masked: "session copiée en Markdown — les clés vues par Glut sont masquées ; ce que tu as tapé toi-même peut encore en contenir",
 };

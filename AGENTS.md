@@ -84,6 +84,13 @@ cargo run --release --bin glut   # the TUI in the current folder, on the default
   provider key variable — the catalog's and the owner's `keyEnv` — is kept out of MCP headers' `${…}`
   (`mcp::client::header_value`); a new catalog entry gets a variable of its own (a coding plan's key is not its
   pay-as-you-go key). `ModelEndpoint.versioned`: a provider's root already holds its version.
+- **Secrets are masked where a result enters the conversation, and go back only into a file that holds them**
+  (T58, `crates/glut/src/masks.rs`): `perform_after` masks before the result event, the hooks, the store and the
+  model — a new path of tool text into the conversation must go through it too. `Loop::unmasked` puts a placeholder's
+  value back only into `write_file`/`edit_file`'s text fields (`masks::WRITTEN_FIELDS`, never a path), for a file
+  inside the folder that already holds it. It guards against a key shown by accident (`cat`, logs, `env`), not
+  against a model set on it: a transformed value (`base64`, `rev`) passes — the sandbox's read-deny list and the
+  network gate stay the barriers.
 - **The TUI never lets a key answer a question it did not show** (`crates/glut-tui/src/app.rs` `on_ask_key`): plain
   keys only, no repeat, nothing in the first 400 ms; a turn that ends drops its open card; an ask shows the head and
   the tail of a long target. Model and tool text goes through `transcript::wrap`/`clean` (control characters as

@@ -27,6 +27,8 @@ const QUIT_WINDOW: Duration = Duration::from_millis(1500);
 const WHEEL_LINES: usize = 3;
 /// How long a question is on the screen before a key answers it.
 const ASK_SETTLE: Duration = Duration::from_millis(400);
+/// Where the owner's own words were seen, as `/secrets` lists a hidden value (T58).
+const YOUR_MESSAGE: &str = "your message";
 /// How long a message waits for an image still read beside the screen (T47).
 const ATTACH_WAIT: Duration = Duration::from_secs(10);
 /// An image to read for the message: the dropped file's name (`None`: the clipboard's), and how to read it.
@@ -332,6 +334,10 @@ pub struct App {
     attaching: usize,
     /// Since when the oldest of them is read.
     attaching_since: Option<Instant>,
+    /// The owner's answer to the warning of a key in their message (T58), for the next submit: masked or as it is.
+    secrets_answer: Option<bool>,
+    /// Whether that warning came from Tab (the message waits as the next turn) rather than Enter.
+    secrets_for_queue: bool,
     /// Whether the blocks hold their texts for a search (T47): given up once it closes.
     pub search_texts: bool,
     /// The projects the welcome shows (T44), looked up once: the newest, where this folder has no session yet.
@@ -544,6 +550,8 @@ impl App {
             images_given: 0,
             attaching: 0,
             attaching_since: None,
+            secrets_answer: None,
+            secrets_for_queue: false,
             search_texts: false,
             welcome_projects: None,
             project,
@@ -602,6 +610,7 @@ impl App {
     /// Opens session `session`: its conversation goes on, its stream is shown again.
     pub fn open(&mut self, session: Session) {
         self.forget_warm();
+        self.forget_masks();
         // A side question was about the session that goes (T57).
         self.side = None;
         // What waited for the other session is not this one's.
@@ -758,6 +767,7 @@ impl App {
         );
         if asked.copy {
             return match crate::select::copy(&text) {
+                Ok(_) if self.masking() => self.tell(tr!(export_copied_masked)),
                 Ok(_) => self.tell(tr!(export_copied)),
                 Err(reason) => self.transcript.note(reason, Tone::Fault),
             };
@@ -776,7 +786,11 @@ impl App {
         match written {
             Ok(path) => {
                 let shown = crate::projects::shown_path(&path, &self.parts.home);
-                self.tell(tr!(export_written, path = shown));
+                if self.masking() {
+                    self.tell(tr!(export_written_masked, path = shown));
+                } else {
+                    self.tell(tr!(export_written, path = shown));
+                }
             }
             Err(reason) => self.transcript.note(reason, Tone::Fault),
         }
@@ -799,6 +813,124 @@ impl App {
             crate::export::write(&path, &text, &home).map(|()| path)
         });
         self.exported(written);
+    }
+
+    /// `/secrets` (T58): what was hidden from the model in this session; `on|off`, `allow <n> [always]`,
+    /// `add <name> <regex>`, `remove <name>` change the rules every pane masks by, kept in `~/.glut/secrets.json`.
+    fn secrets_command(&mut self, rest: &str) {
+        let Some(masks) = self.parts.config.masks.clone() else {
+            return self.tell(tr!(secrets_hosted));
+        };
+        let home = self.parts.home.clone();
+        let rest = rest.trim();
+        let (word, rest) = rest.split_once(' ').unwrap_or((rest, ""));
+        let rest = rest.trim();
+        if word.is_empty() {
+            return self.list_secrets(&masks);
+        }
+        let mut owner = match glut::masks::Owner::load(&home) {
+            Ok(owner) => owner,
+            Err(err) => return self.transcript.note(err.to_string(), Tone::Fault),
+        };
+        let said = match word {
+            "on" | "off" => {
+                let on = word == "on";
+                masks.set_on(on);
+                owner.mask = (!on).then_some(false);
+                if on {
+                    tr!(secrets_on)
+                } else {
+                    tr!(secrets_off)
+                }
+                .to_string()
+            }
+            "allow" => {
+                let (number, always) = rest.split_once(' ').unwrap_or((rest, ""));
+                let always = match always.trim() {
+                    "" => false,
+                    "always" => true,
+                    _ => return self.transcript.note(tr!(secrets_usage), Tone::Fault),
+                };
+                let Some(number) = number.parse::<u32>().ok() else {
+                    return self.transcript.note(tr!(secrets_usage), Tone::Fault);
+                };
+                let Some(print) = masks.allow(number) else {
+                    return self
+                        .transcript
+                        .note(tr!(secrets_no_such, n = number), Tone::Fault);
+                };
+                if !always {
+                    return self.say(tr!(secrets_allowed, n = number));
+                }
+                masks.allow_always(&print);
+                if !owner.allowed.contains(&print) {
+                    owner.allowed.push(print);
+                }
+                tr!(secrets_allowed_always, n = number).to_string()
+            }
+            "add" => {
+                let Some((name, regex)) = rest.split_once(' ') else {
+                    return self.transcript.note(tr!(secrets_usage), Tone::Fault);
+                };
+                let regex = regex.trim();
+                let compiled = match glut::masks::compile(regex) {
+                    Ok(compiled) => compiled,
+                    Err(reason) => {
+                        return self
+                            .transcript
+                            .note(tr!(secrets_bad_regex, reason = reason), Tone::Fault);
+                    }
+                };
+                owner.patterns.retain(|own| own.name != name);
+                owner.patterns.push(glut::masks::OwnPattern {
+                    name: name.to_owned(),
+                    regex: regex.to_owned(),
+                });
+                masks.remove_format(name);
+                masks.add_format(name, compiled);
+                tr!(secrets_added, name = name).to_string()
+            }
+            "remove" if !rest.is_empty() => {
+                let before = owner.patterns.len();
+                owner.patterns.retain(|own| own.name != rest);
+                let dropped = masks.remove_format(rest);
+                if owner.patterns.len() == before && !dropped {
+                    return self
+                        .transcript
+                        .note(tr!(secrets_no_format, name = rest), Tone::Fault);
+                }
+                tr!(secrets_removed, name = rest).to_string()
+            }
+            _ => return self.transcript.note(tr!(secrets_usage), Tone::Fault),
+        };
+        match owner.save(&home) {
+            Ok(()) => self.say(said),
+            Err(err) => self.transcript.note(err.to_string(), Tone::Fault),
+        }
+    }
+
+    /// `/secrets` alone: every value hidden in this session, by number, kind, length and where it was seen — never the
+    /// value.
+    fn list_secrets(&mut self, masks: &glut::masks::Masks) {
+        if !masks.is_on() {
+            return self.tell(tr!(secrets_off_now));
+        }
+        let hidden = masks.hidden();
+        if hidden.is_empty() {
+            return self.tell(tr!(secrets_none));
+        }
+        let mut text = tr!(secrets_heading).to_string();
+        for value in hidden {
+            text.push('\n');
+            text.push_str(&tr!(
+                secrets_row,
+                n = value.number,
+                kind = value.kind,
+                chars = value.chars,
+                seen = value.seen.join(", ")
+            ));
+        }
+        self.transcript.note(text, Tone::Quiet);
     }
 
     /// `/notify`: when the owner is told a turn ended or asks (T53), or — alone — what holds now.
@@ -1399,6 +1531,23 @@ impl App {
                 ran,
                 to_model,
             } => {
+                // T58: what goes to the model is masked like a tool's result, and shown as it goes.
+                let (mut ran, mut command) = (ran, command);
+                if to_model && let Some(masks) = &self.parts.config.masks {
+                    let program = command.split_whitespace().next().unwrap_or_default();
+                    let at = format!("! {program}");
+                    // The command ran with what the owner typed; the model reads of it what it may.
+                    command = masks.mask(&command, &at).text;
+                    let masked = masks.mask(&ran.output, &at);
+                    if !masked.hidden.is_empty() {
+                        ran.output = masked.text;
+                        self.transcript.take(&glut::Event::Masked {
+                            turn: 0,
+                            id: id.clone(),
+                            hidden: masked.hidden,
+                        });
+                    }
+                }
                 self.transcript.take(&glut::Event::ToolResult {
                     turn: 0,
                     id,
@@ -2068,6 +2217,9 @@ impl App {
                 self.transcript.note(reason, Tone::Fault);
             }
         }
+        // T58: asked once per message; the answer counts for this submit only, whatever stops it.
+        let answer = self.secrets_answer.take();
+        self.secrets_for_queue = false;
         if self.input.broken_pastes() > 0 {
             self.transcript.note(tr!(paste_lost), Tone::Fault);
             return;
@@ -2090,7 +2242,12 @@ impl App {
                         .note(tr!(command_waits, name = name), Tone::Quiet);
                     return;
                 }
-                let command = command.to_owned();
+                // A side question, a message to another pane or an agent, a skill's or a plan's text: the owner's words
+                // to a model too. `/secrets add` names a format, not a secret.
+                if name != "secrets" && self.asks_about_secrets(&text, answer) {
+                    return;
+                }
+                let command = self.owners_words(command.to_owned(), answer);
                 self.input.take();
                 return self.command(&command);
             }
@@ -2106,6 +2263,10 @@ impl App {
             let expanded = self.input.take();
             let command = owners_command(&expanded).map_or(command, |(_, command)| command);
             return self.shell(command, !alone);
+        }
+        let expanded = self.input.expanded();
+        if self.asks_about_secrets(&expanded, answer) {
+            return;
         }
         // A message with images (T45) goes as a turn of its own, to a model that sees them.
         let images = self.input.images();
@@ -2130,6 +2291,7 @@ impl App {
                 .unwrap_or(0)
                 .max(self.images_sent);
             let prompt = self.input.take();
+            let prompt = self.owners_words(prompt, answer);
             return self.send_with(prompt, images);
         }
         if self.working() {
@@ -2139,6 +2301,7 @@ impl App {
                 return;
             }
             let text = self.input.take();
+            let text = self.owners_words(text, answer);
             // A steer or a queued message is the owner's word too (T36c: it ends a chain between models).
             self.owner_spoke = true;
             match &self.steering {
@@ -2171,7 +2334,49 @@ impl App {
             return self.send(next);
         }
         let prompt = self.input.take();
+        let prompt = self.owners_words(prompt, answer);
         self.send(prompt);
+    }
+
+    /// Whether the owner's `text` holds what looks like a key and is asked about first (T58): a guarded list — no key
+    /// typed before it showed answers it, Enter sends masked —, the message kept in the input meanwhile. `answer` is
+    /// the owner's word already given for it.
+    fn asks_about_secrets(&mut self, text: &str, answer: Option<bool>) -> bool {
+        if answer.is_some() {
+            return false;
+        }
+        let Some(masks) = &self.parts.config.masks else {
+            return false;
+        };
+        let kinds = masks.kinds_in(text);
+        if kinds.is_empty() {
+            return false;
+        }
+        self.picker = Some(
+            Picker::new(
+                tr!(secrets_in_message, kinds = kinds.join(", ")),
+                vec![
+                    Item::plain(
+                        tr!(secrets_send_masked),
+                        tr!(secrets_send_masked_detail),
+                        Pick::SendSecrets(true),
+                    ),
+                    Item::plain(tr!(secrets_send_as_is), "", Pick::SendSecrets(false)),
+                    Item::plain(tr!(secrets_back), "", Pick::Shown),
+                ],
+                None,
+            )
+            .guarded(),
+        );
+        true
+    }
+
+    /// The owner's words as they go (T58): masked when the owner chose so, else as typed.
+    fn owners_words(&self, text: String, answer: Option<bool>) -> String {
+        match (&self.parts.config.masks, answer) {
+            (Some(masks), Some(true)) => masks.mask(&text, YOUR_MESSAGE).text,
+            _ => text,
+        }
     }
 
     /// Tab while Glut works: the message waits until the turn is done and goes as the next one.
@@ -2183,7 +2388,15 @@ impl App {
         if !self.input.images().is_empty() {
             return self.say(tr!(images_wait));
         }
+        // T58: asked about before it waits, as before it goes.
+        let answer = self.secrets_answer.take();
+        self.secrets_for_queue = true;
+        let expanded = self.input.expanded();
+        if self.asks_about_secrets(&expanded, answer) {
+            return;
+        }
         let text = self.input.take();
+        let text = self.owners_words(text, answer);
         self.queue.push(text);
         self.owner_spoke = true;
         self.say(tr!(queued_turn));
@@ -2341,6 +2554,7 @@ impl App {
             "quit" | "exit" | "q" => self.quit = true,
             "clear" => {
                 self.forget_warm();
+                self.forget_masks();
                 self.side = None;
                 self.selection = None;
                 self.search = None;
@@ -2551,6 +2765,7 @@ impl App {
                 }
             },
             "notify" => self.notify_command(rest),
+            "secrets" => self.secrets_command(rest),
             "export" => self.export_command(rest),
             "links" => match crate::links::Links::parse(rest) {
                 Some(links) => {
@@ -4473,6 +4688,14 @@ impl App {
                     Some(Pick::Init(migrate)) => self.init_with(migrate),
                     Some(Pick::MemoryFact(name)) => self.show_fact(&name),
                     Some(Pick::TodoClean) => self.todo_clean(),
+                    Some(Pick::SendSecrets(masked)) => {
+                        self.secrets_answer = Some(masked);
+                        if self.secrets_for_queue {
+                            self.queue_next();
+                        } else {
+                            self.submit();
+                        }
+                    }
                     Some(Pick::Skill(name)) => self.input.insert_text(&format!("/skill {name} ")),
                     Some(Pick::Step { run, turn }) => self.picker = Some(step_do(run, turn)),
                     Some(Pick::StepDo { run, turn, restore }) => self.step_do(run, turn, restore),
@@ -5026,6 +5249,22 @@ impl App {
                 Arc::clone(&self.parts.host),
                 self.reports.clone(),
             ));
+        }
+    }
+
+    /// Whether keys are hidden from the model now (T58).
+    fn masking(&self) -> bool {
+        self.parts
+            .config
+            .masks
+            .as_ref()
+            .is_some_and(glut::masks::Masks::is_on)
+    }
+
+    /// The values hidden in the session that goes (T58): the next one numbers its own anew.
+    fn forget_masks(&self) {
+        if let Some(masks) = &self.parts.config.masks {
+            masks.forget();
         }
     }
 
@@ -7851,6 +8090,118 @@ pub(crate) mod tests {
             }
         }
         panic!("the side question never ended");
+    }
+
+    const A_KEY: &str = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789";
+
+    /// The guarded list up long enough to take a key, and Enter on its entry `at`.
+    fn pick(app: &mut App, at: usize) {
+        let picker = app.picker.as_mut().expect("a list is open");
+        picker.opened = Instant::now() - Duration::from_secs(1);
+        for _ in 0..at {
+            app.on_terminal(key(KeyCode::Down, KeyModifiers::NONE));
+        }
+        app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
+    }
+
+    fn owners_last(app: &App) -> Option<String> {
+        app.transcript
+            .blocks
+            .iter()
+            .rev()
+            .find_map(|block| match &block.kind {
+                crate::transcript::Kind::Owner(text) => Some(text.clone()),
+                _ => None,
+            })
+    }
+
+    #[tokio::test]
+    async fn a_key_in_the_owners_message_is_asked_about_and_sent_masked_on_enter() {
+        let (mut app, _reports) = app();
+        app.input.insert_text(&format!("use {A_KEY} please"));
+        app.submit();
+        let title = app
+            .picker
+            .as_ref()
+            .map(|picker| picker.title.clone())
+            .unwrap_or_default();
+        assert!(title.contains("anthropic key"), "{title}");
+        assert!(
+            owners_last(&app).is_none(),
+            "nothing went before the answer"
+        );
+        assert!(!app.input.is_empty(), "the message waits in the input");
+        pick(&mut app, 0);
+        let sent = owners_last(&app).unwrap();
+        assert_eq!(sent, "use ‹secret 1: anthropic key, 49 chars› please");
+    }
+
+    #[tokio::test]
+    async fn a_key_sent_as_it_is_goes_unmasked_and_back_keeps_the_input() {
+        let (mut app, _reports) = app();
+        app.input.insert_text(&format!("use {A_KEY}"));
+        app.submit();
+        pick(&mut app, 2);
+        assert!(app.picker.is_none() && owners_last(&app).is_none());
+        assert!(app.input.text().contains(A_KEY));
+        app.submit();
+        pick(&mut app, 1);
+        assert_eq!(owners_last(&app).unwrap(), format!("use {A_KEY}"));
+    }
+
+    #[test]
+    fn a_key_in_a_message_queued_with_tab_is_asked_about_and_waits_masked() {
+        let (mut app, _reports) = app();
+        app.input.insert_text(&format!("later: {A_KEY}"));
+        app.queue_next();
+        assert!(app.queue.is_empty() && app.picker.is_some());
+        pick(&mut app, 0);
+        assert_eq!(app.queue, ["later: ‹secret 1: anthropic key, 49 chars›"]);
+        assert!(app.input.is_empty());
+    }
+
+    #[test]
+    fn secrets_lists_lets_through_and_keeps_the_owners_formats() {
+        let (mut app, _reports) = app();
+        let home = app.parts.home.clone();
+        let masks = app.parts.config.masks.clone().unwrap();
+        app.secrets_command("");
+        assert!(
+            last_note(&app).contains("nothing hidden"),
+            "{}",
+            last_note(&app)
+        );
+        masks.mask(&format!("TOKEN={A_KEY}"), "read_file .env");
+        app.secrets_command("");
+        let listed = last_note(&app);
+        assert!(
+            listed.contains("anthropic key") && listed.contains("read_file .env"),
+            "{listed}"
+        );
+        assert!(!listed.contains(A_KEY), "never the value");
+        app.secrets_command("allow 1 always");
+        assert_eq!(masks.mask(A_KEY, "x").text, A_KEY);
+        let owner = glut::masks::Owner::load(&home).unwrap();
+        assert_eq!(owner.allowed, [glut::masks::fingerprint(A_KEY)]);
+        app.secrets_command("add acme acme_[0-9]{6}");
+        assert!(masks.mask("acme_123456", "x").text.contains("‹secret"));
+        app.secrets_command("add bad (");
+        assert!(last_note(&app).contains("pattern"), "{}", last_note(&app));
+        app.secrets_command("remove acme");
+        // A value hidden once stays hidden; a new one of the dropped format goes as it is.
+        assert_eq!(masks.mask("acme_654321", "x").text, "acme_654321");
+        app.secrets_command("off");
+        assert!(!masks.is_on());
+        assert_eq!(glut::masks::Owner::load(&home).unwrap().mask, Some(false));
+        app.secrets_command("on");
+        assert!(masks.is_on());
+        app.secrets_command("allow 9");
+        assert!(
+            last_note(&app).contains("no secret 9"),
+            "{}",
+            last_note(&app)
+        );
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]

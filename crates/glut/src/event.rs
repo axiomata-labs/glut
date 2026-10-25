@@ -186,6 +186,12 @@ pub enum Event {
         chars_before: usize,
         chars_after: usize,
     },
+    /// Secrets in a call's result were replaced before anything saw it (T58): the placeholders put in, one per place.
+    Masked {
+        turn: u32,
+        id: String,
+        hidden: Vec<String>,
+    },
     /// The owner's message sent while the run worked joined the conversation before this turn's model call (T10).
     Steered {
         turn: u32,

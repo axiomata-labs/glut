@@ -411,6 +411,26 @@ async fn run_inner<M: ChatModel>(
             resumed_calls = recorded.open_calls;
         }
     }
+    // T58: numbers go on above the conversation's own placeholders, and the instructions (a project's `AGENTS.md`)
+    // are masked like a file read — the same values the same placeholders, so the cache holds.
+    if let Some(masks) = &config.masks {
+        masks.continue_after(
+            run.messages
+                .iter()
+                .filter_map(|message| message.content.as_deref()),
+        );
+        if let Some(system) = run
+            .messages
+            .first_mut()
+            .filter(|first| first.role == Role::System)
+            && let Some(text) = &system.content
+        {
+            let masked = masks.mask(text, "the instructions");
+            if !masked.hidden.is_empty() {
+                system.content = Some(masked.text);
+            }
+        }
+    }
     // SessionStart first: its context goes in behind the system prompt, and the journal must hold it there.
     if depth == 0 && !continuing {
         run.session_start(sink).await;
@@ -454,6 +474,44 @@ async fn run_inner<M: ChatModel>(
         warm: last_call,
     };
     (outcome, messages)
+}
+
+/// Where a result was seen, for `/secrets` (T58): the tool and its file, address or pattern — of a command only its
+/// program, since the rest may hold what is hidden, and this text goes back to the model in a refusal.
+fn seen_at(call: &ToolCall) -> String {
+    let arguments: serde_json::Value =
+        serde_json::from_str(&call.function.arguments).unwrap_or_default();
+    let field = |key: &str| arguments.get(key).and_then(serde_json::Value::as_str);
+    let target = field("path")
+        .or_else(|| field("url"))
+        .or_else(|| field("pattern"))
+        .map(|target| target.chars().take(60).collect::<String>())
+        .or_else(|| {
+            field("command")
+                .and_then(|command| command.split_whitespace().next())
+                .map(str::to_owned)
+        });
+    match target {
+        Some(target) => format!("{} {target}", call.function.name),
+        None => call.function.name.clone(),
+    }
+}
+
+/// The most a file may hold for Glut to read it before a write puts a hidden value back (T58).
+const MOST_HELD_BYTES: u64 = 8 * 1024 * 1024;
+
+/// What the file a write names holds now (T58) — the file itself, its links followed, inside the folder only, a
+/// plain file not too large; anything else holds nothing, so no hidden value goes into it.
+fn held_text(cwd: &Path, path: &str) -> String {
+    let (Ok(root), Ok(real)) = (cwd.canonicalize(), lexical(cwd, path).canonicalize()) else {
+        return String::new();
+    };
+    let plain =
+        std::fs::metadata(&real).is_ok_and(|meta| meta.is_file() && meta.len() <= MOST_HELD_BYTES);
+    if !real.starts_with(&root) || !plain {
+        return String::new();
+    }
+    std::fs::read_to_string(&real).unwrap_or_default()
 }
 
 /// The conversation a run starts with: its system prompt — the caller's instructions at depth 0, the
@@ -1740,6 +1798,18 @@ impl<M: ChatModel> Loop<'_, M> {
             output.push_str("\n\n");
             output.push_str(&note);
         }
+        // T58: before anything sees it — the stream, the hooks, the store, the model.
+        if let Some(masks) = &self.config.masks {
+            let masked = masks.mask(&output, &seen_at(call));
+            if !masked.hidden.is_empty() {
+                output = masked.text;
+                sink.emit(Event::Masked {
+                    turn,
+                    id: call.id.clone(),
+                    hidden: masked.hidden,
+                });
+            }
+        }
         // In the stream the tool's own result is shown first (D3); the model's message may still differ.
         sink.emit(Event::tool_result(
             turn,
@@ -1873,8 +1943,12 @@ impl<M: ChatModel> Loop<'_, M> {
             }
             _ => None,
         };
+        let arguments = match self.unmasked(call).await {
+            Ok(arguments) => arguments,
+            Err(refused) => return Ok((false, refused)),
+        };
         let called = tokio::select! {
-            called = self.tools.call_reporting(name, &call.function.arguments, self.stop) => called,
+            called = self.tools.call_reporting(name, &arguments, self.stop) => called,
             () = tokio::time::sleep_until(self.deadline) => return Err(FinishReason::Timeout),
             () = self.cancel.cancelled() => return Err(FinishReason::Cancelled),
         };
@@ -1910,6 +1984,39 @@ impl<M: ChatModel> Loop<'_, M> {
             });
         }
         Ok((called.ok, called.text))
+    }
+
+    /// The arguments a call runs with (T58): a write's placeholders with their values put back where the file
+    /// already holds them, anything else as the model wrote it. `Err` with the model's words when a write would put a
+    /// hidden value somewhere new.
+    async fn unmasked(&self, call: &ToolCall) -> Result<String, String> {
+        let arguments = &call.function.arguments;
+        let Some(masks) = self
+            .config
+            .masks
+            .clone()
+            .filter(|_| arguments.contains(crate::masks::OPEN))
+        else {
+            return Ok(arguments.clone());
+        };
+        let Some(Access::Edit { path }) = self.tools.access_of(&call.function.name, arguments)
+        else {
+            return Ok(arguments.clone());
+        };
+        let (cwd, arguments) = (self.config.cwd.clone(), arguments.clone());
+        // The file is read only when a value is to go back, and off the runtime: it is the model's to name.
+        let job = tokio::task::spawn_blocking(move || {
+            let held = std::cell::OnceCell::new();
+            masks.unmask(&arguments, |value| {
+                held.get_or_init(|| held_text(&cwd, &path)).contains(value)
+            })
+        });
+        let deadline = self.deadline;
+        tokio::select! {
+            joined = job => joined.unwrap_or_else(|err| Err(format!("error: the write could not be prepared: {err}"))),
+            () = tokio::time::sleep_until(deadline) => Err("error: the run's time ran out".into()),
+            () = self.cancel.cancelled() => Err("error: the run was stopped".into()),
+        }
     }
 
     /// Records the work folder before the first call of this turn that may change it — an edit or a command (Glut 2,
@@ -6278,5 +6385,99 @@ mod tests {
         ));
         // Not intercepted, so the ordinary "no tool named" of the toolbox answers it.
         assert!(tool_answer(&model).contains("no tool named"));
+    }
+
+    #[tokio::test]
+    async fn a_secret_read_is_masked_and_goes_back_only_into_its_own_file() {
+        let dir = Scratch::new("glut-masks-write");
+        std::fs::write(
+            dir.path().join(".env"),
+            "API_KEY=abc123def456ghi\nDEBUG=0\n",
+        )
+        .unwrap();
+        let placeholder = "‹secret 1: API_KEY, 15 chars›";
+        let rewrite =
+            json!({"path": ".env", "content": format!("API_KEY={placeholder}\nDEBUG=1\n")})
+                .to_string();
+        let smuggle = json!({"path": "out.txt", "content": placeholder}).to_string();
+        // A link named like the placeholder leads to `.env`: the path still never gets the value.
+        std::os::unix::fs::symlink(".env", dir.path().join(placeholder)).unwrap();
+        let named = json!({"path": placeholder, "content": "x"}).to_string();
+        let model = Script::new(vec![
+            Ok(calls(&[("r", "read_file", r#"{"path":".env"}"#)])),
+            Ok(calls(&[("w", "write_file", rewrite.as_str())])),
+            Ok(calls(&[("s", "write_file", smuggle.as_str())])),
+            Ok(calls(&[("n", "write_file", named.as_str())])),
+            Ok(text("done")),
+        ]);
+        let mut tools = Toolbox::new();
+        tools.extend(crate::tools::files::file_tools(dir.path(), Default::default()).unwrap());
+        let config = RunConfig::new(dir.path());
+        let mut events = Vec::new();
+        let outcome = run(&config, &model, &tools, "go", &mut events, &Cancel::new()).await;
+        assert_eq!(outcome.reason, FinishReason::Answered);
+        let answers = tool_answers(&model);
+        assert!(
+            answers[0].contains(placeholder) && !answers[0].contains("abc123"),
+            "{}",
+            answers[0]
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(".env")).unwrap(),
+            "API_KEY=abc123def456ghi\nDEBUG=1\n"
+        );
+        assert!(answers[2].contains("not in this file"), "{}", answers[2]);
+        assert!(!dir.path().join("out.txt").exists());
+        assert!(answers[3].contains("`path`"), "{}", answers[3]);
+        assert!(!dir.path().join("abc123def456ghi").exists());
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, Event::Masked { id, .. } if id == "r"))
+        );
+        // Nothing of the value reached an event either.
+        let printed = serde_json::to_string(&events).unwrap();
+        assert!(!printed.contains("abc123def456ghi"), "{printed}");
+    }
+
+    #[tokio::test]
+    async fn without_masks_a_result_goes_as_it_is() {
+        let dir = Scratch::new("glut-masks-off");
+        std::fs::write(dir.path().join(".env"), "API_KEY=abc123def456ghi\n").unwrap();
+        let model = Script::new(vec![
+            Ok(calls(&[("r", "read_file", r#"{"path":".env"}"#)])),
+            Ok(text("done")),
+        ]);
+        let mut tools = Toolbox::new();
+        tools.extend(crate::tools::files::file_tools(dir.path(), Default::default()).unwrap());
+        let config = RunConfig {
+            masks: None,
+            ..RunConfig::new(dir.path())
+        };
+        let mut events = Vec::new();
+        run(&config, &model, &tools, "go", &mut events, &Cancel::new()).await;
+        assert!(tool_answers(&model)[0].contains("abc123def456ghi"));
+    }
+
+    /// A folder of its own for one test, gone with it.
+    struct Scratch(std::path::PathBuf);
+
+    impl Scratch {
+        fn new(name: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!("{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            Scratch(dir.canonicalize().unwrap())
+        }
+
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
     }
 }

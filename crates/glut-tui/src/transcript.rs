@@ -460,6 +460,19 @@ impl Transcript {
                     block.touch();
                 }
             }
+            // T58: said beside the call, as the gate's word is — the placeholders stand in its output.
+            Event::Masked { id, hidden, .. } => {
+                if let Some(block) = self.tool(id)
+                    && let Kind::Tool { gate, .. } = &mut block.kind
+                {
+                    let said = tr!(secrets_hidden_note, n = hidden.len()).to_string();
+                    *gate = Some(match gate.take() {
+                        Some(was) => format!("{was} · {said}"),
+                        None => said,
+                    });
+                    block.touch();
+                }
+            }
             Event::ToolResult { id, ok, output, .. } => {
                 if let Some(block) = self.tool(id) {
                     let kept = match &mut block.kind {

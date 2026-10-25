@@ -61,6 +61,8 @@ pub enum Pick {
     },
     /// `/init` (T35): whether `CLAUDE.md` moves into `AGENTS.md` (`true`) or stays the guide (`false`).
     Init(bool),
+    /// The owner's message held what looks like a key (T58): sent masked (`true`) or as it is.
+    SendSecrets(bool),
     /// What a pane asks of the screen, picked (T36a): where a new pane works, how a worktree's pane ends.
     Pane(crate::panes::Request),
     /// A command put into the input for the owner to change before Enter (a new worktree's branch name).

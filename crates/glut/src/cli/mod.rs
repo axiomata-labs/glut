@@ -169,6 +169,11 @@ pub struct RunArgs {
     #[arg(long)]
     #[serde(default)]
     no_auto_compact: bool,
+    /// Send what the tools answer as it is, without hiding the keys in it (T58; `"mask": false` in
+    /// ~/.glut/secrets.json, which `/secrets off` writes).
+    #[arg(long)]
+    #[serde(default)]
+    no_mask: bool,
     /// default, accept_edits, plan, dont_ask or auto; otherwise the settings files', else default. Headless, an
     /// ask is refused: name what the run may do with --allow, or pick a mode.
     #[arg(long)]
@@ -553,6 +558,7 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
         timeout_secs,
         context_window,
         no_auto_compact,
+        no_mask,
         max_tokens,
         max_usd,
         permission_mode,
@@ -671,6 +677,18 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
         .filter(|home| home.is_absolute())
     else {
         return fail("HOME is not set to an absolute folder".into());
+    };
+    // T58: the owner's own formats and values let through; the run's key is found exactly wherever it shows.
+    config.masks = match crate::masks::Owner::load(&home) {
+        Ok(owner) if owner.masks() && !no_mask => {
+            let masks = crate::masks::Masks::new(&owner);
+            if let Some(key) = &endpoint.api_key {
+                masks.know("the model's key", key);
+            }
+            Some(masks)
+        }
+        Ok(_) => None,
+        Err(err) => return fail(err.to_string()),
     };
     let trusted = match Trust::load(&home) {
         Ok(trust) => trust.contains(&cwd),
