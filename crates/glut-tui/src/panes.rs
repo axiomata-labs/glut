@@ -2451,7 +2451,7 @@ mod tests {
         assert!(panes.switch_to.is_none() && !panes.quitting());
         let picker = panes.active().picker.as_ref().unwrap();
         assert!(
-            picker.guarded && picker.title.contains("still works"),
+            picker.guarded && picker.title.contains("still at work"),
             "{}",
             picker.title
         );
