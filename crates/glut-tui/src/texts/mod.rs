@@ -917,6 +917,264 @@ glut::catalog! {
         todo_input_full: &'static str,
         /// A plan approved to run in auto where there is no sandbox.
         plan_auto_unsandboxed: &'static str,
+        /// A kept pane's session is open in another pane already.
+        kept_open_elsewhere: &'static str,
+        /// A kept pane's session is empty or gone.
+        kept_gone: &'static str,
+        /// `/send` without a text.
+        send_usage: &'static str,
+        /// `/bg as` without a role.
+        bg_as_usage: &'static str,
+        /// `/bg` with a word it does not take: `{word}`.
+        bg_unknown: &'static str,
+        /// `/split as` without a role.
+        split_as_usage: &'static str,
+        /// `/split` with a side, which it no longer takes: `{word}`.
+        split_side: &'static str,
+        /// `/split` with a word it does not take: `{word}`.
+        split_unknown: &'static str,
+        /// ⌃P with one pane.
+        one_pane_split: &'static str,
+        /// `/peek` with a name that is none: `{name}`.
+        no_background_peek: &'static str,
+        /// `/quit` while others work: `{who}`.
+        still_works_quit: &'static str,
+        /// A project switch's no.
+        switch_no: &'static str,
+        /// What it does.
+        switch_no_detail: &'static str,
+        /// A project switch's yes: `{name}`.
+        switch_yes: &'static str,
+        /// What it does.
+        switch_yes_detail: &'static str,
+        /// A project switch while panes work: `{who}`.
+        switch_question: &'static str,
+        /// `/close` on the last pane.
+        last_pane_quit: &'static str,
+        /// `/close` or `/hide` on the main pane.
+        main_pane_stays: &'static str,
+        /// `/close` on a pane at work.
+        close_working: &'static str,
+        /// `/close` on a worktree's pane whose turn is stopping.
+        close_stopping: &'static str,
+        /// A worktree's pane working again when its leaving was picked.
+        close_works_again: &'static str,
+        /// A worktree kept: `{place}`, `{branch}`.
+        worktree_kept: &'static str,
+        /// A worktree discarded: `{branch}`.
+        worktree_gone: &'static str,
+        /// What became of a closed pane: its turn stopped.
+        closed_stopped: &'static str,
+        /// What became of a closed worktree pane.
+        closed_kept: &'static str,
+        /// What became of a closed pane: its session is listed.
+        closed_resume: &'static str,
+        /// A pane closed: `{n}`, `{kept}` what became of its session.
+        pane_closed: &'static str,
+        /// A split where the host keeps one pane.
+        host_one_pane: &'static str,
+        /// A split beyond the most panes: `{n}`.
+        most_panes_bg: &'static str,
+        /// A split without room while the main pane is wide.
+        no_room_narrower: &'static str,
+        /// A split without room.
+        no_room: &'static str,
+        /// A split while another pane starts.
+        pane_starting: &'static str,
+        /// Why no worktree is offered: `{reason}`.
+        no_worktree_offered: &'static str,
+        /// `tree` outside a git repository.
+        no_repository: &'static str,
+        /// A worktree left where it is: `{place}`.
+        worktree_stays: &'static str,
+        /// A worktree removed again: `{branch}`.
+        worktree_gone_again: &'static str,
+        /// A pane that could not start: `{n}`, `{reason}`.
+        pane_not_started: &'static str,
+        /// An agent in the background ready: `{name}`.
+        background_waits: &'static str,
+        /// A new pane ready while the keys stay: `{n}`.
+        pane_ready: &'static str,
+        /// `/send` with no other pane.
+        one_pane_send: &'static str,
+        /// `/send` to a name that is none: `{name}`.
+        no_pane_or_agent: &'static str,
+        /// `/send` naming none among several.
+        send_which: &'static str,
+        /// `/send plan` before any plan.
+        no_plan_send: &'static str,
+        /// A message sent: the pane starts on it.
+        sent_now: &'static str,
+        /// A message sent: the pane takes it after its turn.
+        sent_after_turn: &'static str,
+        /// A message sent: the pane takes it once free.
+        sent_when_free: &'static str,
+        /// A message sent: it waits for Enter there.
+        sent_on_enter: &'static str,
+        /// A message sent: `{label}` its pane, `{when}` one of the four above.
+        sent_to: &'static str,
+        /// The kept layout's no.
+        layout_no: &'static str,
+        /// What it does.
+        layout_no_detail: &'static str,
+        /// `glut -c`'s question about the kept layout.
+        layout_question: &'static str,
+        /// No layout kept.
+        no_layout: &'static str,
+        /// The layout back into a window of several panes.
+        layout_one_pane_only: &'static str,
+        /// The layout back while Glut works.
+        layout_waits: &'static str,
+        /// A kept worktree whose folder is no repository any more.
+        no_repository_now: &'static str,
+        /// A kept pane that cannot come back: `{branch}`, `{reason}`.
+        kept_pane_away: &'static str,
+        /// The kept layout came back.
+        layout_back: &'static str,
+        /// The kept layout came back with gaps.
+        layout_back_partly: &'static str,
+        /// A name that names no agent in the background: `{name}`.
+        no_background_agent: &'static str,
+        /// `/show` beyond the most panes: `{n}`.
+        most_panes_hide: &'static str,
+        /// `/show` without room.
+        no_room_show: &'static str,
+        /// `/close` of an agent in a worktree: `{name}`.
+        agent_in_worktree: &'static str,
+        /// An agent in the background ended: `{name}`, `{kept}`.
+        agent_ended: &'static str,
+        /// `/hide` on the last pane.
+        last_pane_stays: &'static str,
+        /// A pane sent to the background: `{name}`.
+        hidden_works_on: &'static str,
+        /// `/swap` with one pane.
+        one_pane_swap: &'static str,
+        /// `/swap` naming none among several.
+        swap_which: &'static str,
+        /// `/swap` with a name that is no pane on the screen: `{name}`.
+        no_pane_shown: &'static str,
+        /// `/swap` with the main pane.
+        main_already: &'static str,
+        /// A pane made the main one: `{n}`.
+        main_now: &'static str,
+        /// Where a new pane works: this folder.
+        where_here: &'static str,
+        /// What it means.
+        where_here_detail: &'static str,
+        /// Where a new pane works: a new worktree.
+        where_tree: &'static str,
+        /// What it means: `{branch}` its branch.
+        where_tree_detail: &'static str,
+        /// Where a new pane works, asked: `{n}`.
+        where_title: &'static str,
+        /// A question's plain no.
+        no: &'static str,
+        /// The seventh agent's no.
+        more_no_detail: &'static str,
+        /// The seventh agent's yes.
+        more_yes: &'static str,
+        /// What it does.
+        more_yes_detail: &'static str,
+        /// The seventh agent's question: `{n}` agents.
+        more_title: &'static str,
+        /// What a worktree holds cannot be read.
+        holds_unreadable: &'static str,
+        /// A worktree whose repository was on no branch.
+        no_branch_merge: &'static str,
+        /// A worktree pane's leaving: keep.
+        leave_keep: &'static str,
+        /// What it does: `{branch}`, `{held}` what it holds.
+        leave_keep_detail: &'static str,
+        /// A worktree pane's leaving: take over.
+        leave_take_over: &'static str,
+        /// What it does: `{branch}`, `{held}`, `{into}` the branch it merges into.
+        leave_take_over_detail: &'static str,
+        /// A worktree pane's leaving: discard.
+        leave_discard: &'static str,
+        /// What it does: `{branch}`, `{held}`.
+        leave_discard_detail: &'static str,
+        /// The question how a worktree pane ends.
+        leave_title: &'static str,
+        /// The discard question's no.
+        discard_no_detail: &'static str,
+        /// The discard question's yes.
+        discard_yes: &'static str,
+        /// What the discard loses: `{branch}`, `{held}`.
+        discard_lost: &'static str,
+        /// What the discard loses where it cannot be read: `{branch}`, `{reason}`.
+        discard_whatever: &'static str,
+        /// The discard question: `{branch}`.
+        discard_title: &'static str,
+        /// Two or more names: `{rest}` all but the last, joined by commas, `{last}`.
+        list_and: &'static str,
+        /// A worktree with nothing of its own.
+        nothing_new: &'static str,
+        /// git cannot be started: `{reason}`.
+        git_cannot_run: &'static str,
+        /// git ended for taking too long: `{secs}` seconds.
+        git_too_long: &'static str,
+        /// git's output beyond what Glut reads.
+        git_too_much: &'static str,
+        /// A repository whose git folder is no plain one: `{folder}`.
+        no_plain_git: &'static str,
+        /// A worktree asked for inside a worktree.
+        is_worktree: &'static str,
+        /// A branch name Glut refuses: `{branch}`.
+        bad_branch: &'static str,
+        /// A worktree's place taken already: `{place}`.
+        there_already: &'static str,
+        /// A worktree made where it does not belong.
+        worktree_misplaced: &'static str,
+        /// A kept worktree that is gone: `{branch}`, `{place}`.
+        worktree_of_gone: &'static str,
+        /// A worktree outside Glut's place for them: `{place}`.
+        not_glut_place: &'static str,
+        /// A worktree its repository no longer lists: `{place}`, `{repo}`.
+        no_worktree_of: &'static str,
+        /// A kept worktree on another branch: `{branch}`.
+        worktree_other_branch: &'static str,
+        /// git's count that is no number.
+        git_no_number: &'static str,
+        /// A take-over that would write protected files: `{branch}`, `{files}`.
+        protected_changes: &'static str,
+        /// A take-over where the repository was on no branch.
+        repo_no_branch: &'static str,
+        /// No branch checked out.
+        no_branch: &'static str,
+        /// A take-over where the repository moved: `{now}`, `{into}`.
+        repo_other_branch: &'static str,
+        /// A take-over of a worktree with changes not committed: `{branch}`.
+        tree_uncommitted: &'static str,
+        /// A take-over while the repository merges.
+        repo_merging: &'static str,
+        /// A take-over while the repository has changes not committed: `{folder}`.
+        repo_uncommitted: &'static str,
+        /// A merge that stopped: `{reason}`.
+        merge_stopped: &'static str,
+        /// A merge that could not be read: `{reason}`.
+        merge_unreadable: &'static str,
+        /// A merge that could not be committed: `{reason}`.
+        merge_uncommitted: &'static str,
+        /// A worktree taken over: `{branch}`, `{into}`.
+        merged: &'static str,
+        /// A worktree that would lose work: `{branch}`, `{held}`.
+        tree_holds: &'static str,
+        /// A worktree whose content cannot be read: `{branch}`, `{reason}`.
+        tree_unreadable: &'static str,
+        /// A worktree that is not Glut's: `{place}`.
+        not_glut_worktree: &'static str,
+        /// Commits a worktree holds: `{n}`.
+        commits_count: Plural,
+        /// Files not committed in a worktree: `{n}`.
+        uncommitted_count: Plural,
+        /// What parts the names of a list but the last two.
+        list_comma: &'static str,
+        /// Two counts side by side: `{first}`, `{second}`.
+        two_counts: &'static str,
+        /// A note and what follows from it: `{first}`, `{second}`.
+        clause_join: &'static str,
+        /// A worktree that could not be removed: `{place}`, `{reason}`.
+        worktree_stays_why: &'static str,
     }
 }
 
@@ -1035,11 +1293,28 @@ pub(crate) mod check {
         })
     }
 
+    /// Whether `translated` keeps `term`: as a word of its own — "Commit" as a verb too ("committen", "commité",
+    /// and Chinese 提交, Japanese コミット, as git's own translations say it).
+    fn kept_as(translated: &str, term: &str) -> bool {
+        if term != "Commit" {
+            return holds(translated, term);
+        }
+        let text = translated.to_lowercase();
+        // "commit" at a word's start, any ending after it: committen, commité, committato.
+        let as_word = text.match_indices("commit").any(|(at, _)| {
+            !text[..at]
+                .chars()
+                .next_back()
+                .is_some_and(char::is_alphabetic)
+        });
+        as_word || translated.contains("提交") || translated.contains("コミット")
+    }
+
     /// What `english` holds that `translated` lost: a glossary word, a `/command`, a `--flag`, a `<name>`, a key.
     pub fn kept_in(english: &str, translated: &str) -> Vec<String> {
         let mut lost: Vec<String> = KEPT
             .iter()
-            .filter(|term| holds(english, term) && !holds(translated, term))
+            .filter(|term| holds(english, term) && !kept_as(translated, term))
             .map(|term| (*term).to_owned())
             .collect();
         let trim = |word: &'_ str| {

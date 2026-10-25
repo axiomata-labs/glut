@@ -262,11 +262,11 @@ fn open_kept(app: &mut App, id: &str) {
         return;
     }
     if app.others_open.iter().any(|open| open == id) {
-        return app.tell("its kept session is open in another pane — a new one starts");
+        return app.tell(tr!(kept_open_elsewhere));
     }
     match crate::store::Session::load(&app.parts.home, id) {
         Ok(session) if session.cwd == app.parts.config.cwd => app.open(session),
-        _ => app.tell("its kept session holds nothing or is gone — a new one starts"),
+        _ => app.tell(tr!(kept_gone)),
     }
 }
 
@@ -358,8 +358,7 @@ pub enum Request {
 /// What `/send` takes, when nothing is to be sent.
 pub fn parse_send(rest: &str) -> Result<Request, String> {
     let rest = rest.trim();
-    let empty =
-        || Err("/send <text> — or /send plan; a pane's number or name first picks it".to_owned());
+    let empty = || Err(tr!(send_usage).to_owned());
     match rest.split_once(char::is_whitespace) {
         Some((first, text)) if text.trim() == "plan" => Ok(Request::SendPlan {
             to: Some(first.to_owned()),
@@ -394,7 +393,7 @@ pub fn parse_background(rest: &str) -> Result<Request, String> {
             "here" => place = Place::Here,
             "as" => match words.next() {
                 Some(given) => role = Some(given.to_owned()),
-                None => return Err("/bg as <role>: a role's name (/role lists them)".to_owned()),
+                None => return Err(tr!(bg_as_usage).to_owned()),
             },
             "tree" => {
                 let branch = words.next_if(|next| !matches!(*next, "here" | "tree" | "as"));
@@ -402,9 +401,7 @@ pub fn parse_background(rest: &str) -> Result<Request, String> {
             }
             given if name.is_none() && is_name(given) => name = Some(given.to_owned()),
             other => {
-                return Err(format!(
-                    "/bg {other}: a name (letters, digits, dashes), as <role>, here or tree [branch]"
-                ));
+                return Err(tr!(bg_unknown, word = other));
             }
         }
     }
@@ -446,7 +443,7 @@ pub fn parse_split(rest: &str) -> Result<Request, String> {
             "here" => place = Place::Here,
             "as" => match words.next() {
                 Some(name) => role = Some(name.to_owned()),
-                None => return Err("/split as <role>: a role's name (/role lists them)".to_owned()),
+                None => return Err(tr!(split_as_usage).to_owned()),
             },
             "tree" => {
                 let branch =
@@ -454,14 +451,10 @@ pub fn parse_split(rest: &str) -> Result<Request, String> {
                 place = Place::Tree(branch.unwrap_or_default().to_owned());
             }
             "l" | "r" | "u" | "d" | "left" | "right" | "up" | "down" => {
-                return Err(format!(
-                    "/split {word}: a new pane goes into the grid beside the main one — no side to name"
-                ));
+                return Err(tr!(split_side, word = word));
             }
             other => {
-                return Err(format!(
-                    "/split {other}: resume; here or tree [branch]; as <role>"
-                ));
+                return Err(tr!(split_unknown, word = other));
             }
         }
     }
@@ -681,12 +674,21 @@ impl Panes {
         (playing.len() == 1).then(|| playing[0])
     }
 
-    /// How a pane is named to the owner and the models: "pane 2", or a background agent's name.
+    /// How a pane is named to the models, always English: "pane 2", or a background agent's name.
     fn label(&self, at: usize) -> String {
         let pane = &self.list[at];
         match (&pane.name, pane.background) {
             (Some(name), true) => name.clone(),
             _ => format!("pane {}", pane.number),
+        }
+    }
+
+    /// How a pane is named to the owner, in the language read now: "Pane 2", or a background agent's name.
+    fn shown_label(&self, at: usize) -> String {
+        let pane = &self.list[at];
+        match (&pane.name, pane.background) {
+            (Some(name), true) => name.clone(),
+            _ => tr!(pane_named, n = pane.number),
         }
     }
 
@@ -975,7 +977,7 @@ impl Panes {
             }
             match request {
                 Request::Toggle if !self.split() => {
-                    self.active().say("one pane — /split splits the window");
+                    self.active().say(tr!(one_pane_split));
                 }
                 Request::Toggle => {
                     // Round the panes on the screen in reading order; background agents are not on it.
@@ -1029,9 +1031,9 @@ impl Panes {
                 Request::SwitchNow(folder) => self.switch_to = Some(folder),
                 Request::Peek(Some(name)) => match self.resolve_background(&name) {
                     Some(at) => self.peek = Some(self.list[at].id),
-                    _ => self.active().tell(format!(
-                        "no background agent {} — /peek <name>",
-                        crate::transcript::clean(&name)
+                    _ => self.active().tell(tr!(
+                        no_background_peek,
+                        name = crate::transcript::clean(&name)
                     )),
                 },
             }
@@ -1054,7 +1056,7 @@ impl Panes {
         };
         let working: Vec<String> = (0..self.list.len())
             .filter(|other| *other != at && self.list[*other].app.working())
-            .map(|other| self.label(other))
+            .map(|other| self.shown_label(other))
             .collect();
         let armed = self.quit_armed.is_some_and(|since| since.elapsed() < ARMED);
         if working.is_empty() || armed {
@@ -1063,10 +1065,7 @@ impl Panes {
         self.quit_armed = Some(Instant::now());
         let app = &mut self.list[at].app;
         app.quit = false;
-        app.tell(format!(
-            "{} still works — /quit again ends it too",
-            listed(&working)
-        ));
+        app.tell(tr!(still_works_quit, who = listed(&working)));
         false
     }
 
@@ -1074,11 +1073,11 @@ impl Panes {
     /// key typed before the question showed answering it — and every turn and agent stops as at a `/quit`, kept.
     fn switch(&mut self, folder: std::path::PathBuf) {
         if folder == self.cwd {
-            return self.active().tell("that is this project already");
+            return self.active().tell(tr!(project_same));
         }
         let working: Vec<String> = (0..self.list.len())
             .filter(|at| self.list[*at].app.working())
-            .map(|at| self.label(at))
+            .map(|at| self.shown_label(at))
             .collect();
         if working.is_empty() {
             self.switch_to = Some(folder);
@@ -1089,26 +1088,28 @@ impl Panes {
             |name| name.to_string_lossy().into_owned(),
         ));
         let items = vec![
-            crate::picker::Item::plain("no, stay", "Glut goes on here", crate::picker::Pick::Shown),
             crate::picker::Item::plain(
-                format!("yes: stop and go to {name}"),
-                "each turn and agent stops as at /quit — the sessions and this window's panes kept",
+                tr!(switch_no),
+                tr!(switch_no_detail),
+                crate::picker::Pick::Shown,
+            ),
+            crate::picker::Item::plain(
+                tr!(switch_yes, name = name),
+                tr!(switch_yes_detail),
                 crate::picker::Pick::Pane(Request::SwitchNow(folder)),
             ),
         ];
-        let question = format!("{} still works — stop and switch?", listed(&working));
+        let question = tr!(switch_question, who = listed(&working));
         self.active().picker = Some(crate::picker::Picker::new(question, items, None).guarded());
     }
 
     /// Closes the active pane; a turn under way is stopped — said once first. The last pane is not closed.
     fn close(&mut self) {
         if !self.split() {
-            return self.active().tell("the last pane — /quit ends Glut");
+            return self.active().tell(tr!(last_pane_quit));
         }
         if self.list[self.active].id == self.grid.main {
-            return self
-                .active()
-                .tell("the main pane stays — /swap <n> puts another in its place first");
+            return self.active().tell(tr!(main_pane_stays));
         }
         let number = self.list[self.active].number;
         let armed = self
@@ -1116,18 +1117,14 @@ impl Panes {
             .is_some_and(|(armed, since)| armed == number && since.elapsed() < ARMED);
         if self.active().working() && !armed {
             self.close_armed = Some((number, Instant::now()));
-            return self
-                .active()
-                .tell("this pane works — /close again stops it and closes the pane");
+            return self.active().tell(tr!(close_working));
         }
         self.close_armed = None;
         if let Some(tree) = self.list[self.active].tree.clone() {
             // Git goes over the worktree only once nothing writes there any more.
             if self.active().working() {
                 self.active().stop_turn();
-                return self
-                    .active()
-                    .tell("its turn is stopping — /close again once it has stopped, to say how the worktree ends");
+                return self.active().tell(tr!(close_stopping));
             }
             let picker = leaving_picker(&tree, crate::worktree::standing(&tree));
             self.active().picker = Some(picker);
@@ -1141,17 +1138,13 @@ impl Panes {
     fn leave(&mut self, leaving: Leaving) {
         // A `/swap` while the question was open may have made this pane the main one.
         if self.list[self.active].id == self.grid.main {
-            return self
-                .active()
-                .tell("the main pane stays — /swap <n> puts another in its place first");
+            return self.active().tell(tr!(main_pane_stays));
         }
         let Some(tree) = self.list[self.active].tree.clone() else {
             return self.remove_active();
         };
         if self.active().working() {
-            return self
-                .active()
-                .tell("this pane works again — /close once it is done");
+            return self.active().tell(tr!(close_works_again));
         }
         let standing = crate::worktree::standing(&tree);
         // What cannot be read is taken as work a discard would lose.
@@ -1159,10 +1152,10 @@ impl Panes {
             .as_ref()
             .map_or(true, |standing| standing.loses_work());
         let done = match leaving {
-            Leaving::Keep => Ok(format!(
-                "its worktree {} stays on {} — glut there goes on with /resume",
-                tree.place.display(),
-                tree.branch
+            Leaving::Keep => Ok(tr!(
+                worktree_kept,
+                place = tree.place.display(),
+                branch = tree.branch
             )),
             Leaving::TakeOver => crate::worktree::take_over(&tree),
             Leaving::Discard if loses_work => {
@@ -1171,7 +1164,7 @@ impl Panes {
                 return;
             }
             Leaving::Discard | Leaving::DiscardSure => crate::worktree::remove(&tree, true)
-                .map(|()| format!("{} and its worktree are gone", tree.branch)),
+                .map(|()| tr!(worktree_gone, branch = tree.branch)),
         };
         match done {
             Ok(said) => {
@@ -1204,11 +1197,12 @@ impl Panes {
         }
         // A worktree's session is found from its own folder; the leaving said where.
         let kept = match (stopped, &pane.tree) {
-            (true, _) => "its turn was stopped; the session is kept as it was before that turn",
-            (false, Some(_)) => "its session is kept",
-            (false, None) => "/resume finds its session",
+            (true, _) => tr!(closed_stopped),
+            (false, Some(_)) => tr!(closed_kept),
+            (false, None) => tr!(closed_resume),
         };
-        self.active().tell(format!("pane {number} closed — {kept}"));
+        self.active()
+            .tell(tr!(pane_closed, n = number, kept = kept));
     }
 
     /// Starts a new pane beside the active one: a session in the same folder, on the active pane's provider and
@@ -1227,38 +1221,31 @@ impl Panes {
         host: &Arc<dyn Host>,
     ) {
         if !self.may_split {
-            return self
-                .active()
-                .tell("this session's host keeps one pane: its studio splits its own windows");
+            return self.active().tell(tr!(host_one_pane));
         }
         if background.is_none() && self.visible() >= MOST {
-            return self.active().tell(format!(
-                "at most {MOST} panes — /bg starts one in the background"
-            ));
+            return self.active().tell(tr!(most_panes_bg, n = MOST));
         }
         if background.is_none() && !self.room_for_one_more() {
-            let narrower = if self.grid.share > SHARE {
-                "a narrower main pane (⌃X {), "
+            let said = if self.grid.share > SHARE {
+                tr!(no_room_narrower)
             } else {
-                ""
+                tr!(no_room)
             };
-            return self.active().tell(format!(
-                "no room for another pane beside the main one — {narrower}a wider window, or /bg starts it in the \
-                 background"
-            ));
+            return self.active().tell(said);
         }
         if self.building.is_some() {
-            return self.active().tell("a pane is starting already");
+            return self.active().tell(tr!(pane_starting));
         }
         // A role named wrong ends the split here, rather than open a pane with every tool.
         if let Some(role) = &role
             && self.active().parts.config.agents.get(role).is_none()
         {
             let known = self.active().parts.config.agents.known();
-            return self.active().transcript.note(
-                format!("no role {role}: {known} (/role lists them)"),
-                Tone::Fault,
-            );
+            return self
+                .active()
+                .transcript
+                .note(tr!(no_role, name = role, known = known), Tone::Fault);
         }
         let number = (1..=u8::MAX)
             .find(|number| self.list.iter().all(|pane| pane.number != *number))
@@ -1272,7 +1259,8 @@ impl Panes {
             (Place::Kept(tree), _) => Some(tree),
             (Place::Here, _) | (Place::Ask, Ok(None)) => None,
             (Place::Ask, Err(reason)) => {
-                self.active().tell(format!("no worktree offered: {reason}"));
+                self.active()
+                    .tell(tr!(no_worktree_offered, reason = reason));
                 None
             }
             // A background agent works here unless told `tree`: it has no pane to ask in.
@@ -1286,9 +1274,7 @@ impl Panes {
                 return self.active().transcript.note(reason, Tone::Fault);
             }
             (Place::Tree(_), Ok(None)) => {
-                return self
-                    .active()
-                    .tell("this folder is in no git repository: /split here");
+                return self.active().tell(tr!(no_repository));
             }
             (Place::Tree(branch), Ok(Some(repo))) => {
                 let branch = if branch.is_empty() {
@@ -1349,20 +1335,24 @@ impl Panes {
                 // for a kept pane (TUI9e) holds its work: it stays.
                 let gone = match &building.tree {
                     Some(tree) if building.restore.is_some() => {
-                        format!("; its worktree stays at {}", tree.place.display())
+                        Some(tr!(worktree_stays, place = tree.place.display()))
                     }
                     Some(tree) => match crate::worktree::remove(tree, true) {
-                        Ok(()) => format!("; its worktree {} is gone again", tree.branch),
-                        Err(left) => {
-                            format!("; its worktree stays at {} ({left})", tree.place.display())
-                        }
+                        Ok(()) => Some(tr!(worktree_gone_again, branch = tree.branch)),
+                        Err(left) => Some(tr!(
+                            worktree_stays_why,
+                            place = tree.place.display(),
+                            reason = left
+                        )),
                     },
-                    None => String::new(),
+                    None => None,
                 };
-                return self.active().transcript.note(
-                    format!("pane {} could not start: {reason}{gone}", building.number),
-                    Tone::Fault,
-                );
+                let failed = tr!(pane_not_started, n = building.number, reason = reason);
+                let said = match gone {
+                    Some(gone) => tr!(clause_join, first = failed, second = gone),
+                    None => failed,
+                };
+                return self.active().transcript.note(said, Tone::Fault);
             }
         };
         let mut app = App::new(Arc::new(parts), engine, building.reports);
@@ -1395,9 +1385,7 @@ impl Panes {
                 tree: building.tree,
             });
             self.reorder();
-            return self.active().tell(format!(
-                "{name} waits in the background — /send {name} …, /peek {name}, /show {name}"
-            ));
+            return self.active().tell(tr!(background_waits, name = name));
         }
         // Panes leave little room beside them: the side panel starts hidden (⌃B brings it, where there is room).
         app.panel = Some(false);
@@ -1422,8 +1410,7 @@ impl Panes {
             // The keys stay where they were, wherever that pane stands now.
             self.active = self.at(active_id);
             let number = building.number;
-            self.active()
-                .tell(format!("pane {number} is ready — ⌃P goes there"));
+            self.active().tell(tr!(pane_ready, n = number));
         } else {
             self.focus(at);
         }
@@ -1439,20 +1426,20 @@ impl Panes {
         };
         let Some(target) = target else {
             let said = match (&to, self.list.len()) {
-                (_, 1) => "one pane — /split or /bg first".to_owned(),
-                (Some(word), _) => format!("no pane or agent {}", crate::transcript::clean(word)),
-                (None, _) => "which one? /send <number or name> …".to_owned(),
+                (_, 1) => tr!(one_pane_send).to_owned(),
+                (Some(word), _) => tr!(no_pane_or_agent, name = crate::transcript::clean(word)),
+                (None, _) => tr!(send_which).to_owned(),
             };
             return self.active().tell(said);
         };
         let number = self.list[target].number;
-        let label = self.label(target);
+        let label = self.shown_label(target);
         let plan = text.is_none();
         let text = match text {
             Some(text) => text,
             None => match self.active().plan_to_build() {
                 Some(plan) => plan,
-                None => return self.active().tell("no plan yet: plan mode (⇧⇥) makes one"),
+                None => return self.active().tell(tr!(no_plan_send)),
             },
         };
         // A plan was written by a model: the owner hands it over, the words stay the planner's.
@@ -1470,14 +1457,12 @@ impl Panes {
         }
         use crate::app::Delivered;
         let when = match delivered {
-            Delivered::Now => "it starts on it now",
-            Delivered::AfterTurn => "it takes it after its turn",
-            Delivered::WhenFree => "it takes it once it is free",
-            Delivered::OnEnter => {
-                "it waits there for Enter (a list was open or messages were waiting)"
-            }
+            Delivered::Now => tr!(sent_now),
+            Delivered::AfterTurn => tr!(sent_after_turn),
+            Delivered::WhenFree => tr!(sent_when_free),
+            Delivered::OnEnter => tr!(sent_on_enter),
         };
-        self.active().tell(format!("sent to {label} — {when}"));
+        self.active().tell(tr!(sent_to, label = label, when = when));
     }
 
     /// At the end (TUI9e): a window of several panes or with agents in the background keeps how it stood for the
@@ -1543,13 +1528,13 @@ impl Panes {
                 crate::picker::Pick::Pane(Request::Restore),
             ),
             crate::picker::Item::plain(
-                "no, one pane",
-                "the layout goes if this window ends with one pane",
+                tr!(layout_no),
+                tr!(layout_no_detail),
                 crate::picker::Pick::Shown,
             ),
         ];
         self.active().picker =
-            Some(crate::picker::Picker::new("The last layout again?", items, None).guarded());
+            Some(crate::picker::Picker::new(tr!(layout_question), items, None).guarded());
     }
 
     /// The kept layout back: the first pane goes on with the first kept session, the others are built one by one
@@ -1557,18 +1542,14 @@ impl Panes {
     fn restore(&mut self) {
         let home = self.list[0].app.parts.home.clone();
         let Some(layout) = crate::layout::load(&home, &self.cwd) else {
-            return self.active().tell("no layout kept for this folder");
+            return self.active().tell(tr!(no_layout));
         };
         if self.list.len() > 1 || self.building.is_some() || self.restoring.is_some() {
-            return self
-                .active()
-                .tell("the layout comes back only into a window of one pane");
+            return self.active().tell(tr!(layout_one_pane_only));
         }
         // Another session opened under a running turn would take its answer.
         if self.active().working() {
-            return self.active().tell(
-                "the layout comes back once Glut is done — /resume then, or start glut -c again",
-            );
+            return self.active().tell(tr!(layout_waits));
         }
         let first = layout.panes[0].clone();
         open_kept(self.active(), &first.session);
@@ -1606,7 +1587,7 @@ impl Panes {
             Some(branch) => {
                 let home = self.active().parts.home.clone();
                 let found = crate::worktree::repo_of(&self.cwd).and_then(|repo| {
-                    repo.ok_or_else(|| "this folder is in no git repository any more".to_owned())
+                    repo.ok_or_else(|| tr!(no_repository_now).to_owned())
                         .and_then(|repo| {
                             crate::worktree::reopen(&home, &repo, branch, kept.into.clone())
                         })
@@ -1615,7 +1596,7 @@ impl Panes {
                     Ok(tree) => Place::Kept(tree),
                     Err(reason) => {
                         self.active().transcript.note(
-                            format!("a kept pane on {branch} stays away: {reason}"),
+                            tr!(kept_pane_away, branch = branch, reason = reason),
                             Tone::Fault,
                         );
                         return;
@@ -1672,11 +1653,9 @@ impl Panes {
                 };
                 self.reorder();
                 self.active = self.at(keys);
-                self.active().tell("the last layout is back");
+                self.active().tell(tr!(layout_back));
             }
-            None => self
-                .active()
-                .tell("the last layout is back but for the panes that could not start"),
+            None => self.active().tell(tr!(layout_back_partly)),
         }
     }
 
@@ -1721,20 +1700,16 @@ impl Panes {
     /// `/show <name>`: a background agent brought forward as a pane, the last in the grid.
     fn show(&mut self, name: &str) {
         let Some(at) = self.resolve_background(name) else {
-            return self.active().tell(format!(
-                "no background agent {} — ⌃X A lists them",
-                crate::transcript::clean(name)
+            return self.active().tell(tr!(
+                no_background_agent,
+                name = crate::transcript::clean(name)
             ));
         };
         if self.visible() >= MOST {
-            return self
-                .active()
-                .tell(format!("at most {MOST} panes: /hide or /close one first"));
+            return self.active().tell(tr!(most_panes_hide, n = MOST));
         }
         if !self.room_for_one_more() {
-            return self
-                .active()
-                .tell("no room for another pane beside the main one: a wider window, or /hide or /close one first");
+            return self.active().tell(tr!(no_room_show));
         }
         let id = self.list[at].id;
         // Panes leave little room beside them: the side panel goes, as when a pane is split off.
@@ -1751,16 +1726,14 @@ impl Panes {
     /// first, where how its worktree ends is asked.
     fn end_background(&mut self, name: &str) {
         let Some(at) = self.resolve_background(name) else {
-            return self.active().tell(format!(
-                "no background agent {} — ⌃X A lists them",
-                crate::transcript::clean(name)
+            return self.active().tell(tr!(
+                no_background_agent,
+                name = crate::transcript::clean(name)
             ));
         };
-        let label = self.label(at);
+        let label = self.shown_label(at);
         if self.list[at].tree.is_some() {
-            return self.active().tell(format!(
-                "{label} works in a worktree: /show {label}, then /close there asks how it ends"
-            ));
+            return self.active().tell(tr!(agent_in_worktree, name = label));
         }
         let keys = self.list[self.active].id;
         let mut pane = self.list.remove(at);
@@ -1771,24 +1744,21 @@ impl Panes {
         }
         self.active = self.at(keys);
         let kept = if stopped {
-            "its turn was stopped; the session is kept as it was before that turn"
+            tr!(closed_stopped)
         } else {
-            "/resume finds its session"
+            tr!(closed_resume)
         };
-        self.active().tell(format!("{label} ended — {kept}"));
+        self.active()
+            .tell(tr!(agent_ended, name = label, kept = kept));
     }
 
     /// `/hide`: the active pane goes to the background with its memory; it keeps a name to be reached by.
     fn hide(&mut self) {
         if self.visible() <= 1 {
-            return self
-                .active()
-                .tell("the last pane stays: /bg starts an agent in the background");
+            return self.active().tell(tr!(last_pane_stays));
         }
         if self.list[self.active].id == self.grid.main {
-            return self
-                .active()
-                .tell("the main pane stays — /swap <n> puts another in its place first");
+            return self.active().tell(tr!(main_pane_stays));
         }
         let at = self.active;
         let number = self.list[at].number;
@@ -1827,16 +1797,14 @@ impl Panes {
             .map(|other| self.list[other].id)
             .unwrap_or(id);
         self.reorder();
-        let label = self.label(self.at(id));
+        let label = self.shown_label(self.at(id));
         self.focus(self.at(next));
         // Alone again: the side panel comes back as the owner keeps it.
         if !self.split() {
             let home = self.active().parts.home.clone();
             self.active().panel = crate::prefs::Prefs::load(&home).panel;
         }
-        self.active().tell(format!(
-            "{label} works on in the background — /send {label} …, /peek {label}, /show {label}"
-        ));
+        self.active().tell(tr!(hidden_works_on, name = label));
     }
 
     /// Moves the keys to pane `at`; what it asks counts as shown from now.
@@ -1857,7 +1825,7 @@ impl Panes {
     /// other one; the keys stay with the pane that has them.
     fn swap(&mut self, with: Option<String>) {
         if !self.split() {
-            return self.active().tell("one pane — /split first");
+            return self.active().tell(tr!(one_pane_swap));
         }
         let main = self.grid.main;
         let target = match &with {
@@ -1866,18 +1834,17 @@ impl Panes {
                 .filter(|at| !self.list[*at].background),
             None if self.list[self.active].id != main => Some(self.active),
             None if self.grid.others.len() == 1 => Some(self.at(self.grid.others[0])),
-            None => return self.active().tell("which one? /swap <number>"),
+            None => return self.active().tell(tr!(swap_which)),
         };
         let Some(target) = target else {
             let word = with.as_deref().unwrap_or_default();
-            return self.active().tell(format!(
-                "no pane {} on the screen",
-                crate::transcript::clean(word)
-            ));
+            return self
+                .active()
+                .tell(tr!(no_pane_shown, name = crate::transcript::clean(word)));
         };
         let id = self.list[target].id;
         if id == main {
-            return self.active().tell("that is the main pane already");
+            return self.active().tell(tr!(main_already));
         }
         let keys = self.list[self.active].id;
         self.grid.swap(id);
@@ -1886,8 +1853,7 @@ impl Panes {
         self.reorder();
         self.active = self.at(keys);
         let number = self.list[self.at(id)].number;
-        self.active()
-            .tell(format!("pane {number} is the main pane now"));
+        self.active().tell(tr!(main_now, n = number));
     }
 
     /// `⌃X }` / `⌃X {`: the main pane wider or narrower by `by` percent, within its bounds.
@@ -2044,8 +2010,8 @@ fn where_picker(
     let role_words = role.map_or(String::new(), |role| format!(" as {role}"));
     let items = vec![
         Item::plain(
-            "this folder",
-            "both panes change the same files",
+            tr!(where_here),
+            tr!(where_here_detail),
             Pick::Pane(Request::Split {
                 resume,
                 place: Place::Here,
@@ -2053,12 +2019,12 @@ fn where_picker(
             }),
         ),
         Item::plain(
-            "a new worktree",
-            format!("on the branch {branch} — ⏎ puts it in the input to rename first"),
+            tr!(where_tree),
+            tr!(where_tree_detail, branch = branch),
             Pick::Input(format!("/split{resume_word}{role_words} tree {branch}")),
         ),
     ];
-    Picker::new(format!("Pane {number}: where does it work?"), items, None).guarded()
+    Picker::new(tr!(where_title, n = number), items, None).guarded()
 }
 
 /// One more agent in the background than [`BACKGROUND_ASKED`] (T36f): asked once a window, no the default.
@@ -2070,10 +2036,10 @@ fn more_picker(
 ) -> crate::picker::Picker {
     use crate::picker::{Item, Pick, Picker};
     let items = vec![
-        Item::plain("no", "no agent starts", Pick::Shown),
+        Item::plain(tr!(no), tr!(more_no_detail), Pick::Shown),
         Item::plain(
-            "yes, start it",
-            "each agent's turns cost on their own — Glut asks no more in this window",
+            tr!(more_yes),
+            tr!(more_yes_detail),
             Pick::Pane(Request::Background {
                 name,
                 role,
@@ -2082,12 +2048,7 @@ fn more_picker(
             }),
         ),
     ];
-    Picker::new(
-        format!("{count} agents in the background at once?"),
-        items,
-        None,
-    )
-    .guarded()
+    Picker::new(tr!(more_title, n = count), items, None).guarded()
 }
 
 /// The tab under `column` on a line of tabs drawn as [`tab_spots`] lays them out.
@@ -2129,30 +2090,32 @@ fn leaving_picker(
     use crate::picker::{Item, Pick, Picker};
     let held = match &standing {
         Ok(standing) => standing.said(),
-        Err(_) => "what it holds cannot be read".to_owned(),
+        Err(_) => tr!(holds_unreadable).to_owned(),
     };
-    let into = tree
-        .into
-        .as_deref()
-        .unwrap_or("no branch: merge it by hand");
+    let into = tree.into.as_deref().unwrap_or(tr!(no_branch_merge));
     let items = vec![
         Item::plain(
-            "keep",
-            format!("the worktree and {} stay ({held})", tree.branch),
+            tr!(leave_keep),
+            tr!(leave_keep_detail, branch = tree.branch, held = held),
             Pick::Pane(Request::CloseAs(Leaving::Keep)),
         ),
         Item::plain(
-            "take over",
-            format!("merge {} ({held}) into {into}", tree.branch),
+            tr!(leave_take_over),
+            tr!(
+                leave_take_over_detail,
+                branch = tree.branch,
+                held = held,
+                into = into
+            ),
             Pick::Pane(Request::CloseAs(Leaving::TakeOver)),
         ),
         Item::plain(
-            "discard",
-            format!("remove the worktree and {} ({held})", tree.branch),
+            tr!(leave_discard),
+            tr!(leave_discard_detail, branch = tree.branch, held = held),
             Pick::Pane(Request::CloseAs(Leaving::Discard)),
         ),
     ];
-    Picker::new("Closing this worktree's pane", items, None).guarded()
+    Picker::new(tr!(leave_title), items, None).guarded()
 }
 
 /// The second question before work goes.
@@ -2162,17 +2125,17 @@ fn discard_picker(
 ) -> crate::picker::Picker {
     use crate::picker::{Item, Pick, Picker};
     let items = vec![
-        Item::plain("no", "keep it — the pane stays open", Pick::Shown),
+        Item::plain(tr!(no), tr!(discard_no_detail), Pick::Shown),
         Item::plain(
-            "yes, discard",
+            tr!(discard_yes),
             match standing {
-                Ok(standing) => format!("{} is lost: {}", tree.branch, standing.said()),
-                Err(reason) => format!("{} goes, whatever it holds ({reason})", tree.branch),
+                Ok(standing) => tr!(discard_lost, branch = tree.branch, held = standing.said()),
+                Err(reason) => tr!(discard_whatever, branch = tree.branch, reason = reason),
             },
             Pick::Pane(Request::CloseAs(Leaving::DiscardSure)),
         ),
     ];
-    Picker::new(format!("Discard {}?", tree.branch), items, None).guarded()
+    Picker::new(tr!(discard_title, branch = tree.branch), items, None).guarded()
 }
 
 /// The new pane's session: the owner's, in the active pane's folder, on its provider and model, with the first
@@ -2217,7 +2180,9 @@ fn numbers(numbers: &[u8]) -> String {
 /// Words read as a list: "a", "a and b", "a, b and c".
 fn listed(words: &[String]) -> String {
     match words.split_last() {
-        Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
+        Some((last, rest)) if !rest.is_empty() => {
+            tr!(list_and, rest = rest.join(tr!(list_comma)), last = last)
+        }
         _ => words.join(""),
     }
 }

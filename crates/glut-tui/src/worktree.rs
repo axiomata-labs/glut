@@ -139,21 +139,17 @@ impl Standing {
 
     /// `3 commits, 2 uncommitted files` — or `nothing new`.
     pub fn said(self) -> String {
-        let plural = |count: usize, one: &str, many: &str| {
-            if count == 1 {
-                format!("1 {one}")
-            } else {
-                format!("{count} {many}")
-            }
-        };
+        let texts = crate::texts::t();
+        let commits = |count: usize| texts.commits_count.of(count as u64);
+        let files = |count: usize| texts.uncommitted_count.of(count as u64);
         match (self.ahead, self.uncommitted) {
-            (0, 0) => "nothing new".to_owned(),
-            (ahead, 0) => plural(ahead, "commit", "commits"),
-            (0, files) => plural(files, "uncommitted file", "uncommitted files"),
-            (ahead, files) => format!(
-                "{}, {}",
-                plural(ahead, "commit", "commits"),
-                plural(files, "uncommitted file", "uncommitted files")
+            (0, 0) => tr!(nothing_new).to_owned(),
+            (ahead, 0) => commits(ahead),
+            (0, uncommitted) => files(uncommitted),
+            (ahead, uncommitted) => tr!(
+                two_counts,
+                first = commits(ahead),
+                second = files(uncommitted)
             ),
         }
     }
@@ -258,7 +254,7 @@ fn run(mut command: Command, limit: Duration) -> Result<String, String> {
         // A group of its own: ending it ends what it started too.
         .process_group(0)
         .spawn()
-        .map_err(|err| format!("git cannot run: {err}"))?;
+        .map_err(|err| tr!(git_cannot_run, reason = err))?;
     let read = |pipe: Option<Box<dyn std::io::Read + Send>>| {
         let (sent, got) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
@@ -281,10 +277,7 @@ fn run(mut command: Command, limit: Duration) -> Result<String, String> {
             Ok(None) if started.elapsed() < limit => std::thread::sleep(Duration::from_millis(10)),
             _ => {
                 end_group(&mut child);
-                return Err(format!(
-                    "git took over {} s and was ended — a .lock file in the repository's .git may be left",
-                    limit.as_secs()
-                ));
+                return Err(tr!(git_too_long, secs = limit.as_secs()));
             }
         }
     };
@@ -292,7 +285,7 @@ fn run(mut command: Command, limit: Duration) -> Result<String, String> {
     let out = out.recv_timeout(GRACE).unwrap_or_default();
     let err = err.recv_timeout(GRACE).unwrap_or_default();
     if out.len() as u64 > MOST_OUTPUT {
-        return Err("git said more than Glut reads".to_owned());
+        return Err(tr!(git_too_much).to_owned());
     }
     if status.success() {
         return Ok(String::from_utf8_lossy(&out).trim().to_owned());
@@ -338,9 +331,9 @@ pub fn repo_of(cwd: &Path) -> Result<Option<Repo>, String> {
     };
     let common = PathBuf::from(common);
     let odd = || {
-        format!(
-            "{} is no plain git folder: worktrees are made of plain repositories only",
-            crate::transcript::clean(&common.display().to_string())
+        tr!(
+            no_plain_git,
+            folder = crate::transcript::clean(&common.display().to_string())
         )
     };
     let kind = std::fs::symlink_metadata(&common).map_err(|_| odd())?;
@@ -360,10 +353,7 @@ pub fn repo_of(cwd: &Path) -> Result<Option<Repo>, String> {
     .ok()
     .and_then(|path| PathBuf::from(path).canonicalize().ok());
     if here.as_deref() != Some(top.as_path()) {
-        return Err(
-            "this is a worktree, not the repository's own folder: worktrees are made from there"
-                .into(),
-        );
+        return Err(tr!(is_worktree).into());
     }
     let repo = Repo {
         top,
@@ -470,10 +460,7 @@ fn plain_branch(repo: &Repo, branch: &str) -> Result<(), String> {
         )
         .is_err()
     {
-        return Err(format!(
-            "{} is no branch name Glut takes: plain letters, digits and - _ . /",
-            crate::transcript::clean(branch)
-        ));
+        return Err(tr!(bad_branch, branch = crate::transcript::clean(branch)));
     }
     Ok(())
 }
@@ -494,7 +481,7 @@ pub fn add(home: &Path, repo: &Repo, branch: &str) -> Result<Tree, String> {
     let dir = home.join(DIR);
     let place = dir.join(format!("{name}-{}", branch.replace('/', "-")));
     if place.exists() {
-        return Err(format!("{} is there already", place.display()));
+        return Err(tr!(there_already, place = place.display()));
     }
     {
         use std::os::unix::fs::DirBuilderExt as _;
@@ -527,10 +514,7 @@ pub fn add(home: &Path, repo: &Repo, branch: &str) -> Result<Tree, String> {
             &["worktree", "remove", "--force", "--", &place_text],
         );
         let _ = git(&repo.pin(), &["branch", "-D", branch]);
-        return Err(
-            "the worktree was made but its git folder is not where it belongs — it is gone again"
-                .into(),
-        );
+        return Err(tr!(worktree_misplaced).into());
     };
     Ok(Tree {
         place,
@@ -570,17 +554,14 @@ pub fn reopen(
         .join(format!("{name}-{}", branch.replace('/', "-")));
     let place = place
         .canonicalize()
-        .map_err(|_| format!("the worktree of {branch} is gone ({})", place.display()))?;
+        .map_err(|_| tr!(worktree_of_gone, branch = branch, place = place.display()))?;
     // Where Glut keeps worktrees, a link at the place not followed out of it.
     let root = home
         .join(DIR)
         .canonicalize()
         .map_err(|err| err.to_string())?;
     if !place.starts_with(&root) {
-        return Err(format!(
-            "{} is not where Glut keeps worktrees",
-            place.display()
-        ));
+        return Err(tr!(not_glut_place, place = place.display()));
     }
     let dot_git = place.join(".git");
     let listed = std::fs::read_dir(repo.common.join("worktrees"))
@@ -597,10 +578,10 @@ pub fn reopen(
         .and_then(|dir| dir.canonicalize().ok())
         .filter(|dir| dir.starts_with(repo.common.join("worktrees")));
     let Some(git_dir) = listed else {
-        return Err(format!(
-            "{} is no worktree of {} any more",
-            place.display(),
-            repo.top.display()
+        return Err(tr!(
+            no_worktree_of,
+            place = place.display(),
+            repo = repo.top.display()
         ));
     };
     let tree = Tree {
@@ -614,7 +595,7 @@ pub fn reopen(
     checked(&tree.pin())?;
     let on = git(&tree.pin(), &["symbolic-ref", "--quiet", "--short", "HEAD"]).unwrap_or_default();
     if on != branch {
-        return Err(format!("the worktree of {branch} is on another branch now"));
+        return Err(tr!(worktree_other_branch, branch = branch));
     }
     Ok(tree)
 }
@@ -644,7 +625,7 @@ pub fn standing(tree: &Tree) -> Result<Standing, String> {
         ],
     )?
     .parse::<usize>()
-    .map_err(|_| "git counted no number".to_owned())?;
+    .map_err(|_| tr!(git_no_number).to_owned())?;
     // Commits made on a detached head in the worktree are its work too.
     let detached = if tree.place.exists() {
         git(
@@ -657,7 +638,7 @@ pub fn standing(tree: &Tree) -> Result<Standing, String> {
             ],
         )?
         .parse::<usize>()
-        .map_err(|_| "git counted no number".to_owned())?
+        .map_err(|_| tr!(git_no_number).to_owned())?
     } else {
         0
     };
@@ -695,9 +676,10 @@ fn refuse_protected(branch: &str, found: &[String]) -> Result<(), String> {
         return Ok(());
     }
     let shown: Vec<&str> = found.iter().take(3).map(String::as_str).collect();
-    Err(format!(
-        "{branch} changes {} — files a model may not write in your folder; merge it by hand after a look",
-        shown.join(", ")
+    Err(tr!(
+        protected_changes,
+        branch = branch,
+        files = shown.join(", ")
     ))
 }
 
@@ -713,32 +695,22 @@ pub fn take_over(tree: &Tree) -> Result<String, String> {
     let repo = tree.repo.pin();
     checked(&repo)?;
     let Some(into) = &tree.into else {
-        return Err(
-            "the repository's folder was on no branch when the worktree was made — merge it by hand".into(),
-        );
+        return Err(tr!(repo_no_branch).into());
     };
     let now = git(&repo, &["symbolic-ref", "--quiet", "--short", "HEAD"]).unwrap_or_default();
     if &now != into {
-        let now = if now.is_empty() { "no branch" } else { &now };
-        return Err(format!(
-            "the repository's folder is on {now} now, not {into} — switch back first"
-        ));
+        let now = if now.is_empty() { tr!(no_branch) } else { &now };
+        return Err(tr!(repo_other_branch, now = now, into = into));
     }
     if standing(tree)?.uncommitted > 0 {
-        return Err(format!(
-            "{} has changes not committed — commit or discard them first",
-            tree.branch
-        ));
+        return Err(tr!(tree_uncommitted, branch = tree.branch));
     }
     if git(&repo, &["rev-parse", "--quiet", "--verify", "MERGE_HEAD"]).is_ok() {
-        return Err("the repository's folder is in the middle of a merge of its own".into());
+        return Err(tr!(repo_merging).into());
     }
     // Untracked files in the folder do not stop a merge that does not touch them; git says so when one would.
     if !git(&repo, &["status", "--porcelain", "--untracked-files=no"])?.is_empty() {
-        return Err(format!(
-            "{} has changes not committed — commit them first",
-            tree.repo.top.display()
-        ));
+        return Err(tr!(repo_uncommitted, folder = tree.repo.top.display()));
     }
     // Both sides pinned to what they are now: a ref moved by something still running changes nothing below.
     let head = git(
@@ -791,7 +763,7 @@ pub fn take_over(tree: &Tree) -> Result<String, String> {
     };
     if let Err(reason) = merged {
         take_back();
-        return Err(format!("the merge stopped, nothing changed: {reason}"));
+        return Err(tr!(merge_stopped, reason = reason));
     }
     let staged = match git(
         &repo,
@@ -808,9 +780,7 @@ pub fn take_over(tree: &Tree) -> Result<String, String> {
         Ok(staged) => staged,
         Err(reason) => {
             take_back();
-            return Err(format!(
-                "the merge could not be read, nothing changed: {reason}"
-            ));
+            return Err(tr!(merge_unreadable, reason = reason));
         }
     };
     if let Err(refused) = refuse_protected(&tree.branch, &protected_among(&staged)) {
@@ -819,15 +789,10 @@ pub fn take_over(tree: &Tree) -> Result<String, String> {
     }
     if let Err(reason) = git(&repo, &["commit", "--no-edit", "--no-verify"]) {
         take_back();
-        return Err(format!(
-            "the merge could not be committed, nothing changed: {reason}"
-        ));
+        return Err(tr!(merge_uncommitted, reason = reason));
     }
     remove(tree, false)?;
-    Ok(format!(
-        "{} merged into {into}; its worktree is gone",
-        tree.branch
-    ))
+    Ok(tr!(merged, branch = tree.branch, into = into))
 }
 
 /// Removes `tree`'s worktree and its branch; `force` also when that loses work (the owner said so twice). A worktree
@@ -842,17 +807,14 @@ pub fn remove(tree: &Tree, force: bool) -> Result<(), String> {
         match standing(tree) {
             Ok(standing) if !standing.loses_work() => {}
             Ok(standing) => {
-                return Err(format!(
-                    "{} holds {} — discard it to lose that",
-                    tree.branch,
-                    standing.said()
+                return Err(tr!(
+                    tree_holds,
+                    branch = tree.branch,
+                    held = standing.said()
                 ));
             }
             Err(reason) => {
-                return Err(format!(
-                    "what {} holds cannot be read: {reason}",
-                    tree.branch
-                ));
+                return Err(tr!(tree_unreadable, branch = tree.branch, reason = reason));
             }
         }
     }
@@ -865,7 +827,7 @@ pub fn remove(tree: &Tree, force: bool) -> Result<(), String> {
                 .is_some_and(|dir| dir.ends_with(DIR) && dir.is_dir())
         });
         if !ours {
-            return Err(format!("{} is no worktree of Glut's", tree.place.display()));
+            return Err(tr!(not_glut_worktree, place = tree.place.display()));
         }
         let place = tree.place.to_string_lossy().into_owned();
         let mut args = vec!["worktree", "remove"];

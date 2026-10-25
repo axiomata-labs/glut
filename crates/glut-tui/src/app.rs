@@ -903,7 +903,7 @@ impl App {
                             .take()
                             .flatten()
                             .unwrap_or_else(|| crate::plan::Plan {
-                                // The plan's text may go to another pane's model (`/send plan`): its note stays English.
+                                // The plan goes to another pane's model with `/send plan`: its note stays English.
                                 text: format!(
                                     "{}\n\n*{}*",
                                     request.target,
