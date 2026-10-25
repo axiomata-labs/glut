@@ -97,8 +97,15 @@ impl ServerEntry {
                         .map(|(key, value)| format!("env {key}={}", quoted(value))),
                 );
             }
-            ServerConfig::Http { url, headers } => {
+            ServerConfig::Http {
+                url,
+                headers,
+                oauth,
+            } => {
                 lines.push(url.clone());
+                if let Some(client) = oauth {
+                    lines.push(format!("oauth client {}", client.client_id));
+                }
                 lines.extend(
                     headers
                         .iter()
@@ -128,7 +135,23 @@ pub enum ServerConfig {
     Http {
         url: String,
         headers: BTreeMap<String, String>,
+        /// The client registered for it beforehand, where its authorization server registers none by itself (T56).
+        /// Left out of the JSON when there is none, so the approval of a server written before stays its own.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        oauth: Option<OAuthClient>,
     },
+}
+
+/// An OAuth client the owner registered with a server's authorization server (T56, `"oauth": {"clientId": …}`,
+/// Claude Code's shape): for a server whose authorization server takes no dynamic registration (GitHub's). Its
+/// secret, where it has one, waits in the secret store, never in the file.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OAuthClient {
+    pub client_id: String,
+    /// The port the redirect comes back to, where the client was registered with one; any free port otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub callback_port: Option<u16>,
 }
 
 impl ServerConfig {
@@ -148,7 +171,7 @@ impl ServerConfig {
         }
         match raw.kind.as_deref().unwrap_or(STDIO) {
             STDIO => {
-                if raw.url.is_some() || !raw.headers.is_empty() {
+                if raw.url.is_some() || !raw.headers.is_empty() || raw.oauth.is_some() {
                     return Err(format!(
                         "{at}: the server {name:?} is stdio but has a url or headers"
                     ));
@@ -164,6 +187,15 @@ impl ServerConfig {
                 })
             }
             HTTP => {
+                if raw
+                    .oauth
+                    .as_ref()
+                    .is_some_and(|client| client.client_id.trim().is_empty())
+                {
+                    return Err(format!(
+                        "{at}: the http server {name:?} names an oauth client without its clientId"
+                    ));
+                }
                 if raw.command.is_some() || !raw.args.is_empty() || !raw.env.is_empty() {
                     return Err(format!(
                         "{at}: the http server {name:?} has a command, args or env"
@@ -182,6 +214,7 @@ impl ServerConfig {
                 Ok(ServerConfig::Http {
                     url,
                     headers: raw.headers,
+                    oauth: raw.oauth,
                 })
             }
             other => Err(format!(
@@ -217,6 +250,8 @@ struct Raw {
     url: Option<String>,
     #[serde(default)]
     headers: BTreeMap<String, String>,
+    #[serde(default)]
+    oauth: Option<OAuthClient>,
 }
 
 /// Whether `name` is a server name (M1): `[a-zA-Z0-9_-]{1,32}`, short enough to head a tool name the model API
@@ -360,11 +395,23 @@ fn read(path: &Path, origin: Origin) -> Result<Vec<ServerEntry>, HarnessError> {
         path: path.display().to_string(),
         reason,
     };
+    let Some(text) = read_text(path)? else {
+        // No file says nothing: a project without servers, an owner who configured none.
+        return Ok(Vec::new());
+    };
+    parse(&text, &path.display().to_string(), origin).map_err(fail)
+}
+
+/// One file's text, `None` when there is none.
+fn read_text(path: &Path) -> Result<Option<String>, HarnessError> {
+    let fail = |reason: String| HarnessError::Settings {
+        path: path.display().to_string(),
+        reason,
+    };
     use std::io::Read as _;
     let file = match std::fs::File::open(path) {
         Ok(file) => file,
-        // No file says nothing: a project without servers, an owner who configured none.
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(fail(err.to_string())),
     };
     // Opened once and checked on the open file: a FIFO or a file swapped in between is not read.
@@ -382,17 +429,21 @@ fn read(path: &Path, origin: Origin) -> Result<Vec<ServerEntry>, HarnessError> {
     if text.len() as u64 > MAX_CONFIG_BYTES {
         return Err(fail(format!("larger than {MAX_CONFIG_BYTES} bytes")));
     }
-    let file: File = serde_json::from_str(&text).map_err(|err| fail(err.to_string()))?;
-    let at = path.display().to_string();
+    Ok(Some(text))
+}
+
+/// A file's text checked and turned into its servers; `at` names it in a refusal.
+fn parse(text: &str, at: &str, origin: Origin) -> Result<Vec<ServerEntry>, String> {
+    let file: File = serde_json::from_str(text).map_err(|err| err.to_string())?;
     file.servers
         .into_iter()
         .map(|(name, raw)| {
             if !valid_name(&name) {
-                return Err(fail(format!(
+                return Err(format!(
                     "{name:?} is no server name: [a-zA-Z0-9_-], up to {MAX_NAME_CHARS} characters"
-                )));
+                ));
             }
-            let config = ServerConfig::from_raw(raw, &at, &name, origin).map_err(fail)?;
+            let config = ServerConfig::from_raw(raw, at, &name, origin)?;
             Ok(ServerEntry {
                 name,
                 origin,
@@ -400,6 +451,121 @@ fn read(path: &Path, origin: Origin) -> Result<Vec<ServerEntry>, HarnessError> {
             })
         })
         .collect()
+}
+
+/// A server to add to the owner's file (T56, `/mcp add`, `glut mcp add`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Adding {
+    /// Reached over Streamable HTTP at this URL.
+    Http(String),
+    /// Started as this command line.
+    Stdio { command: String, args: Vec<String> },
+}
+
+/// Adds the server `name` to the owner's `~/.glut/mcp.json` — never a project's — and hands back its entry, checked
+/// as a run checks it. The rest of the file stays as it was written (`${…}` and all); a name it holds already is
+/// refused, not replaced.
+///
+/// # Errors
+///
+/// [`HarnessError::Settings`] for a name that is no name or is taken, a server the checks refuse (an http URL to
+/// another machine), a file that cannot be read or is a link, or one that cannot be written.
+pub fn add(home: &Path, name: &str, adding: Adding) -> Result<ServerEntry, HarnessError> {
+    let path = home.join(OWNER_FILE);
+    let fail = |reason: String| HarnessError::Settings {
+        path: path.display().to_string(),
+        reason,
+    };
+    if !valid_name(name) {
+        return Err(fail(format!(
+            "{name:?} is no server name: [a-zA-Z0-9_-], up to {MAX_NAME_CHARS} characters"
+        )));
+    }
+    let mut file = owner_json(&path)?;
+    let servers = servers_of(&mut file).map_err(fail)?;
+    if servers.contains_key(name) {
+        return Err(fail(format!(
+            "it holds a server {name:?} already; remove it first"
+        )));
+    }
+    let server = match adding {
+        Adding::Http(url) => serde_json::json!({"type": HTTP, "url": url}),
+        Adding::Stdio { command, args } => serde_json::json!({"command": command, "args": args}),
+    };
+    servers.insert(name.to_owned(), server);
+    let entries = write_owner(&path, &file)?;
+    entries
+        .into_iter()
+        .find(|entry| entry.name == name)
+        .ok_or_else(|| fail(format!("{name:?} was not written")))
+}
+
+/// Takes the server `name` out of the owner's `~/.glut/mcp.json`; `false`: it holds none of that name.
+///
+/// # Errors
+///
+/// As [`add`], for reading and writing the file.
+pub fn remove(home: &Path, name: &str) -> Result<bool, HarnessError> {
+    let path = home.join(OWNER_FILE);
+    let mut file = owner_json(&path)?;
+    let servers = servers_of(&mut file).map_err(|reason| HarnessError::Settings {
+        path: path.display().to_string(),
+        reason,
+    })?;
+    if servers.remove(name).is_none() {
+        return Ok(false);
+    }
+    write_owner(&path, &file)?;
+    Ok(true)
+}
+
+/// The owner's file as JSON, an empty one where there is none; a link is refused — the file it points to is the
+/// owner's to edit, a rename over it would cut the link.
+fn owner_json(path: &Path) -> Result<serde_json::Value, HarnessError> {
+    if std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink()) {
+        return Err(HarnessError::Settings {
+            path: path.display().to_string(),
+            reason: "it is a link; change the file it points to".into(),
+        });
+    }
+    match read_text(path)? {
+        Some(text) => serde_json::from_str(&text).map_err(|err| HarnessError::Settings {
+            path: path.display().to_string(),
+            reason: err.to_string(),
+        }),
+        None => Ok(serde_json::json!({"mcpServers": {}})),
+    }
+}
+
+/// The `mcpServers` object of a file, made where it has none.
+fn servers_of(
+    file: &mut serde_json::Value,
+) -> Result<&mut serde_json::Map<String, serde_json::Value>, String> {
+    let object = file
+        .as_object_mut()
+        .ok_or_else(|| "it is no JSON object".to_owned())?;
+    object
+        .entry("mcpServers")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .ok_or_else(|| "its mcpServers is no object".to_owned())
+}
+
+/// Writes the owner's file whole once it passes the checks a run makes, readable by the owner alone (a header may
+/// hold a token).
+fn write_owner(path: &Path, file: &serde_json::Value) -> Result<Vec<ServerEntry>, HarnessError> {
+    let fail = |reason: String| HarnessError::Settings {
+        path: path.display().to_string(),
+        reason,
+    };
+    let mut text = serde_json::to_string_pretty(file).map_err(|err| fail(err.to_string()))?;
+    text.push('\n');
+    let entries = parse(&text, &path.display().to_string(), Origin::Owner).map_err(fail)?;
+    let dir = path.parent().ok_or_else(|| fail("no folder".into()))?;
+    crate::providers::make_private_dir(dir).map_err(|err| fail(err.to_string()))?;
+    crate::providers::write_replacing(dir, path, text.as_bytes(), 0o600)
+        .map_err(|err| fail(err.to_string()))?;
+    Ok(entries)
 }
 
 /// `${NAME}` in a header value, looked up through `lookup` (M3). No OAuth in HS5, so a header is where a token
@@ -572,6 +738,7 @@ mod tests {
         other_url.config = ServerConfig::Http {
             url: "https://x.example".into(),
             headers: BTreeMap::new(),
+            oauth: None,
         };
         assert_ne!(
             base.config_hash().unwrap(),
@@ -621,6 +788,7 @@ mod tests {
             config: ServerConfig::Http {
                 url: "https://x.example/mcp".into(),
                 headers: BTreeMap::new(),
+                oauth: None,
             },
             ..stdio
         };
@@ -640,6 +808,7 @@ mod tests {
             config: ServerConfig::Http {
                 url: "https://x.example/mcp".into(),
                 headers: BTreeMap::from([("Authorization".into(), "Bearer ${TOKEN}".into())]),
+                oauth: None,
             },
             ..http
         };
@@ -737,6 +906,74 @@ mod tests {
         assert!(
             expand_vars("Bearer ${}", lookup).is_err(),
             "an empty name is refused"
+        );
+    }
+
+    #[test]
+    fn a_server_is_added_to_and_removed_from_the_owners_file_only_as_a_run_would_take_it() {
+        let home = temp("add");
+        write(
+            &home.join(OWNER_FILE),
+            r#"{"mcpServers": {"mail": {"command": "uvx", "env": {"T": "${TOKEN}"}}}}"#,
+        );
+        let notion = add(
+            &home,
+            "notion",
+            Adding::Http("https://mcp.notion.com/mcp".into()),
+        )
+        .unwrap();
+        assert!(
+            matches!(notion.config, ServerConfig::Http { ref url, .. } if url.ends_with("/mcp"))
+        );
+        add(
+            &home,
+            "fs",
+            Adding::Stdio {
+                command: "npx".into(),
+                args: vec!["-y".into(), "server-fs".into()],
+            },
+        )
+        .unwrap();
+        let names: Vec<String> = owner(&home)
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.name)
+            .collect();
+        assert_eq!(names, ["fs", "mail", "notion"]);
+        let text = std::fs::read_to_string(home.join(OWNER_FILE)).unwrap();
+        assert!(
+            text.contains("${TOKEN}"),
+            "the rest stays as written: {text}"
+        );
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = std::fs::metadata(home.join(OWNER_FILE))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+        assert!(
+            add(&home, "mail", Adding::Http("https://x.example".into())).is_err(),
+            "taken"
+        );
+        assert!(
+            add(
+                &home,
+                "plain",
+                Adding::Http("http://elsewhere.example/mcp".into())
+            )
+            .is_err(),
+            "no clear text to another machine"
+        );
+        assert!(add(&home, "Bad Name", Adding::Http("https://x.example".into())).is_err());
+        assert!(remove(&home, "notion").unwrap());
+        assert!(!remove(&home, "notion").unwrap());
+        assert_eq!(owner(&home).unwrap().len(), 2);
+        let fresh = temp("add-fresh");
+        add(&fresh, "a", Adding::Http("https://a.example/mcp".into())).unwrap();
+        assert_eq!(
+            owner(&fresh).unwrap().len(),
+            1,
+            "a file made where there was none"
         );
     }
 }

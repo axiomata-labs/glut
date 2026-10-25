@@ -15,6 +15,7 @@ use std::sync::Arc;
 #[macro_use]
 mod texts;
 
+pub mod mcp_servers;
 pub mod models;
 pub mod providers;
 
@@ -80,6 +81,9 @@ pub enum Command {
     /// The models the providers offer (`docs/plans/glut-providers.md`, PV2), from lists kept in ~/.glut/models.
     #[command(subcommand)]
     Models(models::ModelsCommand),
+    /// The MCP servers: ~/.glut/mcp.json and the project's .mcp.json, signing in to a hosted one and out again.
+    #[command(subcommand)]
+    Mcp(mcp_servers::McpCommand),
 }
 
 /// Writes each event as one JSON line, flushed at once so a reader sees it while the run goes on.
@@ -227,6 +231,7 @@ pub async fn dispatch(command: Command) -> ExitCode {
         Command::Gain { days } => gain(days),
         Command::Providers(command) => providers::run(command).await,
         Command::Models(command) => models::run(command).await,
+        Command::Mcp(command) => mcp_servers::run(command).await,
     }
 }
 

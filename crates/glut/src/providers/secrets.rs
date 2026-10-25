@@ -31,8 +31,8 @@ pub enum StoreChoice {
     File,
 }
 
-/// A place secrets are kept, by account.
-pub trait SecretStore {
+/// A place secrets are kept, by account — shared by the tasks of a session (an MCP server refreshing its sign-in, T56).
+pub trait SecretStore: Send + Sync {
     /// The account's secret; `None` when it has none.
     ///
     /// # Errors

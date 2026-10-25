@@ -63,7 +63,8 @@ pub async fn toolbox(
         tools.extend([Box::new(files) as Box<dyn Tool>]);
     }
     tools.set_gate(Arc::new(gate));
-    tools.extend(mcp::start(servers, sink).await);
+    let keys = signed_in(&servers);
+    mcp::start(servers, &keys, tools.servers(), sink).await;
     tools.extend(shell_tools(
         cwd,
         ShellOptions {
@@ -73,6 +74,21 @@ pub async fn toolbox(
         },
     )?);
     Ok(tools)
+}
+
+/// The owner's kept sign-ins (T56), opened only where a server is reached over HTTP; none where the home or the
+/// store cannot be found — such a server then asks for its sign-in like one that never had one.
+fn signed_in(servers: &[ServerEntry]) -> mcp::Keys {
+    let hosted = servers
+        .iter()
+        .any(|entry| matches!(entry.config, mcp::config::ServerConfig::Http { .. }));
+    if !hosted {
+        return mcp::Keys::none();
+    }
+    crate::permissions::settings::home_dir()
+        .ok()
+        .and_then(|home| mcp::Keys::owner(&home).ok())
+        .unwrap_or_default()
 }
 
 /// What a caller adds to the toolbox beside the core: the web search with its providers and budget (glut-round

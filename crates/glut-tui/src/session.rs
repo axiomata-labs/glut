@@ -70,6 +70,8 @@ pub enum Report {
     Restored(Result<(String, String), String>),
     /// Every kept session, read beside the screen for `/resume`'s search (T55).
     Kept(Arc<crate::finder::Corpus>),
+    /// What a `/mcp` command came to (T56): a note, a secret to ask for, a sign-in that waits for the browser.
+    Mcp(crate::mcp::Step),
     /// The walk of the folder for `@` ended: its files, and whether there were more.
     Files((Vec<String>, bool)),
     /// `/handoff write` ended: where the handoff is and what it cost, or why there is none; the conversation as it was.
@@ -347,13 +349,23 @@ pub async fn build(
         .iter()
         .map(|skill| (skill.name.clone(), skill.description.clone()))
         .collect();
+    // A project's servers the owner has not approved, which `/mcp` lists as refused (T56).
+    let mut refused = Vec::new();
+    let mut permitted = |entries: Vec<mcp::config::ServerEntry>| {
+        let kept = mcp::approval::permitted(entries.clone(), &home, &cwd, false)?;
+        refused.extend(
+            entries
+                .into_iter()
+                .filter(|entry| !kept.iter().any(|kept| kept.name == entry.name)),
+        );
+        Ok::<_, glut::HarnessError>(kept)
+    };
     let servers = match &launch.servers {
         // Nobody can be asked about a project's new server before the screen is up: it is left out and said so.
-        Servers::Owner => mcp::config::load(&home, &cwd)
-            .and_then(|entries| mcp::approval::permitted(entries, &home, &cwd, false)),
+        Servers::Owner => mcp::config::load(&home, &cwd).and_then(&mut permitted),
         Servers::Only(file) => mcp::config::named(file),
         Servers::Also(file) => mcp::config::load(&home, &cwd)
-            .and_then(|entries| mcp::approval::permitted(entries, &home, &cwd, false))
+            .and_then(&mut permitted)
             .and_then(|owner| Ok(beside(owner, mcp::config::named(file)?))),
     }
     .map_err(|err| err.to_string())?;
@@ -401,6 +413,9 @@ pub async fn build(
     .await
     .map_err(|err| err.to_string())?;
     tools.extend([Box::new(tell) as Box<dyn glut::Tool>]);
+    for entry in refused {
+        tools.servers().refused(entry);
+    }
     let projects = launch.projects && host.may_split();
     let parts = Parts {
         home,

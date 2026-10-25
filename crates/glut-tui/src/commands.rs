@@ -97,7 +97,7 @@ const fn command(
 }
 
 /// Every command, grouped by topic in [`Topic::ALL`]'s order, the most used first inside a topic.
-pub const COMMANDS: [Command; 47] = [
+pub const COMMANDS: [Command; 48] = [
     command(Topic::Session, "clear", "", "start a new session"),
     command(
         Topic::Session,
@@ -294,6 +294,13 @@ pub const COMMANDS: [Command; 47] = [
         "gate",
         "",
         "the rules in force; take an \"always\" back (⌃G: the gate, live)",
+    ),
+    command(
+        Topic::Settings,
+        "mcp",
+        "[login|logout|add|remove]",
+        "the MCP servers and how each stands: /mcp login <name> signs in to a hosted one, /mcp add <name> <url> adds \
+         one to ~/.glut/mcp.json",
     ),
     command(
         Topic::Settings,

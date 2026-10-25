@@ -21,6 +21,7 @@ use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::time::timeout;
 
 use super::config::{ServerConfig, expand_vars};
+use super::keys::{Keys, Signed};
 use crate::config::API_KEY_ENV;
 use crate::error::HarnessError;
 
@@ -284,6 +285,11 @@ pub struct Http {
     client: reqwest::Client,
     /// The session the server issued with `initialize`, sent back with every later message.
     session: Option<String>,
+    /// What the server is signed in with (T56); none where it needs no sign-in, or a header of the owner's carries
+    /// the authorization.
+    signed: Option<Signed>,
+    /// Where a refreshed grant is kept.
+    keys: Keys,
 }
 
 impl Http {
@@ -293,8 +299,8 @@ impl Http {
     ///
     /// [`HarnessError::Mcp`] when the config is not an HTTP one, a header cannot be resolved or built, or the
     /// client itself cannot be made — that server fails to start, the run goes on without it.
-    pub fn new(server: &str, config: &ServerConfig) -> Result<Self, HarnessError> {
-        let ServerConfig::Http { url, headers } = config else {
+    pub fn new(server: &str, config: &ServerConfig, keys: &Keys) -> Result<Self, HarnessError> {
+        let ServerConfig::Http { url, headers, .. } = config else {
             return Err(mcp_err(server, "not an http server"));
         };
         let mut resolved = BTreeMap::new();
@@ -319,13 +325,59 @@ impl Http {
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|err| mcp_err(server, err.to_string()))?;
+        // The owner's own header says how to sign in; only without one is a kept sign-in looked up.
+        let signed = if headers
+            .keys()
+            .any(|name| name.eq_ignore_ascii_case("authorization"))
+        {
+            None
+        } else {
+            keys.signed(server, url)?
+        };
         Ok(Http {
             server: server.to_owned(),
             url: url.clone(),
             headers: resolved,
             client,
             session: None,
+            signed,
+            keys: keys.clone(),
         })
+    }
+
+    /// Whether the owner's entry carries an `Authorization` header of its own.
+    fn own_authorization(&self) -> bool {
+        self.headers
+            .keys()
+            .any(|name| name.eq_ignore_ascii_case("authorization"))
+    }
+
+    /// The bearer token the requests carry, where the server is signed in.
+    fn bearer(&self) -> Option<&str> {
+        match &self.signed {
+            Some(Signed::Token(token)) => Some(token),
+            Some(Signed::OAuth(grant)) => Some(&grant.access_token),
+            None => None,
+        }
+    }
+
+    /// Whether the sign-in can be renewed without the owner: a grant with a refresh token.
+    fn renewable(&self) -> bool {
+        matches!(&self.signed, Some(Signed::OAuth(grant)) if grant.refresh_token.is_some())
+    }
+
+    /// The grant refreshed and kept (T56). A store that cannot be written keeps the old one: this session goes on
+    /// with the new token, the next one may have to sign in again.
+    async fn renew(&mut self) -> Result<(), HarnessError> {
+        let Some(Signed::OAuth(grant)) = &self.signed else {
+            return Err(HarnessError::McpSignIn {
+                server: self.server.clone(),
+            });
+        };
+        let fresh = super::oauth::refresh(&self.server, grant).await?;
+        let _ = self.keys.keep_grant(&self.server, &self.url, &fresh);
+        self.signed = Some(Signed::OAuth(fresh));
+        Ok(())
     }
 
     /// One `POST` with the headers every message carries.
@@ -338,6 +390,9 @@ impl Http {
             .body(body.to_string());
         for (name, value) in &self.headers {
             call = call.header(name.as_str(), value.as_str());
+        }
+        if let Some(token) = self.bearer() {
+            call = call.bearer_auth(token);
         }
         if let Some(session) = &self.session {
             call = call.header(SESSION_HEADER, session.as_str());
@@ -358,6 +413,44 @@ impl Http {
     /// Posts `body` and hands back a successful response, its session noted; a server that cannot be reached
     /// or answers with an error status is the error.
     async fn exchange(&mut self, body: &Value) -> Result<reqwest::Response, HarnessError> {
+        if matches!(&self.signed, Some(Signed::OAuth(grant)) if grant.spent(chrono::Utc::now().timestamp()))
+            && self.renewable()
+        {
+            self.renew().await?;
+        }
+        let mut response = self.send_once(body).await?;
+        // A token the server no longer takes is renewed once, where it can be; else the owner signs in again.
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED && self.renewable() {
+            self.renew().await?;
+            response = self.send_once(body).await?;
+        }
+        let status = response.status();
+        let refused = status == reqwest::StatusCode::UNAUTHORIZED
+            || (status == reqwest::StatusCode::FORBIDDEN && super::oauth::wants_scope(&response));
+        // The owner's own header is theirs to mend: no sign-in of Glut's would help.
+        if refused && self.signed.is_none() && self.own_authorization() {
+            return Err(mcp_err(
+                &self.server,
+                format!("it refused the token of its Authorization header ({status})"),
+            ));
+        }
+        if refused {
+            return Err(HarnessError::McpSignIn {
+                server: self.server.clone(),
+            });
+        }
+        if !status.is_success() {
+            let text = read_body(&self.server, response).await?;
+            return Err(mcp_err(
+                &self.server,
+                format!("it answered {status}: {}", excerpt(&text)),
+            ));
+        }
+        Ok(response)
+    }
+
+    /// One `POST` of `body`, its session noted.
+    async fn send_once(&mut self, body: &Value) -> Result<reqwest::Response, HarnessError> {
         let response = self.post(body).send().await.map_err(|err| {
             mcp_err(
                 &self.server,
@@ -369,14 +462,6 @@ impl Http {
             )
         })?;
         self.note_session(&response);
-        let status = response.status();
-        if !status.is_success() {
-            let text = read_body(&self.server, response).await?;
-            return Err(mcp_err(
-                &self.server,
-                format!("it answered {status}: {}", excerpt(&text)),
-            ));
-        }
         Ok(response)
     }
 }
@@ -631,7 +716,20 @@ impl Client {
     /// [`HarnessError::McpTimeout`] when it says nothing within [`START_TIMEOUT`]. Either way that server is
     /// left out; the run goes on without it.
     pub async fn connect(server: &str, config: &ServerConfig) -> Result<Client, HarnessError> {
-        Client::connect_within(server, config, START_TIMEOUT, CALL_TIMEOUT).await
+        Client::connect_signed(server, config, &Keys::none()).await
+    }
+
+    /// [`Self::connect`] with what `keys` holds for the server (T56): its kept sign-in, refreshed when spent.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::connect`]; [`HarnessError::McpSignIn`] when the server wants a sign-in Glut does not hold.
+    pub async fn connect_signed(
+        server: &str,
+        config: &ServerConfig,
+        keys: &Keys,
+    ) -> Result<Client, HarnessError> {
+        Client::connect_within(server, config, keys, START_TIMEOUT, CALL_TIMEOUT).await
     }
 
     /// [`Self::connect`] with timeouts of the caller's choosing: the tests need a handshake that hangs within
@@ -639,12 +737,13 @@ impl Client {
     pub(crate) async fn connect_within(
         server: &str,
         config: &ServerConfig,
+        keys: &Keys,
         start: Duration,
         call: Duration,
     ) -> Result<Client, HarnessError> {
         let transport: Box<dyn Transport> = match config {
             ServerConfig::Stdio { .. } => Box::new(Stdio::spawn(server, config)?),
-            ServerConfig::Http { .. } => Box::new(Http::new(server, config)?),
+            ServerConfig::Http { .. } => Box::new(Http::new(server, config, keys)?),
         };
         let mut client = Client {
             server: server.to_owned(),
@@ -1094,6 +1193,7 @@ mod tests {
         let mut client = Client::connect_within(
             "mock",
             &config,
+            &Keys::none(),
             Duration::from_secs(30),
             Duration::from_secs(10),
         )
@@ -1132,6 +1232,7 @@ mod tests {
             Client::connect_within(
                 "mock",
                 &config,
+                &Keys::none(),
                 Duration::from_millis(500),
                 Duration::from_secs(5),
             )
@@ -1152,6 +1253,7 @@ mod tests {
         let client = Client::connect_within(
             "mock",
             &config,
+            &Keys::none(),
             Duration::from_secs(30),
             Duration::from_secs(10),
         )
@@ -1299,10 +1401,12 @@ mod tests {
         let config = ServerConfig::Http {
             url,
             headers: BTreeMap::new(),
+            oauth: None,
         };
         let mut client = Client::connect_within(
             "mail",
             &config,
+            &Keys::none(),
             Duration::from_secs(10),
             Duration::from_secs(10),
         )
@@ -1338,10 +1442,12 @@ mod tests {
         let config = ServerConfig::Http {
             url,
             headers: BTreeMap::new(),
+            oauth: None,
         };
         let client = Client::connect_within(
             "mail",
             &config,
+            &Keys::none(),
             Duration::from_secs(10),
             Duration::from_secs(10),
         )
@@ -1370,11 +1476,13 @@ mod tests {
         let config = ServerConfig::Http {
             url,
             headers: BTreeMap::new(),
+            oauth: None,
         };
         let err = failure(
             Client::connect_within(
                 "mail",
                 &config,
+                &Keys::none(),
                 Duration::from_secs(10),
                 Duration::from_secs(10),
             )

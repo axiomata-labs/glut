@@ -965,6 +965,37 @@ fn draw_input(
         )),
         rule,
     );
+    // A secret asked for (T56) takes the input's place: its prompt, and a dot for each character up to a few.
+    if let Some(secret) = &app.secret {
+        let label = format!("{} ", crate::transcript::clean(&secret.prompt));
+        let dots = if secret.typed.is_empty() {
+            String::new()
+        } else {
+            crate::mcp::DOTS.to_owned()
+        };
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(label.clone(), theme::glow()),
+                Span::raw(dots.clone()),
+            ])),
+            text,
+        );
+        if active {
+            frame.set_cursor_position(Position {
+                x: text.x + (label.width() + dots.width()).min(usize::from(text.width)) as u16,
+                y: text.y,
+            });
+        }
+        return;
+    }
+    // A sign-in's address waits for the owner's word to open it (T56).
+    if app.opening.is_some() {
+        frame.render_widget(
+            Paragraph::new(Span::styled(tr!(mcp_open_ask), theme::glow())),
+            text,
+        );
+        return;
+    }
     // The search takes the input's place while it is open; the input waits below it, unchanged.
     if let Some(search) = &app.search {
         let found = match (search.current, search.matches.len()) {
@@ -1155,6 +1186,10 @@ fn draw_keys(frame: &mut Frame, app: &App, area: Rect, branch: Option<String>, c
         } else {
             tr!(hint_shell).to_owned()
         }
+    } else if app.secret.is_some() {
+        tr!(hint_secret).to_owned()
+    } else if app.opening.is_some() {
+        tr!(hint_opening).to_owned()
     } else if app.search.is_some() {
         tr!(hint_search).to_owned()
     } else if app.plan_asks() {

@@ -162,6 +162,10 @@ pub const TEXTS: Texts = Texts {
             "les règles en vigueur ; retirer un « toujours » (⌃G : le gate, en direct)",
         ),
         (
+            "mcp",
+            "les serveurs MCP et l’état de chacun : /mcp login <name> se connecte à un serveur hébergé, /mcp add <name> <url> en ajoute un à ~/.glut/mcp.json",
+        ),
+        (
             "images",
             "comment les images sont dessinées : la vraie où le terminal le peut, des demi-blocs en couleurs \
              vraies, ou leur ligne seule",
@@ -1009,6 +1013,35 @@ pub const TEXTS: Texts = Texts {
     setup_provider_prompt: "Fournisseur :",
     cli: &[
         (
+            "The MCP servers: ~/.glut/mcp.json and the project's .mcp.json, signing in to a hosted one and out again",
+            "Les serveurs MCP : ~/.glut/mcp.json et le .mcp.json du projet, se connecter à un serveur hébergé et s’en déconnecter",
+        ),
+        (
+            "The MCP servers of ~/.glut/mcp.json and the folder's .mcp.json, and what each one is signed in with (never the token)",
+            "Les serveurs MCP de ~/.glut/mcp.json et du .mcp.json du dossier, et ce avec quoi chacun est connecté (jamais le token)",
+        ),
+        (
+            "Signs in to a hosted server: in the browser where it speaks OAuth, else with a token asked for without echo",
+            "Se connecter à un serveur hébergé : dans le navigateur s’il parle OAuth, sinon avec un token demandé sans écho",
+        ),
+        ("The server's name", "Le nom du serveur"),
+        (
+            "Signs out of a server: revoked at the server where it offers that, forgotten here either way",
+            "Se déconnecter d’un serveur : révoqué au serveur s’il le propose, oublié ici dans tous les cas",
+        ),
+        (
+            "Adds a server to ~/.glut/mcp.json: its URL, or the command that starts it after --",
+            "Ajouter un serveur à ~/.glut/mcp.json : son URL, ou après -- la commande qui le démarre",
+        ),
+        (
+            "A URL (https://…), or a command and its arguments after --",
+            "Une URL (https://…), ou après -- une commande et ses arguments",
+        ),
+        (
+            "Removes a server from ~/.glut/mcp.json and signs it out",
+            "Retirer un serveur de ~/.glut/mcp.json et le déconnecter",
+        ),
+        (
             "Find kept sessions whose title or conversation holds every word, newest first: a line each with its id, \
              its title and where it was said",
             "Trouver les sessions gardées dont le titre ou la conversation contient chaque mot, la plus récente \
@@ -1432,4 +1465,46 @@ pub const TEXTS: Texts = Texts {
     found_folder: "⌃A tous les projets",
     found_all: "tous les projets — ⌃A ce dossier seul",
     session_other_folder: "cette session travaillait dans {folder} — lance Glut là-bas pour la poursuivre",
+    mcp_none: "aucun serveur MCP — /mcp add <name> <url>, ou /mcp add <name> -- <command>",
+    mcp_head: "Serveurs MCP :",
+    mcp_starting: "démarrage…",
+    mcp_connected: "connecté · {count} outils",
+    mcp_wants: "veut une connexion : /mcp login {name}",
+    mcp_failed: "échec : {reason}",
+    mcp_project: "du projet",
+    mcp_stdio_no_login: "{name} est démarré par Glut lui-même : il n’a pas besoin de connexion",
+    mcp_header_login: "{name} se connecte avec l’en-tête Authorization de son entrée",
+    mcp_no_server: "pas de serveur MCP {name} — /mcp les montre",
+    mcp_error: "/mcp : {reason}",
+    mcp_open: "{name} répond sans connexion",
+    mcp_registered_only: "{name} n’offre OAuth qu’aux clients enregistrés d’avance : un token à la place — ou le clientId de ton propre client comme \"oauth\" dans ~/.glut/mcp.json",
+    mcp_sign_in_failed: "{name} : la connexion n’a pas abouti : {reason}",
+    mcp_sign_in_at: "{name} se connecte sur {host} :\n{address}",
+    mcp_browser_opened: "ouvert dans ton navigateur — Glut attend son retour",
+    mcp_paste_back: "ouvre-la dans un navigateur ; s’il finit sur une adresse qui ne charge pas (via SSH) : /mcp login {name} <address>",
+    mcp_signed_in: "{name} est connecté : {count} outils",
+    mcp_wants_note: "{name} veut une connexion : /mcp login {name}",
+    mcp_not_up: "le serveur MCP {name} n’a pas démarré : {reason}",
+    secret_odd: "il contient des espaces ou des caractères de contrôle — rien gardé",
+    secret_none: "rien gardé",
+    mcp_out_nothing: "rien n’est gardé pour {name}",
+    mcp_out_token: "{name} déconnecté : son token est oublié ici",
+    mcp_out_revoked: "{name} déconnecté : révoqué au serveur et oublié ici",
+    mcp_out_here: "{name} déconnecté : oublié ici (le serveur n’offre pas de révocation)",
+    mcp_out_failed: "{name} déconnecté ici ; la révocation au serveur a échoué : {reason}",
+    mcp_usage: "/mcp montre les serveurs · /mcp login|logout <name> · /mcp add <name> <url> ou /mcp add <name> -- <command> · /mcp remove <name>",
+    mcp_added: "{name} ajouté à ~/.glut/mcp.json",
+    mcp_up: "{name} est connecté : {count} outils",
+    mcp_not_owners: "{name} n’est pas dans ~/.glut/mcp.json : un serveur du projet se retire dans le projet",
+    mcp_removed: "{name} retiré de ~/.glut/mcp.json et de la session",
+    mcp_no_waiting: "aucune connexion de {name} n’attend — /mcp login {name}",
+    secret_token: "token pour {name} sur {host} :",
+    secret_client: "secret du client {id} (⏎ vide : aucun) :",
+    hint_secret: "masqué · ⏎ garder · Échap abandonner",
+    mcp_refused: "non approuvé — glut mcp login {name} le demande dans un terminal",
+    mcp_token_elsewhere: "{name} reçoit ses tokens de {host}",
+    mcp_open_ask: "⏎ l’ouvre dans ton navigateur · Échap non",
+    hint_opening: "⏎ ouvrir · Échap laisser",
+    mcp_open_failed: "aucun navigateur n’a pu s’ouvrir — ouvre toi-même l’adresse ci-dessus",
+    mcp_open_left: "ouvre toi-même l’adresse ci-dessus ; Glut attend son retour",
 };

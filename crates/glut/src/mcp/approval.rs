@@ -300,6 +300,7 @@ mod tests {
             config: ServerConfig::Http {
                 url: "https://x.example".into(),
                 headers: BTreeMap::new(),
+                oauth: None,
             },
         };
         let kept = permitted(vec![own], &home, &project, false).unwrap();

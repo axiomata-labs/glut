@@ -535,22 +535,22 @@ fn host(root: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::RefCell;
+    use std::sync::Mutex;
 
     /// A store in memory.
     #[derive(Default)]
-    struct Memory(RefCell<BTreeMap<String, String>>);
+    struct Memory(Mutex<BTreeMap<String, String>>);
 
     impl SecretStore for Memory {
         fn get(&self, account: &str) -> Result<Option<String>, HarnessError> {
-            Ok(self.0.borrow().get(account).cloned())
+            Ok(self.0.lock().unwrap().get(account).cloned())
         }
         fn set(&self, account: &str, secret: &str) -> Result<(), HarnessError> {
-            self.0.borrow_mut().insert(account.into(), secret.into());
+            self.0.lock().unwrap().insert(account.into(), secret.into());
             Ok(())
         }
         fn delete(&self, account: &str) -> Result<(), HarnessError> {
-            self.0.borrow_mut().remove(account);
+            self.0.lock().unwrap().remove(account);
             Ok(())
         }
         fn place(&self) -> String {

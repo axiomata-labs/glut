@@ -135,7 +135,10 @@ pub trait Tool: Send + Sync {
 /// The tools of a run.
 #[derive(Default)]
 pub struct Toolbox {
-    tools: Vec<Box<dyn Tool>>,
+    tools: Vec<Arc<dyn Tool>>,
+    /// The MCP servers' tools (T56): a register of their own, so a server signed in later joins the session's
+    /// toolbox at once and one signed out leaves it — while every turn and subagent holding this box sees the same.
+    servers: crate::mcp::Servers,
     /// Judges every call; without one, every call runs (a library caller that checks on its own, the tests).
     gate: Option<Arc<Gate>>,
 }
@@ -156,7 +159,12 @@ impl Toolbox {
 
     /// Adds `tools`.
     pub fn extend(&mut self, tools: impl IntoIterator<Item = Box<dyn Tool>>) {
-        self.tools.extend(tools);
+        self.tools.extend(tools.into_iter().map(Arc::from));
+    }
+
+    /// The MCP servers whose tools this box offers beside its own (T56).
+    pub fn servers(&self) -> &crate::mcp::Servers {
+        &self.servers
     }
 
     /// Takes the tool `name` out of the box (a skill run has no use for the `skill` tool: its body is the task).
@@ -191,11 +199,21 @@ impl Toolbox {
         self.offered().map(|tool| tool.spec().name).collect()
     }
 
-    fn offered(&self) -> impl Iterator<Item = &dyn Tool> {
-        self.tools
-            .iter()
-            .map(Box::as_ref)
-            .filter(|tool| self.offers(*tool))
+    /// Every tool, the box's own first, then the servers' as they stand now.
+    fn all(&self) -> Vec<Arc<dyn Tool>> {
+        let mut all = self.tools.clone();
+        all.extend(self.servers.tools());
+        all
+    }
+
+    fn find(&self, name: &str) -> Option<Arc<dyn Tool>> {
+        self.all().into_iter().find(|tool| tool.spec().name == name)
+    }
+
+    fn offered(&self) -> impl Iterator<Item = Arc<dyn Tool>> {
+        self.all()
+            .into_iter()
+            .filter(|tool| self.offers(tool.as_ref()))
     }
 
     fn offers(&self, tool: &dyn Tool) -> bool {
@@ -207,7 +225,7 @@ impl Toolbox {
     /// What a call of `name` with these arguments would touch, when the tool exists and the arguments are an object —
     /// for a step that wants to know beforehand (Glut 2: a snapshot before a change).
     pub fn access_of(&self, name: &str, arguments: &str) -> Option<Access> {
-        let tool = self.tools.iter().find(|tool| tool.spec().name == name)?;
+        let tool = self.find(name)?;
         let parsed = serde_json::from_str::<Value>(if arguments.trim().is_empty() {
             "{}"
         } else {
@@ -220,7 +238,7 @@ impl Toolbox {
     /// Whether a call of `name` with these arguments may run again after an interruption ([`Tool::replay_safe`]); an
     /// unknown tool or arguments that are no object may not.
     pub fn replay_safe(&self, name: &str, arguments: &str) -> bool {
-        let Some(tool) = self.tools.iter().find(|tool| tool.spec().name == name) else {
+        let Some(tool) = self.find(name) else {
             return false;
         };
         let text = if arguments.trim().is_empty() {
@@ -255,7 +273,7 @@ impl Toolbox {
         if stop.load(Ordering::SeqCst) {
             return refused("error: the run was stopped".into());
         }
-        let Some(tool) = self.tools.iter().find(|tool| tool.spec().name == name) else {
+        let Some(tool) = self.find(name) else {
             return refused(format!("error: there is no tool named {name:?}"));
         };
         // A tool the run does not offer stays refused when the model guesses its name.

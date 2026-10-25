@@ -226,6 +226,13 @@ pub struct App {
     press: Option<(Point, u16)>,
     /// The search in the stream (Ctrl+F), while it is open.
     pub search: Option<Search>,
+    /// A secret the owner types hidden for `/mcp login` (T56), while it is asked.
+    pub secret: Option<crate::mcp::Secret>,
+    /// A sign-in's address, waiting for the owner's ⏎ to open it in the browser (T56).
+    pub opening: Option<crate::mcp::Opening>,
+    /// The sign-ins that wait for the browser, by server, with their number: an address pasted back goes to the
+    /// newest.
+    mcp_waiting: std::collections::HashMap<String, (u64, oneshot::Sender<String>)>,
     /// A short word in the key line (what was copied), and when it was said.
     pub toast: Option<(String, Instant)>,
     /// Whether Glut holds the mouse; F2 hands it to the terminal and back, the main loop applies it.
@@ -470,6 +477,9 @@ impl App {
             selection: None,
             press: None,
             search: None,
+            secret: None,
+            opening: None,
+            mcp_waiting: std::collections::HashMap::new(),
             toast: None,
             mouse_held: true,
             mouse_request: None,
@@ -1023,6 +1033,26 @@ impl App {
                         self.tab = Tab::Plan;
                     }
                 }
+                // A server that did not come up is said once (T56): one that wants a sign-in names the command.
+                if let Event::McpServer {
+                    name,
+                    status: glut::McpStatus::Failed,
+                    reason,
+                    ..
+                } = &event
+                {
+                    let wants = self.parts.tools.servers().list().iter().any(|server| {
+                        server.entry.name == *name && server.state == glut::mcp::State::SignIn
+                    });
+                    if wants {
+                        self.transcript
+                            .note(tr!(mcp_wants_note, name = name), Tone::Heed);
+                    } else {
+                        let reason = reason.clone().unwrap_or_default();
+                        self.transcript
+                            .note(tr!(mcp_not_up, name = name, reason = reason), Tone::Fault);
+                    }
+                }
                 self.watch.take(&event);
                 self.meter.take(&event, self.engine.prices);
                 self.transcript.take(&event);
@@ -1380,6 +1410,7 @@ impl App {
                     picker.found(corpus);
                 }
             }
+            Report::Mcp(step) => self.mcp_step(step),
             Report::Files(found) => {
                 let (files, truncated) = found;
                 self.files = Some((Instant::now(), files, truncated));
@@ -1448,6 +1479,16 @@ impl App {
                     && self.reading.is_none()
                     && !self.panel_focus =>
             {
+                if let Some(secret) = &mut self.secret {
+                    // A secret is pasted more often than typed: it goes into the hidden entry, never the input.
+                    if secret.opened.elapsed() >= ASK_SETTLE {
+                        secret.typed.push_str(text.trim());
+                    }
+                    return;
+                }
+                if self.opening.is_some() {
+                    return;
+                }
                 match &mut self.search {
                     // A paste while searching is what to search for.
                     Some(search) => {
@@ -1573,6 +1614,12 @@ impl App {
         }
         if self.ask.is_some() {
             return self.on_ask_key(key);
+        }
+        if self.secret.is_some() {
+            return self.on_secret_key(key);
+        }
+        if self.opening.is_some() {
+            return self.on_opening_key(key);
         }
         if self.picker.is_some() {
             return self.on_picker_key(key);
@@ -2210,6 +2257,7 @@ impl App {
         let rest = rest.trim();
         match name {
             "help" | "?" => self.transcript.note(crate::commands::help(), Tone::Quiet),
+            "mcp" => self.mcp_command(rest),
             "quit" | "exit" | "q" => self.quit = true,
             "clear" => {
                 self.forget_warm();
@@ -5623,6 +5671,144 @@ impl App {
             .collect()
     }
 
+    /// ⏎ opens the sign-in's address in the browser, Esc leaves it to the owner — plain keys, not in the first
+    /// moment, as a question's.
+    fn on_opening_key(&mut self, key: KeyEvent) {
+        let Some(opening) = &self.opening else {
+            return;
+        };
+        if key.kind == KeyEventKind::Repeat
+            || key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+            || opening.opened.elapsed() < ASK_SETTLE
+        {
+            return;
+        }
+        match key.code {
+            KeyCode::Enter => {
+                if let Some(opening) = self.opening.take() {
+                    if glut::mcp::oauth::open_in_browser(&opening.address) {
+                        self.transcript.note(tr!(mcp_browser_opened), Tone::Quiet);
+                    } else {
+                        self.transcript.note(tr!(mcp_open_failed), Tone::Quiet);
+                    }
+                }
+            }
+            KeyCode::Esc => {
+                self.opening = None;
+                self.transcript.note(tr!(mcp_open_left), Tone::Quiet);
+            }
+            _ => {}
+        }
+    }
+
+    /// `/mcp` and its words (T56).
+    fn mcp_command(&mut self, rest: &str) {
+        let (verb, args) = rest.split_once(' ').unwrap_or((rest, ""));
+        let args = args.trim();
+        let (name, more) = args.split_once(' ').unwrap_or((args, ""));
+        let parts = Arc::clone(&self.parts);
+        let reports = self.reports.clone();
+        match verb {
+            "" | "list" => self
+                .transcript
+                .note(crate::mcp::listing(self.parts.tools.servers()), Tone::Quiet),
+            "login" if !name.is_empty() && !more.trim().is_empty() => {
+                // The address the browser ended on, pasted back (over SSH) to the sign-in that waits for it.
+                match self.mcp_waiting.remove(name) {
+                    Some((_, paste)) => {
+                        let _ = paste.send(more.trim().to_owned());
+                    }
+                    None => self
+                        .transcript
+                        .note(tr!(mcp_no_waiting, name = name), Tone::Quiet),
+                }
+            }
+            "login" if !name.is_empty() => crate::mcp::login(parts, name, reports),
+            "logout" if !name.is_empty() => crate::mcp::logout(parts, name, reports),
+            "add" if !args.is_empty() => crate::mcp::add(parts, args, reports),
+            "remove" if !name.is_empty() => crate::mcp::remove(parts, name, reports),
+            _ => self.transcript.note(tr!(mcp_usage), Tone::Quiet),
+        }
+    }
+
+    /// What a `/mcp` command came to.
+    fn mcp_step(&mut self, step: crate::mcp::Step) {
+        use crate::mcp::{Secret, SecretFor, Step};
+        match step {
+            Step::Note(text, tone) => self.transcript.note(text, tone),
+            Step::AskToken { name, host } => {
+                self.secret = Some(Secret {
+                    prompt: tr!(secret_token, name = name, host = host),
+                    typed: String::new(),
+                    purpose: SecretFor::Token { name },
+                    opened: Instant::now(),
+                });
+            }
+            Step::AskClientSecret { name, client } => {
+                self.secret = Some(Secret {
+                    prompt: tr!(secret_client, id = client),
+                    typed: String::new(),
+                    purpose: SecretFor::ClientSecret { name },
+                    opened: Instant::now(),
+                });
+            }
+            Step::Open { address } => {
+                self.opening = Some(crate::mcp::Opening {
+                    address,
+                    opened: Instant::now(),
+                });
+            }
+            Step::Waiting { name, id, paste } => {
+                self.mcp_waiting.insert(name, (id, paste));
+            }
+            Step::Ended { name, id } => {
+                if self
+                    .mcp_waiting
+                    .get(&name)
+                    .is_some_and(|(newest, _)| *newest == id)
+                {
+                    self.mcp_waiting.remove(&name);
+                }
+            }
+        }
+    }
+
+    /// The hidden entry's keys: typed, never shown; ⏎ hands it on, Esc gives it up. It came up while the owner may
+    /// have been typing — a key in its first moment, or one held, is the input's, never the secret's.
+    fn on_secret_key(&mut self, key: KeyEvent) {
+        let Some(secret) = &mut self.secret else {
+            return;
+        };
+        if key.kind == KeyEventKind::Repeat || secret.opened.elapsed() < ASK_SETTLE {
+            return;
+        }
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Esc => {
+                self.secret = None;
+                self.transcript.note(tr!(secret_none), Tone::Quiet);
+            }
+            KeyCode::Enter => {
+                if let Some(secret) = self.secret.take() {
+                    crate::mcp::secret_given(
+                        Arc::clone(&self.parts),
+                        secret.purpose,
+                        secret.typed,
+                        self.reports.clone(),
+                    );
+                }
+            }
+            KeyCode::Backspace => {
+                secret.typed.pop();
+            }
+            KeyCode::Char('u') if ctrl => secret.typed.clear(),
+            KeyCode::Char(c) if !ctrl => secret.typed.push(c),
+            _ => {}
+        }
+    }
+
     /// A key while the search is open: typed text searches, Enter or ↑ goes to the match above, Shift+Enter or ↓ to
     /// the one below, PgUp/PgDn scroll, Esc closes it.
     fn on_search_key(&mut self, key: KeyEvent) {
@@ -7283,6 +7469,129 @@ pub(crate) mod tests {
         assert_eq!(first.label, "as it stood: 2 panes");
         assert_eq!(first.pick, Pick::Pane(crate::panes::Request::Restore));
         let _ = std::fs::remove_dir_all(&app.parts.home);
+    }
+
+    /// Applies the `/mcp` steps that arrive until the newest note holds `said`.
+    fn mcp_until(app: &mut App, reports: &mut mpsc::UnboundedReceiver<Report>, said: &str) {
+        let until = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < until {
+            match reports.try_recv() {
+                Ok(report @ Report::Mcp(_)) => app.on_report(report),
+                Ok(_) => {}
+                Err(_) => std::thread::sleep(Duration::from_millis(5)),
+            }
+            if last_note(app).contains(said) {
+                return;
+            }
+        }
+        panic!("no note with {said:?}; the last: {}", last_note(app));
+    }
+
+    fn last_note(app: &App) -> String {
+        format!(
+            "{:?}",
+            app.transcript.blocks.last().map(|block| &block.kind)
+        )
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn mcp_lists_adds_and_removes_the_owners_servers_and_a_token_is_typed_hidden() {
+        let (mut app, mut reports) = app();
+        let home = app.parts.home.clone();
+        std::fs::create_dir_all(home.join(".glut")).unwrap();
+        // The file store, so the test never reads the Keychain.
+        std::fs::write(
+            home.join(".glut/providers.json"),
+            r#"{"credentialStore": "file"}"#,
+        )
+        .unwrap();
+        app.command("mcp");
+        assert!(
+            last_note(&app).contains("/mcp add <name> <url>"),
+            "{}",
+            last_note(&app)
+        );
+        app.command("mcp login nowhere");
+        mcp_until(&mut app, &mut reports, "no MCP server nowhere");
+
+        app.command("mcp add tool -- /nonexistent/glut-mcp-server --flag");
+        mcp_until(&mut app, &mut reports, "did not start");
+        let file = std::fs::read_to_string(home.join(".glut/mcp.json")).unwrap();
+        assert!(
+            file.contains("/nonexistent/glut-mcp-server") && file.contains("--flag"),
+            "{file}"
+        );
+        app.command("mcp");
+        assert!(
+            last_note(&app).contains("tool  /nonexistent/glut-mcp-server --flag — failed"),
+            "{}",
+            last_note(&app)
+        );
+        app.command("mcp login tool");
+        mcp_until(&mut app, &mut reports, "needs no sign-in");
+
+        // A hidden entry: typed and pasted text never reaches the input or the screen, Esc gives it up.
+        app.on_report(Report::Mcp(crate::mcp::Step::AskToken {
+            name: "tool".into(),
+            host: "x.example".into(),
+        }));
+        // The keys of the moment it came up are the input's, not the secret's.
+        app.on_terminal(key(KeyCode::Char('x'), KeyModifiers::NONE));
+        assert_eq!(
+            app.secret.as_ref().map(|secret| secret.typed.as_str()),
+            Some("")
+        );
+        std::thread::sleep(ASK_SETTLE);
+        for c in "ghp_".chars() {
+            app.on_terminal(key(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.on_terminal(TermEvent::Paste("secret\n".into()));
+        assert_eq!(
+            app.secret.as_ref().map(|secret| secret.typed.as_str()),
+            Some("ghp_secret")
+        );
+        assert!(app.input.text().is_empty());
+        app.on_terminal(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.secret.is_none());
+        assert!(last_note(&app).contains("nothing kept"));
+
+        // Over SSH the address the browser ended on is pasted back to the newest sign-in of that server.
+        let (old, _gone) = oneshot::channel();
+        let (newest, pasted) = oneshot::channel();
+        app.on_report(Report::Mcp(crate::mcp::Step::Waiting {
+            name: "tool".into(),
+            id: 1,
+            paste: old,
+        }));
+        app.on_report(Report::Mcp(crate::mcp::Step::Waiting {
+            name: "tool".into(),
+            id: 2,
+            paste: newest,
+        }));
+        app.on_report(Report::Mcp(crate::mcp::Step::Ended {
+            name: "tool".into(),
+            id: 1,
+        }));
+        app.command("mcp login tool http://127.0.0.1:9/callback?code=c&state=s");
+        assert_eq!(
+            pasted.await.unwrap(),
+            "http://127.0.0.1:9/callback?code=c&state=s"
+        );
+        app.command("mcp login tool http://127.0.0.1:9/callback?code=c");
+        assert!(last_note(&app).contains("no sign-in of tool waits"));
+
+        app.command("mcp remove elsewhere");
+        mcp_until(&mut app, &mut reports, "not in ~/.glut/mcp.json");
+        app.command("mcp remove tool");
+        mcp_until(&mut app, &mut reports, "removed from ~/.glut/mcp.json");
+        assert!(app.parts.tools.servers().list().is_empty());
+        assert!(
+            !std::fs::read_to_string(home.join(".glut/mcp.json"))
+                .unwrap()
+                .contains("glut-mcp-server")
+        );
+        app.command("mcp what");
+        assert!(last_note(&app).contains("/mcp login|logout <name>"));
     }
 
     /// The kept sessions `/resume` read beside the screen, given to it as the screen would (T55).

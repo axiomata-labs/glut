@@ -299,7 +299,7 @@ fn read_key(id: &str, shared: bool) -> Result<Option<String>, String> {
 
 /// Runs `read` with the terminal's echo off, and turns it back on whatever happens: on return, on a panic (the
 /// guard) and on Ctrl-C (a signal task that restores it before the process ends).
-fn without_echo<T>(read: impl FnOnce() -> std::io::Result<T>) -> std::io::Result<T> {
+pub(super) fn without_echo<T>(read: impl FnOnce() -> std::io::Result<T>) -> std::io::Result<T> {
     use rustix::termios::{LocalModes, OptionalActions, Termios, tcgetattr, tcsetattr};
 
     /// Puts the terminal back as it was when dropped.

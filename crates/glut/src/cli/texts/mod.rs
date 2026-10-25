@@ -128,6 +128,72 @@ crate::catalog! {
         test_no_text: &'static str,
         /// `glut providers test` done: `{name}`, `{secs}`, `{text}`, `{input}` and `{output}` tokens.
         test_answered: &'static str,
+        /// `glut mcp list` without a server.
+        mcp_none: &'static str,
+        /// A server the folder does not have: `{name}`.
+        mcp_no_server: &'static str,
+        /// Where a server comes from: the owner's file.
+        mcp_origin_owner: &'static str,
+        /// Where a server comes from: the project's file.
+        mcp_origin_project: &'static str,
+        /// A server Glut starts itself.
+        mcp_kept_stdio: &'static str,
+        /// A server signed in by a header of its entry.
+        mcp_kept_header: &'static str,
+        /// A server with a kept OAuth sign-in.
+        mcp_kept_oauth: &'static str,
+        /// A server with a kept token.
+        mcp_kept_token: &'static str,
+        /// A hosted server with nothing kept.
+        mcp_kept_nothing: &'static str,
+        /// `login` on a server Glut starts: `{name}`.
+        mcp_stdio_no_login: &'static str,
+        /// `login` on a server with its own Authorization header: `{name}`.
+        mcp_header_login: &'static str,
+        /// `login` on a project's server not approved: `{name}`.
+        mcp_not_approved: &'static str,
+        /// Asks for the secret of the owner's client: `{id}`.
+        mcp_secret_prompt: &'static str,
+        /// A server that answers without a sign-in: `{name}`.
+        mcp_open: &'static str,
+        /// A server with OAuth for registered clients only: `{name}`.
+        mcp_registered_only: &'static str,
+        /// Asks for a token: `{name}`, `{host}`.
+        mcp_token_prompt: &'static str,
+        /// No token typed.
+        mcp_no_token: &'static str,
+        /// Before the address of a sign-in: `{host}`, `{name}`.
+        mcp_sign_in_at: &'static str,
+        /// The browser was opened.
+        mcp_browser_opened: &'static str,
+        /// The browser was not opened: the owner opens the address, over SSH pastes it back.
+        mcp_open_yourself: &'static str,
+        /// Signed in and reached: `{name}`, `{count}` tools.
+        mcp_signed_in: &'static str,
+        /// Signed in, but the server does not start: `{name}`, `{reason}`.
+        mcp_signed_in_failed: &'static str,
+        /// `logout` with nothing kept: `{name}`.
+        mcp_nothing_kept: &'static str,
+        /// A typed token forgotten: `{name}`.
+        mcp_out_token: &'static str,
+        /// A grant revoked and forgotten: `{name}`.
+        mcp_out_revoked: &'static str,
+        /// A grant forgotten, the server offers no revocation: `{name}`.
+        mcp_out_here: &'static str,
+        /// A grant forgotten, the revocation failed: `{name}`, `{reason}`.
+        mcp_out_failed: &'static str,
+        /// `add` without a URL or command.
+        mcp_add_what: &'static str,
+        /// A server added: `{name}`.
+        mcp_added: &'static str,
+        /// `remove` of a server not in the owner's file: `{name}`.
+        mcp_not_owners: &'static str,
+        /// A server removed: `{name}`.
+        mcp_removed: &'static str,
+        /// A sign-in whose tokens come from another host: `{name}`, `{host}`.
+        mcp_token_elsewhere: &'static str,
+        /// Before the browser opens: the owner's Enter opens it, or a pasted address finishes.
+        mcp_enter_opens: &'static str,
     }
 }
 

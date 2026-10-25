@@ -9,8 +9,9 @@ description = "Glut, an agent harness: a lean tool-calling loop over an OpenAI-c
 # The guarded file service the file tools go through, shared with the other Axiomata apps (Axiomata-Foundation).
 axiomata-files.workspace = true
 # HTTPS for remote model APIs (OpenRouter); rustls rather than the platform stack, like the rest of the tree would
-# want it — no Security.framework link for a crate meant to stand alone.
-reqwest = { workspace = true, features = ["rustls-tls"] }
+# want it. Its own roots and the system's too (T56, `rustls-tls-native-roots`): a company's GitLab or proxy signed by
+# an authority of its own, which the Mac's keychain trusts, is reached like any other host — for every connection.
+reqwest = { workspace = true, features = ["rustls-tls", "rustls-tls-native-roots"] }
 htmd.workspace = true
 # `signal`: a run ends cleanly on Ctrl-C/SIGTERM/SIGHUP; `net`: the sandbox's network proxy (HS3b).
 tokio = { workspace = true, features = ["signal", "net"] }

@@ -36,6 +36,10 @@ pub enum HarnessError {
     /// without it.
     #[error("MCP server {server}: {message}")]
     Mcp { server: String, message: String },
+    /// A hosted MCP server wants a sign-in Glut does not hold, or one it no longer takes (T56): a run never signs in
+    /// by itself — the owner does, with `glut mcp login` or `/mcp login`.
+    #[error("MCP server {server} wants a sign-in")]
+    McpSignIn { server: String },
     /// An MCP server said nothing within the limit — a handshake that hangs, a call nobody answers.
     #[error("MCP server {server} did not answer within {timeout:?}")]
     McpTimeout {

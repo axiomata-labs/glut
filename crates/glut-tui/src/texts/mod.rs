@@ -1432,6 +1432,90 @@ glut::catalog! {
         found_all: &'static str,
         /// `glut --session` named a session of another folder: `{folder}`.
         session_other_folder: &'static str,
+        /// `/mcp` without a server (T56).
+        mcp_none: &'static str,
+        /// `/mcp`'s list, its head.
+        mcp_head: &'static str,
+        /// A server being started.
+        mcp_starting: &'static str,
+        /// A server connected: `{count}` tools.
+        mcp_connected: &'static str,
+        /// A server that wants a sign-in: `{name}`.
+        mcp_wants: &'static str,
+        /// A server that failed: `{reason}`.
+        mcp_failed: &'static str,
+        /// Beside a project's server.
+        mcp_project: &'static str,
+        /// `/mcp login` on a server Glut starts: `{name}`.
+        mcp_stdio_no_login: &'static str,
+        /// `/mcp login` on a server with its own Authorization header: `{name}`.
+        mcp_header_login: &'static str,
+        /// A server the session does not have: `{name}`.
+        mcp_no_server: &'static str,
+        /// `/mcp` failed: `{reason}`.
+        mcp_error: &'static str,
+        /// A server that answers without a sign-in: `{name}`.
+        mcp_open: &'static str,
+        /// A server with OAuth for registered clients only: `{name}`.
+        mcp_registered_only: &'static str,
+        /// A sign-in that did not succeed: `{name}`, `{reason}`.
+        mcp_sign_in_failed: &'static str,
+        /// Where the owner signs in: `{name}`, `{host}`, `{address}`.
+        mcp_sign_in_at: &'static str,
+        /// The browser was opened.
+        mcp_browser_opened: &'static str,
+        /// The browser was not opened: `{name}`.
+        mcp_paste_back: &'static str,
+        /// Signed in and connected: `{name}`, `{count}` tools.
+        mcp_signed_in: &'static str,
+        /// A server that wants a sign-in, said once: `{name}`.
+        mcp_wants_note: &'static str,
+        /// A server that did not start: `{name}`, `{reason}`.
+        mcp_not_up: &'static str,
+        /// A secret with spaces or control characters.
+        secret_odd: &'static str,
+        /// A secret not given.
+        secret_none: &'static str,
+        /// `/mcp logout` with nothing kept: `{name}`.
+        mcp_out_nothing: &'static str,
+        /// A typed token forgotten: `{name}`.
+        mcp_out_token: &'static str,
+        /// A grant revoked and forgotten: `{name}`.
+        mcp_out_revoked: &'static str,
+        /// A grant forgotten, no revocation offered: `{name}`.
+        mcp_out_here: &'static str,
+        /// A grant forgotten, the revocation failed: `{name}`, `{reason}`.
+        mcp_out_failed: &'static str,
+        /// How `/mcp` is used.
+        mcp_usage: &'static str,
+        /// A server added: `{name}`.
+        mcp_added: &'static str,
+        /// A server added and connected: `{name}`, `{count}` tools.
+        mcp_up: &'static str,
+        /// `/mcp remove` of a server not in the owner's file: `{name}`.
+        mcp_not_owners: &'static str,
+        /// A server removed: `{name}`.
+        mcp_removed: &'static str,
+        /// An address pasted back where no sign-in waits: `{name}`.
+        mcp_no_waiting: &'static str,
+        /// The hidden entry's prompt for a token: `{name}`, `{host}`.
+        secret_token: &'static str,
+        /// The hidden entry's prompt for a client's secret: `{id}`.
+        secret_client: &'static str,
+        /// The key line while a secret is typed.
+        hint_secret: &'static str,
+        /// A project's server not approved (T56): `{name}`.
+        mcp_refused: &'static str,
+        /// A sign-in whose tokens come from another host: `{name}`, `{host}`.
+        mcp_token_elsewhere: &'static str,
+        /// In the input's place while a sign-in's address waits to be opened.
+        mcp_open_ask: &'static str,
+        /// The key line while a sign-in's address waits to be opened.
+        hint_opening: &'static str,
+        /// The browser could not be opened.
+        mcp_open_failed: &'static str,
+        /// The owner left the address to open themselves.
+        mcp_open_left: &'static str,
     }
 }
 
