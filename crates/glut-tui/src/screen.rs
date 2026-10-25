@@ -24,7 +24,7 @@ use tokio::sync::mpsc;
 
 use crate::app::App;
 use crate::host::{EngineChoice, Host, HostLink, Launch, State};
-use crate::panes::{Inlets, Panes};
+use crate::panes::{Inlets, Panes, Switch};
 use crate::{prefs, scrollback, session, setup, store, transcript, vi, view};
 
 /// How often the screen moves on its own while Glut works or Glimm is in view (its flicker, its breath).
@@ -45,6 +45,10 @@ pub struct Open {
     pub conversation: Vec<Message>,
     /// A first message, sent as soon as the session is up.
     pub prompt: Option<String>,
+    /// The kept session of this id to go on with (`glut --session`, a search's hit in another project, T55).
+    pub session: Option<String>,
+    /// What the stream's search looks for once that session is open (`--find`).
+    pub find: Option<String>,
     /// A run of the host's that was cut off: it goes on first, from its journal ([`crate::Turn::Resumed`]), and the
     /// first message follows unless the run had it already.
     pub lost_turn: Option<String>,
@@ -62,7 +66,7 @@ pub async fn standalone(launch: Launch, open: Open) -> std::process::ExitCode {
 pub async fn standalone_switching(
     launch: Launch,
     open: Open,
-) -> (std::process::ExitCode, Option<std::path::PathBuf>) {
+) -> (std::process::ExitCode, Option<Switch>) {
     if let Ok(home) = glut::permissions::settings::home_dir() {
         // The language read from the first line on: the setup and the start speak it too (T48).
         crate::texts::apply(
@@ -87,8 +91,9 @@ pub async fn standalone_switching(
 /// Glut anew in `folder` (T44, `/projects`), as `glut -c` typed there: this process becomes it — its sandbox root,
 /// rules, guides, servers and trust those of a start by hand there. Called once the runtime that ran this window is
 /// gone: what it held — MCP servers, shells, the sandbox's proxy — ended with it, as at any end.
-pub fn restart_in(folder: &std::path::Path) -> std::process::ExitCode {
+pub fn restart_in(to: &Switch) -> std::process::ExitCode {
     use std::os::unix::process::CommandExt as _;
+    let folder = to.folder.as_path();
     let shown = crate::transcript::clean(&folder.display().to_string());
     let program = match std::env::current_exe() {
         Ok(program) => program,
@@ -102,7 +107,7 @@ pub fn restart_in(folder: &std::path::Path) -> std::process::ExitCode {
     };
     let mut command = std::process::Command::new(program);
     command.current_dir(folder).args(restart_args(
-        folder,
+        to,
         crate::motion::reader_forced(),
         crate::texts::forced(),
     ));
@@ -133,7 +138,7 @@ async fn run_switching(
     host: Arc<dyn Host>,
     open: Open,
     linked: impl FnOnce(HostLink),
-) -> (std::process::ExitCode, Option<std::path::PathBuf>) {
+) -> (std::process::ExitCode, Option<Switch>) {
     let (reports, from_session) = mpsc::unbounded_channel();
     // A pane split off later starts the same servers, never more (`--strict-mcp-config` stays strict).
     let servers = launch.servers.clone();
@@ -160,6 +165,9 @@ async fn run_switching(
                 .transcript
                 .note(tr!(no_earlier_session), transcript::Tone::Quiet),
         }
+    }
+    if let Some(id) = &open.session {
+        app.open_kept(id, open.find.as_deref());
     }
     if !open.conversation.is_empty() {
         app.go_on_from(open.conversation);
@@ -278,12 +286,22 @@ async fn screen(
 /// What Glut is started with in `folder` (T44): the folder and `--continue` — nothing of this run's own flags (its
 /// provider, model or `--mcp-config` were for the folder it was started in) but the reader mode the owner holds on.
 fn restart_args(
-    folder: &std::path::Path,
+    to: &Switch,
     reader: bool,
     lang: Option<glut::lang::Lang>,
 ) -> Vec<std::ffi::OsString> {
-    let mut args: Vec<std::ffi::OsString> =
-        vec!["--cwd".into(), folder.into(), "--continue".into()];
+    let mut args: Vec<std::ffi::OsString> = vec!["--cwd".into(), to.folder.as_os_str().into()];
+    // A session a search found (T55) opens there, its stream searched; else the folder's newest goes on.
+    match &to.session {
+        Some(id) => {
+            // One argument each: a text that starts with `-` is no flag of its own.
+            args.push(format!("--session={id}").into());
+            if let Some(find) = to.find.as_ref().filter(|find| !find.is_empty()) {
+                args.push(format!("--find={find}").into());
+            }
+        }
+        None => args.push("--continue".into()),
+    }
     if reader {
         args.push("--reader".into());
     }
@@ -695,7 +713,7 @@ mod tests {
 
     #[test]
     fn a_switch_starts_glut_in_the_folder_as_glut_c_typed_there_and_keeps_only_the_reader_mode() {
-        let folder = std::path::Path::new("/projects/other");
+        let folder = &Switch::to("/projects/other".into());
         assert_eq!(
             restart_args(folder, false, None),
             ["--cwd", "/projects/other", "--continue"]
@@ -705,6 +723,21 @@ mod tests {
         assert_eq!(
             restart_args(folder, false, Some(glut::lang::Lang::Ja))[3..],
             ["--lang", "ja"]
+        );
+        // A session found in another project (T55) opens there, its stream searched.
+        let found = Switch {
+            session: Some("20261025-1".into()),
+            find: Some("-rf sandbox".into()),
+            ..folder.clone()
+        };
+        assert_eq!(
+            restart_args(&found, false, None),
+            [
+                "--cwd",
+                "/projects/other",
+                "--session=20261025-1",
+                "--find=-rf sandbox"
+            ]
         );
     }
 }

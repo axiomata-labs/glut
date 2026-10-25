@@ -1730,7 +1730,18 @@ fn draw_picker(frame: &mut Frame, app: &App, area: Rect) {
                 theme::quiet(),
             ))
         }
-        None => block,
+        None => match &picker.finding {
+            // `/resume`'s search (T55): whether the sessions are still read, and which ones it looks in.
+            Some(finding) => {
+                let hint = match (finding.reading() && !picker.query.is_empty(), finding.all) {
+                    (true, _) => tr!(found_reading),
+                    (false, true) => tr!(found_all),
+                    (false, false) => tr!(found_folder),
+                };
+                block.title_bottom(Span::styled(format!(" {hint} "), theme::quiet()))
+            }
+            None => block,
+        },
     };
     let shown = picker.shown();
     let rows = usize::from(height.saturating_sub(3));
@@ -1753,11 +1764,16 @@ fn draw_picker(frame: &mut Frame, app: &App, area: Rect) {
         } else {
             format!("  {}", item.detail)
         };
-        lines.push(Line::from(vec![
+        let mut spans = vec![
             Span::styled(mark, theme::glow()),
             Span::styled(item.label.clone(), style),
-            Span::styled(detail, theme::quiet()),
-        ]));
+        ];
+        if picker.finding.is_some() {
+            spans.extend(marked(&detail, &picker.query));
+        } else {
+            spans.push(Span::styled(detail, theme::quiet()));
+        }
+        lines.push(Line::from(spans));
     }
     if shown.is_empty() {
         lines.push(Line::from(Span::styled(
@@ -1769,11 +1785,67 @@ fn draw_picker(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(Paragraph::new(lines).block(block), place);
 }
 
+/// `text` quiet, the words of `query` in it marked (T55: where `/resume`'s search found them).
+fn marked(text: &str, query: &str) -> Vec<Span<'static>> {
+    let lowered: Vec<char> = text.chars().map(select::lower).collect();
+    let words: Vec<Vec<char>> = query
+        .split_whitespace()
+        .map(|word| word.chars().map(select::lower).collect())
+        .collect();
+    let mut hit = vec![false; lowered.len()];
+    for word in words.iter().filter(|word| !word.is_empty()) {
+        for start in 0..lowered.len().saturating_sub(word.len() - 1) {
+            if lowered[start..start + word.len()] == word[..] {
+                hit[start..start + word.len()].fill(true);
+            }
+        }
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let mut spans = Vec::new();
+    let mut at = 0;
+    while at < chars.len() {
+        let on = hit[at];
+        let end = (at..chars.len())
+            .find(|next| hit[*next] != on)
+            .unwrap_or(chars.len());
+        let part: String = chars[at..end].iter().collect();
+        spans.push(Span::styled(
+            part,
+            if on { theme::glow() } else { theme::quiet() },
+        ));
+        at = end;
+    }
+    spans
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{asked_rows, panel_width, tab_titles};
+    use super::{asked_rows, marked, panel_width, tab_titles};
     use crate::meter::tokens;
     use unicode_width::UnicodeWidthStr;
+
+    #[test]
+    fn a_found_word_is_marked_in_any_case_the_rest_quiet() {
+        let parts: Vec<(String, bool)> = marked("the Sandbox and seatbelt", "sandbox SEAT")
+            .into_iter()
+            .map(|span| {
+                (
+                    span.content.into_owned(),
+                    span.style == crate::theme::glow(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            parts,
+            [
+                ("the ".into(), false),
+                ("Sandbox".into(), true),
+                (" and ".into(), false),
+                ("seat".into(), true),
+                ("belt".into(), false),
+            ]
+        );
+    }
 
     #[test]
     fn the_tab_names_close_up_before_they_would_be_cut_and_the_shown_one_stays_whole() {

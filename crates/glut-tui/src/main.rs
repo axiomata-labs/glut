@@ -44,6 +44,12 @@ struct Cli {
     /// Pick an earlier session of the folder to go on with.
     #[arg(short = 'r', long)]
     resume: bool,
+    /// Go on with the kept session of this id (glut search finds it).
+    #[arg(long, value_name = "ID", conflicts_with_all = ["resume", "continue_last"])]
+    session: Option<String>,
+    /// With --session: the stream searched for this text once it is open.
+    #[arg(long, value_name = "TEXT", requires = "session")]
+    find: Option<String>,
     /// A first message, sent as soon as the session is up.
     prompt: Option<String>,
 }
@@ -70,6 +76,16 @@ enum Command {
         /// A new file to write it to (never one that is there).
         #[arg(long, value_name = "FILE")]
         out: Option<PathBuf>,
+    },
+    /// Find kept sessions whose title or conversation holds every word, newest first: a line each with its id, its
+    /// title and where it was said.
+    Search {
+        /// The words to find, in any order and any case.
+        #[arg(required = true)]
+        words: Vec<String>,
+        /// Every project's sessions, not only the folder's.
+        #[arg(long)]
+        all: bool,
     },
     #[command(flatten)]
     Headless(glut::cli::Command),
@@ -140,6 +156,9 @@ fn main() -> std::process::ExitCode {
                 glut_tui::export_headless(&what, format, full, out.as_deref()),
                 None,
             ),
+            Some(Command::Search { words, all }) => {
+                (glut_tui::search_headless(&words, all, &cli.cwd), None)
+            }
             Some(Command::Headless(command)) => (glut::cli::dispatch(command).await, None),
             None => {
                 if cli.reader {
@@ -152,9 +171,9 @@ fn main() -> std::process::ExitCode {
     match switch {
         // T44: the window's servers, shells and proxy end with the runtime — before Glut starts anew in the other
         // folder, a hung one not holding the switch up.
-        Some(folder) => {
+        Some(to) => {
             runtime.shutdown_timeout(SHUTDOWN);
-            glut_tui::restart_in(&folder)
+            glut_tui::restart_in(&to)
         }
         None => code,
     }
@@ -196,6 +215,8 @@ fn open(cli: Cli) -> Open {
     Open {
         continue_last: cli.continue_last,
         pick: cli.resume,
+        session: cli.session,
+        find: cli.find,
         prompt: cli.prompt,
         ..Open::default()
     }
@@ -248,6 +269,24 @@ mod tests {
         assert_eq!(cli.cwd, std::path::Path::new("/projects/other"));
         let launch = launch(&cli);
         assert!(launch.owner_trust && launch.projects && matches!(launch.servers, Servers::Owner));
+        // A session a search found in that project (T55), its stream searched.
+        let cli = Cli::parse_from([
+            "glut",
+            "--cwd",
+            "/p",
+            "--session=s-1",
+            "--find=-rf two words",
+        ]);
+        let open = open(cli);
+        assert_eq!(
+            (open.session.as_deref(), open.find.as_deref()),
+            (Some("s-1"), Some("-rf two words"))
+        );
+        assert!(!open.continue_last && !open.pick);
+        assert!(
+            Cli::try_parse_from(["glut", "--find", "x"]).is_err(),
+            "--find needs --session"
+        );
     }
 
     #[test]

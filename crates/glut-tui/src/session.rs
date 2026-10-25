@@ -68,6 +68,8 @@ pub enum Report {
     /// Rewinding the files ended: the commit the folder is back at and the run that keeps what it was just before,
     /// or why not.
     Restored(Result<(String, String), String>),
+    /// Every kept session, read beside the screen for `/resume`'s search (T55).
+    Kept(Arc<crate::finder::Corpus>),
     /// The walk of the folder for `@` ended: its files, and whether there were more.
     Files((Vec<String>, bool)),
     /// `/handoff write` ended: where the handoff is and what it cost, or why there is none; the conversation as it was.

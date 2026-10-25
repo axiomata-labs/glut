@@ -33,6 +33,11 @@ pub const TEXTS: Texts = Texts {
             "abrir una sesión anterior de esta carpeta — las bifurcaciones bajo la suya",
         ),
         (
+            "search",
+            "buscar en las conversaciones guardadas: la lista de /resume con el texto ya escrito — ⌃A todos los \
+             proyectos",
+        ),
+        (
             "projects",
             "seguir en otro proyecto: las carpetas en las que trabajó Glut, o una por su ruta",
         ),
@@ -1002,6 +1007,28 @@ pub const TEXTS: Texts = Texts {
     setup_provider_prompt: "Proveedor:",
     cli: &[
         (
+            "Find kept sessions whose title or conversation holds every word, newest first: a line each with its id, \
+             its title and where it was said",
+            "Encontrar sesiones guardadas cuyo título o conversación contiene cada palabra, la más reciente primero: \
+             una línea cada una con su id, su título y dónde se dijo",
+        ),
+        (
+            "The words to find, in any order and any case",
+            "Las palabras a buscar, en cualquier orden y con cualquier mayúscula",
+        ),
+        (
+            "Every project's sessions, not only the folder's",
+            "Las sesiones de todos los proyectos, no solo las de la carpeta",
+        ),
+        (
+            "Go on with the kept session of this id (glut search finds it)",
+            "Seguir con la sesión guardada de este id (glut search la encuentra)",
+        ),
+        (
+            "With --session: the stream searched for this text once it is open",
+            "Con --session: el flujo se busca por este texto una vez abierto",
+        ),
+        (
             "Write a session out to read or share: a session's id or file, or a run's id or journal; Markdown, HTML or \
              JSON lines, on stdout unless --out names a new file",
             "Escribir una sesión para leerla o compartirla: el id o el archivo de una sesión, o el id o el diario de \
@@ -1394,4 +1421,9 @@ pub const TEXTS: Texts = Texts {
     export_unknown: "ninguna sesión, ejecución ni archivo {what}",
     paths_title: "{folder} — ⇥ completa, ⏎ elige, esc cierra",
     paths_more: "… {n} más, sigue escribiendo",
+    found_more: "+{count} más",
+    found_reading: "leyendo las sesiones guardadas…",
+    found_folder: "⌃A todos los proyectos",
+    found_all: "todos los proyectos — ⌃A solo esta carpeta",
+    session_other_folder: "esa sesión trabajaba en {folder} — inicia Glut allí para seguir con ella",
 };

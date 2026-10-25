@@ -2,7 +2,12 @@
 //! picker also sorts — by name, newest, price or window, whatever the provider — and can show only the free models
 //! (T31); what an account may not use stands greyed below the rest.
 
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
 use glut::Effort;
+
+use crate::finder::Corpus;
 
 /// What picking an entry does.
 #[derive(Debug, Clone, PartialEq)]
@@ -72,6 +77,13 @@ pub enum Pick {
     },
     /// `/projects` (T44): the folder of a project to switch to.
     Project(std::path::PathBuf),
+    /// `/resume`'s search (T55): a session found in its conversation or among every project's, by its id and folder,
+    /// and what the stream's search looks for once it is open (nothing for a title's hit).
+    Found {
+        id: String,
+        cwd: std::path::PathBuf,
+        find: String,
+    },
 }
 
 /// What a model entry is sorted and filtered by.
@@ -161,6 +173,35 @@ pub struct Picker {
     pub opened: std::time::Instant,
     /// A list whose letters are keys (`/projects`: `p` pins, `x` hides): typing does not filter it.
     pub keyed: bool,
+    /// `/resume` (T55): what it finds in the conversations, below the entries that fit.
+    pub finding: Option<Finding>,
+}
+
+/// The kept session an entry opens, if it opens one.
+fn session_of(item: &Item) -> Option<&str> {
+    match &item.pick {
+        Pick::Session(id) => Some(id.as_str()),
+        _ => None,
+    }
+}
+
+/// What `/resume` finds in the kept conversations as the owner types (T55).
+#[derive(Debug)]
+pub struct Finding {
+    /// The sessions read beside the screen; `None` until they came.
+    corpus: Option<Arc<Corpus>>,
+    /// Every project's sessions (⌃A), not only the folder's.
+    pub all: bool,
+    cwd: PathBuf,
+    /// The rows found for the query, below the entries that fit it.
+    rows: Vec<Item>,
+}
+
+impl Finding {
+    /// Whether the sessions are still being read.
+    pub fn reading(&self) -> bool {
+        self.corpus.is_none()
+    }
 }
 
 impl Picker {
@@ -177,6 +218,7 @@ impl Picker {
             guarded: false,
             opened: std::time::Instant::now(),
             keyed: false,
+            finding: None,
         };
         picker.select(current);
         picker
@@ -199,6 +241,111 @@ impl Picker {
         self
     }
 
+    /// A picker that also finds in the kept conversations of `cwd` (T55), once [`Picker::found`] gives them.
+    pub fn finding(mut self, cwd: &Path) -> Self {
+        self.finding = Some(Finding {
+            corpus: None,
+            all: false,
+            cwd: cwd.to_path_buf(),
+            rows: Vec::new(),
+        });
+        self
+    }
+
+    /// The kept conversations read beside the screen came: what was typed meanwhile is looked for at once.
+    pub fn found(&mut self, corpus: Arc<Corpus>) {
+        if let Some(finding) = &mut self.finding {
+            finding.corpus = Some(corpus);
+            self.refind();
+        }
+    }
+
+    /// Every project's sessions, or the folder's again (⌃A).
+    pub fn toggle_all(&mut self) {
+        if let Some(finding) = &mut self.finding {
+            finding.all = !finding.all;
+            self.selected = 0;
+            self.refind();
+        }
+    }
+
+    /// The query as typed elsewhere (`/search <text>`).
+    pub fn set_query(&mut self, query: &str) {
+        self.query = query.to_owned();
+        self.selected = 0;
+        self.refind();
+    }
+
+    /// The rows found for the query anew: the sessions the list shows itself are left to it — every project's are
+    /// all rows.
+    fn refind(&mut self) {
+        let Some(Finding {
+            corpus: Some(corpus),
+            all,
+            cwd,
+            ..
+        }) = &self.finding
+        else {
+            return;
+        };
+        let (listed, shown): (Vec<&str>, Vec<&str>) = if *all {
+            (Vec::new(), Vec::new())
+        } else {
+            (
+                self.items.iter().filter_map(session_of).collect(),
+                self.fitting().into_iter().filter_map(session_of).collect(),
+            )
+        };
+        let hits = corpus.find(
+            &self.query,
+            (!*all).then_some(cwd.as_path()),
+            &listed,
+            &shown,
+        );
+        let rows = hits
+            .into_iter()
+            .map(|hit| {
+                let title = match crate::transcript::clean(&hit.title) {
+                    title if title.trim().is_empty() => format!("({})", tr!(no_message)),
+                    title => title,
+                };
+                let label = if *all {
+                    format!("{title} · {}", crate::finder::project_of(&hit.cwd))
+                } else {
+                    title
+                };
+                let when = hit
+                    .updated
+                    .with_timezone(&chrono::Local)
+                    .format(glut::lang::date_time())
+                    .to_string();
+                let detail = match (&hit.snippet, hit.more) {
+                    (None, _) => when,
+                    (Some(snippet), 0) => snippet.clone(),
+                    (Some(snippet), more) => {
+                        format!("{snippet}  {}", tr!(found_more, count = more))
+                    }
+                };
+                Item::plain(
+                    label,
+                    detail,
+                    Pick::Found {
+                        id: hit.id,
+                        cwd: hit.cwd,
+                        find: if hit.snippet.is_some() {
+                            hit.find
+                        } else {
+                            String::new()
+                        },
+                    },
+                )
+            })
+            .collect();
+        if let Some(finding) = &mut self.finding {
+            finding.rows = rows;
+        }
+    }
+
     /// A picker that sorts and filters its models.
     pub fn sorting(mut self) -> Self {
         let current = self.chosen();
@@ -214,8 +361,20 @@ impl Picker {
     }
 
     /// The entries whose label or detail holds every word typed, in any case — the usable ones first, in the
-    /// order chosen.
+    /// order chosen —, and below them what `/resume` found in the conversations (every project's alone with ⌃A).
     pub fn shown(&self) -> Vec<&Item> {
+        let mut shown = match &self.finding {
+            Some(finding) if finding.all => Vec::new(),
+            _ => self.fitting(),
+        };
+        if let Some(finding) = &self.finding {
+            shown.extend(finding.rows.iter());
+        }
+        shown
+    }
+
+    /// The entries that fit what was typed, as [`Picker::shown`] lists them first.
+    fn fitting(&self) -> Vec<&Item> {
         let words: Vec<String> = self
             .query
             .split_whitespace()
@@ -252,11 +411,13 @@ impl Picker {
     pub fn type_char(&mut self, c: char) {
         self.query.push(c);
         self.selected = 0;
+        self.refind();
     }
 
     pub fn backspace(&mut self) {
         self.query.pop();
         self.selected = 0;
+        self.refind();
     }
 
     pub fn up(&mut self) {

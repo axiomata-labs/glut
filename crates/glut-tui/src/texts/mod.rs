@@ -1422,6 +1422,16 @@ glut::catalog! {
         paths_title: &'static str,
         /// The path list names the first; `{n}` more fit.
         paths_more: &'static str,
+        /// `/resume`'s search (T55): how many more messages of a session hold the words: `{count}`.
+        found_more: &'static str,
+        /// `/resume`'s search while the kept sessions are read.
+        found_reading: &'static str,
+        /// `/resume`'s hint: ⌃A searches every project.
+        found_folder: &'static str,
+        /// `/resume` searching every project: ⌃A goes back to the folder's.
+        found_all: &'static str,
+        /// `glut --session` named a session of another folder: `{folder}`.
+        session_other_folder: &'static str,
     }
 }
 

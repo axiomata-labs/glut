@@ -33,6 +33,10 @@ pub const TEXTS: Texts = Texts {
             "このフォルダーの以前のセッションを開く — 分岐はその下に並ぶ",
         ),
         (
+            "search",
+            "保存済みの会話を検索: テキスト入力済みの /resume の一覧 — ⌃A ですべてのプロジェクト",
+        ),
+        (
             "projects",
             "別のプロジェクトで続ける: Glut が作業したフォルダー、またはパスで指定したもの",
         ),
@@ -931,6 +935,27 @@ pub const TEXTS: Texts = Texts {
     setup_provider_prompt: "プロバイダー:",
     cli: &[
         (
+            "Find kept sessions whose title or conversation holds every word, newest first: a line each with its id, \
+             its title and where it was said",
+            "タイトルか会話にすべての単語を含む保存済みセッションを新しい順に探す: 1 行ずつ id、タイトル、言われた箇所を表示",
+        ),
+        (
+            "The words to find, in any order and any case",
+            "探す単語。順序も大文字小文字も問いません",
+        ),
+        (
+            "Every project's sessions, not only the folder's",
+            "フォルダーのものだけでなく、すべてのプロジェクトのセッション",
+        ),
+        (
+            "Go on with the kept session of this id (glut search finds it)",
+            "この id の保存済みセッションを続ける（glut search で見つかります）",
+        ),
+        (
+            "With --session: the stream searched for this text once it is open",
+            "--session と一緒に: 開いたらこのテキストでストリームを検索",
+        ),
+        (
             "Write a session out to read or share: a session's id or file, or a run's id or journal; Markdown, HTML or \
              JSON lines, on stdout unless --out names a new file",
             "セッションを読む・共有するために書き出す: セッションの id かファイル、または実行の id かジャーナル。Markdown、HTML、JSON 行で、--out が新しいファイルを指定しない限り \
@@ -1296,4 +1321,9 @@ pub const TEXTS: Texts = Texts {
     export_unknown: "{what} というセッション、実行、ファイルはありません",
     paths_title: "{folder} — ⇥ で補完、⏎ で選択、esc で閉じる",
     paths_more: "… ほか {n} 件、続けて入力してください",
+    found_more: "他 {count} 件",
+    found_reading: "保存済みセッションを読み込み中…",
+    found_folder: "⌃A すべてのプロジェクト",
+    found_all: "すべてのプロジェクト — ⌃A でこのフォルダーのみ",
+    session_other_folder: "そのセッションは {folder} で動いていました — 続けるにはそこで Glut を起動してください",
 };

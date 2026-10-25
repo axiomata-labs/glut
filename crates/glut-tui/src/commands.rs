@@ -97,13 +97,19 @@ const fn command(
 }
 
 /// Every command, grouped by topic in [`Topic::ALL`]'s order, the most used first inside a topic.
-pub const COMMANDS: [Command; 46] = [
+pub const COMMANDS: [Command; 47] = [
     command(Topic::Session, "clear", "", "start a new session"),
     command(
         Topic::Session,
         "resume",
         "",
         "open an earlier session of this folder — the forks under theirs",
+    ),
+    command(
+        Topic::Session,
+        "search",
+        "<text>",
+        "find in the kept conversations: /resume's list with the text typed — ⌃A every project",
     ),
     command(
         Topic::Session,

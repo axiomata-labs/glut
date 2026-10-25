@@ -33,6 +33,11 @@ pub const TEXTS: Texts = Texts {
             "eine frühere Session dieses Ordners öffnen — die Abzweigungen unter ihrer",
         ),
         (
+            "search",
+            "in den gespeicherten Gesprächen suchen: die Liste von /resume mit dem Text schon eingetragen — ⌃A alle \
+             Projekte",
+        ),
+        (
             "projects",
             "in einem anderen Projekt weitermachen: die Ordner, in denen Glut gearbeitet hat, oder einer über \
              seinen Pfad",
@@ -1002,6 +1007,28 @@ pub const TEXTS: Texts = Texts {
     setup_provider_prompt: "Provider:",
     cli: &[
         (
+            "Find kept sessions whose title or conversation holds every word, newest first: a line each with its id, \
+             its title and where it was said",
+            "Gespeicherte Sessions finden, deren Titel oder Gespräch jedes Wort enthält, die neueste zuerst: je eine \
+             Zeile mit ID, Titel und der Stelle, an der es gesagt wurde",
+        ),
+        (
+            "The words to find, in any order and any case",
+            "Die gesuchten Wörter, in beliebiger Reihenfolge und Schreibung",
+        ),
+        (
+            "Every project's sessions, not only the folder's",
+            "Die Sessions aller Projekte, nicht nur die des Ordners",
+        ),
+        (
+            "Go on with the kept session of this id (glut search finds it)",
+            "Mit der gespeicherten Session dieser ID weitermachen (glut search findet sie)",
+        ),
+        (
+            "With --session: the stream searched for this text once it is open",
+            "Mit --session: der Verlauf wird nach dem Öffnen nach diesem Text durchsucht",
+        ),
+        (
             "Write a session out to read or share: a session's id or file, or a run's id or journal; Markdown, HTML or \
              JSON lines, on stdout unless --out names a new file",
             "Eine Session zum Lesen oder Teilen ausgeben: die ID oder Datei einer Session oder die ID oder das Journal \
@@ -1396,4 +1423,9 @@ pub const TEXTS: Texts = Texts {
     export_unknown: "keine Session, kein Lauf und keine Datei {what}",
     paths_title: "{folder} — ⇥ ergänzt, ⏎ übernimmt, esc schließt",
     paths_more: "… {n} weitere, tipp weiter",
+    found_more: "+{count} weitere",
+    found_reading: "lese die gespeicherten Sessions…",
+    found_folder: "⌃A alle Projekte",
+    found_all: "alle Projekte — ⌃A nur dieser Ordner",
+    session_other_folder: "diese Session lief in {folder} — starte Glut dort, um mit ihr weiterzumachen",
 };

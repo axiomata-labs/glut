@@ -345,9 +345,29 @@ pub enum Request {
     /// A background agent ended where it is, its turn stopped (`/close <name>`).
     End(String),
     /// Glut goes on in another project's folder (T44, `/projects`): asked first while it works.
-    Switch(std::path::PathBuf),
+    Switch(Switch),
     /// The switch the owner said yes to: the window ends as at a `/quit`, and Glut starts anew in the folder.
-    SwitchNow(std::path::PathBuf),
+    SwitchNow(Switch),
+}
+
+/// Where Glut starts anew (T44), and what it opens there: the folder's newest session, or one a search found (T55)
+/// with the stream searched for its text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Switch {
+    pub folder: std::path::PathBuf,
+    pub session: Option<String>,
+    pub find: Option<String>,
+}
+
+impl Switch {
+    /// To `folder`, as `glut -c` there.
+    pub fn to(folder: std::path::PathBuf) -> Self {
+        Switch {
+            folder,
+            session: None,
+            find: None,
+        }
+    }
 }
 
 /// `/send`'s words: maybe a pane first (a number, a name, a role — the screen knows which word names one), then the
@@ -552,7 +572,7 @@ pub struct Panes {
     /// terminal never sees that click).
     pub links: Vec<crate::links::Spot>,
     /// The project Glut goes on in once this window ended (T44): the screen's loop ends, the layout kept.
-    pub switch_to: Option<std::path::PathBuf>,
+    pub switch_to: Option<Switch>,
     /// The window's focus and the notifications waiting to go out (T53).
     pub notifier: crate::notify::Notifier,
     /// What the environment says about the terminal, for the way a notification goes (T53).
@@ -1126,8 +1146,8 @@ impl Panes {
                 Request::Peek(None) => self.close_peek(),
                 Request::End(name) => self.end_background(&name),
                 Request::Restore => self.restore(),
-                Request::Switch(folder) => self.switch(folder),
-                Request::SwitchNow(folder) => self.switch_to = Some(folder),
+                Request::Switch(to) => self.switch(to),
+                Request::SwitchNow(to) => self.switch_to = Some(to),
                 Request::Peek(Some(name)) => match self.resolve_background(&name) {
                     Some(at) => self.peek = Some(self.list[at].id),
                     _ => self.active().tell(tr!(
@@ -1170,8 +1190,8 @@ impl Panes {
 
     /// Glut goes on in `folder` (T44): at once while nothing works; else the owner says so first — no the default, no
     /// key typed before the question showed answering it — and every turn and agent stops as at a `/quit`, kept.
-    fn switch(&mut self, folder: std::path::PathBuf) {
-        if folder == self.cwd {
+    fn switch(&mut self, to: Switch) {
+        if to.folder == self.cwd {
             return self.active().tell(tr!(project_same));
         }
         let working: Vec<String> = (0..self.list.len())
@@ -1179,11 +1199,11 @@ impl Panes {
             .map(|at| self.shown_label(at))
             .collect();
         if working.is_empty() {
-            self.switch_to = Some(folder);
+            self.switch_to = Some(to);
             return;
         }
-        let name = crate::transcript::clean(&folder.file_name().map_or_else(
-            || folder.display().to_string(),
+        let name = crate::transcript::clean(&to.folder.file_name().map_or_else(
+            || to.folder.display().to_string(),
             |name| name.to_string_lossy().into_owned(),
         ));
         let items = vec![
@@ -1195,7 +1215,7 @@ impl Panes {
             crate::picker::Item::plain(
                 tr!(switch_yes, name = name),
                 tr!(switch_yes_detail),
-                crate::picker::Pick::Pane(Request::SwitchNow(folder)),
+                crate::picker::Pick::Pane(Request::SwitchNow(to)),
             ),
         ];
         let question = tr!(switch_question, who = listed(&working));
@@ -2536,16 +2556,16 @@ mod tests {
         let (mut panes, _inlets) = split();
         // The window's own folder — asked from any of its panes — is no switch.
         let own = panes.cwd.clone();
-        panes.list[1].app.pane_request = Some(Request::Switch(own));
+        panes.list[1].app.pane_request = Some(Request::Switch(Switch::to(own)));
         panes.settle(&host);
         assert!(panes.switch_to.is_none());
-        panes.list[1].app.pane_request = Some(Request::Switch(there.clone()));
+        panes.list[1].app.pane_request = Some(Request::Switch(Switch::to(there.clone())));
         panes.settle(&host);
-        assert_eq!(panes.switch_to, Some(there.clone()));
+        assert_eq!(panes.switch_to, Some(Switch::to(there.clone())));
         assert!(panes.quitting(), "the window ends as at a /quit");
         let (mut panes, _inlets) = split();
         panes.list[0].app.working_for_tests();
-        panes.list[1].app.pane_request = Some(Request::Switch(there.clone()));
+        panes.list[1].app.pane_request = Some(Request::Switch(Switch::to(there.clone())));
         panes.settle(&host);
         assert!(panes.switch_to.is_none() && !panes.quitting());
         let picker = panes.active().picker.as_ref().unwrap();
@@ -2559,9 +2579,9 @@ mod tests {
             Some(crate::picker::Pick::Shown),
             "no is the default"
         );
-        panes.active().pane_request = Some(Request::SwitchNow(there.clone()));
+        panes.active().pane_request = Some(Request::SwitchNow(Switch::to(there.clone())));
         panes.settle(&host);
-        assert_eq!(panes.switch_to, Some(there));
+        assert_eq!(panes.switch_to, Some(Switch::to(there)));
     }
 
     fn ended(reason: glut::FinishReason) -> Report {

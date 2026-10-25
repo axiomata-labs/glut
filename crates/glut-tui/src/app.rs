@@ -249,6 +249,8 @@ pub struct App {
     shells: usize,
     /// The folder's files for `@`, and when they were walked; the walk runs beside the screen.
     files: Option<(Instant, Vec<String>, bool)>,
+    /// The kept sessions are being read for `/resume`'s search (T55), on a thread of their own.
+    reading_kept: Arc<std::sync::atomic::AtomicBool>,
     /// Where the stream ended at the last frame, the panel right of it: a click there is not the stream's.
     pub stream_width: u16,
     /// Whether the last frame drew the side panel (a narrow screen leaves it out though it is on).
@@ -480,6 +482,7 @@ impl App {
             pending: Vec::new(),
             shells: 0,
             files: None,
+            reading_kept: Arc::default(),
             stream_width: u16::MAX,
             panel_drawn: false,
             panel_fits: false,
@@ -1372,6 +1375,11 @@ impl App {
                     .transcript
                     .note(tr!(files_not_restored, reason = reason), Tone::Fault),
             },
+            Report::Kept(corpus) => {
+                if let Some(picker) = &mut self.picker {
+                    picker.found(corpus);
+                }
+            }
             Report::Files(found) => {
                 let (files, truncated) = found;
                 self.files = Some((Instant::now(), files, truncated));
@@ -2310,6 +2318,12 @@ impl App {
             },
             "editor" => self.set_editor(rest),
             "resume" => self.picker = Some(self.session_picker()),
+            // T55: `/resume`'s list with the text typed into it, found in the conversations too.
+            "search" => {
+                let mut picker = self.session_picker();
+                picker.set_query(rest.trim());
+                self.picker = Some(picker);
+            }
             // T44: the host picks the folder where it keeps Glut in its own pane.
             "projects" if !self.parts.projects => self.tell(tr!(projects_hosted)),
             "projects" if rest.trim().is_empty() => self.picker = Some(self.projects_picker()),
@@ -3961,7 +3975,9 @@ impl App {
         if folder == self.project {
             return self.tell(tr!(project_same));
         }
-        self.pane_request = Some(crate::panes::Request::Switch(folder));
+        self.pane_request = Some(crate::panes::Request::Switch(crate::panes::Switch::to(
+            folder,
+        )));
     }
 
     /// The folder's sessions, newest first, each followed by its forks as a tree; this session among them, marked.
@@ -4041,7 +4057,59 @@ impl App {
                 ),
             );
         }
-        Picker::new(title, items, Some(&Pick::Session(own)))
+        self.read_kept();
+        Picker::new(title, items, Some(&Pick::Session(own))).finding(&self.parts.config.cwd)
+    }
+
+    /// Every kept session read beside the screen for `/resume`'s search (T55): a frame must not wait for megabytes.
+    /// A read still under way serves the list opened again meanwhile: one read at a time.
+    fn read_kept(&self) {
+        if self
+            .reading_kept
+            .swap(true, std::sync::atomic::Ordering::Relaxed)
+        {
+            return;
+        }
+        let home = self.parts.home.clone();
+        let reports = self.reports.clone();
+        let reading = Arc::clone(&self.reading_kept);
+        std::thread::spawn(move || {
+            let corpus = Arc::new(crate::finder::Corpus::read(&home));
+            reading.store(false, std::sync::atomic::Ordering::Relaxed);
+            let _ = reports.send(Report::Kept(corpus));
+        });
+    }
+
+    /// The kept session `id` opened, its stream searched for `find` (T55: a search's hit, `glut --session`); one of
+    /// another folder is not opened here — its turns would run in this one.
+    pub fn open_kept(&mut self, id: &str, find: Option<&str>) {
+        if id != self.session.id {
+            if self.working() {
+                return self.transcript.note(tr!(session_opens_later), Tone::Quiet);
+            }
+            if self.others_open.iter().any(|open| open == id) {
+                return self
+                    .transcript
+                    .note(tr!(session_in_other_pane), Tone::Quiet);
+            }
+            match Session::load(&self.parts.home, id) {
+                Ok(session) if session.cwd != self.parts.config.cwd => {
+                    let folder = crate::transcript::clean(&session.cwd.display().to_string());
+                    return self
+                        .transcript
+                        .note(tr!(session_other_folder, folder = folder), Tone::Fault);
+                }
+                Ok(session) => self.open(session),
+                Err(reason) => return self.transcript.note(reason, Tone::Fault),
+            }
+        }
+        if let Some(find) = find.filter(|find| !find.trim().is_empty()) {
+            self.search = Some(Search {
+                query: find.to_owned(),
+                fresh: true,
+                ..Search::default()
+            });
+        }
     }
 
     /// `/resume`'s ⌫: the session named, how many images go with it, a yes asked for — not for a session open in a
@@ -4163,12 +4231,17 @@ impl App {
             }
             KeyCode::Char('s') if ctrl => picker.next_sort(),
             // `/resume`'s ⌃E: the chosen session exported (T54) — a letter alone filters the list.
-            KeyCode::Char('e') if ctrl && matches!(picker.chosen(), Some(Pick::Session(_))) => {
-                if let Some(Pick::Session(id)) = picker.chosen() {
+            KeyCode::Char('e')
+                if ctrl
+                    && matches!(picker.chosen(), Some(Pick::Session(_) | Pick::Found { .. })) =>
+            {
+                if let Some(Pick::Session(id) | Pick::Found { id, .. }) = picker.chosen() {
                     self.picker = None;
                     self.export_listed(&id);
                 }
             }
+            // `/resume`'s ⌃A (T55): every project's sessions, or the folder's again.
+            KeyCode::Char('a') if ctrl && picker.finding.is_some() => picker.toggle_all(),
             KeyCode::Char('f') if ctrl => picker.toggle_free(),
             KeyCode::Up => picker.up(),
             KeyCode::Down | KeyCode::Tab => picker.down(),
@@ -4220,6 +4293,22 @@ impl App {
                         Ok(session) => self.open(session),
                         Err(reason) => self.transcript.note(reason, Tone::Fault),
                     },
+                    // T55: a session of another project opens there — Glut starts anew in its folder.
+                    // A host that keeps Glut in its own pane picks the folder (T44).
+                    Some(Pick::Found { cwd, .. })
+                        if cwd != self.parts.config.cwd && !self.parts.projects =>
+                    {
+                        self.tell(tr!(projects_hosted))
+                    }
+                    Some(Pick::Found { id, cwd, find }) if cwd != self.parts.config.cwd => {
+                        self.pane_request =
+                            Some(crate::panes::Request::Switch(crate::panes::Switch {
+                                folder: cwd,
+                                session: Some(id),
+                                find: Some(find),
+                            }))
+                    }
+                    Some(Pick::Found { id, find, .. }) => self.open_kept(&id, Some(&find)),
                     // The path goes after the `@` typed before the picker opened, in quotes when it has a space.
                     Some(Pick::File(path)) if path.contains(' ') => {
                         self.input.insert_text(&format!("\"{path}\" "))
@@ -7136,7 +7225,9 @@ pub(crate) mod tests {
         app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(
             app.pane_request,
-            Some(crate::panes::Request::Switch(older.clone()))
+            Some(crate::panes::Request::Switch(crate::panes::Switch::to(
+                older.clone()
+            )))
         );
         // By its path, `~` the owner's home; ⇥ completes a folder's name.
         app.pane_request = None;
@@ -7147,7 +7238,9 @@ pub(crate) mod tests {
         // A typed path is the folder itself, links resolved — as a session's folder is.
         assert_eq!(
             app.pane_request,
-            Some(crate::panes::Request::Switch(newer.canonicalize().unwrap()))
+            Some(crate::panes::Request::Switch(crate::panes::Switch::to(
+                newer.canonicalize().unwrap()
+            )))
         );
         let _ = std::fs::remove_dir_all(&home);
     }
@@ -7190,6 +7283,86 @@ pub(crate) mod tests {
         assert_eq!(first.label, "as it stood: 2 panes");
         assert_eq!(first.pick, Pick::Pane(crate::panes::Request::Restore));
         let _ = std::fs::remove_dir_all(&app.parts.home);
+    }
+
+    /// The kept sessions `/resume` read beside the screen, given to it as the screen would (T55).
+    fn kept_read(app: &mut App, reports: &mut mpsc::UnboundedReceiver<Report>) {
+        let until = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < until {
+            match reports.try_recv() {
+                Ok(report @ Report::Kept(_)) => return app.on_report(report),
+                Ok(_) => {}
+                Err(_) => std::thread::sleep(Duration::from_millis(5)),
+            }
+        }
+        panic!("the kept sessions were not read");
+    }
+
+    #[test]
+    fn search_finds_in_the_conversations_opens_at_the_hit_and_another_projects_session_there() {
+        let (mut app, mut reports) = app();
+        let home = app.parts.home.clone();
+        let keep = |cwd: &std::path::Path, title: &str, said: &str| {
+            let mut session = Session::new(cwd, "p", "m");
+            session.title = title.into();
+            session.conversation = vec![Message::user(said)];
+            session.save(&home).unwrap();
+            session.id
+        };
+        let here = keep(
+            &app.parts.config.cwd,
+            "Profiles",
+            "why does the Seatbelt profile deny this?",
+        );
+        std::thread::sleep(Duration::from_millis(5));
+        let there = keep(
+            std::path::Path::new("/elsewhere/os"),
+            "OS",
+            "the seatbelt of the OS",
+        );
+        type_text(&mut app, "/search seatbelt");
+        app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
+        kept_read(&mut app, &mut reports);
+        let picker = app.picker.as_ref().unwrap();
+        assert_eq!(picker.query, "seatbelt");
+        let shown: Vec<(&str, &str)> = picker
+            .shown()
+            .iter()
+            .map(|item| (item.label.as_str(), item.detail.as_str()))
+            .collect();
+        assert_eq!(
+            shown,
+            [("Profiles", "why does the Seatbelt profile deny this?")],
+            "this folder's alone"
+        );
+        app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.session.id, here);
+        assert_eq!(
+            app.search.as_ref().map(|search| search.query.as_str()),
+            Some("seatbelt")
+        );
+
+        app.search = None;
+        app.on_terminal(key(KeyCode::Char('/'), KeyModifiers::NONE));
+        type_text(&mut app, "resume");
+        app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
+        kept_read(&mut app, &mut reports);
+        app.on_terminal(key(KeyCode::Char('a'), KeyModifiers::CONTROL));
+        type_text(&mut app, "seatbelt os");
+        let picker = app.picker.as_ref().unwrap();
+        assert_eq!(picker.shown().len(), 1, "every project's, every word");
+        assert_eq!(picker.shown()[0].label, "OS · os");
+        app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(
+            app.pane_request,
+            Some(crate::panes::Request::Switch(crate::panes::Switch {
+                folder: "/elsewhere/os".into(),
+                session: Some(there),
+                find: Some("seatbelt".into()),
+            })),
+            "opened in its own folder, its stream searched for the longest word"
+        );
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]

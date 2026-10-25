@@ -150,7 +150,7 @@ pub fn matches(query: &str, lines: &[String]) -> Vec<(usize, usize, usize)> {
 }
 
 /// A character in lower case, one for one.
-fn lower(c: char) -> char {
+pub(crate) fn lower(c: char) -> char {
     c.to_lowercase().next().unwrap_or(c)
 }
 

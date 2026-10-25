@@ -171,14 +171,24 @@ impl Session {
 
     /// Every kept session, of every folder.
     pub fn all(home: &Path) -> Vec<Session> {
+        let mut all = Vec::new();
+        Self::each(home, |session| all.push(session));
+        all
+    }
+
+    /// Every kept session, of every folder, handed over one at a time: a reader that keeps only part of each (the
+    /// search, T55) holds one whole session at once, never all of them.
+    pub fn each(home: &Path, mut take: impl FnMut(Session)) {
         let Ok(entries) = std::fs::read_dir(Self::dir(home)) else {
-            return Vec::new();
+            return;
         };
         entries
             .flatten()
             .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
+            // A plain file only, as for the heads: the search reads every one.
+            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
             .filter_map(|entry| read(&entry.path()).ok())
-            .collect()
+            .for_each(&mut take);
     }
 
     /// The images this session's conversation holds.

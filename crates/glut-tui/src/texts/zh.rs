@@ -30,6 +30,10 @@ pub const TEXTS: Texts = Texts {
         ("clear", "开始新会话"),
         ("resume", "打开此文件夹的早先会话 — 分支列在其下"),
         (
+            "search",
+            "在保存的对话中搜索：/resume 的列表，已填入文本 — ⌃A 所有项目",
+        ),
+        (
             "projects",
             "在另一个项目中继续：Glut 工作过的文件夹，或按路径指定一个",
         ),
@@ -874,6 +878,27 @@ pub const TEXTS: Texts = Texts {
     setup_provider_prompt: "提供商：",
     cli: &[
         (
+            "Find kept sessions whose title or conversation holds every word, newest first: a line each with its id, \
+             its title and where it was said",
+            "查找标题或对话包含每个词的已保存会话，最新的在前：每行一个，含其 id、标题和说出的位置",
+        ),
+        (
+            "The words to find, in any order and any case",
+            "要查找的词，顺序和大小写不限",
+        ),
+        (
+            "Every project's sessions, not only the folder's",
+            "所有项目的会话，而不只是此文件夹的",
+        ),
+        (
+            "Go on with the kept session of this id (glut search finds it)",
+            "继续此 id 的已保存会话（glut search 可找到它）",
+        ),
+        (
+            "With --session: the stream searched for this text once it is open",
+            "与 --session 一起：打开后在流中搜索此文本",
+        ),
+        (
             "Write a session out to read or share: a session's id or file, or a run's id or journal; Markdown, HTML or \
              JSON lines, on stdout unless --out names a new file",
             "导出会话以便阅读或分享：会话的 id 或文件，或运行的 id 或日志；Markdown、HTML 或 JSON 行，默认输出到 stdout，除非 --out 指定新文件",
@@ -1229,4 +1254,9 @@ pub const TEXTS: Texts = Texts {
     export_unknown: "没有名为 {what} 的会话、运行或文件",
     paths_title: "{folder} — ⇥ 补全，⏎ 选取，esc 关闭",
     paths_more: "… 另有 {n} 项，请继续输入",
+    found_more: "另有 {count} 处",
+    found_reading: "正在读取保存的会话…",
+    found_folder: "⌃A 所有项目",
+    found_all: "所有项目 — ⌃A 仅此文件夹",
+    session_other_folder: "该会话在 {folder} 中运行 — 请在那里启动 Glut 以继续",
 };

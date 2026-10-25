@@ -770,4 +770,9 @@ pub const TEXTS: Texts = Texts {
     export_unknown: "no session, run or file {what}",
     paths_title: "{folder} — ⇥ completes, ⏎ takes, esc closes",
     paths_more: "… {n} more, type on",
+    found_more: "+{count} more",
+    found_reading: "reading the kept sessions…",
+    found_folder: "⌃A every project",
+    found_all: "every project — ⌃A this folder alone",
+    session_other_folder: "that session worked in {folder} — start Glut there to go on with it",
 };

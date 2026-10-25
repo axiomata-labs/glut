@@ -33,6 +33,10 @@ pub const TEXTS: Texts = Texts {
             "abrir uma sessão anterior desta pasta — as ramificações sob a delas",
         ),
         (
+            "search",
+            "procurar nas conversas guardadas: a lista do /resume com o texto já digitado — ⌃A todos os projetos",
+        ),
+        (
             "projects",
             "continuar em outro projeto: as pastas em que o Glut trabalhou, ou uma pelo caminho",
         ),
@@ -985,6 +989,28 @@ pub const TEXTS: Texts = Texts {
     setup_provider_prompt: "Provedor:",
     cli: &[
         (
+            "Find kept sessions whose title or conversation holds every word, newest first: a line each with its id, \
+             its title and where it was said",
+            "Encontrar sessões guardadas cujo título ou conversa contém cada palavra, a mais recente primeiro: uma \
+             linha cada com seu id, seu título e onde foi dito",
+        ),
+        (
+            "The words to find, in any order and any case",
+            "As palavras a encontrar, em qualquer ordem e com qualquer caixa",
+        ),
+        (
+            "Every project's sessions, not only the folder's",
+            "As sessões de todos os projetos, não só as da pasta",
+        ),
+        (
+            "Go on with the kept session of this id (glut search finds it)",
+            "Continuar com a sessão guardada deste id (glut search a encontra)",
+        ),
+        (
+            "With --session: the stream searched for this text once it is open",
+            "Com --session: o fluxo é pesquisado por este texto quando aberto",
+        ),
+        (
             "Write a session out to read or share: a session's id or file, or a run's id or journal; Markdown, HTML or \
              JSON lines, on stdout unless --out names a new file",
             "Escrever uma sessão para ler ou compartilhar: o id ou o arquivo de uma sessão, ou o id ou o diário de uma \
@@ -1371,4 +1397,9 @@ pub const TEXTS: Texts = Texts {
     export_unknown: "nenhuma sessão, execução ou arquivo {what}",
     paths_title: "{folder} — ⇥ completa, ⏎ escolhe, esc fecha",
     paths_more: "… mais {n}, continue digitando",
+    found_more: "+{count} mais",
+    found_reading: "lendo as sessões guardadas…",
+    found_folder: "⌃A todos os projetos",
+    found_all: "todos os projetos — ⌃A só esta pasta",
+    session_other_folder: "essa sessão trabalhava em {folder} — inicie o Glut lá para continuar com ela",
 };

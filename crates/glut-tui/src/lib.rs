@@ -10,6 +10,7 @@ mod branch;
 mod cli_help;
 mod commands;
 mod export;
+mod finder;
 mod follow;
 mod footer;
 mod glimm;
@@ -54,11 +55,13 @@ mod worktree;
 
 pub use cli_help::{localized as localized_cli, untranslated as untranslated_cli};
 pub use export::{Format as ExportFormat, headless as export_headless};
+pub use finder::headless as search_headless;
 pub use follow::{resolve as watched_log, watch};
 pub use host::{
     EngineChoice, Host, HostFuture, HostLink, Instructions, Launch, Log, Search, Servers, Signal,
     Standalone, State, Turn,
 };
+pub use panes::Switch;
 pub use screen::{Open, restart_in, run, standalone, standalone_switching};
 pub use texts::force as force_language;
 
