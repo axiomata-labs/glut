@@ -57,9 +57,7 @@ fn fail(message: &str) -> ExitCode {
 fn chosen(providers: &Providers, id: Option<&str>) -> Result<Vec<String>, String> {
     match id {
         Some(id) => providers.pick(Some(id)).map(|(id, _)| vec![id.to_owned()]),
-        None if providers.providers.is_empty() => Err(
-            "no provider yet: glut providers add <kind> (glut providers catalog lists them)".into(),
-        ),
+        None if providers.providers.is_empty() => Err(say!(models_no_provider).into()),
         None => Ok(providers.providers.keys().cloned().collect()),
     }
 }
@@ -92,13 +90,19 @@ async fn list(home: &Path, provider: Option<&str>, again: bool, query: &str) -> 
         match list_of(home, &providers, id, again).await {
             Ok(list) => {
                 let shown: Vec<&ModelInfo> = list.matching(query).collect();
+                let when = list
+                    .fetched_at
+                    .with_timezone(&chrono::Local)
+                    .format("%Y-%m-%d %H:%M");
                 println!(
-                    "{id} — {} of {} models (fetched {})",
-                    shown.len(),
-                    list.models.len(),
-                    list.fetched_at
-                        .with_timezone(&chrono::Local)
-                        .format("%Y-%m-%d %H:%M")
+                    "{}",
+                    say!(
+                        models_fetched,
+                        id = id,
+                        shown = shown.len(),
+                        all = list.models.len(),
+                        when = when
+                    )
                 );
                 for model in shown {
                     println!("  {}", row(model));
@@ -116,7 +120,10 @@ async fn refresh(home: &Path, provider: Option<&str>) -> Result<(), String> {
     let mut failed = Vec::new();
     for id in &ids {
         match list_of(home, &providers, id, true).await {
-            Ok(list) => println!("{id}: {} models", list.models.len()),
+            Ok(list) => println!(
+                "{id}: {}",
+                super::texts::t().models_count.of(list.models.len() as u64)
+            ),
             Err(reason) => failed.push(format!("{id}: {reason}")),
         }
     }
@@ -129,7 +136,7 @@ fn report(failed: Vec<String>, of: usize) -> Result<(), String> {
         eprintln!("glut models: {line}");
     }
     if !failed.is_empty() && failed.len() == of {
-        return Err("no list could be read".into());
+        return Err(say!(models_none_read).into());
     }
     Ok(())
 }
@@ -156,7 +163,7 @@ fn row(model: &ModelInfo) -> String {
         .map(|prices| format!("${:.2} / ${:.2}", prices.input_per_m, prices.output_per_m))
         .unwrap_or_default();
     let reasons = if model.reasoning == Some(true) {
-        "reasons"
+        say!(models_reasons)
     } else {
         ""
     };

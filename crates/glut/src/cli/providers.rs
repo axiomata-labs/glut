@@ -121,7 +121,7 @@ fn load(home: &Path) -> Result<Providers, String> {
 fn list(home: &Path) -> Result<(), String> {
     let providers = load(home)?;
     if providers.providers.is_empty() {
-        println!("No provider yet: glut providers add <kind> (glut providers catalog lists them).");
+        println!("{}", say!(providers_none));
         return Ok(());
     }
     let store = providers.store(home).map_err(|err| err.to_string())?;
@@ -137,16 +137,16 @@ fn list(home: &Path) -> Result<(), String> {
                 std::env::var(name).ok()
             }) {
                 Ok(resolved) => match resolved.key_from {
-                    KeyFrom::Env(name) => format!("key from {name}"),
-                    KeyFrom::Store => format!("key in {}", store.place()),
-                    KeyFrom::NotNeeded => "no key needed".to_owned(),
+                    KeyFrom::Env(name) => say!(key_from_env, name = name),
+                    KeyFrom::Store => say!(key_in_store, place = store.place()),
+                    KeyFrom::NotNeeded => say!(key_not_needed).to_owned(),
                 },
-                Err(reason) => format!("NO KEY ({reason})"),
+                Err(reason) => say!(key_missing, reason = reason),
             };
         println!(
             "{mark} {id:<16} {:<20} {:<32} {}",
             entry.kind,
-            entry.model.as_deref().unwrap_or("(no default model)"),
+            entry.model.as_deref().unwrap_or(say!(no_default_model)),
             key
         );
         println!("  {:<16} {}", "", entry.root());
@@ -157,8 +157,8 @@ fn list(home: &Path) -> Result<(), String> {
 fn print_catalog() {
     for known in CATALOG {
         let sign_in = match known.sign_in {
-            SignIn::Key => known.key_env.unwrap_or("key"),
-            SignIn::None => "no key",
+            SignIn::Key => known.key_env.unwrap_or(say!(catalog_key)),
+            SignIn::None => say!(catalog_no_key),
         };
         println!(
             "{:<14} {:<28} {:<20} {}",
@@ -166,8 +166,10 @@ fn print_catalog() {
         );
     }
     println!(
-        "{CUSTOM:<14} {:<28} {:<20} any other endpoint, with --root",
-        "OpenAI-compatible", "key, or --keyless"
+        "{CUSTOM:<14} {:<28} {:<20} {}",
+        "OpenAI-compatible",
+        say!(catalog_custom_sign_in),
+        say!(catalog_custom_note)
     );
 }
 
@@ -189,7 +191,7 @@ fn add(home: &Path, added: Added) -> Result<(), String> {
     providers::check_id(&id)?;
     let custom = added.kind == CUSTOM;
     if added.keyless && !custom {
-        return Err("--keyless is only for openai-compatible; the catalog knows whether its providers need a key".into());
+        return Err(say!(keyless_only_custom).into());
     }
     let entry = Entry {
         kind: added.kind,
@@ -233,21 +235,19 @@ fn add(home: &Path, added: Added) -> Result<(), String> {
     match key {
         Some(key) => {
             store.set(&account, &key).map_err(|err| err.to_string())?;
-            println!("The key of {id} is in {}.", store.place());
+            println!("{}", say!(key_kept, id = id, place = store.place()));
         }
         // A key of its own, given before, stays: Enter changes nothing stored.
-        None if shared => println!(
-            "{id} takes the key its account's other provider keeps, unless it has its own."
-        ),
+        None if shared => println!("{}", say!(key_shared, id = id)),
         None if !entry.needs_key() => store.delete(&account).map_err(|err| err.to_string())?,
         None => {}
     }
     let default = if providers.default.as_deref() == Some(id.as_str()) {
-        " (the default)"
+        say!(the_default)
     } else {
         ""
     };
-    println!("Provider {id} added{default}. glut providers test {id} makes one tiny call.");
+    println!("{}", say!(provider_added, id = id, default = default));
     Ok(())
 }
 
@@ -257,11 +257,9 @@ fn read_key(id: &str, shared: bool) -> Result<Option<String>, String> {
     let stdin = std::io::stdin();
     let key = if stdin.is_terminal() {
         if shared {
-            eprint!(
-                "Key for {id} (not shown; Enter takes the one its account's other provider keeps): "
-            );
+            eprint!("{}", say!(key_prompt_shared, id = id));
         } else {
-            eprint!("Key for {id} (not shown): ");
+            eprint!("{}", say!(key_prompt, id = id));
         }
         let _ = std::io::stderr().flush();
         let line = without_echo(|| {
@@ -273,32 +271,28 @@ fn read_key(id: &str, shared: bool) -> Result<Option<String>, String> {
                 .map(|_| line)
         });
         eprintln!();
-        line.map_err(|err| format!("cannot read the key: {err}"))?
+        line.map_err(|err| say!(key_unreadable, err = err))?
     } else {
         let mut text = String::new();
         stdin
             .lock()
             .take(MAX_KEY_BYTES + 1)
             .read_to_string(&mut text)
-            .map_err(|err| format!("cannot read the key: {err}"))?;
+            .map_err(|err| say!(key_unreadable, err = err))?;
         text
     };
     if key.len() as u64 > MAX_KEY_BYTES {
-        return Err(format!(
-            "more than {MAX_KEY_BYTES} bytes: no key is that long"
-        ));
+        return Err(say!(key_too_long, max = MAX_KEY_BYTES));
     }
     let key = key.trim().to_owned();
     if key.is_empty() && shared {
         return Ok(None);
     }
     if key.is_empty() {
-        return Err("no key given (--no-key stores none, for a key from the environment)".into());
+        return Err(say!(no_key_given).into());
     }
     if key.chars().any(char::is_control) || key.contains(' ') {
-        return Err(
-            "the key holds spaces or control characters; was something else pasted?".into(),
-        );
+        return Err(say!(key_odd).into());
     }
     Ok(Some(key))
 }
@@ -341,7 +335,7 @@ fn without_echo<T>(read: impl FnOnce() -> std::io::Result<T>) -> std::io::Result
 fn remove(home: &Path, id: &str) -> Result<(), String> {
     let mut providers = load(home)?;
     let Some(removed) = providers.providers.remove(id) else {
-        return Err(format!("no provider {id} (glut providers list shows them)"));
+        return Err(say!(no_such_provider, id = id));
     };
     let store = providers.store(home).map_err(|err| err.to_string())?;
     if providers.default.as_deref() == Some(id) {
@@ -351,14 +345,14 @@ fn remove(home: &Path, id: &str) -> Result<(), String> {
     store
         .delete(&providers::account(id, &removed))
         .map_err(|err| err.to_string())?;
-    println!("Provider {id} removed, with its stored key.");
+    println!("{}", say!(provider_removed, id = id));
     match providers.providers.len() {
         0 => {}
         1 if providers.default.is_none() => {
-            println!("Runs without --provider take the one left.");
+            println!("{}", say!(one_left));
         }
         _ if providers.default.is_none() => {
-            println!("There is no default now: glut providers default <id>.");
+            println!("{}", say!(no_default_now));
         }
         _ => {}
     }
@@ -368,11 +362,11 @@ fn remove(home: &Path, id: &str) -> Result<(), String> {
 fn make_default(home: &Path, id: &str) -> Result<(), String> {
     let mut providers = load(home)?;
     if !providers.providers.contains_key(id) {
-        return Err(format!("no provider {id} (glut providers list shows them)"));
+        return Err(say!(no_such_provider, id = id));
     }
     providers.default = Some(id.to_owned());
     providers.save(home).map_err(|err| err.to_string())?;
-    println!("Runs without --provider now take {id}.");
+    println!("{}", say!(default_set, id = id));
     Ok(())
 }
 
@@ -403,16 +397,21 @@ async fn test(home: &Path, id: Option<&str>, model: Option<&str>) -> Result<(), 
         .message
         .content
         .as_deref()
-        .unwrap_or("(no text)")
+        .unwrap_or(say!(test_no_text))
         .trim()
         .chars()
         .take(80)
         .collect();
     println!(
-        "{name} answered in {:.1} s: {text} ({} tokens in, {} out)",
-        started.elapsed().as_secs_f64(),
-        reply.usage.input_tokens,
-        reply.usage.output_tokens
+        "{}",
+        say!(
+            test_answered,
+            name = name,
+            secs = format!("{:.1}", started.elapsed().as_secs_f64()),
+            text = text,
+            input = reply.usage.input_tokens,
+            output = reply.usage.output_tokens
+        )
     );
     Ok(())
 }

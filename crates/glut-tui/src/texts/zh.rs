@@ -864,4 +864,270 @@ pub const TEXTS: Texts = Texts {
         "向下翻页",
     ],
     setup_provider_prompt: "提供商：",
+    cli: &[
+        ("Glut, in the terminal", "Glut，在终端中"),
+        ("The folder the session works in", "会话工作的文件夹"),
+        (
+            "A provider of ~/.glut/providers.json (glut providers list); the default one otherwise",
+            "~/.glut/providers.json 中的提供商（glut providers list）；否则使用默认提供商",
+        ),
+        (
+            "The model; the provider's default otherwise",
+            "模型；否则使用提供商的默认模型",
+        ),
+        (
+            "Go on with the newest session of the folder",
+            "继续该文件夹最新的会话",
+        ),
+        (
+            "MCP servers from this file (Claude Code's shape and flag, `{\"mcpServers\": …}`) beside `~/.glut/mcp.json` and the project's `.mcp.json`; a name both have is the file's",
+            "来自此文件的 MCP 服务器（Claude Code 的格式和参数，`{\"mcpServers\": …}`），与 `~/.glut/mcp.json` 和项目的 `.mcp.json` 并用；两者都有的名字以此文件为准",
+        ),
+        (
+            "The servers of `--mcp-config` alone, none of the owner's nor the project's — `glut run --mcp-config`'s meaning",
+            "只用 `--mcp-config` 的服务器，不用所有者或项目的 — 与 `glut run --mcp-config` 含义相同",
+        ),
+        (
+            "The reader mode for this run, for a screen reader: keys in words, a plain screen, nothing moving",
+            "本次运行的读屏模式：按键用文字表示，界面简洁，没有动态",
+        ),
+        (
+            "The language Glut speaks for this run: en, de, fr, it, es, zh, ja or pt",
+            "本次运行中 Glut 使用的语言：en、de、fr、it、es、zh、ja 或 pt",
+        ),
+        (
+            "Pick an earlier session of the folder to go on with",
+            "选择该文件夹的一个早先会话继续",
+        ),
+        (
+            "A first message, sent as soon as the session is up",
+            "第一条消息，会话就绪后立即发送",
+        ),
+        ("Print help", "显示帮助"),
+        ("Print version", "显示版本"),
+        (
+            "Follow another session read-only from its event log: the folder's newest session, a session's id, or a log file (a Studio card's glut-events.jsonl)",
+            "通过事件日志只读地跟随另一个会话：文件夹最新的会话、会话 ID 或日志文件（Studio 卡片的 glut-events.jsonl）",
+        ),
+        (
+            "A session's id or a log file; the newest session of the folder when left out",
+            "会话 ID 或日志文件；省略时为该文件夹最新的会话",
+        ),
+        (
+            "Runs one prompt and writes its events as JSON lines",
+            "运行一个提示词，并以 JSON 行输出其事件",
+        ),
+        (
+            "A provider of ~/.glut/providers.json (glut providers list); without it and without --base-url the default one",
+            "~/.glut/providers.json 中的提供商（glut providers list）；不指定且无 --base-url 时使用默认提供商",
+        ),
+        (
+            "A one-off endpoint instead of a provider: the API's base, without /v1 (https://openrouter.ai/api, http://localhost:11434); the key from GLUT_API_KEY",
+            "一次性端点，代替提供商：API 的基础地址，不含 /v1（https://openrouter.ai/api、http://localhost:11434）；密钥来自 GLUT_API_KEY",
+        ),
+        (
+            "The model; with a provider, its default model when left out",
+            "模型；有提供商时，省略则用其默认模型",
+        ),
+        (
+            "How hard the model reasons: none, minimal, low, medium, high, xhigh or max. Otherwise a skill's or a command's `effort:`, else `effort` in ~/.glut/settings.json, else the provider's own default",
+            "模型思考的深度：none、minimal、low、medium、high、xhigh 或 max。否则用 skill 或命令的 `effort:`，再否则用 ~/.glut/settings.json 中的 `effort`，最后用提供商的默认值",
+        ),
+        (
+            "The folder the run works in; every file tool is confined to it",
+            "运行工作的文件夹；所有文件工具都限制在其中",
+        ),
+        (
+            "A file whose text is appended to the system prompt (a role, AGENTS.md)",
+            "一个文件，其文本会追加到系统提示词（一个角色、AGENTS.md）",
+        ),
+        ("The run's time limit in seconds", "运行的时间上限（秒）"),
+        (
+            "The model's context window in tokens, over `contextWindow` in ~/.glut/settings.json and the provider's model list: the run compacts its older steps shortly before it is full",
+            "模型的上下文窗口（token），优先于 ~/.glut/settings.json 中的 `contextWindow` 和提供商的模型列表：运行会在快满时压缩较早的步骤",
+        ),
+        (
+            "End the run before its next model call once it has used this many tokens (input less cache reads, plus output)",
+            "用掉这么多 token（输入减去缓存读取，加上输出）后，在下一次调用模型前结束运行",
+        ),
+        (
+            "End the run before its next model call once it has cost this many USD, at the model's `prices` in ~/.glut/settings.json (without them a run has no budget in money, and says so)",
+            "花费达到这么多美元后，在下一次调用模型前结束运行，按 ~/.glut/settings.json 中模型的 `prices` 计算（没有价格时运行没有金额预算，并会说明）",
+        ),
+        (
+            "Never compact the conversation automatically (`\"compact\": {\"auto\": false}` in ~/.glut/settings.json)",
+            "从不自动压缩对话（~/.glut/settings.json 中的 `\"compact\": {\"auto\": false}`）",
+        ),
+        (
+            "default, accept_edits, plan, dont_ask or auto; otherwise the settings files', else default. Headless, an ask is refused: name what the run may do with --allow, or pick a mode",
+            "default、accept_edits、plan、dont_ask 或 auto；否则用设置文件中的，再否则 default。无界面运行时询问会被拒绝：用 --allow 指明运行可做什么，或选择一个模式",
+        ),
+        (
+            "A rule the run allows, in Claude Code's format (`Bash(cargo test:*)`, `Edit(src/**)`); repeatable",
+            "运行允许的规则，采用 Claude Code 的格式（`Bash(cargo test:*)`、`Edit(src/**)`）；可重复",
+        ),
+        (
+            "A rule the run asks about (refused headless); repeatable",
+            "运行会询问的规则（无界面时拒绝）；可重复",
+        ),
+        (
+            "A rule the run refuses; repeatable",
+            "运行拒绝的规则；可重复",
+        ),
+        (
+            "Run a skill as the run's task (HS6, K1.1): its SKILL.md body becomes the run's instructions, and its frontmatter may narrow the tools, pick the model and set the time limit (K5)",
+            "把一个 skill 作为运行的任务（HS6，K1.1）：其 SKILL.md 正文成为运行的指令，其 frontmatter 可以限制工具、选择模型并设置时间上限（K5）",
+        ),
+        (
+            "A folder of skills beside `~/.glut/skills` (HS6, K2); repeatable",
+            "`~/.glut/skills` 之外的 skill 文件夹（HS6，K2）；可重复",
+        ),
+        (
+            "The run's MCP servers from this file alone (`{\"mcpServers\": …}`, Claude Code's shape and flag), instead of ~/.glut/mcp.json and the project's .mcp.json",
+            "运行的 MCP 服务器只来自此文件（`{\"mcpServers\": …}`，Claude Code 的格式和参数），代替 ~/.glut/mcp.json 和项目的 .mcp.json",
+        ),
+        (
+            "Work as Glut's terminal session does in a project (TUI T35): its guides, the map of where plans, to-dos and the memory are kept, and the `memory` tool. Off: the run knows only what its flags say",
+            "像 Glut 的终端会话那样在项目中工作（TUI T35）：其指南、计划、待办和记忆所在位置的地图，以及 `memory` 工具。关闭时：运行只知道参数告诉它的内容",
+        ),
+        (
+            "An image the prompt carries (T45: PNG, JPEG, GIF or WebP, scaled before it is sent); repeatable",
+            "提示词附带的一张图片（T45：PNG、JPEG、GIF 或 WebP，发送前缩小）；可重复",
+        ),
+        (
+            "The prompt — extra text beside `--skill`, or a slash command (`/review src/`), read from `~/.glut/commands/` and, in a trusted folder, the project's `.glut/commands/` (HS4). Without `--skill` a prompt is required; with one it defaults to \"Run the skill.\"",
+            "提示词 — `--skill` 之外的额外文字，或斜杠命令（`/review src/`），从 `~/.glut/commands/` 读取，在可信文件夹中也从项目的 `.glut/commands/` 读取（HS4）。没有 `--skill` 时必须提供提示词；有时默认为 \"Run the skill.\"",
+        ),
+        (
+            "Goes on with a run that was lost before it finished (durable runs, `docs/plans/durable.md`): from its journal in `~/.glut/runs`, with the run's own flags. Without a run the newest unfinished one; --list shows them",
+            "继续一个未完成就中断的运行（持久运行，`docs/plans/durable.md`）：从其在 `~/.glut/runs` 中的日志，用该运行自己的参数。不指定运行时为最新的未完成运行；--list 列出它们",
+        ),
+        (
+            "The run, as `glut` named it when it started (on stderr)",
+            "运行，即 `glut` 启动它时给的名字（在 stderr 上）",
+        ),
+        (
+            "List the unfinished runs, newest first, and change nothing",
+            "列出未完成的运行，最新的在前，不做任何更改",
+        ),
+        (
+            "Give the run up: its journal is deleted",
+            "放弃该运行：删除其日志",
+        ),
+        (
+            "Puts a folder back as it was before a run, or before one of its steps (Glut 2): the snapshots a run took before it changed anything. Without --run the newest run of the folder; --list shows the runs",
+            "把文件夹恢复到某次运行之前，或其某个步骤之前（Glut 2）：运行在做任何更改前拍下的快照。不指定 --run 时为该文件夹最新的运行；--list 列出运行",
+        ),
+        (
+            "The run, as its `snapshot` events name it",
+            "运行，即其 `snapshot` 事件给的名字",
+        ),
+        (
+            "Back to before this step of the run instead of before the whole run",
+            "回到该运行的这一步之前，而不是整个运行之前",
+        ),
+        (
+            "List the runs with snapshots of the folder, newest first, and change nothing",
+            "列出该文件夹有快照的运行，最新的在前，不做任何更改",
+        ),
+        (
+            "What Glut lean saved (`docs/plans/glut-lean.md`, N9): compacted outputs, unchanged re-reads and relocated results per kind, from `~/.glut/lean.jsonl` — every Glut run's, the app's too",
+            "Glut lean 节省了什么（`docs/plans/glut-lean.md`，N9）：按类别的压缩输出、未变的重复读取和移出的结果，来自 `~/.glut/lean.jsonl` — 每次 Glut 运行的，包括应用的",
+        ),
+        ("Only the last N days", "仅最近 N 天"),
+        (
+            "The model providers runs use (`docs/plans/glut-providers.md`): ~/.glut/providers.json, keys in a secret store",
+            "运行使用的模型提供商（`docs/plans/glut-providers.md`）：~/.glut/providers.json，密钥在安全存储中",
+        ),
+        (
+            "The configured providers, the default (marked *), and where each one's key comes from (never the key)",
+            "已配置的提供商、默认提供商（标记 *）以及各自密钥的来源（从不显示密钥）",
+        ),
+        (
+            "Every provider Glut knows by name — the kinds `add` takes",
+            "Glut 认识的每个提供商 — 即 `add` 接受的类型",
+        ),
+        (
+            "Adds a provider, or replaces one of the same id. The key is asked for without echo — or read from stdin when it is no terminal (`op read … | glut providers add openrouter`)",
+            "添加一个提供商，或替换同一 ID 的提供商。密钥以不回显的方式询问 — 或在 stdin 不是终端时从中读取（`op read … | glut providers add openrouter`）",
+        ),
+        (
+            "A kind of `glut providers catalog`, or `openai-compatible` with --root",
+            "`glut providers catalog` 中的一种类型，或带 --root 的 `openai-compatible`",
+        ),
+        (
+            "The name runs use (`--provider`); the kind by default",
+            "运行使用的名称（`--provider`）；默认为类型",
+        ),
+        (
+            "The API's root, its version included (`http://box:8080/v1`); required for openai-compatible",
+            "API 的根地址，包含版本（`http://box:8080/v1`）；openai-compatible 必填",
+        ),
+        (
+            "The model a run takes when none is named",
+            "未指定模型时运行使用的模型",
+        ),
+        (
+            "An environment variable the key may come from, over the catalog's",
+            "可提供密钥的环境变量，优先于目录中的",
+        ),
+        (
+            "Store no key now: it comes from the environment",
+            "现在不保存密钥：它来自环境变量",
+        ),
+        (
+            "An openai-compatible endpoint that needs no key (a server on this machine)",
+            "不需要密钥的 openai-compatible 端点（本机上的服务器）",
+        ),
+        (
+            "Make it the default provider (the first one added always is)",
+            "设为默认提供商（第一个添加的总是默认）",
+        ),
+        (
+            "Removes a provider and its stored key",
+            "删除一个提供商及其保存的密钥",
+        ),
+        (
+            "Makes a provider the one runs take without --provider",
+            "把某个提供商设为运行在没有 --provider 时使用的提供商",
+        ),
+        (
+            "One tiny call to the provider's model, to see that endpoint, key and model work",
+            "对提供商的模型发起一次极小的调用，检查端点、密钥和模型是否可用",
+        ),
+        (
+            "The provider; the default one when left out",
+            "提供商；省略时为默认提供商",
+        ),
+        (
+            "Another model than the provider's default",
+            "提供商默认模型之外的另一个模型",
+        ),
+        (
+            "Print this message or the help of the given subcommand(s)",
+            "显示此帮助或指定子命令的帮助",
+        ),
+        (
+            "The models the providers offer (`docs/plans/glut-providers.md`, PV2), from lists kept in ~/.glut/models",
+            "提供商提供的模型（`docs/plans/glut-providers.md`，PV2），来自 ~/.glut/models 中保存的列表",
+        ),
+        (
+            "The models of one provider or of all, with context window, price per million tokens and whether they reason",
+            "一个或全部提供商的模型，含上下文窗口、每百万 token 价格以及是否推理",
+        ),
+        ("Only this provider's", "仅此提供商的"),
+        (
+            "Fetch the lists again first, however fresh they are",
+            "先重新获取列表，不论它们多新",
+        ),
+        (
+            "Only models whose id or name holds every word (`deepseek flash`)",
+            "仅 ID 或名称包含每个词的模型（`deepseek flash`）",
+        ),
+        (
+            "Fetches the lists again: of one provider, or of all",
+            "重新获取列表：一个提供商的，或全部的",
+        ),
+    ],
+    cli_headings: &["用法：", "选项", "参数", "命令"],
 };

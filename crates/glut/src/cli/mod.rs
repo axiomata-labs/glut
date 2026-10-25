@@ -12,6 +12,9 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
+#[macro_use]
+mod texts;
+
 pub mod models;
 pub mod providers;
 
@@ -241,14 +244,14 @@ fn gain(days: Option<u32>) -> ExitCode {
         ExitCode::from(1)
     };
     let Some(path) = savings_file() else {
-        return fail("no home folder: set HOME or GLUT_HOME".to_owned());
+        return fail(say!(gain_no_home).to_owned());
     };
     match crate::lean::report(&path, days) {
         Ok(table) => {
             print!("{table}");
             ExitCode::SUCCESS
         }
-        Err(err) => fail(format!("cannot read the count of savings: {err}")),
+        Err(err) => fail(say!(gain_unreadable, err = err)),
     }
 }
 
@@ -317,8 +320,12 @@ async fn endpoint(
         )?
     };
     eprintln!(
-        "glut: provider {} · model {}",
-        resolved.id, resolved.endpoint.model
+        "glut: {}",
+        say!(
+            run_provider,
+            provider = resolved.id,
+            model = resolved.endpoint.model
+        )
     );
     let list = match crate::providers::models::current(
         &home,
@@ -331,14 +338,21 @@ async fn endpoint(
         Ok(list) => {
             if list.get(&resolved.endpoint.model).is_none() {
                 eprintln!(
-                    "glut: {} is not in {}'s model list (glut models list --provider {})",
-                    resolved.endpoint.model, resolved.id, resolved.id
+                    "glut: {}",
+                    say!(
+                        model_unlisted,
+                        model = resolved.endpoint.model,
+                        provider = resolved.id
+                    )
                 );
             }
             Some(list)
         }
         Err(reason) => {
-            eprintln!("glut: no model list of {}: {reason}", resolved.id);
+            eprintln!(
+                "glut: {}",
+                say!(no_model_list, provider = resolved.id, reason = reason)
+            );
             None
         }
     };
@@ -448,7 +462,7 @@ async fn resume_command(run: Option<String>, list: bool, discard: bool) -> ExitC
         ExitCode::from(1)
     };
     let Some(dir) = journal_dir() else {
-        return fail("HOME is not set to an absolute folder".into());
+        return fail(say!(home_unset).into());
     };
     journal::sweep(&dir);
     let unfinished = journal::list(&dir);
@@ -464,9 +478,9 @@ async fn resume_command(run: Option<String>, list: bool, discard: bool) -> ExitC
                 })
                 .unwrap_or_default();
             let state = if entry.running {
-                "  (still running)"
+                format!("  {}", say!(resume_running))
             } else {
-                ""
+                String::new()
             };
             println!("{}  {}  {what}{state}", entry.run, entry.started_at);
         }
@@ -474,17 +488,15 @@ async fn resume_command(run: Option<String>, list: bool, discard: bool) -> ExitC
     }
     // Named, never guessed: a resume runs with the flags the journal holds, so the owner picks which.
     let Some(run) = run else {
-        return fail("name the run: glut resume <run> (glut resume --list shows them)".into());
+        return fail(say!(resume_name_run).into());
     };
     let Some(entry) = unfinished.iter().find(|entry| entry.run == run) else {
-        return fail(format!(
-            "no unfinished run {run} (glut resume --list shows them)"
-        ));
+        return fail(say!(resume_no_run, run = run));
     };
     if discard {
         return match journal::discard(&dir, &entry.run) {
             Ok(()) => {
-                println!("{} given up", entry.run);
+                println!("{}", say!(resume_given_up, run = entry.run));
                 ExitCode::SUCCESS
             }
             Err(reason) => fail(reason),
@@ -493,27 +505,31 @@ async fn resume_command(run: Option<String>, list: bool, discard: bool) -> ExitC
     let args = match serde_json::from_value::<RunArgs>(entry.meta["args"].clone()) {
         Ok(args) => args,
         Err(err) => {
-            return fail(format!(
-                "the run {} was not started by glut run: {err}",
-                entry.run
-            ));
+            return fail(say!(resume_not_glut_run, run = entry.run, err = err));
         }
     };
     // What the run goes on with, said before it does: the flags come from the journal, not from this command line.
-    eprintln!(
-        "glut resume: {} with {} --model {} --effort {} --cwd {} --permission-mode {} --allow {:?} --deny {:?}",
-        entry.run,
+    let flags = format!(
+        "{} --model {} --effort {} --cwd {} --permission-mode {} --allow {:?} --deny {:?}",
         match (&args.base_url, &args.provider) {
             (Some(base_url), _) => format!("--base-url {base_url}"),
             (None, Some(provider)) => format!("--provider {provider}"),
-            (None, None) => "the default provider".to_owned(),
+            (None, None) => say!(resume_default_provider).to_owned(),
         },
-        args.model.as_deref().unwrap_or("(the provider's)"),
-        args.effort.as_deref().unwrap_or("(settings)"),
+        args.model
+            .as_deref()
+            .unwrap_or(say!(resume_providers_model)),
+        args.effort.as_deref().unwrap_or(say!(resume_from_settings)),
         args.cwd.display(),
-        args.permission_mode.as_deref().unwrap_or("(settings)"),
+        args.permission_mode
+            .as_deref()
+            .unwrap_or(say!(resume_from_settings)),
         args.allow,
         args.deny
+    );
+    eprintln!(
+        "glut resume: {}",
+        say!(resume_with, run = entry.run, flags = flags)
     );
     execute(args, Some(entry.run.clone())).await
 }
@@ -580,7 +596,7 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
             )
         });
         if resumed.is_none() {
-            eprintln!("glut: run {run} (if it is lost before it ends: glut resume {run})");
+            eprintln!("glut: {}", say!(run_started, run = run));
         }
         let mut kept = journal_args;
         kept.cwd = cwd.clone();
@@ -684,7 +700,7 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
     // cannot be used is a note on stderr, never an error (K3).
     let (catalog, notes) = skills::Catalog::load(&home, &cwd, trusted, &config.skill_dirs);
     for note in notes {
-        eprintln!("glut: skill left out: {note}");
+        eprintln!("glut: {}", say!(skill_left_out, note = note));
     }
     // T37a: the named subagents, the owner's and — in a trusted folder — the project's.
     let (agents, notes) = crate::agents::Catalog::load(&home, &cwd, trusted);
@@ -801,10 +817,7 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
         paid_usd: 0.0,
     };
     if max_usd.is_some() && config.budget.prices.is_none() {
-        eprintln!(
-            "glut: --max-usd has no prices for {} in ~/.glut/settings.json or the provider's list: no budget in money",
-            endpoint.model
-        );
+        eprintln!("glut: {}", say!(max_usd_no_prices, model = endpoint.model));
     }
     // A named agent's own model (T37a): built as the run's is — a provider of `providers.json`, or the run's one-off
     // endpoint with another model id.
@@ -891,31 +904,48 @@ fn undo(cwd: &std::path::Path, run: Option<String>, step: Option<u32>, list: boo
         .filter(|home| home.is_absolute())
         .map(|home| home.join(".glut").join("snapshots"))
     else {
-        return fail("HOME is not set to an absolute folder".into());
+        return fail(say!(home_unset).into());
     };
     let cwd = match cwd.canonicalize() {
         Ok(cwd) => cwd,
-        Err(err) => return fail(format!("cannot use {}: {err}", cwd.display())),
+        Err(err) => return fail(say!(cannot_use, path = cwd.display(), err = err)),
     };
     let runs = snapshot::runs(&root, &cwd);
     if list {
         for record in &runs {
             let steps: Vec<String> = record.steps.iter().map(|s| s.turn.to_string()).collect();
-            println!("{}  steps {}", record.run, steps.join(", "));
+            println!(
+                "{}",
+                say!(undo_steps, run = record.run, steps = steps.join(", "))
+            );
         }
         return ExitCode::SUCCESS;
     }
     let Some(run) = run.or_else(|| runs.first().map(|record| record.run.clone())) else {
-        return fail(format!("no run has snapshots of {}", cwd.display()));
+        return fail(say!(undo_no_snapshots, path = cwd.display()));
     };
     match snapshot::restore(&root, &cwd, &run, step) {
         Ok(commit) => {
             match step {
                 Some(step) => println!(
-                    "{} is back as before step {step} of {run} ({commit:.8})",
-                    cwd.display()
+                    "{}",
+                    say!(
+                        undo_back_step,
+                        path = cwd.display(),
+                        step = step,
+                        run = run,
+                        commit = format!("{commit:.8}")
+                    )
                 ),
-                None => println!("{} is back as before {run} ({commit:.8})", cwd.display()),
+                None => println!(
+                    "{}",
+                    say!(
+                        undo_back,
+                        path = cwd.display(),
+                        run = run,
+                        commit = format!("{commit:.8}")
+                    )
+                ),
             }
             ExitCode::SUCCESS
         }

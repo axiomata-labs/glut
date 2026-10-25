@@ -354,6 +354,8 @@ macro_rules! catalog {
 
         impl $name {
             /// Every text by its field's name.
+            // Only the tests that compare languages read it, and a crate's private catalog has no other reader.
+            #[allow(dead_code)]
             pub fn entries(&self) -> Vec<(&'static str, $crate::lang::Entry)> {
                 vec![$( (stringify!($field), $crate::lang::Entry::from(&self.$field)), )*]
             }

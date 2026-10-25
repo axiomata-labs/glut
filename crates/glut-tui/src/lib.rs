@@ -7,6 +7,7 @@ mod texts;
 mod agents;
 mod app;
 mod branch;
+mod cli_help;
 mod commands;
 mod follow;
 mod footer;
@@ -47,6 +48,7 @@ mod warm;
 mod watch;
 mod worktree;
 
+pub use cli_help::{localized as localized_cli, untranslated as untranslated_cli};
 pub use follow::{resolve as watched_log, watch};
 pub use host::{
     EngineChoice, Host, HostFuture, HostLink, Instructions, Launch, Log, Search, Servers, Signal,
@@ -54,3 +56,12 @@ pub use host::{
 };
 pub use screen::{Open, restart_in, run, standalone, standalone_switching};
 pub use texts::force as force_language;
+
+/// The language a command starts in before any session does (`glut --help`, `glut watch`): the one `/language` kept,
+/// else the system's — a `--lang` forced before wins (T48).
+pub fn apply_kept_language() {
+    let kept = glut::permissions::settings::home_dir()
+        .ok()
+        .and_then(|home| prefs::Prefs::load(&home).language);
+    texts::apply(kept.as_deref(), None);
+}

@@ -1331,6 +1331,11 @@ glut::catalog! {
         key_words: &'static [&'static str],
         /// The setup's prompt for a provider's number.
         setup_provider_prompt: &'static str,
+        /// The command line's help (`glut --help`), by its English text as clap's derive writes it — English's own
+        /// table is empty: every help text of the command tree, a test holds.
+        cli: &'static [(&'static str, &'static str)],
+        /// The help's headings: usage (with its colon), options, arguments, commands.
+        cli_headings: &'static [&'static str],
     }
 }
 
@@ -1473,8 +1478,10 @@ pub(crate) mod check {
             .filter(|term| holds(english, term) && !kept_as(translated, term))
             .map(|term| (*term).to_owned())
             .collect();
+        // Around a word: punctuation, quotes, backticks and an English possessive (`--mcp-config`'s).
         let trim = |word: &'_ str| {
-            word.trim_matches(|c: char| "(),;:.…\"“”".contains(c))
+            let word = word.trim_end_matches("'s").trim_end_matches("’s");
+            word.trim_matches(|c: char| "(),;:.…\"“”`".contains(c))
                 .to_owned()
         };
         let raw: Vec<&str> = english.split_whitespace().collect();

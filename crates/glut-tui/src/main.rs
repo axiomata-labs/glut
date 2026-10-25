@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use glut_tui::{Launch, Open, Servers};
 
 #[derive(Parser)]
@@ -39,7 +39,7 @@ struct Cli {
     #[arg(long)]
     reader: bool,
     /// The language Glut speaks for this run: en, de, fr, it, es, zh, ja or pt.
-    #[arg(long, value_parser = parse_lang)]
+    #[arg(long, global = true, value_parser = parse_lang)]
     lang: Option<glut::lang::Lang>,
     /// Pick an earlier session of the folder to go on with.
     #[arg(short = 'r', long)]
@@ -60,6 +60,28 @@ enum Command {
     Headless(glut::cli::Command),
 }
 
+/// The language `--lang` names among `args`, before clap reads them: `--lang de` or `--lang=de`.
+fn lang_given(args: impl Iterator<Item = String>) -> Option<glut::lang::Lang> {
+    let mut args = args.peekable();
+    while let Some(arg) = args.next() {
+        // Past `--` everything is the prompt's.
+        if arg == "--" {
+            break;
+        }
+        let word = match arg.strip_prefix("--lang") {
+            Some("") => args.next()?,
+            Some(rest) => match rest.strip_prefix('=') {
+                Some(word) => word.to_owned(),
+                // Another flag that starts alike (`--language`): not this one, the scan goes on.
+                None => continue,
+            },
+            None => continue,
+        };
+        return glut::lang::Lang::parse(&word);
+    }
+    None
+}
+
 /// `--lang`'s word: a language Glut speaks.
 fn parse_lang(word: &str) -> Result<glut::lang::Lang, String> {
     glut::lang::Lang::parse(word).ok_or_else(|| "one of en, de, fr, it, es, zh, ja, pt".to_owned())
@@ -69,7 +91,13 @@ fn parse_lang(word: &str) -> Result<glut::lang::Lang, String> {
 const SHUTDOWN: std::time::Duration = std::time::Duration::from_secs(3);
 
 fn main() -> std::process::ExitCode {
-    let mut cli = Cli::parse();
+    // The help speaks the language the run will (T48): `--lang` is read before clap reads the rest.
+    if let Some(lang) = lang_given(std::env::args()) {
+        glut_tui::force_language(lang);
+    }
+    glut_tui::apply_kept_language();
+    let matches = glut_tui::localized_cli(Cli::command()).get_matches();
+    let mut cli = Cli::from_arg_matches(&matches).unwrap_or_else(|err| err.exit());
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -80,10 +108,6 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::from(1);
         }
     };
-    // A language given for the run holds for every command: `glut --lang de watch` too.
-    if let Some(lang) = cli.lang {
-        glut_tui::force_language(lang);
-    }
     let (code, switch) = runtime.block_on(async {
         match cli.command.take() {
             Some(Command::Watch { what }) => (watch(&cli.cwd, what.as_deref()).await, None),
@@ -153,6 +177,39 @@ mod tests {
     use glut_tui::EngineChoice;
 
     use super::*;
+
+    #[test]
+    fn every_help_text_is_in_every_language() {
+        let mut cmd = Cli::command();
+        cmd.build();
+        for lang in glut::lang::Lang::ALL
+            .into_iter()
+            .filter(|lang| *lang != glut::lang::Lang::En)
+        {
+            let missing = glut_tui::untranslated_cli(&cmd, lang);
+            assert!(missing.is_empty(), "{}: {missing:#?}", lang.code());
+        }
+    }
+
+    #[test]
+    fn lang_is_read_before_clap_and_not_from_the_prompt() {
+        let given = |args: &[&str]| lang_given(args.iter().map(|arg| (*arg).to_owned()));
+        assert_eq!(
+            given(&["glut", "--lang", "de", "--help"]),
+            Some(glut::lang::Lang::De)
+        );
+        assert_eq!(
+            given(&["glut", "run", "--lang=ja"]),
+            Some(glut::lang::Lang::Ja)
+        );
+        assert_eq!(given(&["glut", "--", "--lang", "fr"]), None);
+        assert_eq!(given(&["glut", "--language", "fr"]), None);
+        assert_eq!(
+            given(&["glut", "--language", "fr", "--lang", "it"]),
+            Some(glut::lang::Lang::It)
+        );
+        assert_eq!(given(&["glut"]), None);
+    }
 
     #[test]
     fn a_switch_s_restart_is_a_start_by_hand() {

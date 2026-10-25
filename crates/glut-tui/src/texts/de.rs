@@ -989,4 +989,276 @@ pub const TEXTS: Texts = Texts {
         "Bild ab",
     ],
     setup_provider_prompt: "Provider:",
+    cli: &[
+        ("Glut, in the terminal", "Glut, im Terminal"),
+        (
+            "The folder the session works in",
+            "Der Ordner, in dem die Session arbeitet",
+        ),
+        (
+            "A provider of ~/.glut/providers.json (glut providers list); the default one otherwise",
+            "Ein Provider aus ~/.glut/providers.json (glut providers list); sonst der Standard-Provider",
+        ),
+        (
+            "The model; the provider's default otherwise",
+            "Das Modell; sonst das Standardmodell des Providers",
+        ),
+        (
+            "Go on with the newest session of the folder",
+            "Mit der neuesten Session des Ordners weitermachen",
+        ),
+        (
+            "MCP servers from this file (Claude Code's shape and flag, `{\"mcpServers\": …}`) beside `~/.glut/mcp.json` and the project's `.mcp.json`; a name both have is the file's",
+            "MCP-Server aus dieser Datei (Format und Flag wie bei Claude Code, `{\"mcpServers\": …}`) neben `~/.glut/mcp.json` und der `.mcp.json` des Projekts; ein Name in beiden gehört der Datei",
+        ),
+        (
+            "The servers of `--mcp-config` alone, none of the owner's nor the project's — `glut run --mcp-config`'s meaning",
+            "Nur die Server aus `--mcp-config`, keine des Owners oder des Projekts — so wie bei `glut run --mcp-config`",
+        ),
+        (
+            "The reader mode for this run, for a screen reader: keys in words, a plain screen, nothing moving",
+            "Der Bildschirmleser-Modus für diesen Lauf: Tasten in Worten, ein schlichter Bildschirm, nichts bewegt sich",
+        ),
+        (
+            "The language Glut speaks for this run: en, de, fr, it, es, zh, ja or pt",
+            "Die Sprache, in der Glut in diesem Lauf spricht: en, de, fr, it, es, zh, ja oder pt",
+        ),
+        (
+            "Pick an earlier session of the folder to go on with",
+            "Eine frühere Session des Ordners zum Weitermachen wählen",
+        ),
+        (
+            "A first message, sent as soon as the session is up",
+            "Eine erste Nachricht, gesendet, sobald die Session bereit ist",
+        ),
+        ("Print help", "Hilfe anzeigen"),
+        ("Print version", "Version anzeigen"),
+        (
+            "Follow another session read-only from its event log: the folder's newest session, a session's id, or a log file (a Studio card's glut-events.jsonl)",
+            "Eine andere Session nur lesend über ihr Ereignisprotokoll verfolgen: die neueste Session des Ordners, die ID einer Session oder eine Log-Datei (die glut-events.jsonl einer Studio-Karte)",
+        ),
+        (
+            "A session's id or a log file; the newest session of the folder when left out",
+            "Die ID einer Session oder eine Log-Datei; ohne Angabe die neueste Session des Ordners",
+        ),
+        (
+            "Runs one prompt and writes its events as JSON lines",
+            "Führt einen Prompt aus und schreibt seine Ereignisse als JSON-Zeilen",
+        ),
+        (
+            "A provider of ~/.glut/providers.json (glut providers list); without it and without --base-url the default one",
+            "Ein Provider aus ~/.glut/providers.json (glut providers list); ohne ihn und ohne --base-url der Standard-Provider",
+        ),
+        (
+            "A one-off endpoint instead of a provider: the API's base, without /v1 (https://openrouter.ai/api, http://localhost:11434); the key from GLUT_API_KEY",
+            "Ein einmaliger Endpunkt statt eines Providers: die Basis der API, ohne /v1 (https://openrouter.ai/api, http://localhost:11434); der Schlüssel aus GLUT_API_KEY",
+        ),
+        (
+            "The model; with a provider, its default model when left out",
+            "Das Modell; mit einem Provider ohne Angabe dessen Standardmodell",
+        ),
+        (
+            "How hard the model reasons: none, minimal, low, medium, high, xhigh or max. Otherwise a skill's or a command's `effort:`, else `effort` in ~/.glut/settings.json, else the provider's own default",
+            "Wie gründlich das Modell nachdenkt: none, minimal, low, medium, high, xhigh oder max. Sonst das `effort:` eines Skills oder Befehls, sonst `effort` in ~/.glut/settings.json, sonst der Standard des Providers",
+        ),
+        (
+            "The folder the run works in; every file tool is confined to it",
+            "Der Ordner, in dem der Lauf arbeitet; jedes Datei-Werkzeug ist darauf beschränkt",
+        ),
+        (
+            "A file whose text is appended to the system prompt (a role, AGENTS.md)",
+            "Eine Datei, deren Text an den Systemprompt angehängt wird (eine Rolle, AGENTS.md)",
+        ),
+        (
+            "The run's time limit in seconds",
+            "Das Zeitlimit des Laufs in Sekunden",
+        ),
+        (
+            "The model's context window in tokens, over `contextWindow` in ~/.glut/settings.json and the provider's model list: the run compacts its older steps shortly before it is full",
+            "Das Kontextfenster des Modells in Tokens, vor `contextWindow` in ~/.glut/settings.json und der Modell-Liste des Providers: der Lauf kompaktiert seine älteren Schritte kurz bevor es voll ist",
+        ),
+        (
+            "End the run before its next model call once it has used this many tokens (input less cache reads, plus output)",
+            "Den Lauf vor seinem nächsten Modell-Aufruf beenden, sobald er so viele Tokens verbraucht hat (Eingabe ohne Cache-Lesezugriffe, plus Ausgabe)",
+        ),
+        (
+            "End the run before its next model call once it has cost this many USD, at the model's `prices` in ~/.glut/settings.json (without them a run has no budget in money, and says so)",
+            "Den Lauf vor seinem nächsten Modell-Aufruf beenden, sobald er so viele USD gekostet hat, zu den `prices` des Modells in ~/.glut/settings.json (ohne sie hat ein Lauf kein Budget in Geld und sagt das)",
+        ),
+        (
+            "Never compact the conversation automatically (`\"compact\": {\"auto\": false}` in ~/.glut/settings.json)",
+            "Das Gespräch nie automatisch kompaktieren (`\"compact\": {\"auto\": false}` in ~/.glut/settings.json)",
+        ),
+        (
+            "default, accept_edits, plan, dont_ask or auto; otherwise the settings files', else default. Headless, an ask is refused: name what the run may do with --allow, or pick a mode",
+            "default, accept_edits, plan, dont_ask oder auto; sonst der aus den Einstellungsdateien, sonst default. Ohne Oberfläche wird eine Rückfrage abgelehnt: nenne mit --allow, was der Lauf darf, oder wähle einen Modus",
+        ),
+        (
+            "A rule the run allows, in Claude Code's format (`Bash(cargo test:*)`, `Edit(src/**)`); repeatable",
+            "Eine Regel, die der Lauf erlaubt, im Format von Claude Code (`Bash(cargo test:*)`, `Edit(src/**)`); wiederholbar",
+        ),
+        (
+            "A rule the run asks about (refused headless); repeatable",
+            "Eine Regel, zu der der Lauf fragt (ohne Oberfläche abgelehnt); wiederholbar",
+        ),
+        (
+            "A rule the run refuses; repeatable",
+            "Eine Regel, die der Lauf ablehnt; wiederholbar",
+        ),
+        (
+            "Run a skill as the run's task (HS6, K1.1): its SKILL.md body becomes the run's instructions, and its frontmatter may narrow the tools, pick the model and set the time limit (K5)",
+            "Einen Skill als Aufgabe des Laufs ausführen (HS6, K1.1): der Text seiner SKILL.md wird zu den Anweisungen des Laufs, und seine Frontmatter kann die Werkzeuge einschränken, das Modell wählen und das Zeitlimit setzen (K5)",
+        ),
+        (
+            "A folder of skills beside `~/.glut/skills` (HS6, K2); repeatable",
+            "Ein Ordner mit Skills neben `~/.glut/skills` (HS6, K2); wiederholbar",
+        ),
+        (
+            "The run's MCP servers from this file alone (`{\"mcpServers\": …}`, Claude Code's shape and flag), instead of ~/.glut/mcp.json and the project's .mcp.json",
+            "Die MCP-Server des Laufs nur aus dieser Datei (`{\"mcpServers\": …}`, Format und Flag wie bei Claude Code), statt ~/.glut/mcp.json und der .mcp.json des Projekts",
+        ),
+        (
+            "Work as Glut's terminal session does in a project (TUI T35): its guides, the map of where plans, to-dos and the memory are kept, and the `memory` tool. Off: the run knows only what its flags say",
+            "Wie die Terminal-Session von Glut in einem Projekt arbeiten (TUI T35): seine Leitfäden, die Karte, wo Pläne, Aufgaben und das Gedächtnis liegen, und das Werkzeug `memory`. Ohne: der Lauf weiß nur, was seine Flags sagen",
+        ),
+        (
+            "An image the prompt carries (T45: PNG, JPEG, GIF or WebP, scaled before it is sent); repeatable",
+            "Ein Bild, das der Prompt mitnimmt (T45: PNG, JPEG, GIF oder WebP, vor dem Senden verkleinert); wiederholbar",
+        ),
+        (
+            "The prompt — extra text beside `--skill`, or a slash command (`/review src/`), read from `~/.glut/commands/` and, in a trusted folder, the project's `.glut/commands/` (HS4). Without `--skill` a prompt is required; with one it defaults to \"Run the skill.\"",
+            "Der Prompt — zusätzlicher Text neben `--skill`, oder ein Slash-Befehl (`/review src/`), gelesen aus `~/.glut/commands/` und, in einem vertrauten Ordner, aus `.glut/commands/` des Projekts (HS4). Ohne `--skill` ist ein Prompt nötig; mit einem ist er standardmäßig \"Run the skill.\"",
+        ),
+        (
+            "Goes on with a run that was lost before it finished (durable runs, `docs/plans/durable.md`): from its journal in `~/.glut/runs`, with the run's own flags. Without a run the newest unfinished one; --list shows them",
+            "Macht mit einem Lauf weiter, der verloren ging, bevor er fertig war (dauerhafte Läufe, `docs/plans/durable.md`): aus seinem Journal in `~/.glut/runs`, mit den Flags des Laufs. Ohne Lauf der neueste unfertige; --list zeigt sie",
+        ),
+        (
+            "The run, as `glut` named it when it started (on stderr)",
+            "Der Lauf, so wie `glut` ihn beim Start benannt hat (auf stderr)",
+        ),
+        (
+            "List the unfinished runs, newest first, and change nothing",
+            "Die unfertigen Läufe auflisten, neueste zuerst, und nichts ändern",
+        ),
+        (
+            "Give the run up: its journal is deleted",
+            "Den Lauf aufgeben: sein Journal wird gelöscht",
+        ),
+        (
+            "Puts a folder back as it was before a run, or before one of its steps (Glut 2): the snapshots a run took before it changed anything. Without --run the newest run of the folder; --list shows the runs",
+            "Setzt einen Ordner auf den Stand vor einem Lauf zurück, oder vor einem seiner Schritte (Glut 2): die Snapshots, die ein Lauf vor jeder Änderung gemacht hat. Ohne --run der neueste Lauf des Ordners; --list zeigt die Läufe",
+        ),
+        (
+            "The run, as its `snapshot` events name it",
+            "Der Lauf, wie ihn seine `snapshot`-Ereignisse nennen",
+        ),
+        (
+            "Back to before this step of the run instead of before the whole run",
+            "Zurück vor diesen Schritt des Laufs statt vor den ganzen Lauf",
+        ),
+        (
+            "List the runs with snapshots of the folder, newest first, and change nothing",
+            "Die Läufe mit Snapshots des Ordners auflisten, neueste zuerst, und nichts ändern",
+        ),
+        (
+            "What Glut lean saved (`docs/plans/glut-lean.md`, N9): compacted outputs, unchanged re-reads and relocated results per kind, from `~/.glut/lean.jsonl` — every Glut run's, the app's too",
+            "Was Glut lean gespart hat (`docs/plans/glut-lean.md`, N9): gekürzte Ausgaben, unveränderte erneute Lesezugriffe und ausgelagerte Ergebnisse je Art, aus `~/.glut/lean.jsonl` — von jedem Glut-Lauf, auch denen der App",
+        ),
+        ("Only the last N days", "Nur die letzten N Tage"),
+        (
+            "The model providers runs use (`docs/plans/glut-providers.md`): ~/.glut/providers.json, keys in a secret store",
+            "Die Modell-Provider, die Läufe nutzen (`docs/plans/glut-providers.md`): ~/.glut/providers.json, Schlüssel in einem Geheimnisspeicher",
+        ),
+        (
+            "The configured providers, the default (marked *), and where each one's key comes from (never the key)",
+            "Die eingerichteten Provider, der Standard (mit * markiert) und woher jeder seinen Schlüssel nimmt (nie der Schlüssel selbst)",
+        ),
+        (
+            "Every provider Glut knows by name — the kinds `add` takes",
+            "Jeder Provider, den Glut beim Namen kennt — die Arten, die `add` nimmt",
+        ),
+        (
+            "Adds a provider, or replaces one of the same id. The key is asked for without echo — or read from stdin when it is no terminal (`op read … | glut providers add openrouter`)",
+            "Fügt einen Provider hinzu oder ersetzt einen mit derselben ID. Der Schlüssel wird ohne Echo abgefragt — oder von stdin gelesen, wenn das kein Terminal ist (`op read … | glut providers add openrouter`)",
+        ),
+        (
+            "A kind of `glut providers catalog`, or `openai-compatible` with --root",
+            "Eine Art aus `glut providers catalog`, oder `openai-compatible` mit --root",
+        ),
+        (
+            "The name runs use (`--provider`); the kind by default",
+            "Der Name, den Läufe nutzen (`--provider`); standardmäßig die Art",
+        ),
+        (
+            "The API's root, its version included (`http://box:8080/v1`); required for openai-compatible",
+            "Die Wurzel der API, mit ihrer Version (`http://box:8080/v1`); nötig für openai-compatible",
+        ),
+        (
+            "The model a run takes when none is named",
+            "Das Modell, das ein Lauf nimmt, wenn keines genannt ist",
+        ),
+        (
+            "An environment variable the key may come from, over the catalog's",
+            "Eine Umgebungsvariable, aus der der Schlüssel kommen darf, vor der des Katalogs",
+        ),
+        (
+            "Store no key now: it comes from the environment",
+            "Jetzt keinen Schlüssel speichern: er kommt aus der Umgebung",
+        ),
+        (
+            "An openai-compatible endpoint that needs no key (a server on this machine)",
+            "Ein openai-compatible-Endpunkt, der keinen Schlüssel braucht (ein Server auf diesem Rechner)",
+        ),
+        (
+            "Make it the default provider (the first one added always is)",
+            "Zum Standard-Provider machen (der zuerst hinzugefügte ist es immer)",
+        ),
+        (
+            "Removes a provider and its stored key",
+            "Entfernt einen Provider und seinen gespeicherten Schlüssel",
+        ),
+        (
+            "Makes a provider the one runs take without --provider",
+            "Macht einen Provider zu dem, den Läufe ohne --provider nehmen",
+        ),
+        (
+            "One tiny call to the provider's model, to see that endpoint, key and model work",
+            "Ein winziger Aufruf an das Modell des Providers, um zu sehen, ob Endpunkt, Schlüssel und Modell funktionieren",
+        ),
+        (
+            "The provider; the default one when left out",
+            "Der Provider; ohne Angabe der Standard-Provider",
+        ),
+        (
+            "Another model than the provider's default",
+            "Ein anderes Modell als das Standardmodell des Providers",
+        ),
+        (
+            "Print this message or the help of the given subcommand(s)",
+            "Diese Hilfe oder die der angegebenen Unterbefehle anzeigen",
+        ),
+        (
+            "The models the providers offer (`docs/plans/glut-providers.md`, PV2), from lists kept in ~/.glut/models",
+            "Die Modelle, die die Provider anbieten (`docs/plans/glut-providers.md`, PV2), aus den Listen in ~/.glut/models",
+        ),
+        (
+            "The models of one provider or of all, with context window, price per million tokens and whether they reason",
+            "Die Modelle eines Providers oder aller, mit Kontextfenster, Preis pro Million Tokens und ob sie nachdenken",
+        ),
+        ("Only this provider's", "Nur die dieses Providers"),
+        (
+            "Fetch the lists again first, however fresh they are",
+            "Die Listen zuerst neu holen, egal wie frisch sie sind",
+        ),
+        (
+            "Only models whose id or name holds every word (`deepseek flash`)",
+            "Nur Modelle, deren ID oder Name jedes Wort enthält (`deepseek flash`)",
+        ),
+        (
+            "Fetches the lists again: of one provider, or of all",
+            "Holt die Listen neu: eines Providers oder aller",
+        ),
+    ],
+    cli_headings: &["Verwendung:", "Optionen", "Argumente", "Befehle"],
 };

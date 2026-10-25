@@ -721,4 +721,6 @@ pub const TEXTS: Texts = Texts {
         "Page Down",
     ],
     setup_provider_prompt: "Provider:",
+    cli: &[],
+    cli_headings: &["Usage:", "Options", "Arguments", "Commands"],
 };

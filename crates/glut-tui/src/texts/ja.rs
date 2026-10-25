@@ -920,4 +920,273 @@ pub const TEXTS: Texts = Texts {
         "ページダウン",
     ],
     setup_provider_prompt: "プロバイダー:",
+    cli: &[
+        ("Glut, in the terminal", "Glut、ターミナルで"),
+        (
+            "The folder the session works in",
+            "セッションが作業するフォルダー",
+        ),
+        (
+            "A provider of ~/.glut/providers.json (glut providers list); the default one otherwise",
+            "~/.glut/providers.json のプロバイダー（glut providers list）; なければ既定のもの",
+        ),
+        (
+            "The model; the provider's default otherwise",
+            "モデル; なければプロバイダーの既定モデル",
+        ),
+        (
+            "Go on with the newest session of the folder",
+            "フォルダーの最新セッションを続ける",
+        ),
+        (
+            "MCP servers from this file (Claude Code's shape and flag, `{\"mcpServers\": …}`) beside `~/.glut/mcp.json` and the project's `.mcp.json`; a name both have is the file's",
+            "このファイルの MCP サーバー（Claude Code の形式とフラグ、`{\"mcpServers\": …}`）を `~/.glut/mcp.json` とプロジェクトの `.mcp.json` に加えて使う; 両方にある名前はこのファイルのもの",
+        ),
+        (
+            "The servers of `--mcp-config` alone, none of the owner's nor the project's — `glut run --mcp-config`'s meaning",
+            "`--mcp-config` のサーバーだけを使い、所有者やプロジェクトのものは使わない — `glut run --mcp-config` と同じ意味",
+        ),
+        (
+            "The reader mode for this run, for a screen reader: keys in words, a plain screen, nothing moving",
+            "この実行での読み上げモード: キーを言葉で、簡素な画面、動きなし",
+        ),
+        (
+            "The language Glut speaks for this run: en, de, fr, it, es, zh, ja or pt",
+            "この実行で Glut が話す言語: en、de、fr、it、es、zh、ja、pt",
+        ),
+        (
+            "Pick an earlier session of the folder to go on with",
+            "続けるフォルダーの以前のセッションを選ぶ",
+        ),
+        (
+            "A first message, sent as soon as the session is up",
+            "セッションの準備ができ次第送る最初のメッセージ",
+        ),
+        ("Print help", "ヘルプを表示"),
+        ("Print version", "バージョンを表示"),
+        (
+            "Follow another session read-only from its event log: the folder's newest session, a session's id, or a log file (a Studio card's glut-events.jsonl)",
+            "別のセッションをイベントログから読み取り専用で追う: フォルダーの最新セッション、セッションの ID、またはログファイル（Studio カードの glut-events.jsonl）",
+        ),
+        (
+            "A session's id or a log file; the newest session of the folder when left out",
+            "セッションの ID またはログファイル; 省略時はフォルダーの最新セッション",
+        ),
+        (
+            "Runs one prompt and writes its events as JSON lines",
+            "プロンプトを 1 つ実行し、そのイベントを JSON 行で書き出す",
+        ),
+        (
+            "A provider of ~/.glut/providers.json (glut providers list); without it and without --base-url the default one",
+            "~/.glut/providers.json のプロバイダー（glut providers list）; それも --base-url もなければ既定のもの",
+        ),
+        (
+            "A one-off endpoint instead of a provider: the API's base, without /v1 (https://openrouter.ai/api, http://localhost:11434); the key from GLUT_API_KEY",
+            "プロバイダーの代わりに一度だけ使うエンドポイント: API のベース、/v1 なし（https://openrouter.ai/api、http://localhost:11434）; キーは GLUT_API_KEY から",
+        ),
+        (
+            "The model; with a provider, its default model when left out",
+            "モデル; プロバイダーがある場合、省略時はその既定モデル",
+        ),
+        (
+            "How hard the model reasons: none, minimal, low, medium, high, xhigh or max. Otherwise a skill's or a command's `effort:`, else `effort` in ~/.glut/settings.json, else the provider's own default",
+            "モデルがどれだけ考えるか: none、minimal、low、medium、high、xhigh、max。なければ skill かコマンドの `effort:`、次に ~/.glut/settings.json の `effort`、最後にプロバイダーの既定値",
+        ),
+        (
+            "The folder the run works in; every file tool is confined to it",
+            "実行が作業するフォルダー; すべてのファイルツールはその中に限られます",
+        ),
+        (
+            "A file whose text is appended to the system prompt (a role, AGENTS.md)",
+            "テキストがシステムプロンプトに追加されるファイル（役割、AGENTS.md）",
+        ),
+        ("The run's time limit in seconds", "実行の制限時間（秒）"),
+        (
+            "The model's context window in tokens, over `contextWindow` in ~/.glut/settings.json and the provider's model list: the run compacts its older steps shortly before it is full",
+            "モデルのコンテキストウィンドウ（Token）、~/.glut/settings.json の `contextWindow` とプロバイダーのモデル一覧より優先: いっぱいになる少し前に実行は古いステップを圧縮します",
+        ),
+        (
+            "End the run before its next model call once it has used this many tokens (input less cache reads, plus output)",
+            "この Token 数（入力からキャッシュ読み取りを除き、出力を加えたもの）を使ったら、次のモデル呼び出しの前に実行を終える",
+        ),
+        (
+            "End the run before its next model call once it has cost this many USD, at the model's `prices` in ~/.glut/settings.json (without them a run has no budget in money, and says so)",
+            "この金額（USD）に達したら、次のモデル呼び出しの前に実行を終える。~/.glut/settings.json のモデルの `prices` で計算（それがなければ金額の予算はなく、そう伝えます）",
+        ),
+        (
+            "Never compact the conversation automatically (`\"compact\": {\"auto\": false}` in ~/.glut/settings.json)",
+            "会話を自動で圧縮しない（~/.glut/settings.json の `\"compact\": {\"auto\": false}`）",
+        ),
+        (
+            "default, accept_edits, plan, dont_ask or auto; otherwise the settings files', else default. Headless, an ask is refused: name what the run may do with --allow, or pick a mode",
+            "default、accept_edits、plan、dont_ask、auto; なければ設定ファイルのもの、さらになければ default。画面なしでは確認は拒否されます: --allow で実行に許すことを示すか、モードを選んでください",
+        ),
+        (
+            "A rule the run allows, in Claude Code's format (`Bash(cargo test:*)`, `Edit(src/**)`); repeatable",
+            "実行が許可するルール、Claude Code の形式（`Bash(cargo test:*)`、`Edit(src/**)`）; 繰り返し可",
+        ),
+        (
+            "A rule the run asks about (refused headless); repeatable",
+            "実行が確認するルール（画面なしでは拒否）; 繰り返し可",
+        ),
+        (
+            "A rule the run refuses; repeatable",
+            "実行が拒否するルール; 繰り返し可",
+        ),
+        (
+            "Run a skill as the run's task (HS6, K1.1): its SKILL.md body becomes the run's instructions, and its frontmatter may narrow the tools, pick the model and set the time limit (K5)",
+            "skill を実行のタスクとして動かす（HS6、K1.1）: その SKILL.md の本文が実行の指示になり、frontmatter でツールの制限、モデルの選択、制限時間の設定ができます（K5）",
+        ),
+        (
+            "A folder of skills beside `~/.glut/skills` (HS6, K2); repeatable",
+            "`~/.glut/skills` に加える skill のフォルダー（HS6、K2）; 繰り返し可",
+        ),
+        (
+            "The run's MCP servers from this file alone (`{\"mcpServers\": …}`, Claude Code's shape and flag), instead of ~/.glut/mcp.json and the project's .mcp.json",
+            "実行の MCP サーバーをこのファイルだけから使う（`{\"mcpServers\": …}`、Claude Code の形式とフラグ）、~/.glut/mcp.json とプロジェクトの .mcp.json の代わりに",
+        ),
+        (
+            "Work as Glut's terminal session does in a project (TUI T35): its guides, the map of where plans, to-dos and the memory are kept, and the `memory` tool. Off: the run knows only what its flags say",
+            "Glut のターミナルセッションのようにプロジェクトで作業する（TUI T35）: ガイド、プラン・タスク・記憶の置き場所の地図、`memory` ツール。オフ: 実行はフラグが伝えることしか知りません",
+        ),
+        (
+            "An image the prompt carries (T45: PNG, JPEG, GIF or WebP, scaled before it is sent); repeatable",
+            "プロンプトに添える画像（T45: PNG、JPEG、GIF、WebP、送信前に縮小）; 繰り返し可",
+        ),
+        (
+            "The prompt — extra text beside `--skill`, or a slash command (`/review src/`), read from `~/.glut/commands/` and, in a trusted folder, the project's `.glut/commands/` (HS4). Without `--skill` a prompt is required; with one it defaults to \"Run the skill.\"",
+            "プロンプト — `--skill` に添えるテキスト、またはスラッシュコマンド（`/review src/`）、`~/.glut/commands/` と、信頼されたフォルダーではプロジェクトの `.glut/commands/` から読み込み（HS4）。`--skill` がなければプロンプトが必要; あれば既定は \"Run the skill.\"",
+        ),
+        (
+            "Goes on with a run that was lost before it finished (durable runs, `docs/plans/durable.md`): from its journal in `~/.glut/runs`, with the run's own flags. Without a run the newest unfinished one; --list shows them",
+            "終わる前に失われた実行を続ける（永続実行、`docs/plans/durable.md`）: `~/.glut/runs` のジャーナルから、その実行のフラグで。実行の指定がなければ最新の未完了のもの; --list で一覧",
+        ),
+        (
+            "The run, as `glut` named it when it started (on stderr)",
+            "実行、開始時に `glut` が付けた名前（stderr に表示）",
+        ),
+        (
+            "List the unfinished runs, newest first, and change nothing",
+            "未完了の実行を新しい順に一覧し、何も変えない",
+        ),
+        (
+            "Give the run up: its journal is deleted",
+            "実行を諦める: そのジャーナルは削除されます",
+        ),
+        (
+            "Puts a folder back as it was before a run, or before one of its steps (Glut 2): the snapshots a run took before it changed anything. Without --run the newest run of the folder; --list shows the runs",
+            "フォルダーを実行の前、またはそのステップの前の状態に戻す（Glut 2）: 実行が何かを変える前に撮ったスナップショット。--run がなければフォルダーの最新の実行; --list で実行を一覧",
+        ),
+        (
+            "The run, as its `snapshot` events name it",
+            "実行、その `snapshot` イベントが付けた名前",
+        ),
+        (
+            "Back to before this step of the run instead of before the whole run",
+            "実行全体の前ではなく、この実行のステップの前に戻る",
+        ),
+        (
+            "List the runs with snapshots of the folder, newest first, and change nothing",
+            "フォルダーのスナップショットがある実行を新しい順に一覧し、何も変えない",
+        ),
+        (
+            "What Glut lean saved (`docs/plans/glut-lean.md`, N9): compacted outputs, unchanged re-reads and relocated results per kind, from `~/.glut/lean.jsonl` — every Glut run's, the app's too",
+            "Glut lean が節約したもの（`docs/plans/glut-lean.md`、N9）: 種類ごとの圧縮した出力、変わらない再読み込み、移した結果、`~/.glut/lean.jsonl` から — すべての Glut の実行、アプリのものも",
+        ),
+        ("Only the last N days", "直近 N 日だけ"),
+        (
+            "The model providers runs use (`docs/plans/glut-providers.md`): ~/.glut/providers.json, keys in a secret store",
+            "実行が使うモデルのプロバイダー（`docs/plans/glut-providers.md`）: ~/.glut/providers.json、キーは秘密の保管場所に",
+        ),
+        (
+            "The configured providers, the default (marked *), and where each one's key comes from (never the key)",
+            "設定済みのプロバイダー、既定のもの（* 印）、それぞれのキーの出どころ（キー自体は表示しない）",
+        ),
+        (
+            "Every provider Glut knows by name — the kinds `add` takes",
+            "Glut が名前で知っているすべてのプロバイダー — `add` が受け付ける種類",
+        ),
+        (
+            "Adds a provider, or replaces one of the same id. The key is asked for without echo — or read from stdin when it is no terminal (`op read … | glut providers add openrouter`)",
+            "プロバイダーを追加するか、同じ ID のものを置き換える。キーはエコーなしで尋ねます — stdin がターミナルでなければそこから読み込み（`op read … | glut providers add openrouter`）",
+        ),
+        (
+            "A kind of `glut providers catalog`, or `openai-compatible` with --root",
+            "`glut providers catalog` の種類、または --root 付きの `openai-compatible`",
+        ),
+        (
+            "The name runs use (`--provider`); the kind by default",
+            "実行が使う名前（`--provider`）; 既定は種類",
+        ),
+        (
+            "The API's root, its version included (`http://box:8080/v1`); required for openai-compatible",
+            "API のルート、バージョン込み（`http://box:8080/v1`）; openai-compatible では必須",
+        ),
+        (
+            "The model a run takes when none is named",
+            "モデルの指定がないときに実行が使うモデル",
+        ),
+        (
+            "An environment variable the key may come from, over the catalog's",
+            "キーを取り出せる環境変数、カタログのものより優先",
+        ),
+        (
+            "Store no key now: it comes from the environment",
+            "今はキーを保存しない: 環境から取ります",
+        ),
+        (
+            "An openai-compatible endpoint that needs no key (a server on this machine)",
+            "キーの要らない openai-compatible エンドポイント（このマシン上のサーバー）",
+        ),
+        (
+            "Make it the default provider (the first one added always is)",
+            "既定のプロバイダーにする（最初に追加したものは常に既定）",
+        ),
+        (
+            "Removes a provider and its stored key",
+            "プロバイダーと保存されたキーを削除",
+        ),
+        (
+            "Makes a provider the one runs take without --provider",
+            "--provider なしで実行が使うプロバイダーにする",
+        ),
+        (
+            "One tiny call to the provider's model, to see that endpoint, key and model work",
+            "プロバイダーのモデルにごく小さな呼び出しをして、エンドポイント・キー・モデルが動くか確かめる",
+        ),
+        (
+            "The provider; the default one when left out",
+            "プロバイダー; 省略時は既定のもの",
+        ),
+        (
+            "Another model than the provider's default",
+            "プロバイダーの既定とは別のモデル",
+        ),
+        (
+            "Print this message or the help of the given subcommand(s)",
+            "このヘルプ、または指定したサブコマンドのヘルプを表示",
+        ),
+        (
+            "The models the providers offer (`docs/plans/glut-providers.md`, PV2), from lists kept in ~/.glut/models",
+            "プロバイダーが提供するモデル（`docs/plans/glut-providers.md`、PV2）、~/.glut/models に保存した一覧から",
+        ),
+        (
+            "The models of one provider or of all, with context window, price per million tokens and whether they reason",
+            "1 つまたはすべてのプロバイダーのモデル、コンテキストウィンドウ、100 万 Token あたりの価格、推論するかどうか付き",
+        ),
+        ("Only this provider's", "このプロバイダーのものだけ"),
+        (
+            "Fetch the lists again first, however fresh they are",
+            "どれだけ新しくても、先に一覧を取り直す",
+        ),
+        (
+            "Only models whose id or name holds every word (`deepseek flash`)",
+            "ID か名前にすべての単語を含むモデルだけ（`deepseek flash`）",
+        ),
+        (
+            "Fetches the lists again: of one provider, or of all",
+            "一覧を取り直す: 1 つのプロバイダー、またはすべて",
+        ),
+    ],
+    cli_headings: &["使い方:", "オプション", "引数", "コマンド"],
 };
