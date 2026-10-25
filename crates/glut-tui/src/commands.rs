@@ -41,20 +41,29 @@ impl Topic {
         Topic::Help,
     ];
 
+    /// Its heading in the language read now (T48).
     pub fn label(self) -> &'static str {
-        match self {
-            Topic::Session => "Session",
-            Topic::Model => "Model",
-            Topic::View => "View",
-            Topic::Panes => "Panes",
-            Topic::Changes => "Changes",
-            Topic::Project => "Project",
-            Topic::Settings => "Settings",
-            Topic::Input => "Input",
-            Topic::Editing => "Editing the line",
-            Topic::Help => "Help",
-        }
+        let at = Topic::ALL
+            .iter()
+            .position(|topic| *topic == self)
+            .unwrap_or(0);
+        crate::texts::t()
+            .topics
+            .get(at)
+            .copied()
+            .unwrap_or_default()
     }
+}
+
+/// `name`'s row of `rows` in the language read now, else `english`.
+fn said(
+    rows: &'static [(&'static str, &'static str)],
+    name: &str,
+    english: &'static str,
+) -> &'static str {
+    rows.iter()
+        .find(|(row, _)| *row == name)
+        .map_or(english, |(_, text)| *text)
 }
 
 /// A `/` command: its name, what it takes as `/help` writes it, what it does, and its topic.
@@ -64,6 +73,13 @@ pub struct Command {
     pub args: &'static str,
     pub what: &'static str,
     pub topic: Topic,
+}
+
+impl Command {
+    /// What it does, in the language read now (T48).
+    pub fn what(&self) -> &'static str {
+        said(crate::texts::t().commands, self.name, self.what)
+    }
 }
 
 const fn command(
@@ -338,6 +354,13 @@ pub struct Key {
     pub topic: Topic,
 }
 
+impl Key {
+    /// What it does, in the language read now (T48).
+    pub fn what(&self) -> &'static str {
+        said(crate::texts::t().keys, self.key, self.what)
+    }
+}
+
 const fn key(topic: Topic, key: &'static str, what: &'static str, command: &'static str) -> Key {
     Key {
         key,
@@ -567,14 +590,20 @@ pub fn fitting(typed: &str) -> Vec<&'static Command> {
         .clone()
         .filter(|command| command.name.starts_with(&typed))
         .collect();
-    if typed.chars().count() >= 3 {
+    // Chinese and Japanese put no spaces between words, and two characters make one: found anywhere in the text.
+    let wide = typed.width() > typed.chars().count();
+    if typed.chars().count() >= if wide { 2 } else { 3 } {
+        // In the words read now, and in English's: a term the owner knows from the docs finds its command too.
         let in_what = listed.filter(|command| {
             !command.name.starts_with(&typed)
-                && command
-                    .what
-                    .to_lowercase()
-                    .split(|c: char| !c.is_alphanumeric())
-                    .any(|word| word.starts_with(&typed))
+                && [command.what(), command.what].iter().any(|what| {
+                    let what = what.to_lowercase();
+                    if wide {
+                        return what.contains(&typed);
+                    }
+                    what.split(|c: char| !c.is_alphanumeric())
+                        .any(|word| word.starts_with(&typed))
+                })
         });
         fits.extend(in_what);
     }
@@ -583,7 +612,7 @@ pub fn fitting(typed: &str) -> Vec<&'static Command> {
 
 /// What `/help` says: the commands, one row per topic, then the keys the same way, then what is neither.
 pub fn help() -> String {
-    let mut rows = vec!["Commands".to_owned()];
+    let mut rows = vec![tr!(help_commands).to_owned()];
     for topic in Topic::ALL {
         let names: Vec<String> = COMMANDS
             .iter()
@@ -597,33 +626,21 @@ pub fn help() -> String {
             rows.push(format!("  {}: {}", topic.label(), names.join(" · ")));
         }
     }
-    rows.push(format!("Keys ({LEGEND}; ⌃K keeps them in the side panel)"));
+    rows.push(tr!(help_keys, legend = tr!(legend)));
     for topic in Topic::ALL {
         let keys: Vec<String> = KEYS
             .iter()
             .filter(|key| key.topic == topic)
-            .map(|key| format!("{} {}", key.key, key.what))
+            .map(|key| format!("{} {}", key.key, key.what()))
             .collect();
         if !keys.is_empty() {
             rows.push(format!("  {}: {}", topic.label(), keys.join(" · ")));
         }
     }
-    rows.push(
-        "Also: !cmd runs a command and shows Glut its output · !!cmd runs it for you alone · a large paste stands \
-         as [pasted N lines] · drag to copy · a click on a subagent's tile opens it"
-            .to_owned(),
-    );
-    rows.push(
-        "/vim on: ⎋ to Normal mode (h j k l w b e 0 ^ $ gg G · x r ~ J D C s S · d c y with a motion or doubled · \
-         counts · p P · u ⌃R), i a I A o O to Insert; ⎋ in Normal mode stops Glut"
-            .to_owned(),
-    );
+    rows.push(tr!(help_also).to_owned());
+    rows.push(tr!(help_vim).to_owned());
     rows.join("\n")
 }
-
-/// What the key symbols stand for (T39), atop the Keys sheet and in `/help`: read once, then the short forms are
-/// plain.
-pub const LEGEND: &str = "⌃ Ctrl · ⇧ Shift · ⌥ Alt · ⏎ Enter · ⇥ Tab · ⎋ Esc";
 
 /// The panel width from which a key's row also names its `/` command.
 pub const SHEET_WITH_COMMANDS: usize = 46;
@@ -639,7 +656,8 @@ pub fn sheet(width: usize) -> Vec<Line<'static>> {
         + 2;
     let what_width = width.saturating_sub(key_width + 1).max(8);
     let commands = width >= SHEET_WITH_COMMANDS;
-    let mut lines: Vec<Line<'static>> = wrap(LEGEND, width.saturating_sub(1).max(8))
+    // What the key symbols stand for (T39), read once, then the short forms are plain.
+    let mut lines: Vec<Line<'static>> = wrap(tr!(legend), width.saturating_sub(1).max(8))
         .into_iter()
         .map(|row| Line::from(Span::styled(format!(" {row}"), theme::quiet())))
         .collect();
@@ -657,8 +675,8 @@ pub fn sheet(width: usize) -> Vec<Line<'static>> {
         )));
         for key in keys {
             let what = match key.command {
-                command if commands && !command.is_empty() => format!("{} · {command}", key.what),
-                _ => key.what.to_owned(),
+                command if commands && !command.is_empty() => format!("{} · {command}", key.what()),
+                _ => key.what().to_owned(),
             };
             // The reader mode says the keys in words (TUI9b): the column takes the longest.
             let spoken = crate::motion::spoken(key.key);
@@ -681,6 +699,71 @@ pub fn sheet(width: usize) -> Vec<Line<'static>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use glut::lang::Lang;
+
+    #[test]
+    fn help_the_keys_and_the_suggestions_speak_the_language_read_now() {
+        glut::lang::set_for_thread(Some(Lang::De));
+        let help = help();
+        assert!(help.starts_with("Befehle\n  Session: /clear"), "{help}");
+        assert!(help.contains("Tasten (⌃ Control · ⇧ Umschalt"), "{help}");
+        let sheet: Vec<String> = sheet(60).iter().map(ToString::to_string).collect();
+        assert!(
+            sheet.iter().any(|line| line.contains("Glut anhalten")),
+            "{sheet:?}"
+        );
+        assert_eq!(
+            names(&fitting("zusammenfassen")),
+            ["compact"],
+            "found in the words read now"
+        );
+        assert!(
+            names(&fitting("summarise")).contains(&"compact"),
+            "and in English's"
+        );
+        glut::lang::set_for_thread(Some(Lang::Ja));
+        assert!(
+            names(&fitting("要約")).contains(&"compact"),
+            "two characters, anywhere"
+        );
+        glut::lang::set_for_thread(None);
+    }
+
+    #[test]
+    fn every_language_says_what_each_command_and_key_does_keeping_their_words() {
+        for lang in Lang::ALL.into_iter().filter(|lang| *lang != Lang::En) {
+            let texts = crate::texts::of(lang);
+            let named: Vec<&str> = texts.commands.iter().map(|(name, _)| *name).collect();
+            let commands: Vec<&str> = COMMANDS.iter().map(|command| command.name).collect();
+            assert_eq!(named, commands, "{}: every command, in order", lang.code());
+            let written: Vec<&str> = texts.keys.iter().map(|(key, _)| *key).collect();
+            let keys: Vec<&str> = KEYS.iter().map(|key| key.key).collect();
+            assert_eq!(written, keys, "{}: every key, in order", lang.code());
+            let pairs = COMMANDS
+                .iter()
+                .map(|command| command.what)
+                .zip(texts.commands.iter().map(|(_, what)| *what))
+                .chain(
+                    KEYS.iter()
+                        .map(|key| key.what)
+                        .zip(texts.keys.iter().map(|(_, what)| *what)),
+                );
+            for (english, translated) in pairs {
+                let lost = crate::texts::check::kept_in(english, translated);
+                assert!(
+                    lost.is_empty(),
+                    "{}: {lost:?} lost in {translated}",
+                    lang.code()
+                );
+            }
+            assert_eq!(texts.topics.len(), Topic::ALL.len());
+            assert!(
+                texts.topics.iter().all(|topic| !topic.is_empty()),
+                "{}",
+                lang.code()
+            );
+        }
+    }
 
     fn names(commands: &[&Command]) -> Vec<&'static str> {
         commands.iter().map(|command| command.name).collect()

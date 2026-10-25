@@ -291,8 +291,14 @@ impl Plural {
 /// One text of a catalog, as the tests that compare languages read it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Entry {
+    /// One text.
     Text(&'static str),
+    /// A text by count.
     Plural(Plural),
+    /// Texts in a fixed order, as a list of names.
+    List(&'static [&'static str]),
+    /// Texts by a key that stays the same in every language: a command's name, a key as written.
+    Table(&'static [(&'static str, &'static str)]),
 }
 
 impl Entry {
@@ -301,7 +307,21 @@ impl Entry {
         match self {
             Entry::Text(text) => vec![text],
             Entry::Plural(plural) => vec![plural.one, plural.other],
+            Entry::List(texts) => texts.to_vec(),
+            Entry::Table(rows) => rows.iter().map(|(_, text)| *text).collect(),
         }
+    }
+}
+
+impl From<&&'static [&'static str]> for Entry {
+    fn from(texts: &&'static [&'static str]) -> Self {
+        Entry::List(texts)
+    }
+}
+
+impl From<&&'static [(&'static str, &'static str)]> for Entry {
+    fn from(rows: &&'static [(&'static str, &'static str)]) -> Self {
+        Entry::Table(rows)
     }
 }
 

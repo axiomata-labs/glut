@@ -1530,7 +1530,7 @@ fn draw_suggestions(frame: &mut Frame, app: &App, area: Rect) {
     // As wide as the longest help text needs (mark, name, gap, text and the frame), as far as the screen goes.
     let needed = suggestions
         .iter()
-        .map(|command| command.what.width() + 18)
+        .map(|command| command.what().width() + 18)
         .max()
         .unwrap_or(40);
     let width = area.width.min(needed as u16);
@@ -1573,7 +1573,7 @@ fn draw_suggestions(frame: &mut Frame, app: &App, area: Rect) {
                 Line::from(vec![
                     Span::styled(if *at == chosen { "▸ " } else { "  " }, theme::glow()),
                     Span::styled(format!("/{:<10}", command.name), style),
-                    Span::styled(format!(" {}", command.what), theme::quiet()),
+                    Span::styled(format!(" {}", command.what()), theme::quiet()),
                 ])
             }
         })

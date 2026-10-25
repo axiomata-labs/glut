@@ -31,6 +31,23 @@ glut::catalog! {
         language_now: &'static str,
         /// How many panes: `{n}`.
         panes_count: Plural,
+        /// The help's topics, in `commands::Topic::ALL`'s order.
+        topics: &'static [&'static str],
+        /// What each `/` command does, by its name — every command of `commands::COMMANDS`, in its order; English's
+        /// are its own words there.
+        commands: &'static [(&'static str, &'static str)],
+        /// What each key does, by the key as written — every key of `commands::KEYS`, in its order.
+        keys: &'static [(&'static str, &'static str)],
+        /// `/help`'s heading of the commands.
+        help_commands: &'static str,
+        /// `/help`'s heading of the keys: `{legend}` what the key symbols stand for.
+        help_keys: &'static str,
+        /// `/help`'s line of what is neither a command nor a key.
+        help_also: &'static str,
+        /// `/help`'s line on the vi keys.
+        help_vim: &'static str,
+        /// What the key symbols stand for, by the names the system gives the keys.
+        legend: &'static str,
     }
 }
 
@@ -120,22 +137,18 @@ macro_rules! tr {
     }};
 }
 
+/// What a translation must keep of its English source, for the tests of every catalog.
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn every_language_has_each_text_with_the_english_placeholders() {
-        let english = of(Lang::En).entries();
-        for lang in Lang::ALL {
-            let found = glut::lang::mismatches(&english, &of(lang).entries());
-            assert!(found.is_empty(), "{}: {found:#?}", lang.code());
-        }
-    }
-
+pub(crate) mod check {
     /// The field's own words, which no language translates (T48's glossary).
-    const KEPT: [&str; 10] = [
+    const KEPT: [&str; 11] = [
         "Gate", "Pane", "Skill", "Hook", "MCP", "Token", "Worktree", "Commit", "Glut", "Wache",
+        "Glimm",
+    ];
+
+    /// The marks a key or a command is written with: a word holding one is written the same in every language.
+    const KEY_MARKS: [char; 13] = [
+        '⌃', '⇧', '⌥', '⏎', '⇥', '⎋', '⌫', '←', '→', '↑', '↓', '⌘', '@',
     ];
 
     /// Whether `term` stands in `text` as a word of its own (a plural `s` let be): "pane" in "2 panes", not in "panel".
@@ -153,19 +166,96 @@ mod tests {
         })
     }
 
+    /// What `english` holds that `translated` lost: a glossary word, a `/command`, a `--flag`, a `<name>`, a key.
+    pub fn kept_in(english: &str, translated: &str) -> Vec<String> {
+        let mut lost: Vec<String> = KEPT
+            .iter()
+            .filter(|term| holds(english, term) && !holds(translated, term))
+            .map(|term| (*term).to_owned())
+            .collect();
+        let trim = |word: &'_ str| {
+            word.trim_matches(|c: char| "(),;:.…\"“”".contains(c))
+                .to_owned()
+        };
+        let raw: Vec<&str> = english.split_whitespace().collect();
+        let words: Vec<String> = raw.iter().map(|word| trim(word)).collect();
+        let mut at = 0;
+        while at < words.len() {
+            let word = &words[at];
+            let key = word.chars().any(|c| KEY_MARKS.contains(&c));
+            // A key's second part (`⌃X 0`, `⌃X A`, `⌃X }`) belongs to it — not a word after a comma or a closing mark.
+            let bare = raw[at].trim_start_matches(['(', '“', '"']) == word.as_str();
+            let whole = match words.get(at + 1) {
+                Some(next)
+                    if key
+                        && bare
+                        && next.chars().count() == 1
+                        && next.chars().all(|c| {
+                            c.is_ascii_uppercase() || c.is_ascii_digit() || "{}[]".contains(c)
+                        }) =>
+                {
+                    at += 1;
+                    format!("{word} {next}")
+                }
+                _ => word.clone(),
+            };
+            let fixed = key
+                || (word.len() > 1
+                    && (word.starts_with('/') || word.starts_with("--") || word.starts_with('<')));
+            if fixed && !translated.contains(&whole) {
+                lost.push(whole);
+            }
+            at += 1;
+        }
+        lost
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::check::kept_in;
+    use super::*;
+
+    #[test]
+    fn every_language_has_each_text_with_the_english_placeholders() {
+        let english = of(Lang::En).entries();
+        for lang in Lang::ALL {
+            let found = glut::lang::mismatches(&english, &of(lang).entries());
+            assert!(found.is_empty(), "{}: {found:#?}", lang.code());
+        }
+    }
+
+    #[test]
+    fn a_lost_command_key_flag_or_term_is_found() {
+        let english = "close this pane — /todo <text> adds one (⌃X 0; /init --migrate)";
+        assert!(
+            kept_in(
+                english,
+                "ce pane — /todo <text> en ajoute un (⌃X 0 ; /init --migrate)"
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            kept_in(
+                english,
+                "dieses Fenster — /todo <Text> fügt hinzu (⌃X ; /init)"
+            ),
+            ["Pane", "<text>", "⌃X 0", "--migrate"]
+        );
+    }
+
     #[test]
     fn the_fields_own_words_stay_in_every_language() {
         let english = of(Lang::En).entries();
         for lang in Lang::ALL {
             for ((name, source), (_, translated)) in english.iter().zip(of(lang).entries()) {
                 for (source, text) in source.texts().into_iter().zip(translated.texts()) {
-                    for term in KEPT.iter().filter(|term| holds(source, term)) {
-                        assert!(
-                            holds(text, term),
-                            "{}: {name} drops {term}: {text}",
-                            lang.code()
-                        );
-                    }
+                    let lost = kept_in(source, text);
+                    assert!(
+                        lost.is_empty(),
+                        "{}: {name} drops {lost:?}: {text}",
+                        lang.code()
+                    );
                 }
             }
         }
