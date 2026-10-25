@@ -7,7 +7,7 @@ description = "Glut, an agent harness: a lean tool-calling loop over an OpenAI-c
 
 [dependencies]
 # The guarded file service the file tools go through, shared with the other Axiomata apps (Axiomata-Foundation).
-axiomata-files = { path = "../../../Axiomata-Foundation/crates/axiomata-files" }
+axiomata-files.workspace = true
 # HTTPS for remote model APIs (OpenRouter); rustls rather than the platform stack, like the rest of the tree would
 # want it — no Security.framework link for a crate meant to stand alone.
 reqwest = { workspace = true, features = ["rustls-tls"] }

@@ -24,7 +24,9 @@ too when a public item changes.
 ## Rules
 
 - **Glut depends on nothing of Axiomata's** but `axiomata-files` (`../Axiomata-Foundation`, the guarded file service):
-  no `axiomata-core`, no Tauri. What Axiomata adds comes in as plain values or a trait the caller implements.
+  no `axiomata-core`, no Tauri. The manifest names it by its GitHub repository; the local `.cargo/config.toml` (not
+  checked in) patches that to `../Axiomata-Foundation`, and Axiomata's root manifest does the same — one copy of its
+  types in either tree. What Axiomata adds comes in as plain values or a trait the caller implements.
 - **A new Glut setting starts here** — `~/.glut/settings.json` (the owner's only; a project's `.glut/` is read with
   care), a `glut run` flag or frontmatter; Axiomata's settings only pass a value on top.
 - Runtime data: `~/.glut/` (settings, mcp.json, runs, snapshots, lean.jsonl).
