@@ -18,6 +18,7 @@ mod highlight;
 pub mod host;
 mod input;
 mod layout;
+mod linebreak;
 mod links;
 pub mod log;
 mod markdown;

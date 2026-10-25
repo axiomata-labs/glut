@@ -120,6 +120,25 @@ impl Lang {
         if one { Form::One } else { Form::Other }
     }
 
+    /// The mark between a number's whole part and its fraction.
+    pub fn decimal_mark(self) -> char {
+        match self {
+            Lang::En | Lang::Zh | Lang::Ja => '.',
+            _ => ',',
+        }
+    }
+
+    /// A day and a time as the language writes them, for `chrono`'s `format`. English keeps the ISO order: the
+    /// American and British orders of day and month read each other's dates wrong.
+    pub fn date_time(self) -> &'static str {
+        match self {
+            Lang::En | Lang::Zh => "%Y-%m-%d %H:%M",
+            Lang::Ja => "%Y/%m/%d %H:%M",
+            Lang::De => "%d.%m.%Y %H:%M",
+            Lang::Fr | Lang::It | Lang::Es | Lang::Pt => "%d/%m/%Y %H:%M",
+        }
+    }
+
     fn index(self) -> u8 {
         Lang::ALL.iter().position(|lang| *lang == self).unwrap_or(0) as u8
     }
@@ -218,6 +237,31 @@ fn preferred(listed: &str) -> Option<Lang> {
         .map(|tag| tag.trim().trim_matches('"'))
         .filter(|tag| !tag.is_empty())
         .find_map(Lang::parse)
+}
+
+/// `value` with `places` digits after the language's decimal mark.
+pub fn decimal(value: f64, places: usize) -> String {
+    let text = format!("{value:.places$}");
+    match current().decimal_mark() {
+        '.' => text,
+        mark => text.replace('.', &mark.to_string()),
+    }
+}
+
+/// An amount in US dollars — what providers bill in — written where the language writes the sign: `$0.12`,
+/// `0,12 $`, `US$ 0,12`. The space before the sign is a no-break space, so a wrapped line never leaves it alone.
+pub fn usd(value: f64, places: usize) -> String {
+    let amount = decimal(value, places);
+    match current() {
+        Lang::En | Lang::Zh | Lang::Ja => format!("${amount}"),
+        Lang::Pt => format!("US$\u{a0}{amount}"),
+        Lang::De | Lang::Fr | Lang::It | Lang::Es => format!("{amount}\u{a0}$"),
+    }
+}
+
+/// A day and a time in the language read now, for `chrono`'s `format`.
+pub fn date_time() -> &'static str {
+    current().date_time()
 }
 
 /// `text` with each `{name}` in it replaced by its value; a name not given stays as it is written.
@@ -431,6 +475,22 @@ mod tests {
         assert_eq!(explicit(None, Some("ja_JP".into())), Some(Lang::Ja));
         assert_eq!(explicit(None, None), None);
         assert_eq!(Lang::parse("FRANÇAIS"), Some(Lang::Fr));
+    }
+
+    #[test]
+    fn numbers_money_and_dates_take_the_languages_form() {
+        set_for_thread(Some(Lang::De));
+        assert_eq!(decimal(1.26, 1), "1,3");
+        assert_eq!(usd(0.1234, 4), "0,1234\u{a0}$");
+        assert_eq!(date_time(), "%d.%m.%Y %H:%M");
+        set_for_thread(Some(Lang::Pt));
+        assert_eq!(usd(2.5, 2), "US$\u{a0}2,50");
+        set_for_thread(Some(Lang::Ja));
+        assert_eq!(usd(0.5, 2), "$0.50");
+        set_for_thread(Some(Lang::En));
+        assert_eq!(decimal(12.345, 1), "12.3");
+        assert_eq!(date_time(), "%Y-%m-%d %H:%M");
+        set_for_thread(None);
     }
 
     #[test]

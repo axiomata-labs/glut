@@ -1010,12 +1010,16 @@ pub const TEXTS: Texts = Texts {
             "Reprendre la session la plus récente du dossier",
         ),
         (
-            "MCP servers from this file (Claude Code's shape and flag, `{\"mcpServers\": …}`) beside `~/.glut/mcp.json` and the project's `.mcp.json`; a name both have is the file's",
-            "Les serveurs MCP de ce fichier (format et option de Claude Code, `{\"mcpServers\": …}`) à côté de `~/.glut/mcp.json` et du `.mcp.json` du projet ; un nom présent dans les deux appartient au fichier",
+            "MCP servers from this file (Claude Code's shape and flag, `{\"mcpServers\": …}`) beside \
+             `~/.glut/mcp.json` and the project's `.mcp.json`; a name both have is the file's",
+            "Les serveurs MCP de ce fichier (format et option de Claude Code, `{\"mcpServers\": …}`) à côté de \
+             `~/.glut/mcp.json` et du `.mcp.json` du projet ; un nom présent dans les deux appartient au fichier",
         ),
         (
-            "The servers of `--mcp-config` alone, none of the owner's nor the project's — `glut run --mcp-config`'s meaning",
-            "Seulement les serveurs de `--mcp-config`, aucun du propriétaire ni du projet — le sens de `glut run --mcp-config`",
+            "The servers of `--mcp-config` alone, none of the owner's nor the project's — `glut run --mcp-config`'s \
+             meaning",
+            "Seulement les serveurs de `--mcp-config`, aucun du propriétaire ni du projet — le sens de `glut run \
+             --mcp-config`",
         ),
         (
             "The reader mode for this run, for a screen reader: keys in words, a plain screen, nothing moving",
@@ -1036,8 +1040,11 @@ pub const TEXTS: Texts = Texts {
         ("Print help", "Afficher l’aide"),
         ("Print version", "Afficher la version"),
         (
-            "Follow another session read-only from its event log: the folder's newest session, a session's id, or a log file (a Studio card's glut-events.jsonl)",
-            "Suivre une autre session en lecture seule depuis son journal d’événements : la session la plus récente du dossier, l’identifiant d’une session ou un fichier journal (le glut-events.jsonl d’une carte du Studio)",
+            "Follow another session read-only from its event log: the folder's newest session, a session's id, or a \
+             log file (a Studio card's glut-events.jsonl)",
+            "Suivre une autre session en lecture seule depuis son journal d’événements : la session la plus récente \
+             du dossier, l’identifiant d’une session ou un fichier journal (le glut-events.jsonl d’une carte du \
+             Studio)",
         ),
         (
             "A session's id or a log file; the newest session of the folder when left out",
@@ -1048,20 +1055,27 @@ pub const TEXTS: Texts = Texts {
             "Exécute un prompt et écrit ses événements en lignes JSON",
         ),
         (
-            "A provider of ~/.glut/providers.json (glut providers list); without it and without --base-url the default one",
-            "Un fournisseur de ~/.glut/providers.json (glut providers list) ; sans lui et sans --base-url, celui par défaut",
+            "A provider of ~/.glut/providers.json (glut providers list); without it and without --base-url the \
+             default one",
+            "Un fournisseur de ~/.glut/providers.json (glut providers list) ; sans lui et sans --base-url, celui \
+             par défaut",
         ),
         (
-            "A one-off endpoint instead of a provider: the API's base, without /v1 (https://openrouter.ai/api, http://localhost:11434); the key from GLUT_API_KEY",
-            "Un point d’accès ponctuel au lieu d’un fournisseur : la base de l’API, sans /v1 (https://openrouter.ai/api, http://localhost:11434) ; la clé vient de GLUT_API_KEY",
+            "A one-off endpoint instead of a provider: the API's base, without /v1 (https://openrouter.ai/api, \
+             http://localhost:11434); the key from GLUT_API_KEY",
+            "Un point d’accès ponctuel au lieu d’un fournisseur : la base de l’API, sans /v1 \
+             (https://openrouter.ai/api, http://localhost:11434) ; la clé vient de GLUT_API_KEY",
         ),
         (
             "The model; with a provider, its default model when left out",
             "Le modèle ; avec un fournisseur, son modèle par défaut si omis",
         ),
         (
-            "How hard the model reasons: none, minimal, low, medium, high, xhigh or max. Otherwise a skill's or a command's `effort:`, else `effort` in ~/.glut/settings.json, else the provider's own default",
-            "À quel point le modèle réfléchit : none, minimal, low, medium, high, xhigh ou max. Sinon le `effort:` d’un skill ou d’une commande, sinon `effort` dans ~/.glut/settings.json, sinon celui par défaut du fournisseur",
+            "How hard the model reasons: none, minimal, low, medium, high, xhigh or max. Otherwise a skill's or a \
+             command's `effort:`, else `effort` in ~/.glut/settings.json, else the provider's own default",
+            "À quel point le modèle réfléchit : none, minimal, low, medium, high, xhigh ou max. Sinon le `effort:` \
+             d’un skill ou d’une commande, sinon `effort` dans ~/.glut/settings.json, sinon celui par défaut du \
+             fournisseur",
         ),
         (
             "The folder the run works in; every file tool is confined to it",
@@ -1076,28 +1090,41 @@ pub const TEXTS: Texts = Texts {
             "La limite de temps de l’exécution en secondes",
         ),
         (
-            "The model's context window in tokens, over `contextWindow` in ~/.glut/settings.json and the provider's model list: the run compacts its older steps shortly before it is full",
-            "La fenêtre de contexte du modèle en tokens, avant `contextWindow` dans ~/.glut/settings.json et la liste de modèles du fournisseur : l’exécution compacte ses étapes plus anciennes peu avant qu’elle soit pleine",
+            "The model's context window in tokens, over `contextWindow` in ~/.glut/settings.json and the provider's \
+             model list: the run compacts its older steps shortly before it is full",
+            "La fenêtre de contexte du modèle en tokens, avant `contextWindow` dans ~/.glut/settings.json et la \
+             liste de modèles du fournisseur : l’exécution compacte ses étapes plus anciennes peu avant qu’elle \
+             soit pleine",
         ),
         (
-            "End the run before its next model call once it has used this many tokens (input less cache reads, plus output)",
-            "Terminer l’exécution avant son prochain appel au modèle une fois qu’elle a utilisé autant de tokens (entrée hors lectures du cache, plus la sortie)",
+            "End the run before its next model call once it has used this many tokens (input less cache reads, plus \
+             output)",
+            "Terminer l’exécution avant son prochain appel au modèle une fois qu’elle a utilisé autant de tokens \
+             (entrée hors lectures du cache, plus la sortie)",
         ),
         (
-            "End the run before its next model call once it has cost this many USD, at the model's `prices` in ~/.glut/settings.json (without them a run has no budget in money, and says so)",
-            "Terminer l’exécution avant son prochain appel au modèle une fois qu’elle a coûté autant d’USD, aux `prices` du modèle dans ~/.glut/settings.json (sans eux, une exécution n’a pas de budget en argent, et le dit)",
+            "End the run before its next model call once it has cost this many USD, at the model's `prices` in \
+             ~/.glut/settings.json (without them a run has no budget in money, and says so)",
+            "Terminer l’exécution avant son prochain appel au modèle une fois qu’elle a coûté autant d’USD, aux \
+             `prices` du modèle dans ~/.glut/settings.json (sans eux, une exécution n’a pas de budget en argent, et \
+             le dit)",
         ),
         (
             "Never compact the conversation automatically (`\"compact\": {\"auto\": false}` in ~/.glut/settings.json)",
-            "Ne jamais compacter la conversation automatiquement (`\"compact\": {\"auto\": false}` dans ~/.glut/settings.json)",
+            "Ne jamais compacter la conversation automatiquement (`\"compact\": {\"auto\": false}` dans \
+             ~/.glut/settings.json)",
         ),
         (
-            "default, accept_edits, plan, dont_ask or auto; otherwise the settings files', else default. Headless, an ask is refused: name what the run may do with --allow, or pick a mode",
-            "default, accept_edits, plan, dont_ask ou auto ; sinon celui des fichiers de réglages, sinon default. Sans interface, une question est refusée : indique avec --allow ce que l’exécution peut faire, ou choisis un mode",
+            "default, accept_edits, plan, dont_ask or auto; otherwise the settings files', else default. Headless, \
+             an ask is refused: name what the run may do with --allow, or pick a mode",
+            "default, accept_edits, plan, dont_ask ou auto ; sinon celui des fichiers de réglages, sinon default. \
+             Sans interface, une question est refusée : indique avec --allow ce que l’exécution peut faire, ou \
+             choisis un mode",
         ),
         (
             "A rule the run allows, in Claude Code's format (`Bash(cargo test:*)`, `Edit(src/**)`); repeatable",
-            "Une règle que l’exécution autorise, au format de Claude Code (`Bash(cargo test:*)`, `Edit(src/**)`) ; répétable",
+            "Une règle que l’exécution autorise, au format de Claude Code (`Bash(cargo test:*)`, `Edit(src/**)`) ; \
+             répétable",
         ),
         (
             "A rule the run asks about (refused headless); repeatable",
@@ -1108,32 +1135,48 @@ pub const TEXTS: Texts = Texts {
             "Une règle que l’exécution refuse ; répétable",
         ),
         (
-            "Run a skill as the run's task (HS6, K1.1): its SKILL.md body becomes the run's instructions, and its frontmatter may narrow the tools, pick the model and set the time limit (K5)",
-            "Lancer un skill comme tâche de l’exécution (HS6, K1.1) : le corps de son SKILL.md devient ses instructions, et son frontmatter peut restreindre les outils, choisir le modèle et fixer la limite de temps (K5)",
+            "Run a skill as the run's task (HS6, K1.1): its SKILL.md body becomes the run's instructions, and its \
+             frontmatter may narrow the tools, pick the model and set the time limit (K5)",
+            "Lancer un skill comme tâche de l’exécution (HS6, K1.1) : le corps de son SKILL.md devient ses \
+             instructions, et son frontmatter peut restreindre les outils, choisir le modèle et fixer la limite de \
+             temps (K5)",
         ),
         (
             "A folder of skills beside `~/.glut/skills` (HS6, K2); repeatable",
             "Un dossier de skills à côté de `~/.glut/skills` (HS6, K2) ; répétable",
         ),
         (
-            "The run's MCP servers from this file alone (`{\"mcpServers\": …}`, Claude Code's shape and flag), instead of ~/.glut/mcp.json and the project's .mcp.json",
-            "Les serveurs MCP de l’exécution uniquement depuis ce fichier (`{\"mcpServers\": …}`, format et option de Claude Code), au lieu de ~/.glut/mcp.json et du .mcp.json du projet",
+            "The run's MCP servers from this file alone (`{\"mcpServers\": …}`, Claude Code's shape and flag), \
+             instead of ~/.glut/mcp.json and the project's .mcp.json",
+            "Les serveurs MCP de l’exécution uniquement depuis ce fichier (`{\"mcpServers\": …}`, format et option \
+             de Claude Code), au lieu de ~/.glut/mcp.json et du .mcp.json du projet",
         ),
         (
-            "Work as Glut's terminal session does in a project (TUI T35): its guides, the map of where plans, to-dos and the memory are kept, and the `memory` tool. Off: the run knows only what its flags say",
-            "Travailler comme la session de terminal de Glut dans un projet (TUI T35) : ses guides, la carte de l’emplacement des plans, des tâches et de la mémoire, et l’outil `memory`. Désactivé : l’exécution ne sait que ce que disent ses options",
+            "Work as Glut's terminal session does in a project (TUI T35): its guides, the map of where plans, \
+             to-dos and the memory are kept, and the `memory` tool. Off: the run knows only what its flags say",
+            "Travailler comme la session de terminal de Glut dans un projet (TUI T35) : ses guides, la carte de \
+             l’emplacement des plans, des tâches et de la mémoire, et l’outil `memory`. Désactivé : l’exécution ne \
+             sait que ce que disent ses options",
         ),
         (
             "An image the prompt carries (T45: PNG, JPEG, GIF or WebP, scaled before it is sent); repeatable",
             "Une image que le prompt emporte (T45 : PNG, JPEG, GIF ou WebP, réduite avant l’envoi) ; répétable",
         ),
         (
-            "The prompt — extra text beside `--skill`, or a slash command (`/review src/`), read from `~/.glut/commands/` and, in a trusted folder, the project's `.glut/commands/` (HS4). Without `--skill` a prompt is required; with one it defaults to \"Run the skill.\"",
-            "Le prompt — du texte en plus de `--skill`, ou une commande slash (`/review src/`), lue dans `~/.glut/commands/` et, dans un dossier de confiance, le `.glut/commands/` du projet (HS4). Sans `--skill`, un prompt est requis ; avec, il vaut par défaut \"Run the skill.\"",
+            "The prompt — extra text beside `--skill`, or a slash command (`/review src/`), read from \
+             `~/.glut/commands/` and, in a trusted folder, the project's `.glut/commands/` (HS4). Without `--skill` \
+             a prompt is required; with one it defaults to \"Run the skill.\"",
+            "Le prompt — du texte en plus de `--skill`, ou une commande slash (`/review src/`), lue dans \
+             `~/.glut/commands/` et, dans un dossier de confiance, le `.glut/commands/` du projet (HS4). Sans \
+             `--skill`, un prompt est requis ; avec, il vaut par défaut \"Run the skill.\"",
         ),
         (
-            "Goes on with a run that was lost before it finished (durable runs, `docs/plans/durable.md`): from its journal in `~/.glut/runs`, with the run's own flags. Without a run the newest unfinished one; --list shows them",
-            "Reprend une exécution perdue avant d’avoir fini (exécutions durables, `docs/plans/durable.md`) : depuis son journal dans `~/.glut/runs`, avec ses propres options. Sans exécution, la plus récente inachevée ; --list les montre",
+            "Goes on with a run that was lost before it finished (durable runs, `docs/plans/durable.md`): from its \
+             journal in `~/.glut/runs`, with the run's own flags. Without a run the newest unfinished one; --list \
+             shows them",
+            "Reprend une exécution perdue avant d’avoir fini (exécutions durables, `docs/plans/durable.md`) : \
+             depuis son journal dans `~/.glut/runs`, avec ses propres options. Sans exécution, la plus récente \
+             inachevée ; --list les montre",
         ),
         (
             "The run, as `glut` named it when it started (on stderr)",
@@ -1148,8 +1191,11 @@ pub const TEXTS: Texts = Texts {
             "Abandonner l’exécution : son journal est supprimé",
         ),
         (
-            "Puts a folder back as it was before a run, or before one of its steps (Glut 2): the snapshots a run took before it changed anything. Without --run the newest run of the folder; --list shows the runs",
-            "Remet un dossier tel qu’il était avant une exécution, ou avant une de ses étapes (Glut 2) : les instantanés pris par une exécution avant tout changement. Sans --run, la plus récente exécution du dossier ; --list montre les exécutions",
+            "Puts a folder back as it was before a run, or before one of its steps (Glut 2): the snapshots a run \
+             took before it changed anything. Without --run the newest run of the folder; --list shows the runs",
+            "Remet un dossier tel qu’il était avant une exécution, ou avant une de ses étapes (Glut 2) : les \
+             instantanés pris par une exécution avant tout changement. Sans --run, la plus récente exécution du \
+             dossier ; --list montre les exécutions",
         ),
         (
             "The run, as its `snapshot` events name it",
@@ -1164,13 +1210,18 @@ pub const TEXTS: Texts = Texts {
             "Lister les exécutions avec des instantanés du dossier, les plus récentes d’abord, sans rien changer",
         ),
         (
-            "What Glut lean saved (`docs/plans/glut-lean.md`, N9): compacted outputs, unchanged re-reads and relocated results per kind, from `~/.glut/lean.jsonl` — every Glut run's, the app's too",
-            "Ce que Glut lean a économisé (`docs/plans/glut-lean.md`, N9) : sorties compactées, relectures inchangées et résultats déplacés par type, depuis `~/.glut/lean.jsonl` — de chaque exécution de Glut, y compris celles de l’app",
+            "What Glut lean saved (`docs/plans/glut-lean.md`, N9): compacted outputs, unchanged re-reads and \
+             relocated results per kind, from `~/.glut/lean.jsonl` — every Glut run's, the app's too",
+            "Ce que Glut lean a économisé (`docs/plans/glut-lean.md`, N9) : sorties compactées, relectures \
+             inchangées et résultats déplacés par type, depuis `~/.glut/lean.jsonl` — de chaque exécution de Glut, \
+             y compris celles de l’app",
         ),
         ("Only the last N days", "Seulement les N derniers jours"),
         (
-            "The model providers runs use (`docs/plans/glut-providers.md`): ~/.glut/providers.json, keys in a secret store",
-            "Les fournisseurs de modèles qu’utilisent les exécutions (`docs/plans/glut-providers.md`) : ~/.glut/providers.json, clés dans un coffre",
+            "The model providers runs use (`docs/plans/glut-providers.md`): ~/.glut/providers.json, keys in a \
+             secret store",
+            "Les fournisseurs de modèles qu’utilisent les exécutions (`docs/plans/glut-providers.md`) : \
+             ~/.glut/providers.json, clés dans un coffre",
         ),
         (
             "The configured providers, the default (marked *), and where each one's key comes from (never the key)",
@@ -1181,8 +1232,10 @@ pub const TEXTS: Texts = Texts {
             "Chaque fournisseur que Glut connaît par son nom — les types que prend `add`",
         ),
         (
-            "Adds a provider, or replaces one of the same id. The key is asked for without echo — or read from stdin when it is no terminal (`op read … | glut providers add openrouter`)",
-            "Ajoute un fournisseur, ou remplace celui de même identifiant. La clé est demandée sans écho — ou lue depuis stdin quand ce n’est pas un terminal (`op read … | glut providers add openrouter`)",
+            "Adds a provider, or replaces one of the same id. The key is asked for without echo — or read from \
+             stdin when it is no terminal (`op read … | glut providers add openrouter`)",
+            "Ajoute un fournisseur, ou remplace celui de même identifiant. La clé est demandée sans écho — ou lue \
+             depuis stdin quand ce n’est pas un terminal (`op read … | glut providers add openrouter`)",
         ),
         (
             "A kind of `glut providers catalog`, or `openai-compatible` with --root",
@@ -1242,11 +1295,14 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "The models the providers offer (`docs/plans/glut-providers.md`, PV2), from lists kept in ~/.glut/models",
-            "Les modèles qu’offrent les fournisseurs (`docs/plans/glut-providers.md`, PV2), d’après les listes gardées dans ~/.glut/models",
+            "Les modèles qu’offrent les fournisseurs (`docs/plans/glut-providers.md`, PV2), d’après les listes \
+             gardées dans ~/.glut/models",
         ),
         (
-            "The models of one provider or of all, with context window, price per million tokens and whether they reason",
-            "Les modèles d’un fournisseur ou de tous, avec fenêtre de contexte, prix par million de tokens et s’ils raisonnent",
+            "The models of one provider or of all, with context window, price per million tokens and whether they \
+             reason",
+            "Les modèles d’un fournisseur ou de tous, avec fenêtre de contexte, prix par million de tokens et s’ils \
+             raisonnent",
         ),
         ("Only this provider's", "Seulement ceux de ce fournisseur"),
         (
@@ -1263,4 +1319,17 @@ pub const TEXTS: Texts = Texts {
         ),
     ],
     cli_headings: &["Utilisation :", "Options", "Arguments", "Commandes"],
+    model_reasons: "raisonne",
+    agent_starting: "démarrage…",
+    compacted_tokens: "conversation compactée : {before}k → {after}k tokens",
+    mode_now: "désormais en mode {mode}",
+    thinking_live: "réfléchit…",
+    thought: "réflexion",
+    thought_size: "{state} · ~{size} tokens",
+    agent_stats: "{calls} · {input} en entrée · {output} en sortie",
+    tile_opens: "clic pour ouvrir",
+    agent_calls: Plural {
+        one: "{n} appel",
+        other: "{n} appels",
+    },
 };

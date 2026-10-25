@@ -1336,6 +1336,26 @@ glut::catalog! {
         cli: &'static [(&'static str, &'static str)],
         /// The help's headings: usage (with its colon), options, arguments, commands.
         cli_headings: &'static [&'static str],
+        /// Beside a model that reasons, in the model list.
+        model_reasons: &'static str,
+        /// A subagent's tile before its first step.
+        agent_starting: &'static str,
+        /// The conversation compacted by the model's side: `{before}` and `{after}` thousands of tokens.
+        compacted_tokens: &'static str,
+        /// The permission mode changed: `{mode}` its name, as written.
+        mode_now: &'static str,
+        /// Over a model's thinking while it streams.
+        thinking_live: &'static str,
+        /// Over a model's thinking once it ended.
+        thought: &'static str,
+        /// The head of a thinking block: `{state}` one of the two above, `{size}` its tokens, short.
+        thought_size: &'static str,
+        /// A subagent tile's counts: `{calls}` how many calls (the plural below), `{input}` and `{output}` tokens.
+        agent_stats: &'static str,
+        /// At a subagent tile's foot: a click opens its view.
+        tile_opens: &'static str,
+        /// A subagent's calls: `{n}`.
+        agent_calls: Plural,
     }
 }
 

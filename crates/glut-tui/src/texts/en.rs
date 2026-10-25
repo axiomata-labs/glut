@@ -723,4 +723,17 @@ pub const TEXTS: Texts = Texts {
     setup_provider_prompt: "Provider:",
     cli: &[],
     cli_headings: &["Usage:", "Options", "Arguments", "Commands"],
+    model_reasons: "reasons",
+    agent_starting: "starting…",
+    compacted_tokens: "compacted the conversation: {before}k → {after}k tokens",
+    mode_now: "now in {mode} mode",
+    thinking_live: "thinking…",
+    thought: "thought",
+    thought_size: "{state} · ~{size} tokens",
+    agent_stats: "{calls} · {input} in · {output} out",
+    tile_opens: "click opens",
+    agent_calls: Plural {
+        one: "{n} call",
+        other: "{n} calls",
+    },
 };

@@ -939,11 +939,14 @@ pub const TEXTS: Texts = Texts {
             "フォルダーの最新セッションを続ける",
         ),
         (
-            "MCP servers from this file (Claude Code's shape and flag, `{\"mcpServers\": …}`) beside `~/.glut/mcp.json` and the project's `.mcp.json`; a name both have is the file's",
-            "このファイルの MCP サーバー（Claude Code の形式とフラグ、`{\"mcpServers\": …}`）を `~/.glut/mcp.json` とプロジェクトの `.mcp.json` に加えて使う; 両方にある名前はこのファイルのもの",
+            "MCP servers from this file (Claude Code's shape and flag, `{\"mcpServers\": …}`) beside \
+             `~/.glut/mcp.json` and the project's `.mcp.json`; a name both have is the file's",
+            "このファイルの MCP サーバー（Claude Code の形式とフラグ、`{\"mcpServers\": …}`）を `~/.glut/mcp.json` とプロジェクトの `.mcp.json` \
+             に加えて使う; 両方にある名前はこのファイルのもの",
         ),
         (
-            "The servers of `--mcp-config` alone, none of the owner's nor the project's — `glut run --mcp-config`'s meaning",
+            "The servers of `--mcp-config` alone, none of the owner's nor the project's — `glut run --mcp-config`'s \
+             meaning",
             "`--mcp-config` のサーバーだけを使い、所有者やプロジェクトのものは使わない — `glut run --mcp-config` と同じ意味",
         ),
         (
@@ -965,7 +968,8 @@ pub const TEXTS: Texts = Texts {
         ("Print help", "ヘルプを表示"),
         ("Print version", "バージョンを表示"),
         (
-            "Follow another session read-only from its event log: the folder's newest session, a session's id, or a log file (a Studio card's glut-events.jsonl)",
+            "Follow another session read-only from its event log: the folder's newest session, a session's id, or a \
+             log file (a Studio card's glut-events.jsonl)",
             "別のセッションをイベントログから読み取り専用で追う: フォルダーの最新セッション、セッションの ID、またはログファイル（Studio カードの glut-events.jsonl）",
         ),
         (
@@ -977,20 +981,25 @@ pub const TEXTS: Texts = Texts {
             "プロンプトを 1 つ実行し、そのイベントを JSON 行で書き出す",
         ),
         (
-            "A provider of ~/.glut/providers.json (glut providers list); without it and without --base-url the default one",
+            "A provider of ~/.glut/providers.json (glut providers list); without it and without --base-url the \
+             default one",
             "~/.glut/providers.json のプロバイダー（glut providers list）; それも --base-url もなければ既定のもの",
         ),
         (
-            "A one-off endpoint instead of a provider: the API's base, without /v1 (https://openrouter.ai/api, http://localhost:11434); the key from GLUT_API_KEY",
-            "プロバイダーの代わりに一度だけ使うエンドポイント: API のベース、/v1 なし（https://openrouter.ai/api、http://localhost:11434）; キーは GLUT_API_KEY から",
+            "A one-off endpoint instead of a provider: the API's base, without /v1 (https://openrouter.ai/api, \
+             http://localhost:11434); the key from GLUT_API_KEY",
+            "プロバイダーの代わりに一度だけ使うエンドポイント: API のベース、/v1 なし（https://openrouter.ai/api、http://localhost:11434）; キーは \
+             GLUT_API_KEY から",
         ),
         (
             "The model; with a provider, its default model when left out",
             "モデル; プロバイダーがある場合、省略時はその既定モデル",
         ),
         (
-            "How hard the model reasons: none, minimal, low, medium, high, xhigh or max. Otherwise a skill's or a command's `effort:`, else `effort` in ~/.glut/settings.json, else the provider's own default",
-            "モデルがどれだけ考えるか: none、minimal、low、medium、high、xhigh、max。なければ skill かコマンドの `effort:`、次に ~/.glut/settings.json の `effort`、最後にプロバイダーの既定値",
+            "How hard the model reasons: none, minimal, low, medium, high, xhigh or max. Otherwise a skill's or a \
+             command's `effort:`, else `effort` in ~/.glut/settings.json, else the provider's own default",
+            "モデルがどれだけ考えるか: none、minimal、low、medium、high、xhigh、max。なければ skill かコマンドの `effort:`、次に \
+             ~/.glut/settings.json の `effort`、最後にプロバイダーの既定値",
         ),
         (
             "The folder the run works in; every file tool is confined to it",
@@ -1002,15 +1011,19 @@ pub const TEXTS: Texts = Texts {
         ),
         ("The run's time limit in seconds", "実行の制限時間（秒）"),
         (
-            "The model's context window in tokens, over `contextWindow` in ~/.glut/settings.json and the provider's model list: the run compacts its older steps shortly before it is full",
-            "モデルのコンテキストウィンドウ（Token）、~/.glut/settings.json の `contextWindow` とプロバイダーのモデル一覧より優先: いっぱいになる少し前に実行は古いステップを圧縮します",
+            "The model's context window in tokens, over `contextWindow` in ~/.glut/settings.json and the provider's \
+             model list: the run compacts its older steps shortly before it is full",
+            "モデルのコンテキストウィンドウ（Token）、~/.glut/settings.json の `contextWindow` とプロバイダーのモデル一覧より優先: \
+             いっぱいになる少し前に実行は古いステップを圧縮します",
         ),
         (
-            "End the run before its next model call once it has used this many tokens (input less cache reads, plus output)",
+            "End the run before its next model call once it has used this many tokens (input less cache reads, plus \
+             output)",
             "この Token 数（入力からキャッシュ読み取りを除き、出力を加えたもの）を使ったら、次のモデル呼び出しの前に実行を終える",
         ),
         (
-            "End the run before its next model call once it has cost this many USD, at the model's `prices` in ~/.glut/settings.json (without them a run has no budget in money, and says so)",
+            "End the run before its next model call once it has cost this many USD, at the model's `prices` in \
+             ~/.glut/settings.json (without them a run has no budget in money, and says so)",
             "この金額（USD）に達したら、次のモデル呼び出しの前に実行を終える。~/.glut/settings.json のモデルの `prices` で計算（それがなければ金額の予算はなく、そう伝えます）",
         ),
         (
@@ -1018,8 +1031,10 @@ pub const TEXTS: Texts = Texts {
             "会話を自動で圧縮しない（~/.glut/settings.json の `\"compact\": {\"auto\": false}`）",
         ),
         (
-            "default, accept_edits, plan, dont_ask or auto; otherwise the settings files', else default. Headless, an ask is refused: name what the run may do with --allow, or pick a mode",
-            "default、accept_edits、plan、dont_ask、auto; なければ設定ファイルのもの、さらになければ default。画面なしでは確認は拒否されます: --allow で実行に許すことを示すか、モードを選んでください",
+            "default, accept_edits, plan, dont_ask or auto; otherwise the settings files', else default. Headless, \
+             an ask is refused: name what the run may do with --allow, or pick a mode",
+            "default、accept_edits、plan、dont_ask、auto; なければ設定ファイルのもの、さらになければ default。画面なしでは確認は拒否されます: --allow \
+             で実行に許すことを示すか、モードを選んでください",
         ),
         (
             "A rule the run allows, in Claude Code's format (`Bash(cargo test:*)`, `Edit(src/**)`); repeatable",
@@ -1034,7 +1049,8 @@ pub const TEXTS: Texts = Texts {
             "実行が拒否するルール; 繰り返し可",
         ),
         (
-            "Run a skill as the run's task (HS6, K1.1): its SKILL.md body becomes the run's instructions, and its frontmatter may narrow the tools, pick the model and set the time limit (K5)",
+            "Run a skill as the run's task (HS6, K1.1): its SKILL.md body becomes the run's instructions, and its \
+             frontmatter may narrow the tools, pick the model and set the time limit (K5)",
             "skill を実行のタスクとして動かす（HS6、K1.1）: その SKILL.md の本文が実行の指示になり、frontmatter でツールの制限、モデルの選択、制限時間の設定ができます（K5）",
         ),
         (
@@ -1042,11 +1058,14 @@ pub const TEXTS: Texts = Texts {
             "`~/.glut/skills` に加える skill のフォルダー（HS6、K2）; 繰り返し可",
         ),
         (
-            "The run's MCP servers from this file alone (`{\"mcpServers\": …}`, Claude Code's shape and flag), instead of ~/.glut/mcp.json and the project's .mcp.json",
-            "実行の MCP サーバーをこのファイルだけから使う（`{\"mcpServers\": …}`、Claude Code の形式とフラグ）、~/.glut/mcp.json とプロジェクトの .mcp.json の代わりに",
+            "The run's MCP servers from this file alone (`{\"mcpServers\": …}`, Claude Code's shape and flag), \
+             instead of ~/.glut/mcp.json and the project's .mcp.json",
+            "実行の MCP サーバーをこのファイルだけから使う（`{\"mcpServers\": …}`、Claude Code の形式とフラグ）、~/.glut/mcp.json とプロジェクトの \
+             .mcp.json の代わりに",
         ),
         (
-            "Work as Glut's terminal session does in a project (TUI T35): its guides, the map of where plans, to-dos and the memory are kept, and the `memory` tool. Off: the run knows only what its flags say",
+            "Work as Glut's terminal session does in a project (TUI T35): its guides, the map of where plans, \
+             to-dos and the memory are kept, and the `memory` tool. Off: the run knows only what its flags say",
             "Glut のターミナルセッションのようにプロジェクトで作業する（TUI T35）: ガイド、プラン・タスク・記憶の置き場所の地図、`memory` ツール。オフ: 実行はフラグが伝えることしか知りません",
         ),
         (
@@ -1054,12 +1073,18 @@ pub const TEXTS: Texts = Texts {
             "プロンプトに添える画像（T45: PNG、JPEG、GIF、WebP、送信前に縮小）; 繰り返し可",
         ),
         (
-            "The prompt — extra text beside `--skill`, or a slash command (`/review src/`), read from `~/.glut/commands/` and, in a trusted folder, the project's `.glut/commands/` (HS4). Without `--skill` a prompt is required; with one it defaults to \"Run the skill.\"",
-            "プロンプト — `--skill` に添えるテキスト、またはスラッシュコマンド（`/review src/`）、`~/.glut/commands/` と、信頼されたフォルダーではプロジェクトの `.glut/commands/` から読み込み（HS4）。`--skill` がなければプロンプトが必要; あれば既定は \"Run the skill.\"",
+            "The prompt — extra text beside `--skill`, or a slash command (`/review src/`), read from \
+             `~/.glut/commands/` and, in a trusted folder, the project's `.glut/commands/` (HS4). Without `--skill` \
+             a prompt is required; with one it defaults to \"Run the skill.\"",
+            "プロンプト — `--skill` に添えるテキスト、またはスラッシュコマンド（`/review src/`）、`~/.glut/commands/` と、信頼されたフォルダーではプロジェクトの \
+             `.glut/commands/` から読み込み（HS4）。`--skill` がなければプロンプトが必要; あれば既定は \"Run the skill.\"",
         ),
         (
-            "Goes on with a run that was lost before it finished (durable runs, `docs/plans/durable.md`): from its journal in `~/.glut/runs`, with the run's own flags. Without a run the newest unfinished one; --list shows them",
-            "終わる前に失われた実行を続ける（永続実行、`docs/plans/durable.md`）: `~/.glut/runs` のジャーナルから、その実行のフラグで。実行の指定がなければ最新の未完了のもの; --list で一覧",
+            "Goes on with a run that was lost before it finished (durable runs, `docs/plans/durable.md`): from its \
+             journal in `~/.glut/runs`, with the run's own flags. Without a run the newest unfinished one; --list \
+             shows them",
+            "終わる前に失われた実行を続ける（永続実行、`docs/plans/durable.md`）: `~/.glut/runs` のジャーナルから、その実行のフラグで。実行の指定がなければ最新の未完了のもの; \
+             --list で一覧",
         ),
         (
             "The run, as `glut` named it when it started (on stderr)",
@@ -1074,7 +1099,8 @@ pub const TEXTS: Texts = Texts {
             "実行を諦める: そのジャーナルは削除されます",
         ),
         (
-            "Puts a folder back as it was before a run, or before one of its steps (Glut 2): the snapshots a run took before it changed anything. Without --run the newest run of the folder; --list shows the runs",
+            "Puts a folder back as it was before a run, or before one of its steps (Glut 2): the snapshots a run \
+             took before it changed anything. Without --run the newest run of the folder; --list shows the runs",
             "フォルダーを実行の前、またはそのステップの前の状態に戻す（Glut 2）: 実行が何かを変える前に撮ったスナップショット。--run がなければフォルダーの最新の実行; --list で実行を一覧",
         ),
         (
@@ -1090,12 +1116,15 @@ pub const TEXTS: Texts = Texts {
             "フォルダーのスナップショットがある実行を新しい順に一覧し、何も変えない",
         ),
         (
-            "What Glut lean saved (`docs/plans/glut-lean.md`, N9): compacted outputs, unchanged re-reads and relocated results per kind, from `~/.glut/lean.jsonl` — every Glut run's, the app's too",
-            "Glut lean が節約したもの（`docs/plans/glut-lean.md`、N9）: 種類ごとの圧縮した出力、変わらない再読み込み、移した結果、`~/.glut/lean.jsonl` から — すべての Glut の実行、アプリのものも",
+            "What Glut lean saved (`docs/plans/glut-lean.md`, N9): compacted outputs, unchanged re-reads and \
+             relocated results per kind, from `~/.glut/lean.jsonl` — every Glut run's, the app's too",
+            "Glut lean が節約したもの（`docs/plans/glut-lean.md`、N9）: 種類ごとの圧縮した出力、変わらない再読み込み、移した結果、`~/.glut/lean.jsonl` から \
+             — すべての Glut の実行、アプリのものも",
         ),
         ("Only the last N days", "直近 N 日だけ"),
         (
-            "The model providers runs use (`docs/plans/glut-providers.md`): ~/.glut/providers.json, keys in a secret store",
+            "The model providers runs use (`docs/plans/glut-providers.md`): ~/.glut/providers.json, keys in a \
+             secret store",
             "実行が使うモデルのプロバイダー（`docs/plans/glut-providers.md`）: ~/.glut/providers.json、キーは秘密の保管場所に",
         ),
         (
@@ -1107,8 +1136,10 @@ pub const TEXTS: Texts = Texts {
             "Glut が名前で知っているすべてのプロバイダー — `add` が受け付ける種類",
         ),
         (
-            "Adds a provider, or replaces one of the same id. The key is asked for without echo — or read from stdin when it is no terminal (`op read … | glut providers add openrouter`)",
-            "プロバイダーを追加するか、同じ ID のものを置き換える。キーはエコーなしで尋ねます — stdin がターミナルでなければそこから読み込み（`op read … | glut providers add openrouter`）",
+            "Adds a provider, or replaces one of the same id. The key is asked for without echo — or read from \
+             stdin when it is no terminal (`op read … | glut providers add openrouter`)",
+            "プロバイダーを追加するか、同じ ID のものを置き換える。キーはエコーなしで尋ねます — stdin がターミナルでなければそこから読み込み（`op read … | glut providers add \
+             openrouter`）",
         ),
         (
             "A kind of `glut providers catalog`, or `openai-compatible` with --root",
@@ -1171,7 +1202,8 @@ pub const TEXTS: Texts = Texts {
             "プロバイダーが提供するモデル（`docs/plans/glut-providers.md`、PV2）、~/.glut/models に保存した一覧から",
         ),
         (
-            "The models of one provider or of all, with context window, price per million tokens and whether they reason",
+            "The models of one provider or of all, with context window, price per million tokens and whether they \
+             reason",
             "1 つまたはすべてのプロバイダーのモデル、コンテキストウィンドウ、100 万 Token あたりの価格、推論するかどうか付き",
         ),
         ("Only this provider's", "このプロバイダーのものだけ"),
@@ -1189,4 +1221,17 @@ pub const TEXTS: Texts = Texts {
         ),
     ],
     cli_headings: &["使い方:", "オプション", "引数", "コマンド"],
+    model_reasons: "推論",
+    agent_starting: "起動中…",
+    compacted_tokens: "会話を圧縮しました: {before}k → {after}k Token",
+    mode_now: "{mode} モードになりました",
+    thinking_live: "思考中…",
+    thought: "思考",
+    thought_size: "{state} · ~{size} Token",
+    agent_stats: "{calls} · 入力 {input} · 出力 {output}",
+    tile_opens: "クリックで開く",
+    agent_calls: Plural {
+        one: "{n} 回の呼び出し",
+        other: "{n} 回の呼び出し",
+    },
 };

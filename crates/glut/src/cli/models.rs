@@ -93,7 +93,7 @@ async fn list(home: &Path, provider: Option<&str>, again: bool, query: &str) -> 
                 let when = list
                     .fetched_at
                     .with_timezone(&chrono::Local)
-                    .format("%Y-%m-%d %H:%M");
+                    .format(crate::lang::date_time());
                 println!(
                     "{}",
                     say!(
@@ -145,8 +145,9 @@ fn report(failed: Vec<String>, of: usize) -> Result<(), String> {
 fn window(tokens: u32) -> String {
     if tokens >= 1_000_000 {
         let millions = f64::from(tokens) / 1_048_576.0;
-        let text = format!("{millions:.1}");
-        format!("{}M", text.trim_end_matches(".0"))
+        let text = crate::lang::decimal(millions, 1);
+        let whole = format!("{}0", crate::lang::current().decimal_mark());
+        format!("{}M", text.strip_suffix(&whole).unwrap_or(&text))
     } else {
         format!("{}k", tokens / 1024)
     }
@@ -160,7 +161,13 @@ fn row(model: &ModelInfo) -> String {
         .unwrap_or_else(|| "?".into());
     let prices = model
         .prices
-        .map(|prices| format!("${:.2} / ${:.2}", prices.input_per_m, prices.output_per_m))
+        .map(|prices| {
+            format!(
+                "{} / {}",
+                crate::lang::usd(prices.input_per_m, 2),
+                crate::lang::usd(prices.output_per_m, 2)
+            )
+        })
         .unwrap_or_default();
     let reasons = if model.reasoning == Some(true) {
         say!(models_reasons)
@@ -168,7 +175,7 @@ fn row(model: &ModelInfo) -> String {
         ""
     };
     format!(
-        "{:<48} {window:>6}  {prices:<18} {reasons}",
+        "{:<48} {window:>6}  {prices:<24} {reasons}",
         models::printable(&model.id)
     )
 }
@@ -202,6 +209,17 @@ mod tests {
             line.contains("160k") && line.contains("$0.10 / $0.40") && line.ends_with("reasons"),
             "{line}"
         );
+        crate::lang::set_for_thread(Some(crate::lang::Lang::De));
+        assert_eq!(
+            (window(1_048_576), window(2_000_000)),
+            ("1M".to_owned(), "1,9M".to_owned())
+        );
+        assert!(
+            row(&model).contains("0,10\u{a0}$ / 0,40\u{a0}$"),
+            "{}",
+            row(&model)
+        );
+        crate::lang::set_for_thread(None);
         model.context_window = None;
         model.prices = None;
         model.reasoning = None;

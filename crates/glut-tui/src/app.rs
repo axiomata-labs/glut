@@ -560,7 +560,7 @@ impl App {
         let when = session
             .updated
             .with_timezone(&chrono::Local)
-            .format("%Y-%m-%d %H:%M");
+            .format(glut::lang::date_time());
         let said = if session.title.is_empty() {
             tr!(session_opened, when = when)
         } else {
@@ -2806,13 +2806,13 @@ impl App {
             // Glut counts money only with the budget's prices.
             (None, Some(max)) if budget.prices.is_some() => Some(tr!(
                 budget_money_left,
-                left = format!(
-                    "${:.2}",
-                    (max - turn.and_then(|turn| turn.cost).unwrap_or(0.0)).max(0.0)
+                left = glut::lang::usd(
+                    (max - turn.and_then(|turn| turn.cost).unwrap_or(0.0)).max(0.0),
+                    2
                 ),
-                max = format!("${max:.2}")
+                max = glut::lang::usd(max, 2)
             )),
-            (None, Some(max)) => Some(tr!(budget_uncounted, max = format!("${max:.2}"))),
+            (None, Some(max)) => Some(tr!(budget_uncounted, max = glut::lang::usd(max, 2))),
             (None, None) => None,
         };
         crate::meter::Window {
@@ -3763,10 +3763,10 @@ impl App {
                 let when = session
                     .updated
                     .with_timezone(&chrono::Local)
-                    .format("%Y-%m-%d %H:%M");
+                    .format(glut::lang::date_time());
                 let cost = session
                     .cost
-                    .map(|cost| format!(" · ${cost:.4}"))
+                    .map(|cost| format!(" · {}", glut::lang::usd(cost, 4)))
                     .unwrap_or_default();
                 let note = if session.id == own {
                     format!("{} · ", tr!(review_session))
@@ -5482,12 +5482,13 @@ fn model_detail(model: &models::ModelInfo) -> String {
     }
     if let Some(prices) = model.prices {
         parts.push(format!(
-            "${:.2}/${:.2}",
-            prices.input_per_m, prices.output_per_m
+            "{}/{}",
+            glut::lang::usd(prices.input_per_m, 2),
+            glut::lang::usd(prices.output_per_m, 2)
         ));
     }
     if model.reasoning == Some(true) {
-        parts.push("reasons".into());
+        parts.push(tr!(model_reasons).into());
     }
     parts.join(" · ")
 }

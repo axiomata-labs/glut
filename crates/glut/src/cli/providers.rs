@@ -407,7 +407,7 @@ async fn test(home: &Path, id: Option<&str>, model: Option<&str>) -> Result<(), 
         say!(
             test_answered,
             name = name,
-            secs = format!("{:.1}", started.elapsed().as_secs_f64()),
+            secs = crate::lang::decimal(started.elapsed().as_secs_f64(), 1),
             text = text,
             input = reply.usage.input_tokens,
             output = reply.usage.output_tokens

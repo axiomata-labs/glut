@@ -1133,7 +1133,7 @@ fn draw_keys(frame: &mut Frame, app: &App, area: Rect, branch: Option<String>, c
         segments.push(Segment::calm(rate, 2));
     }
     if let Some(cost) = app.cost {
-        segments.push(Segment::calm(format!("${cost:.4}"), 2));
+        segments.push(Segment::calm(glut::lang::usd(cost, 4), 2));
     }
     if let Some(branch) = branch {
         segments.push(Segment::calm(

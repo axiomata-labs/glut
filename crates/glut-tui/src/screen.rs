@@ -251,7 +251,7 @@ async fn screen(
                 };
                 let cost = app
                     .cost
-                    .map(|cost| format!(", ${cost:.4}"))
+                    .map(|cost| format!(", {}", glut::lang::usd(cost, 4)))
                     .unwrap_or_default();
                 let _ = writeln!(
                     io::stdout(),

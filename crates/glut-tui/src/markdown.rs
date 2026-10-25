@@ -665,7 +665,12 @@ fn words(runs: &[Run]) -> Vec<(Vec<Run>, bool)> {
             }
             let space = c == ' ';
             match words.last_mut() {
-                Some((word, was)) if *was == space && !(word.len() == 1 && word[0].0 == "\n") => {
+                Some((word, was))
+                    if *was == space
+                        && !(word.len() == 1 && word[0].0 == "\n")
+                        // Chinese and Japanese: a row may break inside the run, so it is words of its own there.
+                        && (space || !last_char(word).is_some_and(|before| crate::linebreak::between(before, c))) =>
+                {
                     push_char(word, c, *style)
                 }
                 _ => words.push((vec![(c.to_string(), *style)], space)),
@@ -673,6 +678,11 @@ fn words(runs: &[Run]) -> Vec<(Vec<Run>, bool)> {
         }
     }
     words
+}
+
+/// The last character of a word.
+fn last_char(word: &[Run]) -> Option<char> {
+    word.last().and_then(|(text, _)| text.chars().next_back())
 }
 
 fn push_char(row: &mut Vec<Run>, c: char, style: Style) {
@@ -723,6 +733,18 @@ mod tests {
                     .collect()
             })
             .collect()
+    }
+
+    #[test]
+    fn chinese_and_japanese_fill_the_row_and_keep_their_marks() {
+        assert_eq!(
+            text(&render("Glut 会读取**文件**。然后它运行测试。", 12)),
+            ["Glut 会读取", "文件。然后它", "运行测试。"]
+        );
+        assert_eq!(
+            text(&render("テストを「実行」します。", 8)),
+            ["テストを", "「実行」", "します。"]
+        );
     }
 
     #[test]

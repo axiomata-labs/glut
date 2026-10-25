@@ -375,7 +375,7 @@ impl Transcript {
                         calls: 0,
                         input_tokens: 0,
                         output_tokens: 0,
-                        live: "starting…".into(),
+                        live: tr!(agent_starting).into(),
                         model: None,
                         named: agent.is_some(),
                     })));
@@ -444,15 +444,15 @@ impl Transcript {
                 after_tokens,
                 ..
             } => self.note(
-                format!(
-                    "compacted the conversation: {}k → {}k tokens",
-                    before_tokens / 1000,
-                    after_tokens / 1000
+                tr!(
+                    compacted_tokens,
+                    before = before_tokens / 1000,
+                    after = after_tokens / 1000
                 ),
                 Tone::Quiet,
             ),
             Event::Error { message } if depth == 0 => self.note(message.clone(), Tone::Fault),
-            Event::ModeChanged { mode, .. } => self.note(format!("now in {mode} mode"), Tone::Fine),
+            Event::ModeChanged { mode, .. } => self.note(tr!(mode_now, mode = mode), Tone::Fine),
             // A subagent's step goes to its tile; one with no tile to go to (none runs) stands indented here.
             Event::Sub {
                 depth: inner,
@@ -877,7 +877,11 @@ fn render(kind: &Kind, width: u16, thinking: Thinking, frame: usize) -> Vec<Line
             };
             // About four characters to a token: the size of the thought, not a count to bill by.
             let size = text.chars().count().div_ceil(4);
-            let state = if *streaming { "thinking…" } else { "thought" };
+            let state = if *streaming {
+                tr!(thinking_live)
+            } else {
+                tr!(thought)
+            };
             let style = if *streaming {
                 theme::glow()
             } else {
@@ -886,7 +890,10 @@ fn render(kind: &Kind, width: u16, thinking: Thinking, frame: usize) -> Vec<Line
             lines.push(Line::default());
             let header = vec![
                 Span::styled(if open { "▾ " } else { "▸ " }, style),
-                Span::styled(format!("{state} · ~{} tokens", tokens_short(size)), style),
+                Span::styled(
+                    tr!(thought_size, state = state, size = tokens_short(size)),
+                    style,
+                ),
             ];
             if *streaming {
                 // While the model thinks, a small flame flickers in front of it, slowly — two rows, so it reads as a
@@ -966,10 +973,10 @@ fn render(kind: &Kind, width: u16, thinking: Thinking, frame: usize) -> Vec<Line
 /// and tokens below. The frame glows while it works, as everything that lives does.
 fn tile(agent: &Agent, width: usize, lines: &mut Vec<Line<'static>>) {
     let (state, style) = match agent.state {
-        ToolState::Running => ("running", theme::glow()),
-        ToolState::Done => ("done", theme::quiet()),
-        ToolState::Failed => ("stopped", Style::default().fg(theme::c().fault)),
-        ToolState::Refused => ("refused", Style::default().fg(theme::c().fault)),
+        ToolState::Running => (tr!(agent_running), theme::glow()),
+        ToolState::Done => (tr!(agent_done), theme::quiet()),
+        ToolState::Failed => (tr!(agent_stopped), Style::default().fg(theme::c().fault)),
+        ToolState::Refused => (tr!(agent_refused), Style::default().fg(theme::c().fault)),
     };
     // Inside the side rows' "│ " and " │".
     let inner = width.saturating_sub(4).max(4);
@@ -1021,7 +1028,7 @@ fn tile(agent: &Agent, width: usize, lines: &mut Vec<Line<'static>>) {
         Span::raw(" ".repeat(pad)),
         Span::styled(" │", style),
     ]));
-    let calls = if agent.calls == 1 { "call" } else { "calls" };
+    let calls = crate::texts::t().agent_calls.of(agent.calls as u64);
     let model = agent
         .model
         .as_deref()
@@ -1029,15 +1036,18 @@ fn tile(agent: &Agent, width: usize, lines: &mut Vec<Line<'static>>) {
         .unwrap_or_default();
     let stats = cut(
         &format!(
-            "{} {calls} · {} in · {} out{model}",
-            agent.calls,
-            tokens_short(agent.input_tokens as usize),
-            tokens_short(agent.output_tokens as usize)
+            "{}{model}",
+            tr!(
+                agent_stats,
+                calls = calls,
+                input = tokens_short(agent.input_tokens as usize),
+                output = tokens_short(agent.output_tokens as usize)
+            )
         ),
         inner,
     );
     let hint = if inner >= stats.width() + 16 {
-        "click opens"
+        tr!(tile_opens)
     } else {
         ""
     };
@@ -1057,7 +1067,7 @@ fn tokens_short(count: usize) -> String {
     if count < 1000 {
         count.to_string()
     } else {
-        format!("{:.1}k", count as f64 / 1000.0)
+        format!("{}k", glut::lang::decimal(count as f64 / 1000.0, 1))
     }
 }
 
@@ -1132,18 +1142,24 @@ fn cell_width(c: char) -> usize {
     c.width().unwrap_or(0)
 }
 
-/// `line` as runs of spaces and runs of everything else, in order.
+/// `line` as runs of spaces and runs of everything else, in order — a run of Chinese or Japanese parted where a row
+/// may break inside it (`linebreak::between`).
 fn parts(line: &str) -> Vec<&str> {
     let mut parts = Vec::new();
     let mut start = 0;
     let mut in_space = None;
+    let mut last = None;
     for (at, c) in line.char_indices() {
         let space = c == ' ';
-        if in_space.is_some_and(|was| was != space) {
+        let breaks = !space
+            && in_space == Some(false)
+            && last.is_some_and(|before| crate::linebreak::between(before, c));
+        if in_space.is_some_and(|was| was != space) || breaks {
             parts.push(&line[start..at]);
             start = at;
         }
         in_space = Some(space);
+        last = Some(c);
     }
     if start < line.len() {
         parts.push(&line[start..]);
@@ -1279,6 +1295,11 @@ mod tests {
         assert_eq!(wrap("the quick brown fox", 10), ["the quick", "brown fox"]);
         assert_eq!(wrap("abcdefghij", 4), ["abcd", "efgh", "ij"]);
         assert_eq!(wrap("日本語テキスト", 6), ["日本語", "テキス", "ト"]);
+        assert_eq!(
+            wrap("Glut 会读取文件。然后它运行测试。", 12),
+            ["Glut 会读取", "文件。然后它", "运行测试。"],
+            "a Chinese run breaks between its characters, never before 。"
+        );
         assert_eq!(wrap("one\n\ntwo", 10), ["one", "", "two"]);
         assert_eq!(
             wrap("a\u{1b}[2Jb", 10),

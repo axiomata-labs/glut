@@ -277,7 +277,7 @@ impl Meter {
             )
         )))));
         lines.push(quiet(match cost {
-            Some(cost) => format!("  {}", tr!(meter_price, cost = format!("${cost:.4}"))),
+            Some(cost) => format!("  {}", tr!(meter_price, cost = glut::lang::usd(cost, 4))),
             None => format!("  {}", tr!(meter_no_price)),
         }));
         if let Some(effort) = &window.effort {
@@ -318,7 +318,7 @@ impl Meter {
         for turn in self.turns.iter().rev().take(TURNS_LISTED) {
             let cost = turn
                 .cost
-                .map(|cost| format!(" · ${cost:.4}"))
+                .map(|cost| format!(" · {}", glut::lang::usd(cost, 4)))
                 .unwrap_or_default();
             lines.push(Line::from(vec![
                 Span::styled(format!("  #{:<3}", turn.number), theme::glow()),
@@ -347,7 +347,7 @@ impl Meter {
                     "       {rate:.0} tok/s · {}",
                     tr!(
                         meter_first_token,
-                        secs = format!("{:.1}", first.as_secs_f64())
+                        secs = glut::lang::decimal(first.as_secs_f64(), 1)
                     )
                 )),
                 (Some(rate), None) => Some(format!("       {rate:.0} tok/s")),
@@ -355,7 +355,7 @@ impl Meter {
                     "       {}",
                     tr!(
                         meter_first_token,
-                        secs = format!("{:.1}", first.as_secs_f64())
+                        secs = glut::lang::decimal(first.as_secs_f64(), 1)
                     )
                 )),
                 (None, None) => None,
@@ -439,8 +439,8 @@ fn cached_share(usage: &Usage) -> String {
 pub fn tokens(count: u64) -> String {
     match count {
         0..1_000 => count.to_string(),
-        1_000..1_000_000 => format!("{:.1}k", count as f64 / 1_000.0),
-        _ => format!("{:.1}M", count as f64 / 1_000_000.0),
+        1_000..1_000_000 => format!("{}k", glut::lang::decimal(count as f64 / 1_000.0, 1)),
+        _ => format!("{}M", glut::lang::decimal(count as f64 / 1_000_000.0, 1)),
     }
 }
 
