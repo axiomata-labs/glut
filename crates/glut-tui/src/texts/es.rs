@@ -38,6 +38,10 @@ pub const TEXTS: Texts = Texts {
              proyectos",
         ),
         (
+            "btw",
+            "una pregunta al margen, respondida en una tarjeta y nunca en la conversación; el turno en curso sigue — /btw reviewer ¿cómo vas?",
+        ),
+        (
             "projects",
             "seguir en otro proyecto: las carpetas en las que trabajó Glut, o una por su ruta",
         ),
@@ -1501,4 +1505,9 @@ pub const TEXTS: Texts = Texts {
     hint_opening: "⏎ abrir · Esc dejar",
     mcp_open_failed: "no se pudo abrir ningún navegador — abre tú la dirección de arriba",
     mcp_open_left: "abre tú la dirección de arriba; Glut espera a que vuelva",
+    btw_usage: "/btw <question> pregunta al margen — /btw <name> <question> pregunta a un agente en segundo plano o a otro pane; el turno en curso sigue sin interrupciones",
+    btw_wanted_tools: "quería consultar algo — una pregunta al margen no ejecuta herramientas; hazla como mensaje",
+    btw_failed: "la pregunta al margen falló: {reason}",
+    btw_waiting: "pensando…",
+    hint_btw: "Esc cierra la tarjeta · RePág AvPág la desplazan",
 };

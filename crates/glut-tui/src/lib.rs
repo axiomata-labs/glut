@@ -7,6 +7,7 @@ mod texts;
 mod agents;
 mod app;
 mod branch;
+mod btw;
 mod cli_help;
 mod commands;
 mod export;

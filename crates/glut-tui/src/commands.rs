@@ -97,7 +97,7 @@ const fn command(
 }
 
 /// Every command, grouped by topic in [`Topic::ALL`]'s order, the most used first inside a topic.
-pub const COMMANDS: [Command; 48] = [
+pub const COMMANDS: [Command; 49] = [
     command(Topic::Session, "clear", "", "start a new session"),
     command(
         Topic::Session,
@@ -110,6 +110,13 @@ pub const COMMANDS: [Command; 48] = [
         "search",
         "<text>",
         "find in the kept conversations: /resume's list with the text typed — ⌃A every project",
+    ),
+    command(
+        Topic::Session,
+        "btw",
+        "[name] <question>",
+        "a side question, answered in a card and never part of the conversation; the turn under way goes on — \
+         /btw reviewer how far?",
     ),
     command(
         Topic::Session,

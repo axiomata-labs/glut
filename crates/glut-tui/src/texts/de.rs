@@ -38,6 +38,10 @@ pub const TEXTS: Texts = Texts {
              Projekte",
         ),
         (
+            "btw",
+            "eine Nebenfrage, beantwortet in einer Karte und nie Teil des Gesprächs; der laufende Turn arbeitet weiter — /btw reviewer wie weit?",
+        ),
+        (
             "projects",
             "in einem anderen Projekt weitermachen: die Ordner, in denen Glut gearbeitet hat, oder einer über \
              seinen Pfad",
@@ -1503,4 +1507,9 @@ pub const TEXTS: Texts = Texts {
     hint_opening: "⏎ öffnen · Esc lassen",
     mcp_open_failed: "kein Browser ließ sich öffnen — öffne die Adresse oben selbst",
     mcp_open_left: "öffne die Adresse oben selbst; Glut wartet, bis er zurückkommt",
+    btw_usage: "/btw <question> fragt nebenbei — /btw <name> <question> fragt einen Hintergrund-Agenten oder ein anderes Pane; der laufende Turn arbeitet ungestört weiter",
+    btw_wanted_tools: "wollte etwas nachschauen — eine Nebenfrage führt kein Werkzeug aus; frag das als Nachricht",
+    btw_failed: "die Nebenfrage ging nicht: {reason}",
+    btw_waiting: "denkt…",
+    hint_btw: "Esc schließt die Karte · Bild↑ Bild↓ blättern",
 };

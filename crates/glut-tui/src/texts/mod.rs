@@ -1516,6 +1516,16 @@ glut::catalog! {
         mcp_open_failed: &'static str,
         /// The owner left the address to open themselves.
         mcp_open_left: &'static str,
+        /// `/btw` without a question (T57).
+        btw_usage: &'static str,
+        /// A side question's model wanted a tool, which was dropped.
+        btw_wanted_tools: &'static str,
+        /// A side question that failed: `{reason}`.
+        btw_failed: &'static str,
+        /// The side question's card while nothing of the answer came.
+        btw_waiting: &'static str,
+        /// The key line while a side question's card is open.
+        hint_btw: &'static str,
     }
 }
 

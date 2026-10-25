@@ -38,6 +38,10 @@ pub const TEXTS: Texts = Texts {
              projets",
         ),
         (
+            "btw",
+            "une question en aparté, répondue dans une carte et jamais dans la conversation ; le tour en cours continue — /btw reviewer où en es-tu ?",
+        ),
+        (
             "projects",
             "continuer dans un autre projet : les dossiers où Glut a travaillé, ou un par son chemin",
         ),
@@ -1507,4 +1511,9 @@ pub const TEXTS: Texts = Texts {
     hint_opening: "⏎ ouvrir · Échap laisser",
     mcp_open_failed: "aucun navigateur n’a pu s’ouvrir — ouvre toi-même l’adresse ci-dessus",
     mcp_open_left: "ouvre toi-même l’adresse ci-dessus ; Glut attend son retour",
+    btw_usage: "/btw <question> pose une question en aparté — /btw <name> <question> interroge un agent en arrière-plan ou un autre pane ; le tour en cours continue sans être dérangé",
+    btw_wanted_tools: "il voulait vérifier quelque chose — une question en aparté n’exécute aucun outil ; pose-la comme un message",
+    btw_failed: "la question en aparté a échoué : {reason}",
+    btw_waiting: "réfléchit…",
+    hint_btw: "Échap ferme la carte · PgPréc PgSuiv la font défiler",
 };

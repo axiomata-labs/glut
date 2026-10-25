@@ -37,6 +37,10 @@ pub const TEXTS: Texts = Texts {
             "cercare nelle conversazioni salvate: l’elenco di /resume con il testo già inserito — ⌃A tutti i progetti",
         ),
         (
+            "btw",
+            "una domanda a margine, con la risposta in una scheda e mai nella conversazione; il turno in corso prosegue — /btw reviewer a che punto sei?",
+        ),
+        (
             "projects",
             "continuare in un altro progetto: le cartelle in cui Glut ha lavorato, o una dal suo percorso",
         ),
@@ -1506,4 +1510,9 @@ pub const TEXTS: Texts = Texts {
     hint_opening: "⏎ apri · Esc lascia",
     mcp_open_failed: "non è stato possibile aprire un browser — apri tu l’indirizzo sopra",
     mcp_open_left: "apri tu l’indirizzo sopra; Glut aspetta che torni",
+    btw_usage: "/btw <question> chiede a margine — /btw <name> <question> chiede a un agente in background o a un altro pane; il turno in corso prosegue indisturbato",
+    btw_wanted_tools: "voleva controllare qualcosa — una domanda a margine non esegue strumenti; chiedila come messaggio",
+    btw_failed: "la domanda a margine non è riuscita: {reason}",
+    btw_waiting: "sta pensando…",
+    hint_btw: "Esc chiude la scheda · PagSu PagGiù la scorrono",
 };

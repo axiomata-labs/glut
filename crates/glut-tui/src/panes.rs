@@ -322,6 +322,13 @@ pub enum Request {
     },
     /// The asking pane's last plan with its task list, to be built in pane `to`.
     SendPlan { to: Option<String> },
+    /// A side question (T57) about pane or agent `to` — a word only when it names one, else the question's own, as
+    /// `/send` reads it — or about the asking pane; `whole` is the text with that first word.
+    Btw {
+        to: Option<String>,
+        question: String,
+        whole: String,
+    },
     /// A background agent (T36e): a session with no room on the screen, named `name` or after its role; `sure`: the
     /// owner said yes to one beyond [`BACKGROUND_ASKED`] (T36f).
     Background {
@@ -1131,6 +1138,26 @@ impl Panes {
                     self.send(None, Some(format!("{word} plan")));
                 }
                 Request::SendPlan { to } => self.send(to, None),
+                Request::Btw {
+                    to,
+                    question,
+                    whole,
+                } => {
+                    let asked = to
+                        .as_deref()
+                        .and_then(|word| self.resolve(word, self.active));
+                    match asked {
+                        Some(at) => {
+                            let lent = self.list[at].app.side_asked();
+                            let label = self.shown_label(at);
+                            self.active().ask_aside(lent, Some(label), question);
+                        }
+                        None => {
+                            let lent = self.active().side_asked();
+                            self.active().ask_aside(lent, None, whole);
+                        }
+                    }
+                }
                 Request::Background {
                     name,
                     role,
@@ -3205,6 +3232,48 @@ mod tests {
         assert!(parse_background("one two").is_err());
         assert!(parse_background("as").is_err());
         assert!(parse_background("Big").is_err());
+    }
+
+    #[tokio::test]
+    async fn btw_asks_a_background_agent_by_name_and_a_word_naming_none_is_the_question_s_own() {
+        let host = Arc::new(crate::Standalone) as Arc<dyn Host>;
+        let (mut panes, _inlets) = with_background("critic");
+        let ask = |panes: &mut Panes, typed: &str| {
+            panes.active().input.insert_text(typed);
+            press(panes, KeyCode::Enter, KeyModifiers::NONE);
+            panes.settle(&host);
+        };
+        ask(&mut panes, "/btw critic what did you find?");
+        let side = panes.list[0]
+            .app
+            .side
+            .as_ref()
+            .expect("a card over the asking pane");
+        assert_eq!(side.about.as_deref(), Some("critic"));
+        assert_eq!(side.question, "what did you find?");
+        assert!(
+            panes.list[1].app.side.is_none(),
+            "nothing shown in the agent asked"
+        );
+        assert!(
+            panes.list[1]
+                .app
+                .transcript
+                .blocks
+                .iter()
+                .all(|block| { !matches!(&block.kind, crate::transcript::Kind::Owner(_)) }),
+            "the agent's stream untouched"
+        );
+        // A new one replaces it; a first word that names no one is the question's.
+        ask(&mut panes, "/btw update the plan?");
+        let side = panes.list[0].app.side.as_ref().unwrap();
+        assert_eq!(side.about, None);
+        assert_eq!(side.question, "update the plan?");
+        ask(&mut panes, "/btw");
+        assert!(
+            panes.list[0].app.side.is_some(),
+            "a usage note, the card stays"
+        );
     }
 
     #[tokio::test]

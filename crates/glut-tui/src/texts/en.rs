@@ -817,4 +817,9 @@ pub const TEXTS: Texts = Texts {
     hint_opening: "⏎ open · Esc leave",
     mcp_open_failed: "no browser could be opened — open the address above yourself",
     mcp_open_left: "open the address above yourself; Glut waits for it to come back",
+    btw_usage: "/btw <question> asks aside — /btw <name> <question> asks a background agent or another pane; the turn under way goes on undisturbed",
+    btw_wanted_tools: "it wanted to look something up — a side question runs no tool; ask it as a message",
+    btw_failed: "the side question failed: {reason}",
+    btw_waiting: "thinking…",
+    hint_btw: "Esc closes the card · PgUp PgDn scroll it",
 };

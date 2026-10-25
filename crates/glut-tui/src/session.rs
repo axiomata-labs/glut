@@ -70,6 +70,8 @@ pub enum Report {
     Restored(Result<(String, String), String>),
     /// Every kept session, read beside the screen for `/resume`'s search (T55).
     Kept(Arc<crate::finder::Corpus>),
+    /// A piece of a side question's answer, or its end (T57), under the question's id.
+    Side(u64, crate::btw::Came),
     /// What a `/mcp` command came to (T56): a note, a secret to ask for, a sign-in that waits for the browser.
     Mcp(crate::mcp::Step),
     /// The walk of the folder for `@` ended: its files, and whether there were more.
@@ -1038,7 +1040,7 @@ pub fn write_handoff(
 
 /// The conversation as a readable text for the handoff: who said what, each tool call on a line, each result cut
 /// short — its newest `room` characters.
-fn as_text(conversation: &[Message], room: usize) -> String {
+pub(crate) fn as_text(conversation: &[Message], room: usize) -> String {
     let piece = |text: &str| {
         let count = text.chars().count();
         let mut kept: String = text.chars().take(HANDOFF_PIECE_CHARS).collect();
@@ -1080,7 +1082,7 @@ fn as_text(conversation: &[Message], room: usize) -> String {
 
 /// Whether a model's answer is tool calls in its raw markup (DeepSeek's `<｜DSML｜invoke …>`, `<function_calls>`)
 /// rather than text: a line that opens such a tag. A handoff that only mentions one in its prose stays one.
-fn calls_tools(text: &str) -> bool {
+pub(crate) fn calls_tools(text: &str) -> bool {
     text.lines().map(str::trim_start).any(|line| {
         [
             "<｜DSML｜",

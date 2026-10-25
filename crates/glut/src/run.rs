@@ -512,8 +512,9 @@ const MOST_SENT_IMAGE_BYTES: u64 = 16 * 1024 * 1024;
 const MOST_SENT_IMAGES: usize = 8;
 
 /// The conversation as it is sent (T45): to a model that sees no images, none — each said by its line —; to any
-/// other, the newest images within [`MOST_SENT_IMAGES`] and [`MOST_SENT_IMAGE_BYTES`], the older by their line.
-fn sendable(messages: &[Message], sees: Option<bool>) -> std::borrow::Cow<'_, [Message]> {
+/// other, the newest images within [`MOST_SENT_IMAGES`] and [`MOST_SENT_IMAGE_BYTES`], the older by their line. A
+/// call beside the loop (a TUI's side question) sends what the loop would.
+pub fn sendable(messages: &[Message], sees: Option<bool>) -> std::borrow::Cow<'_, [Message]> {
     if !messages.iter().any(|message| !message.images.is_empty()) {
         return std::borrow::Cow::Borrowed(messages);
     }

@@ -331,6 +331,10 @@ fn draw_in(frame: &mut Frame, app: &mut App, area: Rect, chrome: &Chrome) {
         .name(&cwd)
         .map(|name| crate::transcript::clean(name).replace('\n', " "));
     draw_keys(frame, app, keys, branch, chrome);
+    // The card takes the wheel only where it was drawn this frame.
+    if let Some(side) = &mut app.side {
+        side.area = Rect::default();
+    }
     if app.picker.is_some() {
         draw_picker(frame, app, stream);
     } else if app.keys_sheet.is_some() {
@@ -344,9 +348,86 @@ fn draw_in(frame: &mut Frame, app: &mut App, area: Rect, chrome: &Chrome) {
     } else if app.picture_view.is_some() {
         draw_picture(frame, app, stream);
     } else {
+        draw_side(frame, app, stream);
         draw_suggestions(frame, app, stream);
         draw_paths(frame, app, stream);
     }
+}
+
+/// A side question's card (T57) over the stream's lower part: the question, the thinking, the answer as it streams,
+/// framed in the glow while it comes. The stream above reads on; the keys go to the input but Esc and the pages.
+fn draw_side(frame: &mut Frame, app: &mut App, area: Rect) {
+    let thinking = app.transcript.thinking;
+    let tick = app.frame;
+    let Some(side) = &mut app.side else {
+        return;
+    };
+    if area.width < 20 || area.height < 6 {
+        return;
+    }
+    // Inside the frame, a cell short of its right side as the stream is.
+    let width = area.width.saturating_sub(3).max(8);
+    let mut lines: Vec<Line<'static>> = side
+        .stream
+        .blocks
+        .iter_mut()
+        .flat_map(|block| block.lines(width, thinking, tick).to_vec())
+        .collect();
+    if side.waiting() {
+        lines.push(Line::default());
+        lines.push(Line::from(Span::styled(tr!(btw_waiting), theme::glow())));
+    }
+    // The question's empty row above it is the frame's.
+    if lines.first().is_some_and(|line| line.width() == 0) {
+        lines.remove(0);
+    }
+    let most = (area.height * 3 / 5).max(5);
+    let height = (u16::try_from(lines.len())
+        .unwrap_or(u16::MAX)
+        .saturating_add(2))
+    .clamp(5, most);
+    let place = Rect {
+        x: area.x,
+        y: area.y + area.height - height,
+        width: area.width,
+        height,
+    };
+    let style = if side.state == crate::btw::State::Asking {
+        theme::glow()
+    } else {
+        theme::quiet()
+    };
+    let title = match &side.about {
+        Some(about) => format!(
+            " btw · {} ",
+            crate::transcript::cut(
+                &crate::transcript::clean(about),
+                usize::from(area.width / 2)
+            )
+        ),
+        None => " btw ".to_owned(),
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(style)
+        .title(Span::styled(title, style));
+    let inner = block.inner(place);
+    side.rows = lines.len();
+    side.room = usize::from(inner.height);
+    let last = side.rows.saturating_sub(side.room);
+    side.scroll = if side.follow {
+        last
+    } else {
+        side.scroll.min(last)
+    };
+    let shown: Vec<Line<'static>> = lines
+        .into_iter()
+        .skip(side.scroll)
+        .take(side.room)
+        .collect();
+    side.area = place;
+    frame.render_widget(Clear, place);
+    frame.render_widget(Paragraph::new(shown).block(block), place);
 }
 
 /// The review (T17) over the stream: framed in the glow, it waits for the owner's decisions.
@@ -1188,6 +1269,8 @@ fn draw_keys(frame: &mut Frame, app: &App, area: Rect, branch: Option<String>, c
         }
     } else if app.secret.is_some() {
         tr!(hint_secret).to_owned()
+    } else if app.side.is_some() && app.ask.is_none() {
+        tr!(hint_btw).to_owned()
     } else if app.opening.is_some() {
         tr!(hint_opening).to_owned()
     } else if app.search.is_some() {

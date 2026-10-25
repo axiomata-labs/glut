@@ -34,6 +34,10 @@ pub const TEXTS: Texts = Texts {
             "在保存的对话中搜索：/resume 的列表，已填入文本 — ⌃A 所有项目",
         ),
         (
+            "btw",
+            "顺便一问：答案显示在卡片中，从不进入对话；正在进行的一轮继续 — /btw reviewer 进展如何？",
+        ),
+        (
             "projects",
             "在另一个项目中继续：Glut 工作过的文件夹，或按路径指定一个",
         ),
@@ -1334,4 +1338,9 @@ pub const TEXTS: Texts = Texts {
     hint_opening: "⏎ 打开 · Esc 不打开",
     mcp_open_failed: "无法打开浏览器 — 请自行打开上面的地址",
     mcp_open_left: "请自行打开上面的地址；Glut 等待其返回",
+    btw_usage: "/btw <question> 顺便一问 — /btw <name> <question> 问后台代理或另一个 Pane；正在进行的一轮不受打扰",
+    btw_wanted_tools: "它想查点东西 — 顺便一问不运行任何工具；请作为消息提问",
+    btw_failed: "顺便一问失败：{reason}",
+    btw_waiting: "思考中…",
+    hint_btw: "Esc 关闭卡片 · PgUp PgDn 滚动",
 };

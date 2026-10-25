@@ -37,6 +37,10 @@ pub const TEXTS: Texts = Texts {
             "保存済みの会話を検索: テキスト入力済みの /resume の一覧 — ⌃A ですべてのプロジェクト",
         ),
         (
+            "btw",
+            "ついでの質問: 答えはカードに出て会話には入らない; 進行中のターンは続く — /btw reviewer どこまで進んだ？",
+        ),
+        (
             "projects",
             "別のプロジェクトで続ける: Glut が作業したフォルダー、またはパスで指定したもの",
         ),
@@ -1401,4 +1405,9 @@ pub const TEXTS: Texts = Texts {
     hint_opening: "⏎ 開く · Esc そのまま",
     mcp_open_failed: "ブラウザーを開けませんでした — 上のアドレスを自分で開いてください",
     mcp_open_left: "上のアドレスを自分で開いてください。Glut は戻ってくるのを待っています",
+    btw_usage: "/btw <question> でついでに質問 — /btw <name> <question> でバックグラウンドのエージェントや別の Pane に質問; 進行中のターンはそのまま続く",
+    btw_wanted_tools: "何かを調べようとしました — ついでの質問はツールを実行しません; メッセージとして聞いてください",
+    btw_failed: "ついでの質問に失敗しました: {reason}",
+    btw_waiting: "思考中…",
+    hint_btw: "Esc でカードを閉じる · PgUp PgDn でスクロール",
 };

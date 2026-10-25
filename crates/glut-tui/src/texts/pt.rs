@@ -37,6 +37,10 @@ pub const TEXTS: Texts = Texts {
             "procurar nas conversas guardadas: a lista do /resume com o texto já digitado — ⌃A todos os projetos",
         ),
         (
+            "btw",
+            "uma pergunta à parte, respondida num cartão e nunca na conversa; o turno em curso continua — /btw reviewer como vai?",
+        ),
+        (
             "projects",
             "continuar em outro projeto: as pastas em que o Glut trabalhou, ou uma pelo caminho",
         ),
@@ -1477,4 +1481,9 @@ pub const TEXTS: Texts = Texts {
     hint_opening: "⏎ abrir · Esc deixar",
     mcp_open_failed: "nenhum navegador pôde ser aberto — abra você o endereço acima",
     mcp_open_left: "abra você o endereço acima; o Glut aguarda que volte",
+    btw_usage: "/btw <question> pergunta à parte — /btw <name> <question> pergunta a um agente em segundo plano ou a outro pane; o turno em curso continua sem interrupção",
+    btw_wanted_tools: "queria consultar algo — uma pergunta à parte não executa ferramentas; faça-a como mensagem",
+    btw_failed: "a pergunta à parte falhou: {reason}",
+    btw_waiting: "pensando…",
+    hint_btw: "Esc fecha o cartão · PgUp PgDn rolam-no",
 };

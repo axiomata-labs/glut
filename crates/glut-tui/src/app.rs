@@ -135,6 +135,18 @@ enum State {
     Rests,
 }
 
+/// What a cut-off turn going on works on, as a side question tells it to the model (T57).
+const RESUMED_TURN: &str = "(a turn that was cut off, going on where it stopped)";
+
+/// The conversation as a turn, a compaction or a handoff got it (T57).
+struct Lent {
+    conversation: Vec<Message>,
+    /// The first block of the stream after the owner's message: what the turn did starts there.
+    from: usize,
+    /// The owner's message a turn works on; `None` for a compaction or a handoff.
+    prompt: Option<String>,
+}
+
 pub struct App {
     pub parts: Arc<Parts>,
     pub engine: Engine,
@@ -154,6 +166,12 @@ pub struct App {
     paths_closed: Option<String>,
     /// The conversation between turns; taken while a turn runs.
     conversation: Vec<Message>,
+    /// A copy of the conversation while a turn, a compaction or a handoff holds it: what a side question sees (T57).
+    lent: Option<Lent>,
+    /// The tools the last turn's model calls offered: a side question offers the same, so the cache holds.
+    side_tools: Option<Vec<glut::ToolSpec>>,
+    /// The card of the side question asked last (T57, `/btw`).
+    pub side: Option<crate::btw::Side>,
     /// The session as it is kept (T25).
     pub session: Session,
     /// The run's task list as `todo_write` last sent it (the Plan tab, T28).
@@ -439,6 +457,9 @@ impl App {
             path_picked: false,
             paths_closed: None,
             conversation: Vec::new(),
+            lent: None,
+            side_tools: None,
+            side: None,
             session,
             todos: Vec::new(),
             project_todos: crate::todos::Todos::default(),
@@ -578,6 +599,8 @@ impl App {
     /// Opens session `session`: its conversation goes on, its stream is shown again.
     pub fn open(&mut self, session: Session) {
         self.forget_warm();
+        // A side question was about the session that goes (T57).
+        self.side = None;
         // What waited for the other session is not this one's.
         self.queue.clear();
         self.forget_models();
@@ -913,6 +936,7 @@ impl App {
         self.busy = Some(Busy::Turn);
         let inbox = glut::Inbox::default();
         self.steering = Some(inbox.clone());
+        self.lend(Some(prompt.clone()));
         // Where this message begins, to rewind to before it; its run is known with its first snapshot.
         self.session.marks.push(crate::store::Mark {
             at: Some(self.conversation.len()),
@@ -940,6 +964,7 @@ impl App {
             return;
         }
         self.transcript.note(tr!(turn_resumed), Tone::Quiet);
+        self.lend(Some(RESUMED_TURN.to_owned()));
         self.after_resume = then;
         self.parts.log.follow(&self.session.id);
         let cancel = Cancel::new();
@@ -964,6 +989,9 @@ impl App {
     /// A step of the run, a question, or the end of something that ran in the background.
     pub fn on_report(&mut self, report: Report) {
         self.handle(report);
+        if !self.working() {
+            self.lent = None;
+        }
         // A `!cmd`'s output that came while the conversation was a turn's (or a compaction's) joins it once it is
         // the session's again.
         if !self.working() && self.busy.is_none() && !self.pending.is_empty() {
@@ -1136,6 +1164,9 @@ impl App {
                     outcome.warm.as_ref(),
                     &conversation,
                 );
+                if let Some(warm) = &outcome.warm {
+                    self.side_tools = Some(warm.tools.clone());
+                }
                 if let Some(path) = self.init_guide.take()
                     && outcome.reason == FinishReason::Answered
                 {
@@ -1411,6 +1442,7 @@ impl App {
                 }
             }
             Report::Mcp(step) => self.mcp_step(step),
+            Report::Side(id, came) => self.side_came(id, came),
             Report::Files(found) => {
                 let (files, truncated) = found;
                 self.files = Some((Instant::now(), files, truncated));
@@ -1544,6 +1576,14 @@ impl App {
                         view.scroll = view.scroll.saturating_add(WHEEL_LINES);
                     }
                 }
+                // The card is no window onto the stream below it: a click or a drag there reaches nothing.
+                MouseEventKind::Down(MouseButton::Left)
+                | MouseEventKind::Up(MouseButton::Left)
+                | MouseEventKind::Drag(MouseButton::Left)
+                    if self.over_side(mouse.column, mouse.row) =>
+                {
+                    self.press = None;
+                }
                 MouseEventKind::Down(MouseButton::Left) | MouseEventKind::Up(MouseButton::Left)
                     if self.overlaid() =>
                 {
@@ -1557,6 +1597,16 @@ impl App {
                 MouseEventKind::ScrollDown if self.agent_view.is_some() => {
                     if let Some(view) = &mut self.agent_view {
                         view.scroll = view.scroll.saturating_sub(WHEEL_LINES);
+                    }
+                }
+                MouseEventKind::ScrollUp if self.over_side(mouse.column, mouse.row) => {
+                    if let Some(side) = &mut self.side {
+                        side.roll(-(WHEEL_LINES as isize));
+                    }
+                }
+                MouseEventKind::ScrollDown if self.over_side(mouse.column, mouse.row) => {
+                    if let Some(side) = &mut self.side {
+                        side.roll(WHEEL_LINES as isize);
                     }
                 }
                 MouseEventKind::ScrollUp => self.scroll_by(WHEEL_LINES as isize),
@@ -1752,7 +1802,7 @@ impl App {
                 KeyCode::Esc => {
                     self.paths_closed = Some(self.input.text());
                     self.paths = None;
-                    if !self.working() {
+                    if !self.working() || self.side.is_some() {
                         return;
                     }
                 }
@@ -1818,6 +1868,8 @@ impl App {
                 }
             }
             KeyCode::BackTab => self.cycle_mode(),
+            // A side question's card goes first (T57): its Esc never stops the turn under it.
+            KeyCode::Esc if self.side.is_some() => self.close_side(),
             // A selection goes first: Esc lets it go, the next one stops Glut.
             KeyCode::Esc if self.selection.is_some() => self.selection = None,
             KeyCode::Esc => {
@@ -1874,6 +1926,8 @@ impl App {
             KeyCode::Down if shift => self.scroll_by(-1),
             KeyCode::Up => self.input.up(),
             KeyCode::Down => self.input.down(),
+            KeyCode::PageUp if self.side_shown() => self.roll_side(-1),
+            KeyCode::PageDown if self.side_shown() => self.roll_side(1),
             KeyCode::PageUp => self.scroll_by(self.page()),
             KeyCode::PageDown => self.scroll_by(-self.page()),
             // Tab while Glut works queues the message for after the turn (T10; Alt+Enter is a new line in many
@@ -2261,6 +2315,7 @@ impl App {
             "quit" | "exit" | "q" => self.quit = true,
             "clear" => {
                 self.forget_warm();
+                self.side = None;
                 self.selection = None;
                 self.search = None;
                 self.pending.clear();
@@ -2318,6 +2373,7 @@ impl App {
             "compact" => {
                 self.busy = Some(Busy::Compacting);
                 self.transcript.note(tr!(compacting), Tone::Quiet);
+                self.lend(None);
                 session::compact(
                     self.engine.clone(),
                     std::mem::take(&mut self.conversation),
@@ -2338,6 +2394,7 @@ impl App {
                 "write" => {
                     self.busy = Some(Busy::HandingOff);
                     self.transcript.note(tr!(handoff_writing), Tone::Quiet);
+                    self.lend(None);
                     session::write_handoff(
                         Arc::clone(&self.parts),
                         self.engine.clone(),
@@ -2449,6 +2506,7 @@ impl App {
                 "none" | "all-rounder" => self.play(None),
                 name => self.play(Some(name)),
             },
+            "btw" => self.btw_command(rest),
             "send" => match crate::panes::parse_send(rest) {
                 Ok(request) => self.pane_request = Some(request),
                 Err(reason) => self.transcript.note(reason, Tone::Fault),
@@ -3399,6 +3457,7 @@ impl App {
     fn rewind(&mut self, mark: usize, conversation: bool, files: bool) {
         if conversation {
             self.forget_warm();
+            self.side = None;
         }
         if self.working() {
             return self.transcript.note(tr!(rewind_waits), Tone::Quiet);
@@ -4406,6 +4465,135 @@ impl App {
         }
     }
 
+    /// Keeps a copy of the conversation as it is handed to a turn (`prompt`: the owner's message it works on), a
+    /// compaction or a handoff (`None`): a side question sees it while they hold the conversation (T57).
+    fn lend(&mut self, prompt: Option<String>) {
+        self.lent = Some(Lent {
+            conversation: self.conversation.clone(),
+            from: self.transcript.blocks.len(),
+            prompt,
+        });
+    }
+
+    /// What this session lends a side question (T57): its model, its conversation — while a turn runs, the one it
+    /// began with and what it did so far —, the tools its calls offer.
+    pub fn side_asked(&self) -> crate::btw::Asked {
+        let (conversation, under_way) = match self.lent.as_ref().filter(|_| self.working()) {
+            Some(lent) => (
+                lent.conversation.clone(),
+                lent.prompt.as_deref().map(|prompt| {
+                    crate::btw::under_way(
+                        prompt,
+                        self.transcript.blocks.get(lent.from..).unwrap_or(&[]),
+                    )
+                }),
+            ),
+            None => (self.conversation.clone(), None),
+        };
+        crate::btw::Asked {
+            model: Arc::clone(&self.engine.model),
+            prices: self.engine.prices,
+            sees_images: self.engine.images,
+            conversation,
+            tools: self.side_tools.clone(),
+            under_way,
+        }
+    }
+
+    /// `/btw [name] <question>`: a side question about this pane or, when the first word names one, another pane or a
+    /// background agent — the screen decides which.
+    fn btw_command(&mut self, rest: &str) {
+        let rest = rest.trim();
+        if rest.is_empty() {
+            return self.tell(tr!(btw_usage));
+        }
+        let (to, question) = match rest.split_once(char::is_whitespace) {
+            Some((first, question)) => (Some(first.to_owned()), question.trim().to_owned()),
+            None => (None, rest.to_owned()),
+        };
+        self.pane_request = Some(crate::panes::Request::Btw {
+            to,
+            question,
+            whole: rest.to_owned(),
+        });
+    }
+
+    /// Asks `question` aside of the session that lent `asked` — `about` names it when it is another — in a card over
+    /// this pane; a card still open closes first.
+    pub fn ask_aside(&mut self, asked: crate::btw::Asked, about: Option<String>, question: String) {
+        let question = question.trim().to_owned();
+        if question.is_empty() {
+            return self.tell(tr!(btw_usage));
+        }
+        // A paid call, like every turn: the host's budget has its word.
+        if self.refused_spend() {
+            return;
+        }
+        self.close_side();
+        let (messages, tools) = crate::btw::request(&asked, &question);
+        let reports = self.reports.clone();
+        let model = Arc::clone(&asked.model);
+        self.side = Some(crate::btw::Side::new(about, question, asked.prices, |id| {
+            crate::btw::ask(model, messages, tools, id, reports)
+        }));
+    }
+
+    /// A piece of the side question's answer, or its end: what it used counts in the session's cost, in no context.
+    fn side_came(&mut self, id: u64, came: crate::btw::Came) {
+        let Some(side) = self.side.as_mut().filter(|side| side.id == id) else {
+            return;
+        };
+        let prices = side.prices;
+        if let Some(usage) = side.take(came) {
+            if let Some(prices) = prices {
+                *self.cost.get_or_insert(0.0) += prices.cost_usd(&usage);
+            }
+            self.usage += usage;
+            self.spent(usage);
+        }
+    }
+
+    /// Closes the side question's card, its call ended; an answer leaves its folded line in the stream.
+    fn close_side(&mut self) {
+        let Some(kind) = self.side.take().and_then(|side| side.kept()) else {
+            return;
+        };
+        let at = self.transcript.put_aside(kind);
+        // The views that name a block by its place follow the ones that moved on; a selection's lines moved under it.
+        self.selection = None;
+        if let Some(reading) = &mut self.reading
+            && reading.block >= at
+        {
+            reading.block += 1;
+        }
+        if let Some(view) = &mut self.agent_view
+            && view.path.first().is_some_and(|first| *first >= at)
+        {
+            view.path[0] += 1;
+        }
+    }
+
+    /// Rolls the side question's card a page down (`1`) or up (`-1`).
+    fn roll_side(&mut self, pages: isize) {
+        if let Some(side) = self.side.as_mut().filter(|side| side.area.width > 0) {
+            let page = side.room.saturating_sub(1).max(1) as isize;
+            side.roll(pages * page);
+        }
+    }
+
+    /// Whether the side question's card was drawn: a screen too small for it has none to roll.
+    fn side_shown(&self) -> bool {
+        self.side.as_ref().is_some_and(|side| side.area.width > 0)
+    }
+
+    /// Whether the mouse is over the side question's card.
+    fn over_side(&self, column: u16, row: u16) -> bool {
+        self.side.as_ref().is_some_and(|side| {
+            side.area
+                .contains(ratatui::layout::Position { x: column, y: row })
+        })
+    }
+
     /// Whether something stands over the stream: a list, the review, the plan, a subagent's view.
     fn overlaid(&self) -> bool {
         self.picture_view.is_some()
@@ -4744,6 +4932,8 @@ impl App {
     /// The cache this session kept is no head of what comes next (another conversation, a compacted one, another
     /// role or mode): its keeping ends, and the footer marks nothing until the provider caches anew.
     fn forget_warm(&mut self) {
+        // The tools offered with that head go with it: a side question offers none it may not hold (T57).
+        self.side_tools = None;
         self.keeper = None;
         self.warm_until = None;
         self.cache_seen = false;
@@ -7492,6 +7682,194 @@ pub(crate) mod tests {
             "{:?}",
             app.transcript.blocks.last().map(|block| &block.kind)
         )
+    }
+
+    /// A model server for one streamed answer: the request's body comes back through the receiver.
+    async fn side_server(
+        pieces: Vec<serde_json::Value>,
+    ) -> (String, tokio::sync::oneshot::Receiver<serde_json::Value>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let root = format!("http://{}", listener.local_addr().unwrap());
+        let (sent, body) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut read = Vec::new();
+            let mut buffer = [0u8; 8192];
+            let whole = loop {
+                let count = socket.read(&mut buffer).await.unwrap();
+                read.extend_from_slice(&buffer[..count]);
+                let text = String::from_utf8_lossy(&read).into_owned();
+                if let Some((head, rest)) = text.split_once("\r\n\r\n") {
+                    let length: usize = head
+                        .lines()
+                        .find_map(|line| {
+                            line.to_lowercase()
+                                .strip_prefix("content-length:")
+                                .map(|n| n.trim().to_owned())
+                        })
+                        .and_then(|n| n.parse().ok())
+                        .unwrap_or(0);
+                    if rest.len() >= length {
+                        break rest[..length].to_owned();
+                    }
+                }
+            };
+            let _ = sent.send(serde_json::from_str(&whole).unwrap());
+            let mut answer: String = pieces
+                .iter()
+                .map(|piece| format!("data: {piece}\n\n"))
+                .collect();
+            answer.push_str("data: [DONE]\n\n");
+            let reply = format!(
+                concat!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n",
+                    "content-length: {}\r\nconnection: close\r\n\r\n{}"
+                ),
+                answer.len(),
+                answer
+            );
+            socket.write_all(reply.as_bytes()).await.unwrap();
+        });
+        (root, body)
+    }
+
+    fn side_until(app: &mut App, reports: &mut mpsc::UnboundedReceiver<Report>) {
+        let until = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < until {
+            match reports.try_recv() {
+                Ok(report @ Report::Side(..)) => app.on_report(report),
+                Ok(_) => {}
+                Err(_) => std::thread::sleep(Duration::from_millis(5)),
+            }
+            if app
+                .side
+                .as_ref()
+                .is_some_and(|side| side.state != crate::btw::State::Asking)
+            {
+                return;
+            }
+        }
+        panic!("the side question never ended");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_side_question_streams_into_its_card_costs_and_leaves_the_conversation_and_the_turn_alone()
+     {
+        let (mut app, mut reports) = app();
+        let (root, body) = side_server(vec![
+            serde_json::json!({"choices": [{"delta": {"reasoning": "the lexer"}}]}),
+            serde_json::json!({"choices": [{"delta": {"content": "Two "}}]}),
+            serde_json::json!({"choices": [{"delta": {"content": "bugs."}}]}),
+            serde_json::json!({"choices": [], "usage": {"prompt_tokens": 1000, "completion_tokens": 10,
+                "prompt_tokens_details": {"cached_tokens": 900}}}),
+        ])
+        .await;
+        let endpoint = glut::config::ModelEndpoint {
+            base_url: root,
+            api_key: None,
+            model: "m".into(),
+            effort: None,
+            versioned: true,
+        };
+        app.engine.model =
+            Arc::new(glut::Model::new(endpoint.clone(), Default::default()).unwrap());
+        app.engine.endpoint = endpoint;
+        app.engine.prices = Some(glut::Prices {
+            input_per_m: 1.0,
+            cached_input_per_m: Some(0.1),
+            output_per_m: 10.0,
+        });
+        let mut said = Message::user("It parses.");
+        said.role = glut::model::Role::Assistant;
+        let before = vec![
+            Message::system("You are Glut."),
+            Message::user("Fix the parser"),
+            said,
+        ];
+        app.conversation = before.clone();
+        app.side_tools = Some(vec![glut::ToolSpec {
+            name: "bash".into(),
+            description: "runs".into(),
+            parameters: serde_json::json!({"type": "object"}),
+        }]);
+        // A turn under way: the side question sees the conversation it began with and what it did.
+        app.lend(Some("Now the tests".into()));
+        app.conversation.clear();
+        app.working_for_tests();
+        app.transcript.take(&Event::ToolCall {
+            turn: 1,
+            id: "c1".into(),
+            name: "read_file".into(),
+            arguments: "{\"path\":\"tests/parse.rs\"}".into(),
+        });
+        let blocks = app.transcript.blocks.len();
+        let asked = app.side_asked();
+        app.ask_aside(asked, None, "  what did you read?  ".into());
+        let body = body.await.unwrap();
+        let messages = body["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 4, "{body}");
+        assert_eq!(messages[1]["content"], "Fix the parser");
+        let asked = messages[3]["content"].as_str().unwrap();
+        assert!(asked.contains("right now:\n----\nNow the tests"), "{asked}");
+        assert!(
+            asked.contains("[tool read_file] tests/parse.rs (running)"),
+            "{asked}"
+        );
+        assert!(
+            asked.ends_with("The side question:\nwhat did you read?"),
+            "{asked}"
+        );
+        assert_eq!(
+            body["tools"][0]["function"]["name"], "bash",
+            "the same tools: {body}"
+        );
+        side_until(&mut app, &mut reports);
+        let side = app.side.as_ref().unwrap();
+        assert_eq!(side.state, crate::btw::State::Answered);
+        assert_eq!(side.answer(), "Two bugs.");
+        assert!(
+            side.stream.blocks.iter().any(|block| matches!(&block.kind,
+                crate::transcript::Kind::Thinking { text, .. } if text == "the lexer")),
+            "its thinking in the card"
+        );
+        let cost = app.cost.unwrap();
+        assert!(
+            (cost - (100.0 / 1e6 + 900.0 * 0.1 / 1e6 + 10.0 * 10.0 / 1e6)).abs() < 1e-12,
+            "{cost}"
+        );
+        assert_eq!(app.usage.output_tokens, 10);
+        assert_eq!(
+            app.transcript.blocks.len(),
+            blocks,
+            "nothing in the stream while the card is open"
+        );
+        // Typing goes on into the input; Esc closes the card only — the turn runs on.
+        app.on_terminal(key(KeyCode::Char('x'), KeyModifiers::NONE));
+        assert_eq!(app.input.text(), "x");
+        app.on_terminal(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.side.is_none());
+        assert!(app.working(), "the turn was not stopped");
+        match &app.transcript.blocks.last().unwrap().kind {
+            crate::transcript::Kind::Side {
+                about,
+                question,
+                answer,
+                unfolded,
+            } => {
+                assert_eq!(about, &None);
+                assert_eq!(question, "what did you read?");
+                assert_eq!(answer, "Two bugs.");
+                assert!(!unfolded);
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(
+            app.lent
+                .as_ref()
+                .is_some_and(|lent| lent.conversation == before),
+            "the turn's copy untouched"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
