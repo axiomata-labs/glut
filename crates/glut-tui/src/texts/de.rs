@@ -34,7 +34,8 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "projects",
-            "in einem anderen Projekt weitermachen: die Ordner, in denen Glut gearbeitet hat, oder einer über seinen Pfad",
+            "in einem anderen Projekt weitermachen: die Ordner, in denen Glut gearbeitet hat, oder einer über \
+             seinen Pfad",
         ),
         ("compact", "das bisherige Gespräch zusammenfassen"),
         (
@@ -67,7 +68,8 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "agents",
-            "die Subagenten der Session: den Stream eines öffnen (auch ein Klick auf seine Kachel; ⌃X A: der Reiter Agenten)",
+            "die Subagenten der Session: den Stream eines öffnen (auch ein Klick auf seine Kachel; ⌃X A: der Reiter \
+             Agenten)",
         ),
         (
             "plan",
@@ -79,7 +81,8 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "split",
-            "eine neue Session neben dem Haupt-Pane (bis zu sechs, zwei Reihen zu drei); in einem Git-Repository hier oder in einem Worktree",
+            "eine neue Session neben dem Haupt-Pane (bis zu sechs, zwei Reihen zu drei); in einem Git-Repository \
+             hier oder in einem Worktree",
         ),
         (
             "swap",
@@ -87,15 +90,18 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "close",
-            "dieses Pane schließen (nicht das Haupt-Pane) — oder einen Hintergrund-Agenten beenden; seine Session bleibt für /resume",
+            "dieses Pane schließen (nicht das Haupt-Pane) — oder einen Hintergrund-Agenten beenden; seine Session \
+             bleibt für /resume",
         ),
         (
             "send",
-            "eine Nachricht an ein anderes Pane (bei drei oder mehr Panes zuerst seine Nummer), dort genommen, als wäre sie getippt; /send plan gibt ihm deinen Plan zum Bauen",
+            "eine Nachricht an ein anderes Pane (bei drei oder mehr Panes zuerst seine Nummer), dort genommen, als \
+             wäre sie getippt; /send plan gibt ihm deinen Plan zum Bauen",
         ),
         (
             "role",
-            "die Rolle dieses Panes: Prompt und Werkzeuge eines benannten Agenten, nicht sein Modell — reviewer, tester, docs oder deine",
+            "die Rolle dieses Panes: Prompt und Werkzeuge eines benannten Agenten, nicht sein Modell — reviewer, \
+             tester, docs oder deine",
         ),
         (
             "bg",
@@ -123,7 +129,8 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "todo",
-            "die TODO.md des Projekts (⌃Y): /todo <text> fügt einen Punkt hinzu, /todo open bearbeitet sie, /todo clean entfernt die erledigten",
+            "die TODO.md des Projekts (⌃Y): /todo <text> fügt einen Punkt hinzu, /todo open bearbeitet sie, /todo \
+             clean entfernt die erledigten",
         ),
         (
             "memory",
@@ -131,11 +138,13 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "skill",
-            "einen Skill starten: /skill <name> [wofür] — /skill allein listet sie (make-agent, make-skill, make-hook, …)",
+            "einen Skill starten: /skill <name> [wofür] — /skill allein listet sie (make-agent, make-skill, \
+             make-hook, …)",
         ),
         (
             "init",
-            "eine kurze AGENTS.md für diesen Ordner, oder seinen Leitfaden prüfen (/init --migrate fragt wieder nach CLAUDE.md)",
+            "eine kurze AGENTS.md für diesen Ordner, oder seinen Leitfaden prüfen (/init --migrate fragt wieder \
+             nach CLAUDE.md)",
         ),
         (
             "gate",
@@ -143,7 +152,8 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "images",
-            "wie Bilder gezeichnet werden: das echte Bild, wo das Terminal es kann, Halbblöcke in Echtfarbe, oder nur ihre Zeile",
+            "wie Bilder gezeichnet werden: das echte Bild, wo das Terminal es kann, Halbblöcke in Echtfarbe, oder \
+             nur ihre Zeile",
         ),
         (
             "links",
@@ -151,15 +161,18 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "motion",
-            "wie viel sich auf dem Bildschirm bewegt; calm und off halten Glimm still (macOS „Bewegung reduzieren“ zählt als off)",
+            "wie viel sich auf dem Bildschirm bewegt; calm und off halten Glimm still (macOS „Bewegung reduzieren“ \
+             zählt als off)",
         ),
         (
             "reader",
-            "für einen Bildschirmleser: Tasten in Worten, ein schlichter Bildschirm, nichts bewegt sich, eine Zeile bei jedem Wechsel des Zustands",
+            "für einen Bildschirmleser: Tasten in Worten, ein schlichter Bildschirm, nichts bewegt sich, eine Zeile \
+             bei jedem Wechsel des Zustands",
         ),
         (
             "language",
-            "die Sprache, in der Glut mit dir spricht: en de fr it es zh ja pt — das Modell antwortet in der Sprache, in der du schreibst",
+            "die Sprache, in der Glut mit dir spricht: en de fr it es zh ja pt — das Modell antwortet in der \
+             Sprache, in der du schreibst",
         ),
         (
             "theme",

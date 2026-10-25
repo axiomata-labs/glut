@@ -70,7 +70,8 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "agents",
-            "les sous-agents de la session : ouvrir le flux de l’un d’eux (un clic sur sa tuile aussi ; ⌃X A : l’onglet Agents)",
+            "les sous-agents de la session : ouvrir le flux de l’un d’eux (un clic sur sa tuile aussi ; ⌃X A : \
+             l’onglet Agents)",
         ),
         (
             "plan",
@@ -82,7 +83,8 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "split",
-            "une nouvelle session à côté du pane principal (jusqu’à six, deux rangées de trois) ; dans un dépôt git ici ou dans un worktree",
+            "une nouvelle session à côté du pane principal (jusqu’à six, deux rangées de trois) ; dans un dépôt git \
+             ici ou dans un worktree",
         ),
         (
             "swap",
@@ -94,11 +96,13 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "send",
-            "un message à un autre pane (à partir de trois panes, son numéro d’abord), reçu là-bas comme s’il était tapé ; /send plan lui passe ton plan à construire",
+            "un message à un autre pane (à partir de trois panes, son numéro d’abord), reçu là-bas comme s’il était \
+             tapé ; /send plan lui passe ton plan à construire",
         ),
         (
             "role",
-            "le rôle que joue ce pane : le prompt et les outils d’un agent nommé, pas son modèle — reviewer, tester, docs ou les tiens",
+            "le rôle que joue ce pane : le prompt et les outils d’un agent nommé, pas son modèle — reviewer, \
+             tester, docs ou les tiens",
         ),
         (
             "bg",
@@ -126,7 +130,8 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "todo",
-            "le TODO.md du projet (⌃Y) : /todo <text> en ajoute un, /todo open le modifie, /todo clean retire les tâches terminées",
+            "le TODO.md du projet (⌃Y) : /todo <text> en ajoute un, /todo open le modifie, /todo clean retire les \
+             tâches terminées",
         ),
         (
             "memory",
@@ -134,7 +139,8 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "skill",
-            "lancer un skill : /skill <name> [pour quoi] — /skill seul les liste (make-agent, make-skill, make-hook, …)",
+            "lancer un skill : /skill <name> [pour quoi] — /skill seul les liste (make-agent, make-skill, \
+             make-hook, …)",
         ),
         (
             "init",
@@ -146,7 +152,8 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "images",
-            "comment les images sont dessinées : la vraie où le terminal le peut, des demi-blocs en couleurs vraies, ou leur ligne seule",
+            "comment les images sont dessinées : la vraie où le terminal le peut, des demi-blocs en couleurs \
+             vraies, ou leur ligne seule",
         ),
         (
             "links",
@@ -154,11 +161,13 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "motion",
-            "à quel point l’écran bouge ; calm et off tiennent Glimm immobile (« Réduire les animations » de macOS compte comme off)",
+            "à quel point l’écran bouge ; calm et off tiennent Glimm immobile (« Réduire les animations » de macOS \
+             compte comme off)",
         ),
         (
             "reader",
-            "pour un lecteur d’écran : touches en mots, un écran sobre, rien ne bouge, une ligne à chaque changement d’état",
+            "pour un lecteur d’écran : touches en mots, un écran sobre, rien ne bouge, une ligne à chaque \
+             changement d’état",
         ),
         (
             "language",

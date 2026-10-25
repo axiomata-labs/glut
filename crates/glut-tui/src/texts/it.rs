@@ -70,7 +70,8 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "agents",
-            "i subagenti della sessione: aprire il flusso di uno (anche un clic sulla sua tessera; ⌃X A: la scheda Agenti)",
+            "i subagenti della sessione: aprire il flusso di uno (anche un clic sulla sua tessera; ⌃X A: la scheda \
+             Agenti)",
         ),
         (
             "plan",
@@ -82,7 +83,8 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "split",
-            "una nuova sessione accanto al pane principale (fino a sei, due file da tre); in un repository git qui o in un worktree",
+            "una nuova sessione accanto al pane principale (fino a sei, due file da tre); in un repository git qui \
+             o in un worktree",
         ),
         (
             "swap",
@@ -90,15 +92,18 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "close",
-            "chiudere questo pane (non il principale) — o terminare un agente in background; la sua sessione resta per /resume",
+            "chiudere questo pane (non il principale) — o terminare un agente in background; la sua sessione resta \
+             per /resume",
         ),
         (
             "send",
-            "un messaggio a un altro pane (prima il suo numero, da tre in su), ricevuto là come se fosse digitato; /send plan gli passa il tuo piano da costruire",
+            "un messaggio a un altro pane (prima il suo numero, da tre in su), ricevuto là come se fosse digitato; \
+             /send plan gli passa il tuo piano da costruire",
         ),
         (
             "role",
-            "il ruolo di questo pane: prompt e strumenti di un agente con nome, non il suo modello — reviewer, tester, docs o i tuoi",
+            "il ruolo di questo pane: prompt e strumenti di un agente con nome, non il suo modello — reviewer, \
+             tester, docs o i tuoi",
         ),
         (
             "bg",
@@ -126,7 +131,8 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "todo",
-            "il TODO.md del progetto (⌃Y): /todo <text> ne aggiunge uno, /todo open lo modifica, /todo clean elimina quelli completati",
+            "il TODO.md del progetto (⌃Y): /todo <text> ne aggiunge uno, /todo open lo modifica, /todo clean \
+             elimina quelli completati",
         ),
         (
             "memory",
@@ -134,11 +140,13 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "skill",
-            "avviare una skill: /skill <name> [a che scopo] — /skill da solo li elenca (make-agent, make-skill, make-hook, …)",
+            "avviare una skill: /skill <name> [a che scopo] — /skill da solo li elenca (make-agent, make-skill, \
+             make-hook, …)",
         ),
         (
             "init",
-            "un breve AGENTS.md per questa cartella, o controllarne la guida (/init --migrate chiede di nuovo per CLAUDE.md)",
+            "un breve AGENTS.md per questa cartella, o controllarne la guida (/init --migrate chiede di nuovo per \
+             CLAUDE.md)",
         ),
         (
             "gate",
@@ -146,7 +154,8 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "images",
-            "come vengono disegnate le immagini: quella vera dove il terminale può, mezzi blocchi a colori reali, o solo la loro riga",
+            "come vengono disegnate le immagini: quella vera dove il terminale può, mezzi blocchi a colori reali, o \
+             solo la loro riga",
         ),
         (
             "links",
@@ -158,7 +167,8 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "reader",
-            "per uno screen reader: tasti a parole, uno schermo semplice, niente che si muove, una riga a ogni cambio di stato",
+            "per uno screen reader: tasti a parole, uno schermo semplice, niente che si muove, una riga a ogni \
+             cambio di stato",
         ),
         (
             "language",

@@ -79,7 +79,8 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "split",
-            "uma sessão nova ao lado do pane principal (até seis, duas fileiras de três); num repositório git aqui ou num worktree",
+            "uma sessão nova ao lado do pane principal (até seis, duas fileiras de três); num repositório git aqui \
+             ou num worktree",
         ),
         (
             "swap",
@@ -87,15 +88,18 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "close",
-            "fechar este pane (não o principal) — ou encerrar um agente em segundo plano; a sessão dele fica para /resume",
+            "fechar este pane (não o principal) — ou encerrar um agente em segundo plano; a sessão dele fica para \
+             /resume",
         ),
         (
             "send",
-            "uma mensagem a outro pane (primeiro o número, a partir de três), recebida lá como se fosse digitada; /send plan passa a ele o seu plano para construir",
+            "uma mensagem a outro pane (primeiro o número, a partir de três), recebida lá como se fosse digitada; \
+             /send plan passa a ele o seu plano para construir",
         ),
         (
             "role",
-            "o papel deste pane: o prompt e as ferramentas de um agente nomeado, não o modelo dele — reviewer, tester, docs ou os seus",
+            "o papel deste pane: o prompt e as ferramentas de um agente nomeado, não o modelo dele — reviewer, \
+             tester, docs ou os seus",
         ),
         (
             "bg",
@@ -131,11 +135,13 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "skill",
-            "iniciar uma skill: /skill <name> [para quê] — /skill sozinho os lista (make-agent, make-skill, make-hook, …)",
+            "iniciar uma skill: /skill <name> [para quê] — /skill sozinho os lista (make-agent, make-skill, \
+             make-hook, …)",
         ),
         (
             "init",
-            "um AGENTS.md curto para esta pasta, ou verificar o guia dela (/init --migrate pergunta de novo sobre CLAUDE.md)",
+            "um AGENTS.md curto para esta pasta, ou verificar o guia dela (/init --migrate pergunta de novo sobre \
+             CLAUDE.md)",
         ),
         (
             "gate",
@@ -143,7 +149,8 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "images",
-            "como as imagens são desenhadas: a real onde o terminal consegue, meios-blocos em cor real, ou só a linha delas",
+            "como as imagens são desenhadas: a real onde o terminal consegue, meios-blocos em cor real, ou só a \
+             linha delas",
         ),
         (
             "links",
@@ -155,11 +162,13 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "reader",
-            "para um leitor de tela: teclas em palavras, uma tela simples, nada se movendo, uma linha a cada mudança de estado",
+            "para um leitor de tela: teclas em palavras, uma tela simples, nada se movendo, uma linha a cada \
+             mudança de estado",
         ),
         (
             "language",
-            "o idioma em que o Glut fala com você: en de fr it es zh ja pt — o modelo responde no idioma em que você escreve",
+            "o idioma em que o Glut fala com você: en de fr it es zh ja pt — o modelo responde no idioma em que \
+             você escreve",
         ),
         (
             "theme",

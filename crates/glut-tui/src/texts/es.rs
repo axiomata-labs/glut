@@ -67,7 +67,8 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "agents",
-            "los subagentes de la sesión: abrir el flujo de uno (también un clic en su ficha; ⌃X A: la pestaña Agentes)",
+            "los subagentes de la sesión: abrir el flujo de uno (también un clic en su ficha; ⌃X A: la pestaña \
+             Agentes)",
         ),
         (
             "plan",
@@ -79,7 +80,8 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "split",
-            "una sesión nueva junto al pane principal (hasta seis, dos filas de tres); en un repositorio git aquí o en un worktree",
+            "una sesión nueva junto al pane principal (hasta seis, dos filas de tres); en un repositorio git aquí o \
+             en un worktree",
         ),
         (
             "swap",
@@ -91,11 +93,13 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "send",
-            "un mensaje a otro pane (primero su número, a partir de tres), recibido allí como si se escribiera; /send plan le pasa tu plan para construir",
+            "un mensaje a otro pane (primero su número, a partir de tres), recibido allí como si se escribiera; \
+             /send plan le pasa tu plan para construir",
         ),
         (
             "role",
-            "el rol de este pane: el prompt y las herramientas de un agente con nombre, no su modelo — reviewer, tester, docs o los tuyos",
+            "el rol de este pane: el prompt y las herramientas de un agente con nombre, no su modelo — reviewer, \
+             tester, docs o los tuyos",
         ),
         (
             "bg",
@@ -123,7 +127,8 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "todo",
-            "el TODO.md del proyecto (⌃Y): /todo <text> añade uno, /todo open lo edita, /todo clean quita los completados",
+            "el TODO.md del proyecto (⌃Y): /todo <text> añade uno, /todo open lo edita, /todo clean quita los \
+             completados",
         ),
         (
             "memory",
@@ -135,7 +140,8 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "init",
-            "un AGENTS.md breve para esta carpeta, o revisar su guía (/init --migrate vuelve a preguntar por CLAUDE.md)",
+            "un AGENTS.md breve para esta carpeta, o revisar su guía (/init --migrate vuelve a preguntar por \
+             CLAUDE.md)",
         ),
         (
             "gate",
@@ -143,7 +149,8 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "images",
-            "cómo se dibujan las imágenes: la real donde el terminal puede, medios bloques en color real, o solo su línea",
+            "cómo se dibujan las imágenes: la real donde el terminal puede, medios bloques en color real, o solo su \
+             línea",
         ),
         (
             "links",
@@ -151,11 +158,13 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "motion",
-            "cuánto se mueve la pantalla; calm y off mantienen quieto a Glimm («Reducir movimiento» de macOS cuenta como off)",
+            "cuánto se mueve la pantalla; calm y off mantienen quieto a Glimm («Reducir movimiento» de macOS cuenta \
+             como off)",
         ),
         (
             "reader",
-            "para un lector de pantalla: teclas en palabras, una pantalla sencilla, nada que se mueva, una línea en cada cambio de estado",
+            "para un lector de pantalla: teclas en palabras, una pantalla sencilla, nada que se mueva, una línea en \
+             cada cambio de estado",
         ),
         (
             "language",

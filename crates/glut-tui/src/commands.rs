@@ -207,7 +207,8 @@ pub const COMMANDS: [Command; 44] = [
         Topic::Panes,
         "send",
         "[n] <text>|plan",
-        "a message to another pane (its number first, with three or more), taken there as if typed; /send plan hands it your plan to build",
+        "a message to another pane (its number first, with three or more), taken there as if typed; /send plan \
+         hands it your plan to build",
     ),
     command(
         Topic::Panes,
