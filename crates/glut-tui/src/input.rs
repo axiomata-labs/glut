@@ -540,6 +540,116 @@ impl Input {
         }
         (rows, cursor)
     }
+
+    /// The rows of [`Input::layout`] at `width` as places in the text: each row's line and its first character and
+    /// the one after its last — what a selection drawn on them covers.
+    pub fn row_spans(&self, width: usize) -> Vec<(usize, usize, usize)> {
+        let width = width.max(2);
+        let mut spans = Vec::new();
+        for (line_at, line) in self.lines.iter().enumerate() {
+            let (mut start, mut used) = (0, 0);
+            for (char_at, c) in line.chars().enumerate() {
+                let cells = c.width().unwrap_or(0);
+                if used + cells > width {
+                    spans.push((line_at, start, char_at));
+                    (start, used) = (char_at, 0);
+                }
+                used += cells;
+            }
+            let count = line.chars().count();
+            // The cursor at the end of a full row stands on a row of its own, as the layout draws it.
+            if line_at == self.row && self.col >= count && used >= width {
+                spans.push((line_at, start, count));
+                start = count;
+            }
+            spans.push((line_at, start, count));
+        }
+        spans
+    }
+
+    /// The place in the text under `cell` of `row` of [`Input::layout`] at `width`: its line and the character there,
+    /// the row's end where it is shorter; below the last row, the text's end (T69's Mac test: the input copies).
+    pub fn place_at(&self, width: usize, row: usize, cell: usize) -> (usize, usize) {
+        let spans = self.row_spans(width);
+        let Some(&(line_at, start, end)) = spans.get(row) else {
+            let last = self.lines.len() - 1;
+            return (last, self.lines[last].chars().count());
+        };
+        let mut used = 0;
+        for (at, c) in self.lines[line_at]
+            .chars()
+            .enumerate()
+            .take(end)
+            .skip(start)
+        {
+            let cells = c.width().unwrap_or(0);
+            // A character of no width rides with the one before it, as the layout counts it.
+            if cells > 0 && cell < used + cells {
+                return (line_at, at);
+            }
+            used += cells;
+        }
+        // Past a wrapped row's end: its last character, not the next row's first.
+        let wrapped = spans.get(row + 1).is_some_and(|next| next.0 == line_at);
+        (
+            line_at,
+            if wrapped {
+                end.saturating_sub(1).max(start)
+            } else {
+                end
+            },
+        )
+    }
+
+    /// Whether `col` is at or past the end of line `line` (and not at an empty line's start).
+    pub fn ends_at(&self, line: usize, col: usize) -> bool {
+        self.lines
+            .get(line)
+            .is_some_and(|text| col >= text.chars().count() && col > 0)
+    }
+
+    /// [`Input::text_between`] with every paste mark it holds whole given back as the text it stands for: what the
+    /// owner copies is what they pasted, not Glut's shorthand for it.
+    pub fn copied_between(&self, a: (usize, usize), b: (usize, usize)) -> String {
+        let mut text = self.text_between(a, b);
+        for (mark, pasted) in &self.pastes {
+            text = text.replace(mark.as_str(), pasted);
+        }
+        text
+    }
+
+    /// The text between two places (as [`Input::place_at`] gives them), in either order; lines joined by newlines.
+    pub fn text_between(&self, a: (usize, usize), b: (usize, usize)) -> String {
+        let (from, to) = if a <= b { (a, b) } else { (b, a) };
+        let piece = |line: usize, start: usize, end: usize| -> String {
+            self.lines
+                .get(line)
+                .map(|text| {
+                    text.chars()
+                        .skip(start)
+                        .take(end.saturating_sub(start))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        if from.0 == to.0 {
+            return piece(from.0, from.1, to.1);
+        }
+        let mut text = piece(from.0, from.1, usize::MAX);
+        for line in from.0 + 1..to.0 {
+            text.push('\n');
+            text.push_str(self.lines.get(line).map_or("", String::as_str));
+        }
+        text.push('\n');
+        text.push_str(&piece(to.0, 0, to.1));
+        text
+    }
+
+    /// Puts the cursor at `place`, kept inside the text.
+    pub fn put_cursor(&mut self, place: (usize, usize)) {
+        self.row = place.0.min(self.lines.len() - 1);
+        self.col = place.1.min(self.lines[self.row].chars().count());
+    }
 }
 
 #[cfg(test)]
@@ -561,6 +671,30 @@ mod tests {
             height: 1,
             bytes: 1,
         }
+    }
+
+    #[test]
+    fn a_place_on_the_screen_finds_its_character_and_a_stretch_its_text() {
+        let mut input = typed("abcdef");
+        input.insert_text("\nxyz");
+        // At width 4: "abcd", "ef", "xyz".
+        assert_eq!(input.row_spans(4), [(0, 0, 4), (0, 4, 6), (1, 0, 3)]);
+        assert_eq!(input.place_at(4, 0, 2), (0, 2));
+        assert_eq!(input.place_at(4, 1, 0), (0, 4));
+        assert_eq!(input.place_at(4, 1, 9), (0, 6), "past a row's end: its end");
+        assert_eq!(
+            input.place_at(4, 7, 0),
+            (1, 3),
+            "below the last row: the text's end"
+        );
+        assert_eq!(input.text_between((0, 2), (1, 2)), "cdef\nxy");
+        assert_eq!(
+            input.text_between((1, 2), (0, 2)),
+            "cdef\nxy",
+            "either order"
+        );
+        input.put_cursor((0, 9));
+        assert_eq!((input.row, input.col), (0, 6));
     }
 
     #[test]

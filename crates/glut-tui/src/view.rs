@@ -344,7 +344,13 @@ fn draw_in(frame: &mut Frame, app: &mut App, area: Rect, chrome: &Chrome) {
         app.ask_area = ask;
         draw_ask(frame, app, ask, rows);
     }
-    draw_input(frame, app, input, &rows, cursor, chrome.active);
+    draw_input(
+        frame,
+        app,
+        input,
+        (&rows, cursor, input_width),
+        chrome.active,
+    );
     let cwd = app.parts.config.cwd.clone();
     // One row: a line break in a hostile HEAD would part the width counted from the width drawn.
     let branch = app
@@ -1053,13 +1059,13 @@ fn asked_rows(target: &str, width: usize, most: usize) -> Vec<String> {
 
 fn draw_input(
     frame: &mut Frame,
-    app: &App,
+    app: &mut App,
     area: Rect,
-    rows: &[String],
-    cursor: (usize, usize),
+    (rows, cursor, width): (&[String], (usize, usize), usize),
     active: bool,
 ) {
     let [rule, text] = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(area);
+    app.input_spot = None;
     frame.render_widget(
         Paragraph::new(Span::styled(
             "─".repeat(usize::from(area.width)),
@@ -1133,6 +1139,9 @@ fn draw_input(
         Some((false, _)) => Span::styled("! ", theme::glow().add_modifier(Modifier::BOLD)),
         None => Span::styled("› ", theme::glow()),
     };
+    app.input_spot = Some((text, first, width));
+    // What a drag selected, lit as the stream lights its selection.
+    let spans = app.input_selection.map(|_| app.input.row_spans(width));
     let lines: Vec<Line> = rows
         .iter()
         .enumerate()
@@ -1144,7 +1153,45 @@ fn draw_input(
             } else {
                 Span::raw("  ")
             };
-            Line::from(vec![mark, Span::raw(row.clone())])
+            let lit = app
+                .input_selection
+                .zip(spans.as_ref().and_then(|spans| spans.get(at)));
+            match lit {
+                Some(((a, b), &(line, start, end))) => {
+                    let (from, to) = if a <= b { (a, b) } else { (b, a) };
+                    let lo = if from.0 < line {
+                        start
+                    } else if from.0 == line {
+                        from.1.clamp(start, end)
+                    } else {
+                        end
+                    };
+                    let hi = if to.0 > line {
+                        end
+                    } else if to.0 == line {
+                        to.1.clamp(start, end)
+                    } else {
+                        start
+                    };
+                    let chars: Vec<char> = row.chars().collect();
+                    let part = |a: usize, b: usize| -> String {
+                        chars[a.saturating_sub(start).min(chars.len())
+                            ..b.saturating_sub(start).min(chars.len())]
+                            .iter()
+                            .collect()
+                    };
+                    Line::from(vec![
+                        mark,
+                        Span::raw(part(start, lo)),
+                        Span::styled(
+                            part(lo, hi.max(lo)),
+                            Style::default().add_modifier(Modifier::REVERSED),
+                        ),
+                        Span::raw(part(hi.max(lo), end)),
+                    ])
+                }
+                None => Line::from(vec![mark, Span::raw(row.clone())]),
+            }
         })
         .collect();
     let mut lines = lines;

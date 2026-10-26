@@ -176,6 +176,13 @@ pub struct App {
     pub side: Option<crate::btw::Side>,
     /// Where the gate's question was drawn last: no tile stands over it (T69).
     pub ask_area: ratatui::layout::Rect,
+    /// Where the input's text was drawn last, its first row shown and the width it was laid out at; `None` while a
+    /// search or a secret takes its place — what a press there selects.
+    pub input_spot: Option<(ratatui::layout::Rect, usize, usize)>,
+    /// A press in the input, at its place in the text, and the selection a drag made from it (the owner's Mac test:
+    /// the input could not be copied); a key lets the selection go.
+    input_press: Option<(usize, usize)>,
+    pub input_selection: Option<((usize, usize), (usize, usize))>,
     /// The session as it is kept (T25).
     pub session: Session,
     /// The run's task list as `todo_write` last sent it (the Plan tab, T28).
@@ -469,6 +476,9 @@ impl App {
             side_tools: None,
             side: None,
             ask_area: ratatui::layout::Rect::default(),
+            input_spot: None,
+            input_press: None,
+            input_selection: None,
             session,
             todos: Vec::new(),
             project_todos: crate::todos::Todos::default(),
@@ -1809,8 +1819,52 @@ impl App {
                 }
                 MouseEventKind::ScrollUp => self.scroll_by(WHEEL_LINES as isize),
                 MouseEventKind::ScrollDown => self.scroll_by(-(WHEEL_LINES as isize)),
+                MouseEventKind::Down(MouseButton::Left)
+                    if self.input_at(mouse.column, mouse.row).is_some() =>
+                {
+                    self.selection = None;
+                    self.press = None;
+                    self.input_selection = None;
+                    self.input_press = self.input_at(mouse.column, mouse.row);
+                }
+                MouseEventKind::Drag(MouseButton::Left) if self.input_press.is_some() => {
+                    if let (Some(anchor), Some(head)) =
+                        (self.input_press, self.input_toward(mouse.column, mouse.row))
+                    {
+                        self.input_selection = (anchor != head).then_some((anchor, head));
+                    }
+                }
+                MouseEventKind::Up(MouseButton::Left) if self.input_press.is_some() => {
+                    let press = self.input_press.take();
+                    match self.input_selection {
+                        // A drag copies what it selected, as in the stream; the selection stays lit until a key.
+                        Some((from, to)) => {
+                            let text = self.input.copied_between(from, to);
+                            if !text.is_empty() {
+                                self.copy_text(&text);
+                            }
+                        }
+                        // A click puts the cursor there.
+                        None => {
+                            if let Some((line, col)) = press {
+                                // Vi's Normal mode stands on a character, never after the last.
+                                let normal = self
+                                    .vi
+                                    .as_ref()
+                                    .is_some_and(|vi| vi.mode == crate::vi::Mode::Normal);
+                                let col = if normal {
+                                    col.saturating_sub(usize::from(self.input.ends_at(line, col)))
+                                } else {
+                                    col
+                                };
+                                self.input.put_cursor((line, col));
+                            }
+                        }
+                    }
+                }
                 MouseEventKind::Down(MouseButton::Left) => {
                     self.selection = None;
+                    self.input_selection = None;
                     self.press = (mouse.column < self.stream_width)
                         .then(|| self.point_at(mouse.column, mouse.row))
                         .flatten()
@@ -1825,6 +1879,9 @@ impl App {
     }
 
     fn on_key(&mut self, key: KeyEvent) {
+        // A key changes the text or moves on: what was selected in the input lets go, a press under way too.
+        self.input_selection = None;
+        self.input_press = None;
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
@@ -4926,6 +4983,31 @@ impl App {
         self.side.as_ref().is_some_and(|side| side.area.width > 0)
     }
 
+    /// The place in the input's text under the pointer, where the input was drawn.
+    fn input_at(&self, column: u16, row: u16) -> Option<(usize, usize)> {
+        let (area, _, _) = self.input_spot?;
+        area.contains(ratatui::layout::Position { x: column, y: row })
+            .then(|| self.input_toward(column, row))
+            .flatten()
+    }
+
+    /// The place in the input's text nearest the pointer: a drag that leaves the input keeps to its edge.
+    fn input_toward(&self, column: u16, row: u16) -> Option<(usize, usize)> {
+        let (area, first, width) = self.input_spot?;
+        let bottom = area.y + area.height.saturating_sub(1);
+        let at_row = first + usize::from(row.clamp(area.y, bottom) - area.y);
+        // The first two cells are the input's mark (`› `).
+        let cell = usize::from(column.saturating_sub(area.x)).saturating_sub(2);
+        let cell = if row < area.y {
+            0
+        } else if row > bottom {
+            usize::MAX
+        } else {
+            cell
+        };
+        Some(self.input.place_at(width, at_row, cell))
+    }
+
     /// Whether the mouse is over the side question's card.
     fn over_side(&self, column: u16, row: u16) -> bool {
         self.side.as_ref().is_some_and(|side| {
@@ -6728,6 +6810,46 @@ pub(crate) mod tests {
             .draw(|frame| crate::view::draw(frame, app))
             .unwrap();
         terminal
+    }
+
+    #[test]
+    fn a_drag_in_the_input_selects_its_text_and_a_click_moves_the_cursor() {
+        let (mut app, _reports) = app();
+        type_text(&mut app, "hello world");
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 20)).unwrap();
+        terminal
+            .draw(|frame| crate::view::draw(frame, &mut app))
+            .unwrap();
+        let (area, _, _) = app.input_spot.expect("the input was drawn");
+        // The text starts after the input's mark, two cells in.
+        let x = area.x + 2;
+        app.on_terminal(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            x + 6,
+            area.y,
+        ));
+        app.on_terminal(mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            x + 11,
+            area.y,
+        ));
+        let (from, to) = app.input_selection.expect("a selection");
+        assert_eq!(app.input.text_between(from, to), "world");
+        terminal
+            .draw(|frame| crate::view::draw(frame, &mut app))
+            .unwrap();
+        // A key lets it go; a click without a drag puts the cursor there.
+        app.on_terminal(key(KeyCode::End, KeyModifiers::NONE));
+        assert!(app.input_selection.is_none());
+        app.on_terminal(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            x + 5,
+            area.y,
+        ));
+        app.on_terminal(mouse(MouseEventKind::Up(MouseButton::Left), x + 5, area.y));
+        assert_eq!((app.input.row, app.input.col), (0, 5));
+        let _ = std::fs::remove_dir_all(&app.parts.home);
     }
 
     #[test]
