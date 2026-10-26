@@ -1,0 +1,27 @@
+size 8 4
+# Glimm, design A, mini: 8 x 4 px = 4 x 2 cells, a plain flame without eyes (no glow, all 4 rows used).
+# work0..3: a quiet flicker of the tip, loop 0->3->0 (tip left, centre, right, right with the second row following).
+
+@ work0
+..yy....
+..yaay..
+oaaaaaao
+.roooor.
+
+@ work1
+...yy...
+..yaay..
+oaaaaaao
+.roooor.
+
+@ work2
+....yy..
+..yaay..
+oaaaaaao
+.roooor.
+
+@ work3
+....yy..
+...yaay.
+oaaaaaao
+.roooor.

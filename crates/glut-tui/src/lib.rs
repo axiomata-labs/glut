@@ -6,6 +6,7 @@
 mod texts;
 mod agents;
 mod app;
+mod background;
 mod branch;
 mod btw;
 mod cli_help;

@@ -1,0 +1,28 @@
+size 8 4
+# Glimm, design C "round", MINI: 8 x 4 px = 4 x 2 cells. A plain flame, no eyes, no glow (too small).
+# A pixel is 1 wide : 2 tall on screen. The tip sways quietly: work0 -> work3 -> work0 (loop 0,1,2,3,2,1).
+# Letters as in c-large.txt: . none, r o a y.
+
+@ work0
+..yy....
+..oaao..
+oaayyaao
+.roooor.
+
+@ work1
+...yy...
+..oaao..
+oaayyaao
+.roooor.
+
+@ work2
+....yy..
+...oaao.
+oaayyaao
+.roooor.
+
+@ work3
+....y...
+...oaao.
+oaayyaao
+.roooor.

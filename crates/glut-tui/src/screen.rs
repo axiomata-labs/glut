@@ -669,6 +669,8 @@ fn edit_in_editor(home: &std::path::Path, text: &str) -> Result<String, String> 
 /// the kitty keyboard protocol, so Shift+Enter is not Enter. Returns whether the protocol was pushed.
 pub(crate) fn enter() -> io::Result<bool> {
     terminal::enable_raw_mode()?;
+    // Glimm's glow is blended over the terminal's background (T72): asked once, before the keys are read.
+    crate::background::probe();
     let mut out = io::stdout();
     execute!(
         out,

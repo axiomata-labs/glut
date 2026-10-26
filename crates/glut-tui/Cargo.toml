@@ -16,7 +16,7 @@ glut = { path = "../glut" }
 # The folder's files for the `@` finder, walked as the file tools walk them (`.gitignore` kept).
 axiomata-files.workspace = true
 # An owner's `!cmd` in a process group of its own, stopped as a whole (as Glut's shell tool does).
-rustix = { workspace = true, features = ["process"] }
+rustix = { workspace = true, features = ["process", "event"] }
 # Layout and widgets (T2); the stream itself is our own model.
 ratatui.workspace = true
 crossterm.workspace = true
