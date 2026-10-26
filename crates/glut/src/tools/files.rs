@@ -375,7 +375,8 @@ impl Tool for FileTool {
                 "grep",
                 concat!(
                     "Searches file contents with a regular expression. Answers path:line: text. ",
-                    "include is a glob (e.g. **/*.rs)."
+                    "include is a glob (e.g. **/*.rs). Hidden files (a name starting with a dot) and ignored ones ",
+                    "(.gitignore) are not searched; read_file reads one by name."
                 ),
                 json!({"type": "object", "properties": {
                     "pattern": {"type": "string"},
@@ -385,7 +386,11 @@ impl Tool for FileTool {
             ),
             Kind::Glob => (
                 "glob",
-                "Finds files by name with a glob pattern (e.g. src/**/*.ts). Ignored files (.gitignore) are left out.",
+                concat!(
+                    "Finds files by name with a glob pattern (e.g. src/**/*.ts). Hidden files (a name starting ",
+                    "with a dot) and ignored ones (.gitignore) are left out; list_dir shows them, read_file reads ",
+                    "one by name."
+                ),
                 json!({"type": "object", "properties": {"pattern": {"type": "string"}}, "required": ["pattern"]}),
             ),
         };
@@ -688,6 +693,20 @@ fn refuse_skill_path(path: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// What an empty search adds when its glob names a hidden file or folder (`.env*`, `.github/**`): the walk never
+/// looks at those, so "nothing found" must not read as "not there" — a model took a missing `.env` for a forbidden
+/// one and refused to read it (T58 Mac test).
+fn hidden_note(glob: &str) -> &'static str {
+    let names_hidden = rel(glob)
+        .split('/')
+        .any(|part| part.starts_with('.') && part != "." && part != "..");
+    if names_hidden {
+        "\n[hidden files and folders are not searched; list_dir shows them, read_file reads one by name]"
+    } else {
+        ""
+    }
+}
+
 fn grep(
     working: &Root,
     skills: &SkillRoots,
@@ -737,7 +756,10 @@ fn grep(
         ));
     }
     if lines.is_empty() {
-        return Ok("no matches".into());
+        return Ok(format!(
+            "no matches{}",
+            hidden_note(args.include.as_deref().unwrap_or(""))
+        ));
     }
     if more || summary.truncated {
         lines.push(format!(
@@ -780,7 +802,7 @@ fn glob(
         .collect();
     found.sort();
     if found.is_empty() {
-        return Ok("no files match".into());
+        return Ok(format!("no files match{}", hidden_note(&args.pattern)));
     }
     let more = found.len() > MAX_GLOB_PATHS;
     let mut out: Vec<String> = found.into_iter().take(MAX_GLOB_PATHS).collect();
@@ -804,10 +826,13 @@ mod tests {
     /// [`setup`] with skill folders beside the working folder (HS6, K4): each entry is a skill's name and the files
     /// to write into its folder.
     fn setup_with(skills: &[(&str, &[(&str, &str)])]) -> (std::path::PathBuf, Toolbox) {
+        // The clock alone gave two tests running at once the same folder (macOS counts microseconds).
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let dir = std::env::temp_dir().join(format!(
-            "glut-files-{}-{}",
+            "glut-files-{}-{}-{}",
             std::process::id(),
-            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let mut folders = Vec::new();
@@ -1017,6 +1042,24 @@ mod tests {
         assert_eq!(text, "src/main.rs");
         let (_, text) = tools.call("glob", r#"{"pattern":"*.py"}"#).await;
         assert_eq!(text, "no files match");
+    }
+
+    #[tokio::test]
+    async fn a_search_for_a_hidden_name_says_it_does_not_look_there() {
+        let (dir, tools) = setup();
+        std::fs::write(dir.join(".env"), "DB_PASSWORD=x\n").unwrap();
+
+        let (_, text) = tools.call("glob", r#"{"pattern":"**/.env*"}"#).await;
+        assert!(text.starts_with("no files match\n[hidden files"), "{text}");
+        let (_, text) = tools
+            .call("grep", r#"{"pattern":"DB_","include":".env"}"#)
+            .await;
+        assert!(text.starts_with("no matches\n[hidden files"), "{text}");
+        // A plain miss stays plain: `./` and `../` are no hidden names.
+        let (_, text) = tools.call("glob", r#"{"pattern":"./*.py"}"#).await;
+        assert_eq!(text, "no files match");
+        let (_, text) = tools.call("read_file", r#"{"path":".env"}"#).await;
+        assert!(text.contains("DB_PASSWORD"), "{text}");
     }
 
     #[test]
