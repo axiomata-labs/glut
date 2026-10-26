@@ -1327,7 +1327,9 @@ fn draw_keys(frame: &mut Frame, app: &App, area: Rect, branch: Option<String>, c
         .as_ref()
         .map_or(0, |open| open.request.scopes.len().min(9));
     // An open question's keys come before any toast.
-    let hints = if let Some(toast) = app.toast().filter(|_| app.ask.is_none()) {
+    let hints = if app.chord_waits() {
+        tr!(hint_chord).to_owned()
+    } else if let Some(toast) = app.toast().filter(|_| app.ask.is_none()) {
         toast.to_owned()
     } else if let Some((alone, _)) = crate::app::owners_command(&app.input.text()) {
         if alone {
@@ -1346,10 +1348,11 @@ fn draw_keys(frame: &mut Frame, app: &App, area: Rect, branch: Option<String>, c
     } else if app.plan_asks() {
         tr!(hint_plan).to_owned()
     } else if app.ask.is_some() && scopes > 0 {
+        // `a` is the first scope's other key (T71): named, as it works.
         let keys = if scopes == 1 {
-            "1".to_owned()
+            "1/a".to_owned()
         } else {
-            format!("1–{scopes}")
+            format!("1–{scopes}/a")
         };
         tr!(hint_ask_scopes, keys = keys)
     } else if app.ask.is_some() {
@@ -1413,21 +1416,34 @@ fn draw_panel(frame: &mut Frame, app: &mut App, area: Rect) {
     } else {
         theme::quiet()
     };
+    let tabs = [
+        (Tab::Plan, names[0]),
+        (Tab::Gate, names[1]),
+        (Tab::Meter, names[2]),
+        (Tab::Agents, names[3]),
+        (Tab::Todos, todos_title.as_str()),
+        (Tab::Keys, names[5]),
+    ];
+    let title = tab_titles(&tabs, app.tab, usize::from(area.width.saturating_sub(1)));
+    // Each name where a click finds it (T71): the title stands right of the edge, a name and a gap by turns.
+    app.panel_spots.clear();
+    let mut x = area.x + 1;
+    for (at, span) in title.spans.iter().enumerate() {
+        let cells = u16::try_from(span.content.width()).unwrap_or(u16::MAX);
+        if at % 2 == 0
+            && let Some((tab, _)) = tabs.get(at / 2)
+        {
+            let spot = Rect::new(x, area.y, cells, 1).intersection(area);
+            app.panel_spots
+                .push((spot, crate::app::PanelSpot::Tab(*tab)));
+        }
+        x = x.saturating_add(cells);
+    }
     let block = Block::default()
         .borders(Borders::LEFT)
         .border_style(edge)
-        .title(tab_titles(
-            &[
-                (Tab::Plan, names[0]),
-                (Tab::Gate, names[1]),
-                (Tab::Meter, names[2]),
-                (Tab::Agents, names[3]),
-                (Tab::Todos, &todos_title),
-                (Tab::Keys, names[5]),
-            ],
-            app.tab,
-            usize::from(area.width.saturating_sub(1)),
-        ));
+        .title(title);
+    let inner = block.inner(area);
     let width = usize::from(area.width.saturating_sub(4)).max(8);
     // Glimm heads the panel with the session's mood: working, waiting for the owner, pleased or gone out.
     let mut lines: Vec<Line> = vec![Line::default()];
@@ -1457,6 +1473,7 @@ fn draw_panel(frame: &mut Frame, app: &mut App, area: Rect) {
     if app.tab == Tab::Agents {
         lines.push(Line::default());
         let keys = panel_keys(app, width);
+        let mut spots: Vec<(usize, crate::agents::Row)> = Vec::new();
         // T36e: the agents in the background first — sessions of their own, reached by name.
         if !app.background.is_empty() {
             lines.push(Line::from(Span::styled(
@@ -1473,6 +1490,10 @@ fn draw_panel(frame: &mut Frame, app: &mut App, area: Rect) {
                 } else {
                     agent.line(width + 1, picked)
                 };
+                let row = crate::agents::Row::Behind(agent.name.clone());
+                spots.extend(
+                    (lines.len()..lines.len() + rows.len()).map(|line| (line, row.clone())),
+                );
                 lines.extend(rows.into_iter().map(|mut row| {
                     row.spans.insert(0, Span::raw(" "));
                     row
@@ -1492,13 +1513,17 @@ fn draw_panel(frame: &mut Frame, app: &mut App, area: Rect) {
             }
         } else {
             let room = usize::from(area.height).saturating_sub(lines.len() + keys.len() + 3);
-            lines.extend(crate::agents::overview_lines(
-                &list,
-                app.agents_chosen(),
-                width + 2,
-                room,
-            ));
+            for (at, line) in
+                crate::agents::overview_lines(&list, app.agents_chosen(), width + 2, room)
+            {
+                spots.push((lines.len(), crate::agents::Row::Sub(list[at].0.clone())));
+                lines.push(line);
+            }
         }
+        let spots = spots
+            .into_iter()
+            .map(|(line, row)| (line, crate::app::PanelSpot::Agent(row)));
+        app.panel_spots.extend(row_spots(inner, spots));
         lines.push(Line::default());
         lines.extend(keys);
         frame.render_widget(Paragraph::new(lines).block(block), area);
@@ -1540,7 +1565,14 @@ fn draw_panel(frame: &mut Frame, app: &mut App, area: Rect) {
         }
         let room = usize::from(area.height).saturating_sub(lines.len() + keys.len() + 3);
         if todos.fault.is_none() {
-            lines.extend(todos.lines(width + 1, room));
+            let mut spots = Vec::new();
+            for (pick, line) in todos.lines(width + 1, room) {
+                if let Some(pick) = pick {
+                    spots.push((lines.len(), crate::app::PanelSpot::Todo(pick)));
+                }
+                lines.push(line);
+            }
+            app.panel_spots.extend(row_spots(inner, spots));
         }
         lines.push(Line::default());
         lines.extend(keys);
@@ -1614,6 +1646,22 @@ const PANEL_BODY_MOST: usize = 2_000;
 fn scrolled(body: Vec<Line<'static>>, scroll: &mut usize, room: usize) -> Vec<Line<'static>> {
     *scroll = (*scroll).min(body.len().saturating_sub(room));
     body.into_iter().skip(*scroll).take(room).collect()
+}
+
+/// Where lines of a panel tab stand once drawn in `inner`, each a row a click finds; those below it are left out.
+fn row_spots(
+    inner: Rect,
+    spots: impl IntoIterator<Item = (usize, crate::app::PanelSpot)>,
+) -> Vec<(Rect, crate::app::PanelSpot)> {
+    spots
+        .into_iter()
+        .filter_map(|(line, spot)| {
+            let line = u16::try_from(line)
+                .ok()
+                .filter(|line| *line < inner.height)?;
+            Some((Rect::new(inner.x, inner.y + line, inner.width, 1), spot))
+        })
+        .collect()
 }
 
 /// The panel's tab names in `width` cells: each with room around it and a dot between where they fit; else the

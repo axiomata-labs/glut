@@ -38,7 +38,8 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "btw",
-            "una domanda a margine, con la risposta in una scheda e mai nella conversazione; il turno in corso prosegue — /btw reviewer a che punto sei?",
+            "una domanda a margine, con la risposta in una scheda e mai nella conversazione; il turno in corso \
+             prosegue — /btw reviewer a che punto sei?",
         ),
         (
             "projects",
@@ -168,7 +169,8 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "mcp",
-            "i server MCP e lo stato di ciascuno: /mcp login <name> accede a uno ospitato, /mcp add <name> <url> ne aggiunge uno a ~/.glut/mcp.json",
+            "i server MCP e lo stato di ciascuno: /mcp login <name> accede a uno ospitato, /mcp add <name> <url> ne \
+             aggiunge uno a ~/.glut/mcp.json",
         ),
         (
             "images",
@@ -186,7 +188,8 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "secrets",
-            "le chiavi nascoste al modello in questa sessione; /secrets allow <n> [always] ne lascia passare una, /secrets add <name> <regex> nasconde un tuo formato, /secrets remove <name>, /secrets on|off",
+            "le chiavi nascoste al modello in questa sessione; /secrets allow <n> [always] ne lascia passare una, \
+             /secrets add <name> <regex> nasconde un tuo formato, /secrets remove <name>, /secrets on|off",
         ),
         (
             "motion",
@@ -297,10 +300,16 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "⌥B ⌥F",
-            "una parola a sinistra, una parola a destra (anche ⌥← ⌥→)",
+            "una parola a sinistra, una parola a destra (anche ⌥← ⌥→ ⌃← ⌃→)",
         ),
-        ("⌃W", "cancellare la parola prima (anche ⌥⌫)"),
+        (
+            "⇧← ⇧→",
+            "selezionare un carattere a sinistra, a destra — ⇧Home ⇧End fino all’inizio, alla fine dell’input; ⌫ \
+             cancella la selezione, scrivere la sostituisce",
+        ),
+        ("⌃W", "cancellare la parola prima (anche ⌥⌫ ⌃⌫)"),
         ("⌃U", "cancellare fino all’inizio della riga"),
+        ("⌦", "cancellare il carattere dopo il cursore"),
         ("⌃J", "una nuova riga"),
         ("⌃D", "uscire, su una riga vuota mentre Glut riposa"),
         ("⌃K", "questo foglio dei tasti"),
@@ -360,6 +369,9 @@ pub const TEXTS: Texts = Texts {
     hint_working: "Glut lavora · ⏎ lo guida · ⇥ mette in coda · ⌥↑ riprende · ⎋ ferma",
     hint_usual: "⏎ invia · ⇧⏎ nuova riga · ⇧⇥ modalità · ⌃K tasti · @ file · !cmd · ⌃F cerca · ⌃C esci",
     hint_other_asks: "chiede — ⌃P risponde",
+    hint_chord: "⌃X e poi: 2 dividi · 0 chiudi · { } larghezza · H nascondi · B sfondo · A agenti · E editor · ↑ \
+                 leggi · ⇥ pannello",
+    chord_unknown: "⌃X {key} non fa nulla — ⌃K elenca i tasti",
     in_background: "In background",
     background_keys: "/peek <name> ne legge uno · /show <name> lo porta in primo piano · /send <name> …",
     no_subagent: "Nessun subagente per ora. Quando Glut ne incarica uno di una parte del lavoro, compare qui: cosa \
@@ -1023,19 +1035,24 @@ pub const TEXTS: Texts = Texts {
     setup_provider_prompt: "Provider:",
     cli: &[
         (
-            "Send what the tools answer as it is, without hiding the keys in it (T58; `\"mask\": false` in ~/.glut/secrets.json, which `/secrets off` writes)",
-            "Inviare ciò che rispondono gli strumenti così com'è, senza nascondervi le chiavi (T58; `\"mask\": false` in ~/.glut/secrets.json, che `/secrets off` scrive)",
+            "Send what the tools answer as it is, without hiding the keys in it (T58; `\"mask\": false` in \
+             ~/.glut/secrets.json, which `/secrets off` writes)",
+            "Inviare ciò che rispondono gli strumenti così com'è, senza nascondervi le chiavi (T58; `\"mask\": false` \
+             in ~/.glut/secrets.json, che `/secrets off` scrive)",
         ),
         (
             "The MCP servers: ~/.glut/mcp.json and the project's .mcp.json, signing in to a hosted one and out again",
             "I server MCP: ~/.glut/mcp.json e il .mcp.json del progetto, accedere a uno ospitato e uscirne",
         ),
         (
-            "The MCP servers of ~/.glut/mcp.json and the folder's .mcp.json, and what each one is signed in with (never the token)",
-            "I server MCP di ~/.glut/mcp.json e del .mcp.json della cartella, e con cosa ciascuno ha effettuato l’accesso (mai il token)",
+            "The MCP servers of ~/.glut/mcp.json and the folder's .mcp.json, and what each one is signed in with \
+             (never the token)",
+            "I server MCP di ~/.glut/mcp.json e del .mcp.json della cartella, e con cosa ciascuno ha effettuato \
+             l’accesso (mai il token)",
         ),
         (
-            "Signs in to a hosted server: in the browser where it speaks OAuth, else with a token asked for without echo",
+            "Signs in to a hosted server: in the browser where it speaks OAuth, else with a token asked for without \
+             echo",
             "Accedere a un server ospitato: nel browser se parla OAuth, altrimenti con un token chiesto senza eco",
         ),
         ("The server's name", "Il nome del server"),
@@ -1488,11 +1505,13 @@ pub const TEXTS: Texts = Texts {
     mcp_no_server: "nessun server MCP {name} — /mcp li mostra",
     mcp_error: "/mcp: {reason}",
     mcp_open: "{name} risponde senza accesso",
-    mcp_registered_only: "{name} offre OAuth solo ai client registrati in anticipo: un token invece — oppure il clientId del tuo client come \"oauth\" in ~/.glut/mcp.json",
+    mcp_registered_only: "{name} offre OAuth solo ai client registrati in anticipo: un token invece — oppure il \
+                          clientId del tuo client come \"oauth\" in ~/.glut/mcp.json",
     mcp_sign_in_failed: "{name}: l’accesso non è riuscito: {reason}",
     mcp_sign_in_at: "{name} accede su {host}:\n{address}",
     mcp_browser_opened: "aperto nel browser — Glut aspetta che torni",
-    mcp_paste_back: "aprilo in un browser; se finisce su un indirizzo che non si carica (via SSH): /mcp login {name} <address>",
+    mcp_paste_back: "aprilo in un browser; se finisce su un indirizzo che non si carica (via SSH): /mcp login {name} \
+                     <address>",
     mcp_signed_in: "{name} ha effettuato l’accesso: {count} strumenti",
     mcp_wants_note: "{name} vuole un accesso: /mcp login {name}",
     mcp_not_up: "il server MCP {name} non si è avviato: {reason}",
@@ -1503,7 +1522,8 @@ pub const TEXTS: Texts = Texts {
     mcp_out_revoked: "{name} disconnesso: revocato sul server e dimenticato qui",
     mcp_out_here: "{name} disconnesso: dimenticato qui (il server non offre la revoca)",
     mcp_out_failed: "{name} disconnesso qui; la revoca sul server è fallita: {reason}",
-    mcp_usage: "/mcp mostra i server · /mcp login|logout <name> · /mcp add <name> <url> oppure /mcp add <name> -- <command> · /mcp remove <name>",
+    mcp_usage: "/mcp mostra i server · /mcp login|logout <name> · /mcp add <name> <url> oppure /mcp add <name> -- \
+                <command> · /mcp remove <name>",
     mcp_added: "{name} aggiunto a ~/.glut/mcp.json",
     mcp_up: "{name} è connesso: {count} strumenti",
     mcp_not_owners: "{name} non è in ~/.glut/mcp.json: un server del progetto lo rimuove il progetto",
@@ -1518,8 +1538,10 @@ pub const TEXTS: Texts = Texts {
     hint_opening: "⏎ apri · Esc lascia",
     mcp_open_failed: "non è stato possibile aprire un browser — apri tu l’indirizzo sopra",
     mcp_open_left: "apri tu l’indirizzo sopra; Glut aspetta che torni",
-    btw_usage: "/btw <question> chiede a margine — /btw <name> <question> chiede a un agente in background o a un altro pane; il turno in corso prosegue indisturbato",
-    btw_wanted_tools: "voleva controllare qualcosa — una domanda a margine non esegue strumenti; chiedila come messaggio",
+    btw_usage: "/btw <question> chiede a margine — /btw <name> <question> chiede a un agente in background o a un \
+                altro pane; il turno in corso prosegue indisturbato",
+    btw_wanted_tools: "voleva controllare qualcosa — una domanda a margine non esegue strumenti; chiedila come \
+                       messaggio",
     btw_failed: "la domanda a margine non è riuscita: {reason}",
     btw_waiting: "sta pensando…",
     hint_btw: "Esc chiude la scheda · PagSu PagGiù la scorrono",
@@ -1545,7 +1567,8 @@ pub const TEXTS: Texts = Texts {
     secrets_on: "chiavi nascoste al modello: attivo",
     secrets_off: "chiavi nascoste al modello: disattivato — ciò che rispondono gli strumenti va così com'è",
     secrets_off_now: "il mascheramento è disattivato — ciò che rispondono gli strumenti va così com'è; /secrets on",
-    secrets_none: "ancora niente di nascosto in questa sessione — una chiave nella risposta di uno strumento appare come ‹secret n: …›",
+    secrets_none: "ancora niente di nascosto in questa sessione — una chiave nella risposta di uno strumento appare \
+                   come ‹secret n: …›",
     secrets_heading: "nascosto al modello in questa sessione — /secrets allow <n> [always] ne lascia passare uno:",
     secrets_row: "  {n}  {kind} · {chars} caratteri · visto in {seen}",
     secrets_usage: "/secrets · on|off · allow <n> [always] · add <name> <regex> · remove <name>",
@@ -1557,6 +1580,8 @@ pub const TEXTS: Texts = Texts {
     secrets_added: "formato {name} aggiunto: nascosto dal prossimo risultato",
     secrets_no_format: "nessun tuo formato chiamato {name}",
     secrets_removed: "formato {name} rimosso",
-    export_written_masked: "esportato in {path} — le chiavi viste da Glut sono nascoste; ciò che hai scritto tu, o una sessione precedente, può ancora contenerne",
-    export_copied_masked: "sessione copiata come Markdown — le chiavi viste da Glut sono nascoste; ciò che hai scritto tu può ancora contenerne",
+    export_written_masked: "esportato in {path} — le chiavi viste da Glut sono nascoste; ciò che hai scritto tu, o \
+                            una sessione precedente, può ancora contenerne",
+    export_copied_masked: "sessione copiata come Markdown — le chiavi viste da Glut sono nascoste; ciò che hai \
+                           scritto tu può ancora contenerne",
 };

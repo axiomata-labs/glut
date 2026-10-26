@@ -1144,10 +1144,13 @@ impl Panes {
             self.notifier.focus(event == TermEvent::FocusGained);
             return;
         }
-        // A background agent's stream over the pane is only to read: Esc (or ⌃C) closes it, nothing else goes through.
+        // A background agent's stream over the pane is only to read: Esc, q (T71) or ⌃C close it, nothing else goes
+        // through.
         if self.peek.is_some() {
             if let TermEvent::Key(key) = &event
                 && (key.code == crossterm::event::KeyCode::Esc
+                    || (key.code == crossterm::event::KeyCode::Char('q')
+                        && key.modifiers.is_empty())
                     || (key.code == crossterm::event::KeyCode::Char('c')
                         && key
                             .modifiers

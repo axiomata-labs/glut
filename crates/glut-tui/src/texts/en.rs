@@ -82,6 +82,9 @@ pub const TEXTS: Texts = Texts {
     hint_working: "Glut works · ⏎ steers it · ⇥ queues for after · ⌥↑ takes back · ⎋ stops",
     hint_usual: "⏎ send · ⇧⏎ new line · ⇧⇥ mode · ⌃K keys · @ file · !cmd · ⌃F search · ⌃C quit",
     hint_other_asks: "asks — ⌃P answers",
+    hint_chord: "⌃X then: 2 split · 0 close · { } width · H hide · B background · A agents · E editor · ↑ read · ⇥ \
+                 panel",
+    chord_unknown: "⌃X {key} does nothing — ⌃K lists the keys",
     in_background: "In the background",
     background_keys: "/peek <name> reads one · /show <name> brings it forward · /send <name> …",
     no_subagent: "No subagent yet. When Glut hands a piece of work to one, it shows here: what it does now, its \
@@ -787,11 +790,13 @@ pub const TEXTS: Texts = Texts {
     mcp_no_server: "no MCP server {name} — /mcp lists them",
     mcp_error: "/mcp: {reason}",
     mcp_open: "{name} answers without a sign-in",
-    mcp_registered_only: "{name} offers OAuth only to clients registered beforehand: a token instead — or your own client's clientId as \"oauth\" in ~/.glut/mcp.json",
+    mcp_registered_only: "{name} offers OAuth only to clients registered beforehand: a token instead — or your own \
+                          client's clientId as \"oauth\" in ~/.glut/mcp.json",
     mcp_sign_in_failed: "{name}: the sign-in did not succeed: {reason}",
     mcp_sign_in_at: "{name} signs in at {host}:\n{address}",
     mcp_browser_opened: "opened in your browser — Glut waits for it to come back",
-    mcp_paste_back: "open it in a browser; if it ends on an address that does not load (over SSH): /mcp login {name} <address>",
+    mcp_paste_back: "open it in a browser; if it ends on an address that does not load (over SSH): /mcp login {name} \
+                     <address>",
     mcp_signed_in: "{name} is signed in: {count} tools",
     mcp_wants_note: "{name} wants a sign-in: /mcp login {name}",
     mcp_not_up: "MCP server {name} did not start: {reason}",
@@ -802,7 +807,8 @@ pub const TEXTS: Texts = Texts {
     mcp_out_revoked: "{name} signed out: revoked at the server and forgotten here",
     mcp_out_here: "{name} signed out: forgotten here (the server offers no revocation)",
     mcp_out_failed: "{name} signed out here; the server's revocation failed: {reason}",
-    mcp_usage: "/mcp lists the servers · /mcp login|logout <name> · /mcp add <name> <url> or /mcp add <name> -- <command> · /mcp remove <name>",
+    mcp_usage: "/mcp lists the servers · /mcp login|logout <name> · /mcp add <name> <url> or /mcp add <name> -- \
+                <command> · /mcp remove <name>",
     mcp_added: "{name} added to ~/.glut/mcp.json",
     mcp_up: "{name} is connected: {count} tools",
     mcp_not_owners: "{name} is not in ~/.glut/mcp.json: a project's server is the project's to remove",
@@ -817,7 +823,8 @@ pub const TEXTS: Texts = Texts {
     hint_opening: "⏎ open · Esc leave",
     mcp_open_failed: "no browser could be opened — open the address above yourself",
     mcp_open_left: "open the address above yourself; Glut waits for it to come back",
-    btw_usage: "/btw <question> asks aside — /btw <name> <question> asks a background agent or another pane; the turn under way goes on undisturbed",
+    btw_usage: "/btw <question> asks aside — /btw <name> <question> asks a background agent or another pane; the turn \
+                under way goes on undisturbed",
     btw_wanted_tools: "it wanted to look something up — a side question runs no tool; ask it as a message",
     btw_failed: "the side question failed: {reason}",
     btw_waiting: "thinking…",
@@ -850,12 +857,15 @@ pub const TEXTS: Texts = Texts {
     secrets_usage: "/secrets · on|off · allow <n> [always] · add <name> <regex> · remove <name>",
     secrets_no_such: "no secret {n} in this session — /secrets lists them",
     secrets_allowed: "secret {n} goes through for this session",
-    secrets_allowed_always: "secret {n} goes through always (its fingerprint kept in ~/.glut/secrets.json, never the value)",
+    secrets_allowed_always: "secret {n} goes through always (its fingerprint kept in ~/.glut/secrets.json, never the \
+                             value)",
     secrets_next_read: "from the next read on — the model hears of it with your next message",
     secrets_bad_regex: "not a pattern Glut can use: {reason}",
     secrets_added: "format {name} added: hidden from the next result on",
     secrets_no_format: "no format of yours named {name}",
     secrets_removed: "format {name} removed",
-    export_written_masked: "exported to {path} — the keys Glut saw are hidden; what you typed yourself, or a session from before, may still hold one",
-    export_copied_masked: "copied the session as Markdown — the keys Glut saw are hidden; what you typed yourself may still hold one",
+    export_written_masked: "exported to {path} — the keys Glut saw are hidden; what you typed yourself, or a session \
+                            from before, may still hold one",
+    export_copied_masked: "copied the session as Markdown — the keys Glut saw are hidden; what you typed yourself may \
+                           still hold one",
 };

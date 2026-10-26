@@ -413,7 +413,7 @@ const fn key(topic: Topic, key: &'static str, what: &'static str, command: &'sta
 }
 
 /// Every key Glut has, grouped as [`COMMANDS`] are; a topic without keys shows no heading.
-pub const KEYS: [Key; 41] = [
+pub const KEYS: [Key; 43] = [
     key(
         Topic::Session,
         "⇧⇥",
@@ -567,11 +567,29 @@ pub const KEYS: [Key; 41] = [
     key(
         Topic::Editing,
         "⌥B ⌥F",
-        "a word left, a word right (⌥← ⌥→ too)",
+        "a word left, a word right (⌥← ⌥→ ⌃← ⌃→ too)",
         "",
     ),
-    key(Topic::Editing, "⌃W", "delete the word before (⌥⌫ too)", ""),
+    key(
+        Topic::Editing,
+        "⇧← ⇧→",
+        "select a character left, right — ⇧Home ⇧End up to the input's start, its end; ⌫ deletes the selection, \
+         typing replaces it",
+        "",
+    ),
+    key(
+        Topic::Editing,
+        "⌃W",
+        "delete the word before (⌥⌫ ⌃⌫ too)",
+        "",
+    ),
     key(Topic::Editing, "⌃U", "delete to the line's start", ""),
+    key(
+        Topic::Editing,
+        "⌦",
+        "delete the character after the cursor",
+        "",
+    ),
     key(Topic::Editing, "⌃J", "a new line", ""),
     key(
         Topic::Editing,

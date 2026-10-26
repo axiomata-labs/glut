@@ -141,6 +141,10 @@ glut::catalog! {
         hint_usual: &'static str,
         /// A pane without the keys whose session asks.
         hint_other_asks: &'static str,
+        /// The footer while ⌃X waits for its second key (T71).
+        hint_chord: &'static str,
+        /// A second key ⌃X does not know (T71): `{key}` it.
+        chord_unknown: &'static str,
         /// The Agents tab's heading of the agents in the background.
         in_background: &'static str,
         /// Under the agents in the background.

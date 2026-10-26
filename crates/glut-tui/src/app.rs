@@ -113,6 +113,15 @@ pub enum Tab {
     Keys,
 }
 
+/// What a click on the side panel lands on (T71): a tab's name, or a row of the Agents or To-dos list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PanelSpot {
+    Tab(Tab),
+    Agent(crate::agents::Row),
+    /// The To-dos list's pick, as ↑↓ count them.
+    Todo(usize),
+}
+
 /// What runs in the background besides the screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Busy {
@@ -298,6 +307,8 @@ pub struct App {
     pub stream_width: u16,
     /// Whether the last frame drew the side panel (a narrow screen leaves it out though it is on).
     pub panel_drawn: bool,
+    /// Where the last frame drew the panel's tab names and list rows, for a click (T71).
+    pub panel_spots: Vec<(ratatui::layout::Rect, PanelSpot)>,
     /// The last frame's stream was wide enough for the panel beside it: Ctrl+K opens the Keys tab, else the sheet
     /// over the stream.
     pub panel_fits: bool,
@@ -545,6 +556,7 @@ impl App {
             reading_kept: Arc::default(),
             stream_width: u16::MAX,
             panel_drawn: false,
+            panel_spots: Vec::new(),
             panel_fits: false,
             keys_sheet: None,
             keys_scroll: 0,
@@ -1781,14 +1793,17 @@ impl App {
                     self.suggestions_closed = None;
                 }
             }
-            // The reading mode and the panel's focus type nothing, a paste neither (TUI9a).
+            // The reading mode types nothing, a paste neither (TUI9a); a paste over the panel's keys is the input's,
+            // as a key the tab does not use is (T71).
             TermEvent::Paste(text)
                 if self.ask.is_none()
                     && self.picker.is_none()
                     && self.keys_sheet.is_none()
-                    && self.reading.is_none()
-                    && !self.panel_focus =>
+                    && self.reading.is_none() =>
             {
+                if self.panel_focus {
+                    self.leave_panel();
+                }
                 if let Some(secret) = &mut self.secret {
                     // A secret is pasted more often than typed: it goes into the hidden entry, never the input.
                     if secret.opened.elapsed() >= ASK_SETTLE {
@@ -1900,6 +1915,20 @@ impl App {
                 }
                 MouseEventKind::ScrollUp => self.scroll_by(WHEEL_LINES as isize),
                 MouseEventKind::ScrollDown => self.scroll_by(-(WHEEL_LINES as isize)),
+                // A question waits for its key: the panel takes no click meanwhile.
+                MouseEventKind::Down(MouseButton::Left)
+                    if self.panel_drawn
+                        && self.ask.is_none()
+                        && self.secret.is_none()
+                        && self.opening.is_none()
+                        && !self.plan_asks()
+                        && self.panel_spot(mouse.column, mouse.row).is_some() =>
+                {
+                    self.press = None;
+                    if let Some(spot) = self.panel_spot(mouse.column, mouse.row) {
+                        self.click_panel(spot);
+                    }
+                }
                 MouseEventKind::Down(MouseButton::Left)
                     if self.input_at(mouse.column, mouse.row).is_some() =>
                 {
@@ -1908,6 +1937,8 @@ impl App {
                     self.input_selection = None;
                     self.input_keyed = false;
                     self.input_press = self.input_at(mouse.column, mouse.row);
+                    // A click in the input gives it the keys.
+                    self.leave_panel();
                 }
                 MouseEventKind::Drag(MouseButton::Left) if self.input_press.is_some() => {
                     if let (Some(anchor), Some(head)) =
@@ -1947,6 +1978,9 @@ impl App {
                 MouseEventKind::Down(MouseButton::Left) => {
                     self.selection = None;
                     self.input_selection = None;
+                    if mouse.column < self.stream_width {
+                        self.leave_panel();
+                    }
                     self.press = (mouse.column < self.stream_width)
                         .then(|| self.point_at(mouse.column, mouse.row))
                         .flatten()
@@ -2006,9 +2040,9 @@ impl App {
         if key.code != KeyCode::Esc {
             self.last_esc = None;
         }
-        // A question or a list over the screen takes the keys from the To-dos list for good: after it, keys type again.
+        // A question or a list over the screen takes the keys from the panel for good: after it, keys type again.
         if self.plan_asks() || self.ask.is_some() || self.picker.is_some() {
-            self.project_todos.keys = false;
+            self.leave_panel();
         }
         if self.plan_asks() {
             return self.on_plan_key(key);
@@ -2054,17 +2088,21 @@ impl App {
             return;
         }
         if self.search.is_some() {
+            self.chord = false;
             return self.on_search_key(key);
         }
         if key.code == KeyCode::F(3) {
+            self.chord = false;
             self.scrollback_request = true;
             return;
         }
         if key.code == KeyCode::F(2) {
+            self.chord = false;
             self.mouse_request = Some(!self.mouse_held);
             return;
         }
         if ctrl && matches!(key.code, KeyCode::Char('f')) {
+            self.chord = false;
             self.search = Some(Search::default());
             return;
         }
@@ -2194,7 +2232,9 @@ impl App {
                 KeyCode::Char('a' | 'A') => return self.show_agents(),
                 KeyCode::Up => return self.start_reading(),
                 KeyCode::Tab => return self.focus_panel(),
-                _ => {}
+                // Esc only lets the chord go; another key says it is none (T71) instead of vanishing.
+                KeyCode::Esc => {}
+                _ => self.say(tr!(chord_unknown, key = key_name(key))),
             }
             // Another chord gives the Agents list's keys back: they are the input's after it.
             self.agents_list = None;
@@ -2206,10 +2246,10 @@ impl App {
             // ⌃V: the clipboard's image into the message (T45) — the terminal's ⌘V pastes text alone.
             KeyCode::Char('v') if ctrl => self.attach_clipboard(),
             KeyCode::Char('y') if ctrl => self.show_todos(),
-            KeyCode::Char('b') if ctrl => self.show_tab(Tab::Plan),
-            KeyCode::Char('g') if ctrl => self.show_tab(Tab::Gate),
+            KeyCode::Char('b') if ctrl => self.open_tab(Tab::Plan),
+            KeyCode::Char('g') if ctrl => self.open_tab(Tab::Gate),
             // Ctrl+M is Enter to a terminal: the meter is on N.
-            KeyCode::Char('n') if ctrl => self.show_tab(Tab::Meter),
+            KeyCode::Char('n') if ctrl => self.open_tab(Tab::Meter),
             KeyCode::Char('r') if ctrl => self.open_review(crate::review::Scope::Turn),
             KeyCode::Enter if shift || alt => self.input.newline(),
             KeyCode::Char('j') if ctrl => self.input.newline(),
@@ -3279,7 +3319,14 @@ impl App {
         self.project_todos.refresh(&cwd);
         let name = self.project_todos.name();
         match rest {
-            "" => self.show_todos_keyed(),
+            // `/todo` alone shows the list, never hides it.
+            "" => {
+                self.project_todos.search_again();
+                if self.panel != Some(true) || self.tab != Tab::Todos {
+                    self.show_tab(Tab::Todos);
+                }
+                self.focus_tab();
+            }
             "open" => self.open_todos(),
             "clean" => {
                 let done = self.project_todos.done();
@@ -3395,25 +3442,10 @@ impl App {
         }
     }
 
-    /// Ctrl+Y: the To-dos tab with its list taking the keys; with the list taking them already, the panel goes.
+    /// Ctrl+Y: the To-dos tab, read anew, with its list taking the keys; with them already, the panel goes.
     fn show_todos(&mut self) {
-        let shown = self.panel == Some(true) && self.tab == Tab::Todos;
-        if shown && self.project_todos.keys {
-            self.project_todos.keys = false;
-            return self.toggle_panel();
-        }
-        self.show_todos_keyed();
-    }
-
-    /// The To-dos tab shown, read anew, its list with the keys.
-    fn show_todos_keyed(&mut self) {
-        self.tab = Tab::Todos;
-        if self.panel != Some(true) {
-            self.toggle_panel();
-        }
         self.project_todos.search_again();
-        self.project_todos.refresh(&self.parts.config.cwd);
-        self.project_todos.keys = true;
+        self.open_tab(Tab::Todos);
     }
 
     /// A key while the To-dos list has them: ↑↓ (j k) choose, Space or Enter ticks (or folds the done ones), a
@@ -3566,13 +3598,13 @@ impl App {
     /// sheet over the stream.
     fn show_keys(&mut self) {
         if self.panel_fits {
-            return self.show_tab(Tab::Keys);
+            return self.open_tab(Tab::Keys);
         }
         self.keys_sheet = Some(0);
     }
 
-    /// A key while the Keys sheet is over the stream: ↑↓ PgUp PgDn scroll, Esc or Ctrl+K close it, any other is
-    /// nobody's — the sheet is only to read.
+    /// A key while the Keys sheet is over the stream: ↑↓ PgUp PgDn scroll, Esc, q (T71) or Ctrl+K close it, any
+    /// other is nobody's — the sheet is only to read.
     fn on_sheet_key(&mut self, key: KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let page = self.overlay_rows.max(1);
@@ -3582,6 +3614,7 @@ impl App {
         match key.code {
             KeyCode::Esc => self.keys_sheet = None,
             KeyCode::Char('k') if ctrl => self.keys_sheet = None,
+            KeyCode::Char('q') if !ctrl => self.keys_sheet = None,
             KeyCode::Up => *scroll = scroll.saturating_sub(1),
             KeyCode::Down => *scroll = scroll.saturating_add(1),
             KeyCode::PageUp => *scroll = scroll.saturating_sub(page),
@@ -3606,7 +3639,25 @@ impl App {
             && column >= self.stream_width
     }
 
-    /// Ctrl+B the Plan tab, Ctrl+G the Gate tab: the panel opens on it or turns to it; on it already, the panel goes.
+    /// A tab's key (T71: ⌃B ⌃G ⌃N ⌃K ⌃Y, ⌃X A): the panel opens on the tab or turns to it, and the tab takes the
+    /// keys; on it already, the panel goes — with the keys or without (a panel the plan opened goes at one key).
+    fn open_tab(&mut self, tab: Tab) {
+        let shown = self.panel == Some(true) && self.tab == tab;
+        self.show_tab(tab);
+        if !shown {
+            self.focus_tab();
+        }
+    }
+
+    /// The shown tab takes the keys: its list where it has one, its scrolling else (T71).
+    fn focus_tab(&mut self) {
+        self.search = None;
+        self.reading = None;
+        self.panel_focus = true;
+        self.key_the_tab();
+    }
+
+    /// The panel opens on `tab` or turns to it; on it already, the panel goes. The keys stay where they are.
     pub fn show_tab(&mut self, tab: Tab) {
         if self.panel == Some(true) && self.tab == tab {
             // The panel goes, and the keys it had with it.
@@ -5204,24 +5255,52 @@ impl App {
     /// `⌃X A`: the Agents tab with its list taking the keys; shown already, the panel goes — as every tab's key closes
     /// its own tab (the owner, 2026-10-26: Esc is what gives the keys back).
     fn show_agents(&mut self) {
-        if self.panel == Some(true) && self.tab == Tab::Agents {
-            self.leave_panel();
-            return self.toggle_panel();
-        }
-        self.tab = Tab::Agents;
-        if self.panel != Some(true) {
-            self.toggle_panel();
-        }
-        self.agents_list = self.agent_rows().into_iter().next();
+        self.open_tab(Tab::Agents);
     }
 
     /// A tile's click (T69): the Agents tab shown, its list taking the keys at `row`.
     pub fn open_agents(&mut self, row: crate::agents::Row) {
-        self.tab = Tab::Agents;
-        if self.panel != Some(true) {
-            self.toggle_panel();
+        if !(self.panel == Some(true) && self.tab == Tab::Agents) {
+            self.show_tab(Tab::Agents);
         }
+        self.focus_tab();
         self.agents_list = Some(row);
+    }
+
+    /// Whether ⌃X waits for its second key: the footer names them (T71).
+    pub fn chord_waits(&self) -> bool {
+        self.chord
+    }
+
+    /// A click on the panel (T71): a tab's name turns to it, a list's row is chosen — the tab taking the keys.
+    fn click_panel(&mut self, spot: PanelSpot) {
+        match spot {
+            PanelSpot::Tab(tab) => {
+                if tab != self.tab {
+                    self.agents_list = None;
+                    self.project_todos.keys = false;
+                    self.show_tab(tab);
+                }
+                self.focus_tab();
+            }
+            PanelSpot::Agent(row) => {
+                self.focus_tab();
+                self.agents_list = Some(row);
+            }
+            PanelSpot::Todo(pick) => {
+                self.focus_tab();
+                self.project_todos.chosen = pick;
+            }
+        }
+    }
+
+    /// What of the panel the last frame drew at a cell, if anything a click takes.
+    fn panel_spot(&self, column: u16, row: u16) -> Option<PanelSpot> {
+        let at = ratatui::layout::Position::new(column, row);
+        self.panel_spots
+            .iter()
+            .find(|(area, _)| area.contains(at))
+            .map(|(_, spot)| spot.clone())
     }
 
     /// Whether the turn under way was told to stop (Esc): what ends now ends as the owner wanted.
@@ -5365,6 +5444,10 @@ impl App {
             self.panel = Some(true);
         } else if self.tab == Tab::Plan && !self.todos.is_empty() {
             return;
+        }
+        // The keys another tab had do not pass to the Agents list unseen: they are the input's again.
+        if self.panel_focus && self.tab != Tab::Agents {
+            self.leave_panel();
         }
         self.tab = Tab::Agents;
     }
@@ -6378,8 +6461,9 @@ impl App {
         }
     }
 
-    /// A key while the panel has them: ←→ (h l) the tabs, Esc back to the input, the rest the tab's — its list's
-    /// (Agents, To-dos) or its scrolling. A key with ⌃ or ⌥ goes on as ever (false: not taken here).
+    /// A key while the panel has them: ←→ the tabs, Esc back to the input, the rest the tab's — its list's (Agents,
+    /// To-dos) or its scrolling. A key with ⌃ or ⌥ goes on as ever, and a key the tab does not use gives the keys back
+    /// and is the input's (T71: the owner types on after a tab's key) — false: not taken here.
     fn on_panel_key(&mut self, key: KeyEvent) -> bool {
         const TABS: [Tab; 6] = [
             Tab::Plan,
@@ -6397,18 +6481,27 @@ impl App {
         if self.search.is_some() {
             return false;
         }
-        if self.chord
-            || key
-                .modifiers
-                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+        if self.chord {
+            return false;
+        }
+        if key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
         {
+            // A tab's key and ⌃X keep the panel's keys for what they do; any other edits the input or moves on.
+            let tabs = key.modifiers == KeyModifiers::CONTROL
+                && matches!(key.code, KeyCode::Char('b' | 'g' | 'n' | 'k' | 'y' | 'x'));
+            if !tabs {
+                self.leave_panel();
+            }
             return false;
         }
         let page = self.stream_height.saturating_sub(4).max(1);
+        // Letters are the input's, a word begun with h or k must not turn the tab: only the arrows move here.
         match key.code {
-            KeyCode::Left | KeyCode::Right | KeyCode::Char('h' | 'l') => {
+            KeyCode::Left | KeyCode::Right if key.modifiers.is_empty() => {
                 let at = TABS.iter().position(|tab| *tab == self.tab).unwrap_or(0);
-                let next = if matches!(key.code, KeyCode::Left | KeyCode::Char('h')) {
+                let next = if key.code == KeyCode::Left {
                     (at + TABS.len() - 1) % TABS.len()
                 } else {
                     (at + 1) % TABS.len()
@@ -6438,36 +6531,30 @@ impl App {
                 } else {
                     self.project_todos.keys
                 };
-                if taken && !keyed {
-                    // The list gave the keys away on purpose (`a` writes `/todo ` into the input): the panel too.
+                if !taken || !keyed {
+                    // A key the list did not take, or one that gave the keys away on purpose (`a` writes `/todo `
+                    // into the input): the panel lets go too, and a key not taken is the input's.
                     self.leave_panel();
-                } else if !taken {
-                    // A key the list did not take is nobody's while the panel has the keys; the list keeps them.
-                    self.key_the_tab();
+                }
+                return taken;
+            }
+            Tab::Keys | Tab::Plan | Tab::Gate | Tab::Meter => {
+                let scroll = if self.tab == Tab::Keys {
+                    &mut self.keys_scroll
+                } else {
+                    &mut self.panel_scroll
+                };
+                match key.code {
+                    KeyCode::Up => *scroll = scroll.saturating_sub(1),
+                    KeyCode::Down => *scroll = scroll.saturating_add(1),
+                    KeyCode::PageUp => *scroll = scroll.saturating_sub(page),
+                    KeyCode::PageDown => *scroll = scroll.saturating_add(page),
+                    _ => {
+                        self.leave_panel();
+                        return false;
+                    }
                 }
             }
-            Tab::Keys => match key.code {
-                KeyCode::Up | KeyCode::Char('k') => {
-                    self.keys_scroll = self.keys_scroll.saturating_sub(1)
-                }
-                KeyCode::Down | KeyCode::Char('j') => {
-                    self.keys_scroll = self.keys_scroll.saturating_add(1)
-                }
-                KeyCode::PageUp => self.keys_scroll = self.keys_scroll.saturating_sub(page),
-                KeyCode::PageDown => self.keys_scroll = self.keys_scroll.saturating_add(page),
-                _ => {}
-            },
-            Tab::Plan | Tab::Gate | Tab::Meter => match key.code {
-                KeyCode::Up | KeyCode::Char('k') => {
-                    self.panel_scroll = self.panel_scroll.saturating_sub(1)
-                }
-                KeyCode::Down | KeyCode::Char('j') => {
-                    self.panel_scroll = self.panel_scroll.saturating_add(1)
-                }
-                KeyCode::PageUp => self.panel_scroll = self.panel_scroll.saturating_sub(page),
-                KeyCode::PageDown => self.panel_scroll = self.panel_scroll.saturating_add(page),
-                _ => {}
-            },
         }
         true
     }
@@ -6940,6 +7027,31 @@ fn reason(reason: FinishReason) -> &'static str {
     }
 }
 
+/// A key as the owner reads it on the keyboard: a letter as its capital, the rest by its sign or name.
+fn key_name(key: KeyEvent) -> String {
+    let mut held = String::new();
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        held.push('⌃');
+    }
+    if key.modifiers.contains(KeyModifiers::ALT) {
+        held.push('⌥');
+    }
+    let name = match key.code {
+        KeyCode::Char(' ') => "Space".into(),
+        KeyCode::Char(c) => c.to_uppercase().collect(),
+        KeyCode::Enter => "⏎".into(),
+        KeyCode::Backspace => "⌫".into(),
+        KeyCode::Delete => "⌦".into(),
+        KeyCode::Down => "↓".into(),
+        KeyCode::Left => "←".into(),
+        KeyCode::Right => "→".into(),
+        KeyCode::BackTab => "⇧⇥".into(),
+        KeyCode::F(n) => format!("F{n}"),
+        other => format!("{other:?}"),
+    };
+    held + &name
+}
+
 /// Whether `key` goes on with a selection in the input: ⇧ with ←→ or Home/End, nothing else held (T71).
 fn extends_selection(key: KeyEvent) -> bool {
     key.modifiers == KeyModifiers::SHIFT
@@ -7248,6 +7360,62 @@ pub(crate) mod tests {
         assert_eq!(app.input.text(), "x", "nothing typed through the sheet");
         app.on_terminal(key(KeyCode::Esc, KeyModifiers::NONE));
         assert_eq!(app.keys_sheet, None);
+        // q closes it too, as every view only to read (T71).
+        app.on_terminal(key(KeyCode::Char('k'), KeyModifiers::CONTROL));
+        app.on_terminal(key(KeyCode::Char('q'), KeyModifiers::NONE));
+        assert_eq!((app.keys_sheet, app.input.text()), (None, "x".to_owned()));
+    }
+
+    #[test]
+    fn a_tabs_key_gives_it_the_keys_a_click_turns_to_a_tab_and_ctrl_x_names_its_keys() {
+        let (mut app, _reports) = app();
+        wide_screen(&mut app);
+        // ⌃G opens the Gate tab with the keys: ↓ scrolls it, a letter goes back to the input and is typed.
+        app.on_terminal(key(KeyCode::Char('g'), KeyModifiers::CONTROL));
+        assert!(app.panel_focus && app.tab == Tab::Gate);
+        wide_screen(&mut app);
+        app.on_terminal(key(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(app.panel_scroll, 1);
+        type_text(&mut app, "hi");
+        assert!(!app.panel_focus);
+        assert_eq!(app.input.text(), "hi", "h turns no tab: it is typed");
+        // A paste and an editing key give the keys back as well.
+        app.on_terminal(key(KeyCode::Char('g'), KeyModifiers::CONTROL));
+        app.on_terminal(key(KeyCode::Char('g'), KeyModifiers::CONTROL));
+        assert!(app.panel_focus);
+        app.on_terminal(TermEvent::Paste("!".into()));
+        assert!(!app.panel_focus);
+        app.on_terminal(key(KeyCode::Char('g'), KeyModifiers::CONTROL));
+        app.on_terminal(key(KeyCode::Char('g'), KeyModifiers::CONTROL));
+        app.on_terminal(key(KeyCode::Char('a'), KeyModifiers::CONTROL));
+        assert!(!app.panel_focus);
+        app.on_terminal(key(KeyCode::Char('e'), KeyModifiers::CONTROL));
+        app.on_terminal(key(KeyCode::Backspace, KeyModifiers::NONE));
+        assert_eq!(app.input.text(), "hi");
+        // A click on a tab's name turns to it, with the keys.
+        wide_screen(&mut app);
+        let (spot, _) = app
+            .panel_spots
+            .iter()
+            .find(|(_, spot)| *spot == PanelSpot::Tab(Tab::Meter))
+            .cloned()
+            .expect("the Meter tab's name was drawn");
+        app.on_terminal(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            spot.x,
+            spot.y,
+        ));
+        assert!(app.panel_focus && app.tab == Tab::Meter);
+        let screen = wide_screen(&mut app);
+        assert!(screen.contains(crate::texts::t().tab_names[2]), "{screen}");
+        app.on_terminal(key(KeyCode::Esc, KeyModifiers::NONE));
+        // ⌃X names its second keys while it waits; one it does not know says so.
+        app.on_terminal(key(KeyCode::Char('x'), KeyModifiers::CONTROL));
+        assert!(wide_screen(&mut app).contains("2 split"));
+        app.on_terminal(key(KeyCode::Char('z'), KeyModifiers::NONE));
+        assert_eq!(app.toast(), Some("⌃X Z does nothing — ⌃K lists the keys"));
+        assert_eq!(app.input.text(), "hi", "and types nothing");
+        let _ = std::fs::remove_dir_all(&app.parts.home);
     }
 
     #[tokio::test]
@@ -9190,13 +9358,15 @@ pub(crate) mod tests {
         assert_ne!(app.tab, first);
         app.on_terminal(key(KeyCode::Left, KeyModifiers::NONE));
         assert_eq!(app.tab, first);
-        type_text(&mut app, "q");
-        assert!(app.input.is_empty(), "the panel's keys type nothing");
         assert!(wide_screen(&mut app).contains("←→ tabs"));
+        // A key the tab does not use gives the keys back and is typed (T71); Esc gives them back too.
+        type_text(&mut app, "q");
+        assert!(!app.panel_focus && app.panel == Some(true));
+        assert_eq!(app.input.text(), "q");
+        app.on_terminal(key(KeyCode::Char('x'), KeyModifiers::CONTROL));
+        app.on_terminal(key(KeyCode::Tab, KeyModifiers::NONE));
         app.on_terminal(key(KeyCode::Esc, KeyModifiers::NONE));
         assert!(!app.panel_focus && app.panel == Some(true));
-        type_text(&mut app, "q");
-        assert_eq!(app.input.text(), "q");
         // ⌃X ⇥ again gives the keys back as well.
         app.on_terminal(key(KeyCode::Char('x'), KeyModifiers::CONTROL));
         app.on_terminal(key(KeyCode::Tab, KeyModifiers::NONE));

@@ -39,7 +39,8 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "btw",
-            "une question en aparté, répondue dans une carte et jamais dans la conversation ; le tour en cours continue — /btw reviewer où en es-tu ?",
+            "une question en aparté, répondue dans une carte et jamais dans la conversation ; le tour en cours \
+             continue — /btw reviewer où en es-tu ?",
         ),
         (
             "projects",
@@ -167,7 +168,8 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "mcp",
-            "les serveurs MCP et l’état de chacun : /mcp login <name> se connecte à un serveur hébergé, /mcp add <name> <url> en ajoute un à ~/.glut/mcp.json",
+            "les serveurs MCP et l’état de chacun : /mcp login <name> se connecte à un serveur hébergé, /mcp add \
+             <name> <url> en ajoute un à ~/.glut/mcp.json",
         ),
         (
             "images",
@@ -185,7 +187,8 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "secrets",
-            "les clés cachées au modèle dans cette session ; /secrets allow <n> [always] en laisse passer une, /secrets add <name> <regex> cache un format à toi, /secrets remove <name>, /secrets on|off",
+            "les clés cachées au modèle dans cette session ; /secrets allow <n> [always] en laisse passer une, \
+             /secrets add <name> <regex> cache un format à toi, /secrets remove <name>, /secrets on|off",
         ),
         (
             "motion",
@@ -292,9 +295,18 @@ pub const TEXTS: Texts = Texts {
         ("⇧⏎", "une nouvelle ligne (⌥⏎ aussi)"),
         ("⌃X E", "modifier la saisie dans ton éditeur"),
         ("⌃A ⌃E", "le début de la ligne, sa fin (Début Fin aussi)"),
-        ("⌥B ⌥F", "un mot à gauche, un mot à droite (⌥← ⌥→ aussi)"),
-        ("⌃W", "supprimer le mot d’avant (⌥⌫ aussi)"),
+        (
+            "⌥B ⌥F",
+            "un mot à gauche, un mot à droite (⌥← ⌥→ ⌃← ⌃→ aussi)",
+        ),
+        (
+            "⇧← ⇧→",
+            "sélectionner un caractère à gauche, à droite — ⇧Home ⇧End jusqu’au début, à la fin de la saisie ; ⌫ \
+             efface la sélection, taper la remplace",
+        ),
+        ("⌃W", "supprimer le mot d’avant (⌥⌫ ⌃⌫ aussi)"),
         ("⌃U", "supprimer jusqu’au début de la ligne"),
+        ("⌦", "supprimer le caractère après le curseur"),
         ("⌃J", "une nouvelle ligne"),
         (
             "⌃D",
@@ -357,6 +369,9 @@ pub const TEXTS: Texts = Texts {
     hint_working: "Glut travaille · ⏎ l’oriente · ⇥ met en attente · ⌥↑ reprend · ⎋ arrête",
     hint_usual: "⏎ envoyer · ⇧⏎ nouvelle ligne · ⇧⇥ mode · ⌃K touches · @ fichier · !cmd · ⌃F recherche · ⌃C quitter",
     hint_other_asks: "demande — ⌃P répond",
+    hint_chord: "⌃X puis : 2 diviser · 0 fermer · { } largeur · H masquer · B arrière-plan · A agents · E éditeur · ↑ \
+                 lire · ⇥ panneau",
+    chord_unknown: "⌃X {key} ne fait rien — ⌃K liste les touches",
     in_background: "En arrière-plan",
     background_keys: "/peek <name> en lit un · /show <name> le ramène au premier plan · /send <name> …",
     no_subagent: "Aucun sous-agent pour l’instant. Quand Glut en charge un d’une partie du travail, il apparaît ici \
@@ -1021,20 +1036,27 @@ pub const TEXTS: Texts = Texts {
     setup_provider_prompt: "Fournisseur :",
     cli: &[
         (
-            "Send what the tools answer as it is, without hiding the keys in it (T58; `\"mask\": false` in ~/.glut/secrets.json, which `/secrets off` writes)",
-            "Envoyer ce que répondent les outils tel quel, sans y cacher les clés (T58 ; `\"mask\": false` dans ~/.glut/secrets.json, que `/secrets off` écrit)",
+            "Send what the tools answer as it is, without hiding the keys in it (T58; `\"mask\": false` in \
+             ~/.glut/secrets.json, which `/secrets off` writes)",
+            "Envoyer ce que répondent les outils tel quel, sans y cacher les clés (T58 ; `\"mask\": false` dans \
+             ~/.glut/secrets.json, que `/secrets off` écrit)",
         ),
         (
             "The MCP servers: ~/.glut/mcp.json and the project's .mcp.json, signing in to a hosted one and out again",
-            "Les serveurs MCP : ~/.glut/mcp.json et le .mcp.json du projet, se connecter à un serveur hébergé et s’en déconnecter",
+            "Les serveurs MCP : ~/.glut/mcp.json et le .mcp.json du projet, se connecter à un serveur hébergé et s’en \
+             déconnecter",
         ),
         (
-            "The MCP servers of ~/.glut/mcp.json and the folder's .mcp.json, and what each one is signed in with (never the token)",
-            "Les serveurs MCP de ~/.glut/mcp.json et du .mcp.json du dossier, et ce avec quoi chacun est connecté (jamais le token)",
+            "The MCP servers of ~/.glut/mcp.json and the folder's .mcp.json, and what each one is signed in with \
+             (never the token)",
+            "Les serveurs MCP de ~/.glut/mcp.json et du .mcp.json du dossier, et ce avec quoi chacun est connecté \
+             (jamais le token)",
         ),
         (
-            "Signs in to a hosted server: in the browser where it speaks OAuth, else with a token asked for without echo",
-            "Se connecter à un serveur hébergé : dans le navigateur s’il parle OAuth, sinon avec un token demandé sans écho",
+            "Signs in to a hosted server: in the browser where it speaks OAuth, else with a token asked for without \
+             echo",
+            "Se connecter à un serveur hébergé : dans le navigateur s’il parle OAuth, sinon avec un token demandé \
+             sans écho",
         ),
         ("The server's name", "Le nom du serveur"),
         (
@@ -1489,11 +1511,13 @@ pub const TEXTS: Texts = Texts {
     mcp_no_server: "pas de serveur MCP {name} — /mcp les montre",
     mcp_error: "/mcp : {reason}",
     mcp_open: "{name} répond sans connexion",
-    mcp_registered_only: "{name} n’offre OAuth qu’aux clients enregistrés d’avance : un token à la place — ou le clientId de ton propre client comme \"oauth\" dans ~/.glut/mcp.json",
+    mcp_registered_only: "{name} n’offre OAuth qu’aux clients enregistrés d’avance : un token à la place — ou le \
+                          clientId de ton propre client comme \"oauth\" dans ~/.glut/mcp.json",
     mcp_sign_in_failed: "{name} : la connexion n’a pas abouti : {reason}",
     mcp_sign_in_at: "{name} se connecte sur {host} :\n{address}",
     mcp_browser_opened: "ouvert dans ton navigateur — Glut attend son retour",
-    mcp_paste_back: "ouvre-la dans un navigateur ; s’il finit sur une adresse qui ne charge pas (via SSH) : /mcp login {name} <address>",
+    mcp_paste_back: "ouvre-la dans un navigateur ; s’il finit sur une adresse qui ne charge pas (via SSH) : /mcp \
+                     login {name} <address>",
     mcp_signed_in: "{name} est connecté : {count} outils",
     mcp_wants_note: "{name} veut une connexion : /mcp login {name}",
     mcp_not_up: "le serveur MCP {name} n’a pas démarré : {reason}",
@@ -1504,7 +1528,8 @@ pub const TEXTS: Texts = Texts {
     mcp_out_revoked: "{name} déconnecté : révoqué au serveur et oublié ici",
     mcp_out_here: "{name} déconnecté : oublié ici (le serveur n’offre pas de révocation)",
     mcp_out_failed: "{name} déconnecté ici ; la révocation au serveur a échoué : {reason}",
-    mcp_usage: "/mcp montre les serveurs · /mcp login|logout <name> · /mcp add <name> <url> ou /mcp add <name> -- <command> · /mcp remove <name>",
+    mcp_usage: "/mcp montre les serveurs · /mcp login|logout <name> · /mcp add <name> <url> ou /mcp add <name> -- \
+                <command> · /mcp remove <name>",
     mcp_added: "{name} ajouté à ~/.glut/mcp.json",
     mcp_up: "{name} est connecté : {count} outils",
     mcp_not_owners: "{name} n’est pas dans ~/.glut/mcp.json : un serveur du projet se retire dans le projet",
@@ -1519,8 +1544,10 @@ pub const TEXTS: Texts = Texts {
     hint_opening: "⏎ ouvrir · Échap laisser",
     mcp_open_failed: "aucun navigateur n’a pu s’ouvrir — ouvre toi-même l’adresse ci-dessus",
     mcp_open_left: "ouvre toi-même l’adresse ci-dessus ; Glut attend son retour",
-    btw_usage: "/btw <question> pose une question en aparté — /btw <name> <question> interroge un agent en arrière-plan ou un autre pane ; le tour en cours continue sans être dérangé",
-    btw_wanted_tools: "il voulait vérifier quelque chose — une question en aparté n’exécute aucun outil ; pose-la comme un message",
+    btw_usage: "/btw <question> pose une question en aparté — /btw <name> <question> interroge un agent en \
+                arrière-plan ou un autre pane ; le tour en cours continue sans être dérangé",
+    btw_wanted_tools: "il voulait vérifier quelque chose — une question en aparté n’exécute aucun outil ; pose-la \
+                       comme un message",
     btw_failed: "la question en aparté a échoué : {reason}",
     btw_waiting: "réfléchit…",
     hint_btw: "Échap ferme la carte · PgPréc PgSuiv la font défiler",
@@ -1546,18 +1573,22 @@ pub const TEXTS: Texts = Texts {
     secrets_on: "clés cachées au modèle : activé",
     secrets_off: "clés cachées au modèle : désactivé — ce que répondent les outils part tel quel",
     secrets_off_now: "le masquage est désactivé — ce que répondent les outils part tel quel ; /secrets on",
-    secrets_none: "rien de masqué dans cette session pour l'instant — une clé dans une réponse d'outil s'affiche ‹secret n: …›",
+    secrets_none: "rien de masqué dans cette session pour l'instant — une clé dans une réponse d'outil s'affiche \
+                   ‹secret n: …›",
     secrets_heading: "masqué au modèle dans cette session — /secrets allow <n> [always] en laisse passer un :",
     secrets_row: "  {n}  {kind} · {chars} caractères · vu dans {seen}",
     secrets_usage: "/secrets · on|off · allow <n> [always] · add <name> <regex> · remove <name>",
     secrets_no_such: "pas de secret {n} dans cette session — /secrets les liste",
     secrets_allowed: "le secret {n} passe pour cette session",
-    secrets_allowed_always: "le secret {n} passe toujours (son empreinte gardée dans ~/.glut/secrets.json, jamais la valeur)",
+    secrets_allowed_always: "le secret {n} passe toujours (son empreinte gardée dans ~/.glut/secrets.json, jamais la \
+                             valeur)",
     secrets_next_read: "à partir de la prochaine lecture — le modèle l'apprend avec ton prochain message",
     secrets_bad_regex: "pas un motif utilisable par Glut : {reason}",
     secrets_added: "format {name} ajouté : masqué dès le prochain résultat",
     secrets_no_format: "aucun format à toi nommé {name}",
     secrets_removed: "format {name} retiré",
-    export_written_masked: "exporté vers {path} — les clés vues par Glut sont masquées ; ce que tu as tapé toi-même, ou une session plus ancienne, peut encore en contenir",
-    export_copied_masked: "session copiée en Markdown — les clés vues par Glut sont masquées ; ce que tu as tapé toi-même peut encore en contenir",
+    export_written_masked: "exporté vers {path} — les clés vues par Glut sont masquées ; ce que tu as tapé toi-même, \
+                            ou une session plus ancienne, peut encore en contenir",
+    export_copied_masked: "session copiée en Markdown — les clés vues par Glut sont masquées ; ce que tu as tapé \
+                           toi-même peut encore en contenir",
 };

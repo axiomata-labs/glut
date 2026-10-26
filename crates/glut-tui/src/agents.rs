@@ -183,13 +183,14 @@ fn stopped_why(answer: &str) -> Option<String> {
 
 /// The tab's rows at `width` for at most `room` rows (T69): a subagent that runs as a card — its task and state on
 /// the frame, glowing; what it does now inside; its model, calls, tokens and time below —, one that ended as a quiet
-/// line of how it ended and what it spent. `chosen` is marked; the list starts late enough for it to be seen.
+/// line of how it ended and what it spent. `chosen` is marked; the list starts late enough for it to be seen. Each
+/// line comes with its entry's place in `list`, for a click to find (T71).
 pub fn overview_lines(
     list: &[(Vec<usize>, &Agent)],
     chosen: Option<usize>,
     width: usize,
     room: usize,
-) -> Vec<Line<'static>> {
+) -> Vec<(usize, Line<'static>)> {
     let mut entries: Vec<Vec<Line<'static>>> = Vec::new();
     for (at, (path, agent)) in list.iter().enumerate() {
         // Deep nesting stops indenting where the panel would have no room left for the task.
@@ -276,15 +277,15 @@ pub fn overview_lines(
         _ => 0,
     };
     let mut lines = Vec::new();
-    for entry in entries.into_iter().skip(first) {
+    for (at, entry) in entries.into_iter().enumerate().skip(first) {
         if lines.len() + entry.len() > room {
             // Too little room for a whole card: the chosen one is still seen, as its frame's top row.
             if lines.is_empty() && room > 0 {
-                lines.extend(entry.into_iter().take(room));
+                lines.extend(entry.into_iter().take(room).map(|line| (at, line)));
             }
             break;
         }
-        lines.extend(entry);
+        lines.extend(entry.into_iter().map(|line| (at, line)));
     }
     lines
 }
@@ -528,7 +529,10 @@ mod tests {
         let list = overview(&stream);
         let tasks: Vec<&str> = list.iter().map(|(_, agent)| agent.task.as_str()).collect();
         assert_eq!(tasks, ["third", "second", "first"]);
-        let rows = overview_lines(&list, Some(2), 40, 100);
+        let rows = overview_lines(&list, Some(2), 40, 100)
+            .into_iter()
+            .map(|(_, line)| line)
+            .collect::<Vec<_>>();
         let text: Vec<String> = rows.iter().map(ToString::to_string).collect();
         // The running one is a card of three rows, an ended one a single line.
         assert_eq!(text.len(), 3 + 1 + 1, "{text:?}");
@@ -545,10 +549,16 @@ mod tests {
             "the card fills the width: {text:?}"
         );
         // Little room: the chosen one is still shown.
-        let rows = overview_lines(&list, Some(2), 40, 1);
+        let rows = overview_lines(&list, Some(2), 40, 1)
+            .into_iter()
+            .map(|(_, line)| line)
+            .collect::<Vec<_>>();
         assert!(rows[0].to_string().contains("first"), "{rows:?}");
         // A running card chosen with less room than it needs shows its top row.
-        let rows = overview_lines(&list, Some(0), 40, 1);
+        let rows = overview_lines(&list, Some(0), 40, 1)
+            .into_iter()
+            .map(|(_, line)| line)
+            .collect::<Vec<_>>();
         assert_eq!(rows.len(), 1);
         assert!(rows[0].to_string().starts_with("╭─ ⬡ third"), "{rows:?}");
     }

@@ -165,11 +165,13 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "notify",
-            "ウィンドウが前面にないとき、ターンの終了や確認待ちを知らせる: on、確認待ちのみ（asks）、off、macOS 経由（system）; /notify after <s>; /notify tiles on|off",
+            "ウィンドウが前面にないとき、ターンの終了や確認待ちを知らせる: on、確認待ちのみ（asks）、off、macOS 経由（system）; /notify after <s>; /notify tiles \
+             on|off",
         ),
         (
             "secrets",
-            "このセッションでモデルから隠したキー; /secrets allow <n> [always] で一つ通す、/secrets add <name> <regex> で自分の形式を隠す、/secrets remove <name>、/secrets on|off",
+            "このセッションでモデルから隠したキー; /secrets allow <n> [always] で一つ通す、/secrets add <name> <regex> で自分の形式を隠す、/secrets \
+             remove <name>、/secrets on|off",
         ),
         (
             "motion",
@@ -256,9 +258,14 @@ pub const TEXTS: Texts = Texts {
         ("⇧⏎", "改行（⌥⏎ も可）"),
         ("⌃X E", "入力をエディターで編集"),
         ("⌃A ⌃E", "行頭、行末（Home End も可）"),
-        ("⌥B ⌥F", "一語左、一語右（⌥← ⌥→ も可）"),
-        ("⌃W", "前の語を削除（⌥⌫ も可）"),
+        ("⌥B ⌥F", "一語左、一語右（⌥← ⌥→ ⌃← ⌃→ も可）"),
+        (
+            "⇧← ⇧→",
+            "左・右へ 1 文字選択 — ⇧Home ⇧End で入力の先頭・末尾まで。⌫ で選択を削除、入力で置き換え",
+        ),
+        ("⌃W", "前の語を削除（⌥⌫ ⌃⌫ も可）"),
         ("⌃U", "行頭まで削除"),
+        ("⌦", "カーソルの後ろの 1 文字を削除"),
         ("⌃J", "改行"),
         ("⌃D", "Glut が休んでいるとき空行で終了"),
         ("⌃K", "このキー一覧"),
@@ -316,6 +323,8 @@ pub const TEXTS: Texts = Texts {
     hint_working: "Glut が作業中 · ⏎ で軌道修正 · ⇥ で後に回す · ⌥↑ で取り戻す · ⎋ で止める",
     hint_usual: "⏎ 送信 · ⇧⏎ 改行 · ⇧⇥ モード · ⌃K キー · @ ファイル · !cmd · ⌃F 検索 · ⌃C 終了",
     hint_other_asks: "確認待ち — ⌃P で答える",
+    hint_chord: "⌃X の次に: 2 分割 · 0 閉じる · { } 幅 · H 隠す · B バックグラウンド · A エージェント · E エディタ · ↑ 読む · ⇥ パネル",
+    chord_unknown: "⌃X {key} は何もしません — ⌃K でキー一覧",
     in_background: "バックグラウンド",
     background_keys: "/peek <name> で読む · /show <name> で前に出す · /send <name> …",
     no_subagent: "まだサブエージェントはいません。Glut が作業の一部を任せると、ここに表示されます: 今していること、呼び出し、Token。",
@@ -947,7 +956,8 @@ pub const TEXTS: Texts = Texts {
     setup_provider_prompt: "プロバイダー:",
     cli: &[
         (
-            "Send what the tools answer as it is, without hiding the keys in it (T58; `\"mask\": false` in ~/.glut/secrets.json, which `/secrets off` writes)",
+            "Send what the tools answer as it is, without hiding the keys in it (T58; `\"mask\": false` in \
+             ~/.glut/secrets.json, which `/secrets off` writes)",
             "ツールの応答をそのまま送り、キーを隠さない（T58; ~/.glut/secrets.json の `\"mask\": false`、`/secrets off` が書き込みます）",
         ),
         (
@@ -955,11 +965,13 @@ pub const TEXTS: Texts = Texts {
             "MCP サーバー: ~/.glut/mcp.json とプロジェクトの .mcp.json、ホスト型へのサインインとサインアウト",
         ),
         (
-            "The MCP servers of ~/.glut/mcp.json and the folder's .mcp.json, and what each one is signed in with (never the token)",
+            "The MCP servers of ~/.glut/mcp.json and the folder's .mcp.json, and what each one is signed in with \
+             (never the token)",
             "~/.glut/mcp.json とフォルダーの .mcp.json の MCP サーバーと、それぞれのサインイン方法（Token は表示しない）",
         ),
         (
-            "Signs in to a hosted server: in the browser where it speaks OAuth, else with a token asked for without echo",
+            "Signs in to a hosted server: in the browser where it speaks OAuth, else with a token asked for without \
+             echo",
             "ホスト型サーバーにサインイン: OAuth ならブラウザーで、そうでなければエコーなしで Token を尋ねる",
         ),
         ("The server's name", "サーバーの名前"),
@@ -1383,7 +1395,8 @@ pub const TEXTS: Texts = Texts {
     mcp_no_server: "MCP サーバー {name} はありません — /mcp で一覧できます",
     mcp_error: "/mcp: {reason}",
     mcp_open: "{name} はサインインなしで応答します",
-    mcp_registered_only: "{name} は事前登録したクライアントにしか OAuth を提供しません: 代わりに Token を — または ~/.glut/mcp.json に \"oauth\" として自分のクライアントの clientId を",
+    mcp_registered_only: "{name} は事前登録したクライアントにしか OAuth を提供しません: 代わりに Token を — または ~/.glut/mcp.json に \"oauth\" \
+                          として自分のクライアントの clientId を",
     mcp_sign_in_failed: "{name}: サインインに失敗しました: {reason}",
     mcp_sign_in_at: "{name} は {host} でサインインします:\n{address}",
     mcp_browser_opened: "ブラウザーで開きました — Glut は戻ってくるのを待っています",
@@ -1398,7 +1411,8 @@ pub const TEXTS: Texts = Texts {
     mcp_out_revoked: "{name} からサインアウト: サーバーで取り消し、ここで削除しました",
     mcp_out_here: "{name} からサインアウト: ここで削除しました（サーバーは取り消しを提供していません）",
     mcp_out_failed: "{name} からここでサインアウトしました。サーバーでの取り消しは失敗: {reason}",
-    mcp_usage: "/mcp でサーバー一覧 · /mcp login|logout <name> · /mcp add <name> <url> または /mcp add <name> -- <command> · /mcp remove <name>",
+    mcp_usage: "/mcp でサーバー一覧 · /mcp login|logout <name> · /mcp add <name> <url> または /mcp add <name> -- <command> · \
+                /mcp remove <name>",
     mcp_added: "{name} を ~/.glut/mcp.json に追加しました",
     mcp_up: "{name} に接続しました: ツール {count} 個",
     mcp_not_owners: "{name} は ~/.glut/mcp.json にありません: プロジェクトのサーバーはプロジェクトで削除します",

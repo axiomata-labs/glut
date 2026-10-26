@@ -129,7 +129,8 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "secrets",
-            "本会话中对模型隐藏的密钥；/secrets allow <n> [always] 放行一个，/secrets add <name> <regex> 隐藏你自己的格式，/secrets remove <name>，/secrets on|off",
+            "本会话中对模型隐藏的密钥；/secrets allow <n> [always] 放行一个，/secrets add <name> <regex> 隐藏你自己的格式，/secrets remove \
+             <name>，/secrets on|off",
         ),
         (
             "motion",
@@ -201,9 +202,14 @@ pub const TEXTS: Texts = Texts {
         ("⇧⏎", "换行（⌥⏎ 亦可）"),
         ("⌃X E", "在你的编辑器中编辑输入"),
         ("⌃A ⌃E", "行首、行尾（Home End 亦可）"),
-        ("⌥B ⌥F", "左移一个词、右移一个词（⌥← ⌥→ 亦可）"),
-        ("⌃W", "删除前一个词（⌥⌫ 亦可）"),
+        ("⌥B ⌥F", "左移一个词、右移一个词（⌥← ⌥→ ⌃← ⌃→ 亦可）"),
+        (
+            "⇧← ⇧→",
+            "向左、向右选择一个字符 — ⇧Home ⇧End 选到输入的开头、结尾；⌫ 删除所选，输入则替换",
+        ),
+        ("⌃W", "删除前一个词（⌥⌫ ⌃⌫ 亦可）"),
         ("⌃U", "删除到行首"),
+        ("⌦", "删除光标后的字符"),
         ("⌃J", "换行"),
         ("⌃D", "在 Glut 空闲时于空行上退出"),
         ("⌃K", "这张按键表"),
@@ -260,6 +266,8 @@ pub const TEXTS: Texts = Texts {
     hint_working: "Glut 工作中 · ⏎ 引导 · ⇥ 排队稍后发送 · ⌥↑ 取回 · ⎋ 停止",
     hint_usual: "⏎ 发送 · ⇧⏎ 换行 · ⇧⇥ 模式 · ⌃K 按键 · @ 文件 · !cmd · ⌃F 搜索 · ⌃C 退出",
     hint_other_asks: "在询问 — ⌃P 回答",
+    hint_chord: "⌃X 之后：2 分屏 · 0 关闭 · { } 宽度 · H 隐藏 · B 后台 · A 代理 · E 编辑器 · ↑ 阅读 · ⇥ 侧栏",
+    chord_unknown: "⌃X {key} 没有作用 — ⌃K 列出按键",
     in_background: "后台",
     background_keys: "/peek <name> 阅读其一 · /show <name> 调到前台 · /send <name> …",
     no_subagent: "还没有子代理。当 Glut 把一部分工作交给子代理时，它会显示在这里：正在做什么、调用次数和 token。",
@@ -890,7 +898,8 @@ pub const TEXTS: Texts = Texts {
     setup_provider_prompt: "提供商：",
     cli: &[
         (
-            "Send what the tools answer as it is, without hiding the keys in it (T58; `\"mask\": false` in ~/.glut/secrets.json, which `/secrets off` writes)",
+            "Send what the tools answer as it is, without hiding the keys in it (T58; `\"mask\": false` in \
+             ~/.glut/secrets.json, which `/secrets off` writes)",
             "按原样发送工具的回答，不隐藏其中的密钥（T58；即 ~/.glut/secrets.json 中的 `\"mask\": false`，由 `/secrets off` 写入）",
         ),
         (
@@ -898,11 +907,13 @@ pub const TEXTS: Texts = Texts {
             "MCP 服务器：~/.glut/mcp.json 和项目的 .mcp.json，登录和退出托管的服务器",
         ),
         (
-            "The MCP servers of ~/.glut/mcp.json and the folder's .mcp.json, and what each one is signed in with (never the token)",
+            "The MCP servers of ~/.glut/mcp.json and the folder's .mcp.json, and what each one is signed in with \
+             (never the token)",
             "~/.glut/mcp.json 和文件夹的 .mcp.json 中的 MCP 服务器，以及各自的登录方式（从不显示 token）",
         ),
         (
-            "Signs in to a hosted server: in the browser where it speaks OAuth, else with a token asked for without echo",
+            "Signs in to a hosted server: in the browser where it speaks OAuth, else with a token asked for without \
+             echo",
             "登录托管的服务器：支持 OAuth 时在浏览器中，否则以不回显的方式询问 token",
         ),
         ("The server's name", "服务器的名称"),
@@ -1331,7 +1342,8 @@ pub const TEXTS: Texts = Texts {
     mcp_out_revoked: "{name} 已退出：已在服务器撤销并在此处删除",
     mcp_out_here: "{name} 已退出：已在此处删除（服务器不提供撤销）",
     mcp_out_failed: "{name} 已在此处退出；服务器撤销失败：{reason}",
-    mcp_usage: "/mcp 列出服务器 · /mcp login|logout <name> · /mcp add <name> <url> 或 /mcp add <name> -- <command> · /mcp remove <name>",
+    mcp_usage: "/mcp 列出服务器 · /mcp login|logout <name> · /mcp add <name> <url> 或 /mcp add <name> -- <command> · /mcp \
+                remove <name>",
     mcp_added: "已将 {name} 添加到 ~/.glut/mcp.json",
     mcp_up: "{name} 已连接：{count} 个工具",
     mcp_not_owners: "{name} 不在 ~/.glut/mcp.json 中：项目的服务器由项目移除",

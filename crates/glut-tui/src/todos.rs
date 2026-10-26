@@ -237,19 +237,21 @@ impl Todos {
     }
 
     /// The tab's rows in `width` columns, at most `room` of them: the chosen one in view, marked while the list has the
-    /// keys.
-    pub fn lines(&self, width: usize, room: usize) -> Vec<Line<'static>> {
-        let mut blocks: Vec<(bool, Vec<Line<'static>>)> = Vec::new();
+    /// keys. Each line comes with the pick it shows (what ↑↓ would choose), `None` for a heading, a text or the scroll
+    /// note — for a click to find (T71).
+    pub fn lines(&self, width: usize, room: usize) -> Vec<(Option<usize>, Line<'static>)> {
+        let mut blocks: Vec<(bool, Option<usize>, Vec<Line<'static>>)> = Vec::new();
         let mut pick = 0;
         for row in self.rows() {
             let picked = matches!(row, Row::Item(_) | Row::Done { .. });
             let chosen = picked && self.keys && pick == self.chosen;
+            let owner = picked.then_some(pick);
             if picked {
                 pick += 1;
             }
-            blocks.push((chosen, self.row_lines(&row, chosen, width)));
+            blocks.push((chosen, owner, self.row_lines(&row, chosen, width)));
         }
-        let total: usize = blocks.iter().map(|(_, lines)| lines.len()).sum();
+        let total: usize = blocks.iter().map(|(_, _, lines)| lines.len()).sum();
         let mut skip = 0;
         // A list longer than the room says so on its last row.
         let room = if total > room {
@@ -260,7 +262,7 @@ impl Todos {
         if total > room {
             // The chosen row's last line ends the view when it would fall below it.
             let mut end = 0;
-            for (chosen, lines) in &blocks {
+            for (chosen, _, lines) in &blocks {
                 end += lines.len();
                 if *chosen {
                     break;
@@ -271,9 +273,9 @@ impl Todos {
                 skip = 0;
             }
         }
-        let mut shown: Vec<Line<'static>> = blocks
+        let mut shown: Vec<(Option<usize>, Line<'static>)> = blocks
             .into_iter()
-            .flat_map(|(_, lines)| lines)
+            .flat_map(|(_, owner, lines)| lines.into_iter().map(move |line| (owner, line)))
             .skip(skip)
             .take(room)
             .collect();
@@ -284,7 +286,7 @@ impl Todos {
                 (_, 0) => format!(" {}", tr!(rows_above, above = skip)),
                 _ => format!(" {}", tr!(rows_around, above = skip, below = below)),
             };
-            shown.push(Line::from(Span::styled(text, theme::quiet())));
+            shown.push((None, Line::from(Span::styled(text, theme::quiet()))));
         }
         shown
     }
