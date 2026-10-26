@@ -347,6 +347,12 @@ pub enum Request {
     Hide,
     /// The panes kept at the last end, back as they stood (TUI9e, offered by `glut -c`).
     Restore,
+    /// A loop in a background agent of its own (T60a).
+    LoopStart(crate::looping::Asked),
+    /// That loop ended, or the only one (`/loop stop`).
+    LoopStop(Option<String>),
+    /// The loops running listed (`/loop`).
+    LoopList,
     /// A background agent's stream shown over the asking pane, only to read; `None` closes it.
     Peek(Option<String>),
     /// A background agent ended where it is, its turn stopped (`/close <name>`).
@@ -539,6 +545,8 @@ pub struct Pane {
     pub area: Rect,
     /// The worktree it works in, made when it opened; `None` in the repository's own folder.
     pub tree: Option<crate::worktree::Tree>,
+    /// The loop its agent runs (T60a).
+    pub looping: Option<crate::looping::Loop>,
 }
 
 /// A pane whose session is still being built.
@@ -552,6 +560,8 @@ struct Building {
     background: Option<String>,
     /// The kept session it goes on with (TUI9e), by its id.
     restore: Option<String>,
+    /// The loop it runs (T60a), with the folders beside the working one of the pane that started it.
+    looping: Option<(crate::looping::Asked, Vec<glut::folders::Folder>)>,
     reports: mpsc::UnboundedSender<Report>,
 }
 
@@ -678,6 +688,7 @@ impl Panes {
             switch_to: None,
             links: Vec::new(),
             list: vec![Pane {
+                looping: None,
                 id: 1,
                 number: 1,
                 name: None,
@@ -874,6 +885,14 @@ impl Panes {
                     cost: app.cost,
                     cache,
                     working: app.working_since.map(|since| since.elapsed()),
+                    looping: pane.looping.as_ref().map(|looping| {
+                        format!(
+                            "↻ {} {}/{}",
+                            crate::looping::shown(looping.asked.every),
+                            looping.rounds,
+                            looping.limits.rounds
+                        )
+                    }),
                 }
             })
             .collect();
@@ -923,6 +942,20 @@ impl Panes {
         };
         let occasion = self.occasion(at, &report);
         let tile = Tiled::of(&report);
+        // How a loop's round ended is the loop's to judge once its agent rests (T60a).
+        if let Some(looping) = &mut self.list[at].looping {
+            match &report {
+                Report::Done(outcome, _) => {
+                    looping.last =
+                        Some((outcome.reason, outcome.answer.clone().unwrap_or_default()));
+                }
+                // The host refused the turn before it began: a round that cannot run.
+                Report::Refused { reason, .. } => {
+                    looping.last = Some((glut::FinishReason::Refused, reason.clone()));
+                }
+                _ => {}
+            }
+        }
         self.list[at].app.on_report(report);
         if let Some((occasion, ran)) = occasion {
             self.notice(at, &occasion, ran);
@@ -944,6 +977,14 @@ impl Panes {
     fn tile(&mut self, at: usize, tiled: Tiled) {
         use crate::tiles::{Goes, Stand, Tile};
         let pane = &self.list[at];
+        // A loop's round that ended is told only when the owner asked for it (T60a): its end is the loop's.
+        let quiet_loop = pane
+            .looping
+            .as_ref()
+            .is_some_and(|looping| !looping.asked.notify);
+        if quiet_loop && matches!(tiled, Tiled::Ended { .. }) {
+            return;
+        }
         let who = self.shown_label(at);
         let goes = match (&pane.name, pane.background) {
             (Some(name), true) => Goes::Behind {
@@ -1028,8 +1069,12 @@ impl Panes {
     fn notice(&mut self, at: usize, occasion: &crate::notify::Occasion, ran: Duration) {
         use glut::permissions::settings::NotifyWhen;
         let choice = crate::notify::choice();
-        // A queued message started the next turn: the work is not done.
-        if !occasion.is_ask() && self.list[at].app.working() {
+        // A queued message started the next turn: the work is not done. A loop's round is told as its tile is.
+        let quiet_loop = self.list[at]
+            .looping
+            .as_ref()
+            .is_some_and(|looping| !looping.asked.notify);
+        if !occasion.is_ask() && (self.list[at].app.working() || quiet_loop) {
             return;
         }
         let who = (self.list.len() > 1).then(|| {
@@ -1235,6 +1280,7 @@ impl Panes {
         if self.restoring.is_some() && self.building.is_none() {
             self.restore_step(host);
         }
+        self.step_loops(Instant::now());
         // One at a time: a close changes the list the next is looked for in.
         while let Some(at) = self
             .list
@@ -1323,6 +1369,9 @@ impl Panes {
                 Request::Peek(None) => self.close_peek(),
                 Request::End(name) => self.end_background(&name),
                 Request::Restore => self.restore(),
+                Request::LoopStart(asked) => self.start_loop(asked, host),
+                Request::LoopStop(name) => self.stop_loop(name.as_deref()),
+                Request::LoopList => self.list_loops(),
                 Request::Switch(to) => self.switch(to),
                 Request::SwitchNow(to) => self.switch_to = Some(to),
                 Request::Peek(Some(name)) => match self.resolve_background(&name) {
@@ -1504,16 +1553,18 @@ impl Panes {
     /// Starts a new pane beside the active one: a session in the same folder, on the active pane's provider and
     /// model, in build — built beside the screen.
     fn start(&mut self, resume: bool, place: Place, role: Option<String>, host: &Arc<dyn Host>) {
-        self.start_as(resume, place, role, None, host);
+        self.start_as(resume, place, role, None, None, host);
     }
 
-    /// [`Self::start`], or — with `background` a name — an agent in the background (T36e).
+    /// [`Self::start`], or — with `background` a name — an agent in the background (T36e), running `looping`
+    /// (T60a).
     fn start_as(
         &mut self,
         resume: bool,
         place: Place,
         role: Option<String>,
         background: Option<String>,
+        looping: Option<crate::looping::Asked>,
         host: &Arc<dyn Host>,
     ) {
         if !self.may_split {
@@ -1593,6 +1644,12 @@ impl Panes {
         if let Some(tree) = &tree {
             launch.cwd = tree.place.clone();
         }
+        // A loop does what its pane could, never more (T60a): the pane's mode, the "always" said there, its folders.
+        let looping = looping.map(|asked| {
+            launch.gate.mode = Some(app.mode());
+            launch.gate.allow = app.sender().granted;
+            (asked, app.parts.tools.folders().list())
+        });
         app.tell(format!("pane {number} starts…"));
         let (reports, inlet) = mpsc::unbounded_channel();
         forward(id, inlet, self.reports.clone());
@@ -1605,6 +1662,7 @@ impl Panes {
             background,
             restore: self.restore_next.take(),
             reports: reports.clone(),
+            looping,
         });
         let built = self.built.clone();
         let host = Arc::clone(host);
@@ -1671,7 +1729,32 @@ impl Panes {
         // A background agent stands in no split: it waits for its first message, reached by its name.
         if let Some(name) = building.background {
             app.panel = Some(false);
+            let looping = building.looping.map(|(asked, folders)| {
+                // Checked when the owner gave them; the pane's tools check each again as they reach it.
+                for folder in folders {
+                    let _ = app.parts.tools.folders().add(folder);
+                }
+                let limits = app.loop_limits();
+                crate::looping::Loop::new(asked, limits, Arc::clone(&app.parts.loop_link))
+            });
+            let said = match &looping {
+                Some(looping) => tr!(
+                    loop_starts,
+                    name = name,
+                    every = crate::looping::shown(looping.asked.every),
+                    task =
+                        crate::transcript::clean(&crate::transcript::cut(&looping.asked.task, 80))
+                ),
+                None => tr!(background_waits, name = name),
+            };
+            // Without prices only the rounds end it: said, not found out.
+            let said = if looping.is_some() && app.engine.prices.is_none() {
+                tr!(clause_join, first = said, second = tr!(loop_uncounted))
+            } else {
+                said
+            };
             self.list.push(Pane {
+                looping,
                 id: building.id,
                 number: building.number,
                 name: Some(name.clone()),
@@ -1681,7 +1764,7 @@ impl Panes {
                 tree: building.tree,
             });
             self.reorder();
-            return self.active().tell(tr!(background_waits, name = name));
+            return self.active().tell(said);
         }
         // Panes leave little room beside them: the side panel starts hidden (⌃B brings it, where there is room).
         app.panel = Some(false);
@@ -1692,6 +1775,7 @@ impl Panes {
         let active_id = self.list[self.active].id;
         self.grid.others.push(building.id);
         self.list.push(Pane {
+            looping: None,
             id: building.id,
             number: building.number,
             name: None,
@@ -1901,7 +1985,7 @@ impl Panes {
             }
         };
         self.restore_next = Some(kept.session);
-        self.start_as(false, place, kept.role, kept.agent, host);
+        self.start_as(false, place, kept.role, kept.agent, None, host);
         // A pane that could not start leaves no building: its kept place stays empty.
         self.restore_next = None;
         if self.building.is_some()
@@ -1976,21 +2060,209 @@ impl Panes {
             .or_else(|| role.clone())
             .filter(|base| is_name(base))
             .unwrap_or_else(|| "agent".to_owned());
+        let name = self.free_name(base);
+        self.start_as(false, place, role, Some(name), None, host);
+    }
+
+    /// `base`, or `base-2`, `base-3`, … where a pane or an agent is named so or plays a role of that name.
+    fn free_name(&self, base: String) -> String {
         let taken = |candidate: &str| {
             self.list.iter().any(|pane| {
                 pane.name.as_deref() == Some(candidate)
                     || pane.app.role.as_deref() == Some(candidate)
             })
         };
-        let name = if taken(&base) {
+        if taken(&base) {
             (2..)
                 .map(|n| format!("{base}-{n}"))
                 .find(|candidate| !taken(candidate))
                 .unwrap_or(base)
         } else {
             base
+        }
+    }
+
+    /// `/loop <interval> … <task>` (T60a): a background agent of its own runs the task, its first round at once —
+    /// named `loop` or after its role.
+    fn start_loop(&mut self, asked: crate::looping::Asked, host: &Arc<dyn Host>) {
+        // Loops spend unattended: their own cap, whatever the owner said yes to for `/bg`.
+        let background = self.list.iter().filter(|pane| pane.background).count();
+        let loops = self
+            .list
+            .iter()
+            .filter(|pane| pane.looping.is_some())
+            .count();
+        if (background >= BACKGROUND_ASKED && !self.background_sure) || loops >= BACKGROUND_ASKED {
+            return self
+                .active()
+                .tell(tr!(loop_too_many, n = background.max(loops)));
+        }
+        // A role narrows: a loop of a pane that plays one plays it too, never another.
+        let role = match (asked.role.clone(), self.active().role.clone()) {
+            (Some(theirs), Some(ours)) if theirs != ours => {
+                return self.active().tell(tr!(loop_role_kept, role = ours));
+            }
+            (theirs, ours) => theirs.or(ours),
         };
-        self.start_as(false, place, role, Some(name), host);
+        let base = role
+            .clone()
+            .filter(|role| is_name(role))
+            .unwrap_or_else(|| "loop".to_owned());
+        let name = self.free_name(base);
+        self.start_as(false, Place::Here, role, Some(name), Some(asked), host);
+    }
+
+    /// The loops' rounds (T60a): a round is over once its agent rests again — the next one set from its end, or the
+    /// loop ended — and a round due starts where its agent is free.
+    fn step_loops(&mut self, now: Instant) {
+        let mut ended = Vec::new();
+        for (at, pane) in self.list.iter_mut().enumerate() {
+            let Some(looping) = &mut pane.looping else {
+                continue;
+            };
+            let app = &mut pane.app;
+            if app.working() || app.waits_for_owner() || app.picker.is_some() {
+                continue;
+            }
+            if looping.running() {
+                if let Some(why) = looping.round_ended(app.cost, now) {
+                    ended.push((at, why));
+                }
+            } else if looping.next.is_some_and(|next| next <= now) {
+                let (task, fresh) = (looping.asked.task.clone(), looping.asked.fresh);
+                // A fresh round's new conversation counts its cost from nothing.
+                app.loop_round(&task, fresh && looping.rounds > 0);
+                // A task that starts nothing (a skill not there, a list opened) would never fail on its own.
+                if !app.working() {
+                    app.picker = None;
+                    ended.push((
+                        at,
+                        crate::looping::Ended::Failed(tr!(loop_no_turn).to_owned()),
+                    ));
+                    continue;
+                }
+                looping.round_began(app.cost);
+            }
+        }
+        for (at, why) in ended {
+            self.end_loop(at, why);
+        }
+    }
+
+    /// When the next round of a loop is due: the screen wakes for it.
+    pub fn loop_due(&self) -> Option<Instant> {
+        // Only an agent free to start it: one busy is woken by the report or the key that frees it, and a time long
+        // past would wake the screen again and again meanwhile. One past for a free agent wakes it at once.
+        self.list
+            .iter()
+            .filter(|pane| {
+                let app = &pane.app;
+                !(app.working() || app.waits_for_owner() || app.picker.is_some())
+            })
+            .filter_map(|pane| pane.looping.as_ref()?.next)
+            .min()
+    }
+
+    /// The loop of the pane at `at` ends, why said where the owner sees it — a tile but for the owner's own stop; its
+    /// agent stays, resting, to be read or closed.
+    fn end_loop(&mut self, at: usize, why: crate::looping::Ended) {
+        use crate::tiles::{Goes, Stand, Tile};
+        let Some(looping) = self.list[at].looping.take() else {
+            return;
+        };
+        looping.link.stop();
+        self.list[at].app.stop_turn();
+        let pane = &self.list[at];
+        let name = pane.name.clone().unwrap_or_else(|| "loop".to_owned());
+        let goes = if pane.background {
+            Goes::Behind {
+                name: name.clone(),
+                asks: false,
+            }
+        } else {
+            Goes::Pane(pane.id)
+        };
+        let said = why.said();
+        // A round put back into the input (a refused turn) is no word of the owner's.
+        if self.list[at].app.input.text() == looping.asked.task {
+            self.list[at].app.input.take();
+        }
+        // `notify` told of the last round already; the owner's own stop needs no telling.
+        if why != crate::looping::Ended::Stopped && !looping.asked.notify {
+            let stand = if why.well() {
+                Stand::Done
+            } else {
+                Stand::Failed
+            };
+            let who = self.shown_label(at);
+            self.tiles.push(Tile::new(who, stand, &said, goes));
+            let ran = looping.began.elapsed();
+            let occasion = crate::notify::Occasion::Ended {
+                ran,
+                answered: why.well(),
+            };
+            let choice = crate::notify::choice();
+            if self.notifier.focused != Some(true)
+                && crate::notify::worth_a_message(choice, self.notifier.focused, &occasion, ran)
+            {
+                self.notifier.push(Some(name.clone()), &occasion);
+            }
+        }
+        let cost = looping
+            .spent
+            .map_or_else(|| "—".to_owned(), |spent| glut::lang::usd(spent, 2));
+        self.active().tell(tr!(
+            loop_ended,
+            name = name,
+            why = said,
+            rounds = looping.rounds,
+            cost = cost
+        ));
+    }
+
+    /// `/loop stop [name]`: that loop, or the only one.
+    fn stop_loop(&mut self, name: Option<&str>) {
+        let loops: Vec<usize> = (0..self.list.len())
+            .filter(|at| self.list[*at].looping.is_some())
+            .collect();
+        let at = match name {
+            Some(name) => loops
+                .iter()
+                .copied()
+                .find(|at| self.list[*at].name.as_deref() == Some(name)),
+            None if loops.is_empty() => return self.active().tell(tr!(loop_none)),
+            None if loops.len() == 1 => Some(loops[0]),
+            None => return self.active().tell(tr!(loop_which)),
+        };
+        match at {
+            Some(at) => self.end_loop(at, crate::looping::Ended::Stopped),
+            None => {
+                let name = crate::transcript::clean(name.unwrap_or_default());
+                self.active().tell(tr!(loop_unknown, name = name));
+            }
+        }
+    }
+
+    /// `/loop`: the loops running, each with its interval, its rounds, when the next one starts and its cost.
+    fn list_loops(&mut self) {
+        let now = Instant::now();
+        let lines: Vec<String> = self
+            .list
+            .iter()
+            .filter_map(|pane| {
+                let looping = pane.looping.as_ref()?;
+                Some(looping.line(pane.name.as_deref().unwrap_or("loop"), now))
+            })
+            .collect();
+        if lines.is_empty() {
+            return self.active().tell(tr!(loop_none));
+        }
+        let mut text = tr!(loops_heading).to_owned();
+        for line in lines {
+            text.push_str("\n  ");
+            text.push_str(&line);
+        }
+        self.active().tell(text);
     }
 
     /// `/show <name>`: a background agent brought forward as a pane, the last in the grid.
@@ -2531,6 +2803,7 @@ mod tests {
         let (mut panes, inlets) = Panes::new(first, reports, true, Servers::Owner);
         let (sender, _) = mpsc::unbounded_channel();
         panes.building = Some(Building {
+            looping: None,
             id: 2,
             number: 2,
             resume: false,
@@ -2550,6 +2823,7 @@ mod tests {
         let (mut panes, inlets) = Panes::new(first, reports, true, Servers::Owner);
         let (sender, _) = mpsc::unbounded_channel();
         panes.building = Some(Building {
+            looping: None,
             id: 2,
             number: 2,
             resume: false,
@@ -2593,6 +2867,7 @@ mod tests {
     fn add(panes: &mut Panes, number: u8) {
         let (sender, _) = mpsc::unbounded_channel();
         panes.building = Some(Building {
+            looping: None,
             id: u64::from(number),
             number,
             resume: false,
@@ -2986,6 +3261,7 @@ mod tests {
         press(&mut panes, KeyCode::Char('0'), KeyModifiers::NONE);
         let (sender, _) = mpsc::unbounded_channel();
         panes.building = Some(Building {
+            looping: None,
             id: 7,
             number: 2,
             resume: false,
@@ -3013,6 +3289,7 @@ mod tests {
         panes.active().input.insert_text("half a thought");
         let (sender, _) = mpsc::unbounded_channel();
         panes.building = Some(Building {
+            looping: None,
             id: 2,
             number: 2,
             resume: false,
@@ -3344,6 +3621,7 @@ mod tests {
         let (mut panes, _inlets) = Panes::new(first_app, first_reports, true, Servers::Owner);
         let (second_app, _second_reports) = gated(Mode::Auto);
         panes.list.push(Pane {
+            looping: None,
             id: 2,
             number: 2,
             name: None,
@@ -3385,6 +3663,7 @@ mod tests {
         parts.config.cwd = std::env::temp_dir().join("glut-tui-elsewhere");
         let (send, _reports) = mpsc::unbounded_channel();
         panes.list.push(Pane {
+            looping: None,
             id: 2,
             number: 2,
             name: None,
@@ -3470,6 +3749,7 @@ mod tests {
         let (mut panes, _inlets) = Panes::new(first, first_reports, true, Servers::Owner);
         let (second, _second_reports) = gated();
         panes.list.push(Pane {
+            looping: None,
             id: 2,
             number: 2,
             name: None,
@@ -3640,6 +3920,7 @@ mod tests {
         for n in 2..=BACKGROUND_ASKED {
             let (sender, _) = mpsc::unbounded_channel();
             panes.building = Some(Building {
+                looping: None,
                 id: 10 + n as u64,
                 number: 10 + n as u8,
                 resume: false,
@@ -3701,6 +3982,7 @@ mod tests {
         let (mut panes, _inlets) = with_background("critic");
         let (sender, _) = mpsc::unbounded_channel();
         panes.building = Some(Building {
+            looping: None,
             id: 3,
             number: 3,
             resume: false,
@@ -3749,6 +4031,212 @@ mod tests {
         assert_eq!(owners, 1);
     }
 
+    /// A screen whose second session runs the loop `/loop <rest>` asks for (T60a).
+    fn with_loop(rest: &str) -> (Panes, Inlets) {
+        let crate::looping::Command::Start(asked) = crate::looping::parse(rest).unwrap() else {
+            panic!("{rest} starts no loop")
+        };
+        let (first, reports) = app();
+        let (mut panes, inlets) = Panes::new(first, reports, true, Servers::Owner);
+        let (sender, _) = mpsc::unbounded_channel();
+        panes.building = Some(Building {
+            looping: Some((asked, Vec::new())),
+            id: 2,
+            number: 2,
+            resume: false,
+            tree: None,
+            role: None,
+            background: Some("loop".to_owned()),
+            restore: None,
+            reports: sender,
+        });
+        panes.on_built(Ok(session::for_tests()));
+        (panes, inlets)
+    }
+
+    fn notes(app: &App) -> Vec<String> {
+        app.transcript
+            .blocks
+            .iter()
+            .filter_map(|block| match &block.kind {
+                crate::transcript::Kind::Note { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn owners_words(app: &App) -> Vec<String> {
+        app.transcript
+            .blocks
+            .iter()
+            .filter_map(|block| match &block.kind {
+                crate::transcript::Kind::Owner(text) => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_loops_rounds_follow_each_other_from_their_end_and_a_failed_one_ends_it() {
+        let _serial = crate::tiles::serial();
+        let host = Arc::new(crate::Standalone) as Arc<dyn Host>;
+        let (mut panes, _inlets) = with_loop("1m run the tests");
+        let behind = panes.list[1].id;
+        assert!(panes.list[1].background && panes.list[1].app.parts.loop_link.on());
+        assert!(
+            notes(&panes.list[0].app)
+                .iter()
+                .any(|note| note.contains("loop") && note.contains("run the tests"))
+        );
+        // The first round starts at once, as the owner's words.
+        panes.settle(&host);
+        assert!(panes.list[1].looping.as_ref().unwrap().running());
+        assert!(panes.list[1].app.working());
+        assert_eq!(owners_words(&panes.list[1].app), ["run the tests"]);
+        assert_eq!(panes.loop_due(), None, "nothing due while a round runs");
+        // It ends answered: no tile, the next round a minute after its end.
+        panes.on_report(behind, ended(glut::FinishReason::Answered));
+        panes.settle(&host);
+        let looping = panes.list[1].looping.as_ref().unwrap();
+        assert_eq!(looping.rounds, 1);
+        assert!(!looping.running());
+        let due = panes.loop_due().unwrap();
+        assert!(due > Instant::now() + Duration::from_secs(55));
+        assert!(
+            panes.tiles.list.is_empty(),
+            "a quiet loop's round is no tile"
+        );
+        panes.sync();
+        assert_eq!(
+            panes.list[0].app.background[0].looping.as_deref(),
+            Some("↻ 1m 1/50")
+        );
+        // Not before its time; at it, the second round — the conversation goes on.
+        panes.step_loops(due - Duration::from_secs(1));
+        assert!(!panes.list[1].app.working());
+        panes.step_loops(due);
+        assert!(panes.list[1].app.working());
+        assert_eq!(owners_words(&panes.list[1].app).len(), 2);
+        // A round that fails ends the loop: a tile, a line, the agent stays resting and the tool goes.
+        panes.on_report(behind, ended(glut::FinishReason::Failed));
+        panes.settle(&host);
+        assert!(panes.list[1].looping.is_none() && !panes.list[1].app.parts.loop_link.on());
+        assert_eq!(panes.list.len(), 2);
+        assert_eq!(panes.tiles.list.len(), 1);
+        assert_eq!(panes.tiles.list[0].stand, crate::tiles::Stand::Failed);
+        assert!(
+            notes(&panes.list[0].app)
+                .iter()
+                .any(|note| note.contains("2"))
+        );
+        assert_eq!(panes.loop_due(), None);
+    }
+
+    #[tokio::test]
+    async fn a_loop_keeps_its_panes_role_fails_on_an_idle_task_and_never_spins() {
+        let _serial = crate::tiles::serial();
+        let host = Arc::new(crate::Standalone) as Arc<dyn Host>;
+        // A pane that plays a role starts loops of that role only.
+        let (first, reports) = app();
+        let (mut panes, _inlets) = Panes::new(first, reports, true, Servers::Owner);
+        panes.active().role = Some("reviewer".into());
+        let crate::looping::Command::Start(asked) =
+            crate::looping::parse("5m as engineer fix it").unwrap()
+        else {
+            panic!()
+        };
+        panes.active().pane_request = Some(Request::LoopStart(asked));
+        panes.settle(&host);
+        assert!(panes.building.is_none());
+        assert!(
+            notes(&panes.list[0].app)
+                .last()
+                .unwrap()
+                .contains("reviewer")
+        );
+        let crate::looping::Command::Start(asked) = crate::looping::parse("5m fix it").unwrap()
+        else {
+            panic!()
+        };
+        panes.active().pane_request = Some(Request::LoopStart(asked));
+        panes.settle(&host);
+        // Taken as the loop's role: the test's catalog has none of that name, so it is said there.
+        assert!(
+            notes(&panes.list[0].app)
+                .last()
+                .unwrap()
+                .contains("reviewer")
+        );
+
+        // A task that starts no turn ends the loop at once, failed.
+        let (mut panes, _inlets) = with_loop("1m /skill nosuch");
+        panes.settle(&host);
+        assert!(panes.list[1].looping.is_none());
+        assert_eq!(panes.tiles.list.len(), 1);
+        assert_eq!(panes.tiles.list[0].stand, crate::tiles::Stand::Failed);
+
+        // A round due while its agent is busy is no wake-up: the report that frees it is.
+        let (mut panes, _inlets) = with_loop("1m run the tests");
+        panes.list[1].app.working_for_tests();
+        panes.settle(&host);
+        assert!(panes.list[1].looping.as_ref().unwrap().next.is_some());
+        assert_eq!(panes.loop_due(), None);
+        // Free again with its time past, it is due at once.
+        let (mut panes, _inlets) = with_loop("1m run the tests");
+        panes.list[1].looping.as_mut().unwrap().next =
+            Some(Instant::now() - Duration::from_secs(5));
+        assert!(panes.loop_due().is_some_and(|due| due <= Instant::now()));
+    }
+
+    #[tokio::test]
+    async fn a_loop_is_listed_stopped_by_its_name_and_its_model_may_end_it() {
+        let _serial = crate::tiles::serial();
+        let host = Arc::new(crate::Standalone) as Arc<dyn Host>;
+        let (mut panes, _inlets) = with_loop("10m fresh notify check the build");
+        let behind = panes.list[1].id;
+        panes.settle(&host);
+        panes.active().pane_request = Some(Request::LoopList);
+        panes.settle(&host);
+        let listed = notes(&panes.list[0].app).last().cloned().unwrap();
+        assert!(
+            listed.contains("loop") && listed.contains("10m") && listed.contains("check the build"),
+            "{listed}"
+        );
+        // Its model says the goal is reached: the round ends, and the loop with it.
+        panes.list[1]
+            .app
+            .parts
+            .loop_link
+            .end_for_tests("the build is green");
+        let mut answered = ended(glut::FinishReason::Answered);
+        if let Report::Done(outcome, _) = &mut answered {
+            outcome.answer = Some("green".into());
+        }
+        panes.on_report(behind, answered);
+        assert_eq!(panes.tiles.list.len(), 1, "notify: the round's own tile");
+        panes.settle(&host);
+        assert!(panes.list[1].looping.is_none());
+        assert_eq!(
+            panes.tiles.list.len(),
+            1,
+            "notify told of the last round: no second tile"
+        );
+
+        // `/loop stop` with one loop running ends that one, a name another; the owner's stop is no tile.
+        let (mut panes, _inlets) = with_loop("10m check the build");
+        panes.settle(&host);
+        panes.active().pane_request = Some(Request::LoopStop(Some("nobody".into())));
+        panes.settle(&host);
+        assert!(panes.list[1].looping.is_some());
+        panes.active().pane_request = Some(Request::LoopStop(None));
+        panes.settle(&host);
+        assert!(panes.list[1].looping.is_none() && panes.list[1].app.stopping());
+        assert!(panes.tiles.list.is_empty());
+        panes.active().pane_request = Some(Request::LoopStop(None));
+        panes.settle(&host);
+        assert!(notes(&panes.list[0].app).last().unwrap().contains("/loop"));
+    }
+
     #[tokio::test]
     async fn a_background_agent_ends_by_its_name_and_the_keys_stay() {
         let host = Arc::new(crate::Standalone) as Arc<dyn Host>;
@@ -3770,6 +4258,7 @@ mod tests {
         let (mut panes, _inlets) = split();
         let (sender, _) = mpsc::unbounded_channel();
         panes.building = Some(Building {
+            looping: None,
             id: 3,
             number: 3,
             resume: false,
@@ -3808,6 +4297,7 @@ mod tests {
         panes.cwd = dir.clone();
         let (sender, _) = mpsc::unbounded_channel();
         panes.building = Some(Building {
+            looping: None,
             id: 3,
             number: 3,
             resume: false,
@@ -3819,6 +4309,7 @@ mod tests {
         });
         panes.on_built(Ok(session::for_tests()));
         panes.building = Some(Building {
+            looping: None,
             id: 4,
             number: 4,
             resume: false,
@@ -3850,6 +4341,7 @@ mod tests {
             let kept = back.restoring.as_ref().unwrap().layout.panes[at].clone();
             back.restoring.as_mut().unwrap().building = Some(at);
             back.building = Some(Building {
+                looping: None,
                 id: next_id,
                 number: u8::try_from(at + 1).unwrap(),
                 resume: false,

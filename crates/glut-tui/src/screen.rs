@@ -526,6 +526,10 @@ async fn run_loop(
         let notify_due = panes.notifier.due();
         let notify_at =
             tokio::time::Instant::from_std(notify_due.unwrap_or_else(std::time::Instant::now));
+        // A loop's next round starts at its time, whatever else moves (T60a).
+        let loop_due = panes.loop_due();
+        let loop_at =
+            tokio::time::Instant::from_std(loop_due.unwrap_or_else(std::time::Instant::now));
         tokio::select! {
             // A closed window or a kill ends the session cleanly: the turn stopped, the terminal given back.
             _ = terminate.recv() => panes.list.iter_mut().for_each(|pane| pane.app.abandon()),
@@ -563,6 +567,7 @@ async fn run_loop(
             }
             _ = second.tick(), if counting => {}
             _ = tokio::time::sleep_until(notify_at), if notify_due.is_some() => {}
+            _ = tokio::time::sleep_until(loop_at), if loop_due.is_some() => {}
         }
         // What a pane asked for — a split, a close, the other pane — once its key or command is through.
         panes.settle(host);

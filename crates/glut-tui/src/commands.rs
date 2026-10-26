@@ -97,7 +97,7 @@ const fn command(
 }
 
 /// Every command, grouped by topic in [`Topic::ALL`]'s order, the most used first inside a topic.
-pub const COMMANDS: [Command; 51] = [
+pub const COMMANDS: [Command; 52] = [
     command(Topic::Session, "clear", "", "start a new session"),
     command(
         Topic::Session,
@@ -266,6 +266,13 @@ pub const COMMANDS: [Command; 51] = [
         "peek",
         "<name>",
         "read a background agent's stream over this pane; Esc closes it",
+    ),
+    command(
+        Topic::Panes,
+        "loop",
+        "<interval> [fresh] [as <role>] [notify] <task>",
+        "run a task again and again in a background agent of its own, the interval counted from a round's end — /loop \
+         10m run the tests; /loop alone lists them, /loop stop [name] ends one, /loop rounds|budget set where one ends",
     ),
     command(
         Topic::Changes,
@@ -646,6 +653,13 @@ fn source(name: &str, before: &[&str]) -> Option<Source> {
         ("close" | "show" | "peek" | "btw" | "send", []) => Source::Agents,
         ("mcp", ["login" | "logout" | "remove"]) => Source::Servers,
         ("bg" | "split", [.., "as"]) => Source::Roles,
+        // Only among the loop's own words, before its task begins.
+        ("loop", [_, words @ .., "as"])
+            if words.iter().all(|word| matches!(*word, "fresh" | "notify")) =>
+        {
+            Source::Roles
+        }
+        ("loop", ["stop"]) => Source::Agents,
         _ => return None,
     })
 }
@@ -1091,6 +1105,7 @@ mod tests {
                 "clickable",
                 "copy",
                 "folded",
+                "fresh",
                 "full",
                 "here",
                 "html",
@@ -1100,6 +1115,7 @@ mod tests {
                 "logout",
                 "md",
                 "none",
+                "notify",
                 "off",
                 "on",
                 "open",

@@ -138,6 +138,12 @@ pub const TEXTS: Texts = Texts {
             "ler o fluxo de um agente em segundo plano sobre este pane; Esc fecha",
         ),
         (
+            "loop",
+            "executar uma tarefa repetidamente num agente em segundo plano próprio, o intervalo contado a partir do \
+             fim de uma rodada — /loop 10m roda os testes; /loop sozinho os lista, /loop stop [name] encerra um, /loop \
+             rounds|budget definem onde um termina",
+        ),
+        (
             "diff",
             "revisar o que o último turno mudou, hunk por hunk; /diff session (⌃R)",
         ),
@@ -1566,6 +1572,36 @@ pub const TEXTS: Texts = Texts {
     folder_overlaps: "{folder} está dentro de {other} ou o contém — um comando na externa poderia pôr um link no lugar \
                       da interna: adicione só uma",
     files_beside_not_restored: "uma pasta ao lado da de trabalho não voltou: {what}",
+    loop_usage: "/loop <interval> [fresh] [as <role>] [notify] <task> — o intervalo como 30s, 5m, 2h ou 1h30m · /loop \
+                 stop [name] · /loop rounds [n] · /loop budget [usd]",
+    loop_interval_bad: "\"{word}\" não é um intervalo: 30s, 5m, 2h ou 1h30m, de 10s a 24h — /loop <interval> <task>",
+    loop_command_refused: "um ciclo executa uma mensagem, /skill, /compact ou /init — não /{name}",
+    loop_rounds_bad: "/loop rounds aceita um número de 1 a {most}",
+    loop_budget_bad: "/loop budget aceita um valor em USD acima de 0 e até 1000, como 2.5",
+    loop_rounds_now: "um ciclo termina após {n} rodadas no máximo — /loop rounds <n> muda isso",
+    loop_rounds_set: "um ciclo iniciado a partir de agora termina após {n} rodadas no máximo",
+    loop_budget_now: "um ciclo termina assim que suas rodadas custaram {usd} juntas, contado onde os preços do modelo \
+                      são conhecidos — /loop budget <usd> muda isso",
+    loop_budget_set: "um ciclo iniciado a partir de agora termina assim que suas rodadas custaram {usd} juntas",
+    loop_starts: "o ciclo {name} começa: a cada {every} após o fim de uma rodada — {task} · /loop o lista, /show \
+                  {name} o traz à frente, /loop stop {name} o encerra",
+    loop_ended: "ciclo {name} encerrado: {why} — {rounds} rodadas, {cost}",
+    loop_why_goal: "seu objetivo foi alcançado ({reason})",
+    loop_why_stopped: "você o parou",
+    loop_why_failed: "uma rodada não terminou com resposta ({reason})",
+    loop_why_rounds: "{n} rodadas feitas",
+    loop_why_budget: "seu orçamento de {max} acabou",
+    loop_none: "nenhum ciclo em execução — /loop <interval> <task> inicia um",
+    loop_which: "vários ciclos em execução: /loop stop <name>",
+    loop_unknown: "nenhum ciclo {name} — /loop os lista",
+    loops_heading: "Ciclos:",
+    loop_line: "{name}: a cada {every}, {round} de {rounds} rodadas, {when}, {cost} — {task}",
+    loop_round_runs: "uma rodada em execução",
+    loop_next_in: "próxima em {time}",
+    loop_too_many: "{n} agentes já trabalham em segundo plano: feche um com /close antes de iniciar um ciclo",
+    loop_no_turn: "sua tarefa não iniciou nenhum turno",
+    loop_role_kept: "este pane faz o papel de {role}: um ciclo iniciado aqui também — /loop sem as",
+    loop_uncounted: "os preços do modelo são desconhecidos, então só o limite de rodadas o encerra",
     secrets_no_such: "nenhum segredo {n} nesta sessão — /secrets os lista",
     secrets_allowed: "o segredo {n} passa nesta sessão",
     secrets_allowed_always: "o segredo {n} passa sempre (sua impressão guardada em ~/.glut/secrets.json, nunca o \

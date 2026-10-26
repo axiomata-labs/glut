@@ -142,6 +142,12 @@ pub const TEXTS: Texts = Texts {
             "leggere il flusso di un agente in background sopra questo pane; Esc lo chiude",
         ),
         (
+            "loop",
+            "eseguire un compito più e più volte in un agente in background tutto suo, l'intervallo contato dalla fine \
+             di un giro — /loop 10m esegui i test; /loop da solo li elenca, /loop stop [name] ne ferma uno, /loop \
+             rounds|budget fissano dove finisce",
+        ),
+        (
             "diff",
             "rivedere cosa ha cambiato l’ultimo turno, hunk per hunk; /diff session (⌃R)",
         ),
@@ -1597,6 +1603,36 @@ pub const TEXTS: Texts = Texts {
     folder_overlaps: "{folder} sta dentro {other} o lo contiene — un comando in quella esterna potrebbe mettere un \
                       link al posto di quella interna: aggiungine solo una",
     files_beside_not_restored: "una cartella accanto a quella di lavoro non è tornata: {what}",
+    loop_usage: "/loop <interval> [fresh] [as <role>] [notify] <task> — l'intervallo come 30s, 5m, 2h o 1h30m · /loop \
+                 stop [name] · /loop rounds [n] · /loop budget [usd]",
+    loop_interval_bad: "«{word}» non è un intervallo: 30s, 5m, 2h o 1h30m, da 10s a 24h — /loop <interval> <task>",
+    loop_command_refused: "un ciclo esegue un messaggio, /skill, /compact o /init — non /{name}",
+    loop_rounds_bad: "/loop rounds prende un numero da 1 a {most}",
+    loop_budget_bad: "/loop budget prende un importo in USD sopra 0 e fino a 1000, come 2.5",
+    loop_rounds_now: "un ciclo finisce dopo al massimo {n} giri — /loop rounds <n> lo cambia",
+    loop_rounds_set: "un ciclo avviato d'ora in poi finisce dopo al massimo {n} giri",
+    loop_budget_now: "un ciclo finisce appena i suoi giri sono costati {usd} insieme, contato dove i prezzi del suo \
+                      modello sono noti — /loop budget <usd> lo cambia",
+    loop_budget_set: "un ciclo avviato d'ora in poi finisce appena i suoi giri sono costati {usd} insieme",
+    loop_starts: "il ciclo {name} parte: ogni {every} dopo la fine di un giro — {task} · /loop lo elenca, /show {name} \
+                  lo porta avanti, /loop stop {name} lo ferma",
+    loop_ended: "ciclo {name} finito: {why} — {rounds} giri, {cost}",
+    loop_why_goal: "il suo obiettivo è raggiunto ({reason})",
+    loop_why_stopped: "l'hai fermato tu",
+    loop_why_failed: "un giro non è finito con una risposta ({reason})",
+    loop_why_rounds: "{n} giri fatti",
+    loop_why_budget: "il suo budget di {max} è esaurito",
+    loop_none: "nessun ciclo in corso — /loop <interval> <task> ne avvia uno",
+    loop_which: "sono in corso più cicli: /loop stop <name>",
+    loop_unknown: "nessun ciclo {name} — /loop li elenca",
+    loops_heading: "Cicli:",
+    loop_line: "{name}: ogni {every}, {round} di {rounds} giri, {when}, {cost} — {task}",
+    loop_round_runs: "un giro è in corso",
+    loop_next_in: "prossimo tra {time}",
+    loop_too_many: "{n} agenti lavorano già in background: chiudine uno con /close prima di avviare un ciclo",
+    loop_no_turn: "il suo compito non ha avviato alcun turno",
+    loop_role_kept: "questo pane interpreta {role}: un ciclo avviato qui lo interpreta anche lui — /loop senza as",
+    loop_uncounted: "i prezzi del suo modello sono sconosciuti, quindi lo ferma solo il limite di giri",
     secrets_no_such: "nessun segreto {n} in questa sessione — /secrets li elenca",
     secrets_allowed: "il segreto {n} passa per questa sessione",
     secrets_allowed_always: "il segreto {n} passa sempre (la sua impronta in ~/.glut/secrets.json, mai il valore)",

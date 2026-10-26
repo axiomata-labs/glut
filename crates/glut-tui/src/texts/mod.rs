@@ -1602,6 +1602,60 @@ glut::catalog! {
         folder_overlaps: &'static str,
         /// After an undo: a folder beside the working one not put back, `{what}` which and why.
         files_beside_not_restored: &'static str,
+        /// How `/loop` is used.
+        loop_usage: &'static str,
+        /// `/loop` with `{word}` where its interval stands.
+        loop_interval_bad: &'static str,
+        /// A loop's task is a command a round may not run: `{name}`.
+        loop_command_refused: &'static str,
+        /// `/loop rounds` with no number from 1 to `{most}`.
+        loop_rounds_bad: &'static str,
+        /// `/loop budget` with no amount above 0.
+        loop_budget_bad: &'static str,
+        /// `/loop rounds` alone: `{n}` the most rounds now.
+        loop_rounds_now: &'static str,
+        /// `/loop rounds` kept `{n}`.
+        loop_rounds_set: &'static str,
+        /// `/loop budget` alone: `{usd}` the most a loop may cost now.
+        loop_budget_now: &'static str,
+        /// `/loop budget` kept `{usd}`.
+        loop_budget_set: &'static str,
+        /// A loop started: `{name}` its agent, `{every}` its interval, `{task}`.
+        loop_starts: &'static str,
+        /// A loop ended: `{name}`, `{why}`, `{rounds}` rounds run, `{cost}` what they cost.
+        loop_ended: &'static str,
+        /// Why a loop ended: its model said the goal is reached, `{reason}` why.
+        loop_why_goal: &'static str,
+        /// Why a loop ended: the owner stopped it.
+        loop_why_stopped: &'static str,
+        /// Why a loop ended: a round ended `{reason}`.
+        loop_why_failed: &'static str,
+        /// Why a loop ended: `{n}` rounds ran, its most.
+        loop_why_rounds: &'static str,
+        /// Why a loop ended: its budget `{max}` is spent.
+        loop_why_budget: &'static str,
+        /// `/loop` with no loop running.
+        loop_none: &'static str,
+        /// `/loop stop` alone while several loops run.
+        loop_which: &'static str,
+        /// `/loop stop` of `{name}`, which runs no loop.
+        loop_unknown: &'static str,
+        /// Above the list of the loops running.
+        loops_heading: &'static str,
+        /// One loop listed: `{name}`, `{every}`, `{round}` rounds run of `{rounds}`, `{when}`, `{cost}`, `{task}`.
+        loop_line: &'static str,
+        /// In a loop's line: a round runs now.
+        loop_round_runs: &'static str,
+        /// In a loop's line: the next round in `{time}`.
+        loop_next_in: &'static str,
+        /// `/loop` while `{n}` agents work in the background already.
+        loop_too_many: &'static str,
+        /// Why a loop ended: its task started no turn.
+        loop_no_turn: &'static str,
+        /// `/loop as` another role in a pane that plays `{role}`.
+        loop_role_kept: &'static str,
+        /// Added where a loop starts on a model without prices.
+        loop_uncounted: &'static str,
         /// `/secrets allow` with a number no value has: `{n}`.
         secrets_no_such: &'static str,
         /// Value `{n}` let through for this session.

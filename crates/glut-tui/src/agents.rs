@@ -376,6 +376,8 @@ pub struct Behind {
     pub cache: Option<bool>,
     /// How long it has worked without a rest.
     pub working: Option<std::time::Duration>,
+    /// The loop it runs (T60a): its interval and its rounds, `↻ 5m 3/50`.
+    pub looping: Option<String>,
 }
 
 /// A row of the Agents tab its keys may stand on (T34, T69): a background agent's card, by its name, or a subagent,
@@ -427,6 +429,9 @@ impl Behind {
             Doing::Rests => (tr!(agent_rests_state), theme::quiet()),
         };
         let mut stats = format!("{} · {}", self.role, self.model);
+        if let Some(looping) = &self.looping {
+            stats.push_str(&format!(" · {looping}"));
+        }
         if let Some(cost) = self.cost {
             stats.push_str(&format!(" · {}", glut::lang::usd(cost, 4)));
         }
@@ -574,6 +579,7 @@ mod tests {
             cost: Some(0.0123),
             cache: Some(true),
             working: Some(std::time::Duration::from_secs(134)),
+            looping: None,
         };
         let text: Vec<String> = behind
             .lines(48, false)

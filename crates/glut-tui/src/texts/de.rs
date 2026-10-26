@@ -141,6 +141,12 @@ pub const TEXTS: Texts = Texts {
             "den Stream eines Hintergrund-Agenten über diesem Pane lesen; Esc schließt ihn",
         ),
         (
+            "loop",
+            "eine Aufgabe immer wieder in einem eigenen Hintergrund-Agenten ausführen, das Intervall ab dem Ende einer \
+             Runde — /loop 10m führe die Tests aus; /loop allein listet sie, /loop stop [name] beendet eine, /loop \
+             rounds|budget legen fest, wo eine endet",
+        ),
+        (
             "diff",
             "prüfen, was der letzte Turn geändert hat, Hunk für Hunk; /diff session (⌃R)",
         ),
@@ -1595,6 +1601,36 @@ pub const TEXTS: Texts = Texts {
     folder_overlaps: "{folder} liegt in {other} oder enthält ihn — ein Befehl im äußeren könnte einen Link an die \
                       Stelle des inneren setzen: nimm nur einen",
     files_beside_not_restored: "ein Ordner neben dem Arbeitsordner ist nicht zurück: {what}",
+    loop_usage: "/loop <interval> [fresh] [as <role>] [notify] <task> — das Intervall als 30s, 5m, 2h oder 1h30m · \
+                 /loop stop [name] · /loop rounds [n] · /loop budget [usd]",
+    loop_interval_bad: "„{word}“ ist kein Intervall: 30s, 5m, 2h oder 1h30m, von 10s bis 24h — /loop <interval> <task>",
+    loop_command_refused: "eine Schleife führt eine Nachricht, /skill, /compact oder /init aus — nicht /{name}",
+    loop_rounds_bad: "/loop rounds nimmt eine Zahl von 1 bis {most}",
+    loop_budget_bad: "/loop budget nimmt einen Betrag in USD über 0 und bis 1000, etwa 2.5",
+    loop_rounds_now: "eine Schleife endet nach höchstens {n} Runden — /loop rounds <n> ändert das",
+    loop_rounds_set: "eine ab jetzt gestartete Schleife endet nach höchstens {n} Runden",
+    loop_budget_now: "eine Schleife endet, sobald ihre Runden zusammen {usd} gekostet haben, gezählt wo die Preise \
+                      ihres Modells bekannt sind — /loop budget <usd> ändert das",
+    loop_budget_set: "eine ab jetzt gestartete Schleife endet, sobald ihre Runden zusammen {usd} gekostet haben",
+    loop_starts: "Schleife {name} startet: alle {every} nach dem Ende einer Runde — {task} · /loop listet sie, /show \
+                  {name} holt sie nach vorn, /loop stop {name} beendet sie",
+    loop_ended: "Schleife {name} beendet: {why} — {rounds} Runden, {cost}",
+    loop_why_goal: "ihr Ziel ist erreicht ({reason})",
+    loop_why_stopped: "du hast sie gestoppt",
+    loop_why_failed: "eine Runde endete ohne Antwort ({reason})",
+    loop_why_rounds: "{n} Runden gelaufen",
+    loop_why_budget: "ihr Budget von {max} ist verbraucht",
+    loop_none: "keine Schleife läuft — /loop <interval> <task> startet eine",
+    loop_which: "mehrere Schleifen laufen: /loop stop <name>",
+    loop_unknown: "keine Schleife {name} — /loop listet sie",
+    loops_heading: "Schleifen:",
+    loop_line: "{name}: alle {every}, {round} von {rounds} Runden, {when}, {cost} — {task}",
+    loop_round_runs: "eine Runde läuft",
+    loop_next_in: "nächste in {time}",
+    loop_too_many: "{n} Agenten arbeiten schon im Hintergrund: schließe einen mit /close, bevor eine Schleife startet",
+    loop_no_turn: "ihre Aufgabe hat keinen Turn gestartet",
+    loop_role_kept: "dieses Pane spielt {role}: eine hier gestartete Schleife spielt sie auch — /loop ohne as",
+    loop_uncounted: "die Preise ihres Modells sind unbekannt, also beendet sie nur die Rundengrenze",
     secrets_no_such: "kein Geheimnis {n} in dieser Session — /secrets listet sie",
     secrets_allowed: "Geheimnis {n} geht für diese Session durch",
     secrets_allowed_always: "Geheimnis {n} geht immer durch (sein Fingerabdruck steht in ~/.glut/secrets.json, nie \
