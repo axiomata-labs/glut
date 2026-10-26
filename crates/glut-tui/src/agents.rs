@@ -2,6 +2,7 @@
 //! subagents open from it by number, Esc goes back one level.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
 use crate::theme;
@@ -168,6 +169,18 @@ pub fn overview(stream: &crate::transcript::Transcript) -> Vec<(Vec<usize>, &Age
     groups.into_iter().flatten().collect()
 }
 
+/// Why a subagent stopped, from its result: the reason after Glut's own words, one short line.
+fn stopped_why(answer: &str) -> Option<String> {
+    let line = answer.lines().next()?.trim();
+    let line = line.strip_prefix("error: ").unwrap_or(line);
+    // The loop's own words before the reason say nothing the mark does not; a reason with a colon stays whole.
+    let why = line
+        .strip_prefix("the subagent stopped without answering: ")
+        .unwrap_or(line)
+        .trim();
+    (!why.is_empty()).then(|| cut(&crate::transcript::clean(why), 40))
+}
+
 /// The tab's rows at `width` for at most `room` rows (T69): a subagent that runs as a card — its task and state on
 /// the frame, glowing; what it does now inside; its model, calls, tokens and time below —, one that ended as a quiet
 /// line of how it ended and what it spent. `chosen` is marked; the list starts late enough for it to be seen.
@@ -223,25 +236,30 @@ pub fn overview_lines(
             );
             continue;
         }
-        let (mark, end) = match agent.state {
-            ToolState::Done => ("✓", tr!(agent_done)),
-            ToolState::Failed => ("✗", tr!(agent_stopped)),
-            ToolState::Refused | ToolState::Running => ("⊘", tr!(agent_refused)),
+        // The mark in the theme's colour of how it ended, the line in plain ink: a quiet one went unseen beside the
+        // cards (the owner's Mac test).
+        let fine = Style::default().fg(theme::c().fine);
+        let fault = Style::default().fg(theme::c().fault);
+        let (mark, mark_style, end) = match agent.state {
+            ToolState::Done => ("✓", fine, tr!(agent_done).to_owned()),
+            // Why it stopped, as its result says it ("the subagent stopped without answering: Timeout").
+            ToolState::Failed => match stopped_why(&agent.answer) {
+                Some(why) => ("✗", fault, format!("{} ({why})", tr!(agent_stopped))),
+                None => ("✗", fault, tr!(agent_stopped).to_owned()),
+            },
+            ToolState::Refused | ToolState::Running => ("⊘", fault, tr!(agent_refused).to_owned()),
         };
-        let mut style = theme::quiet();
+        let mut style = Style::default();
         if picked {
             style = style.add_modifier(ratatui::style::Modifier::BOLD);
         }
         let task = crate::transcript::clean(&agent.task).replace('\n', " ");
+        let room = width.saturating_sub(1 + indent.len() + 2);
         entries.push(vec![Line::from(vec![
             Span::styled(if picked { "▸" } else { " " }, theme::glow()),
-            Span::styled(
-                cut(
-                    &format!("{indent}{mark} {task} · {end} · {spent}{ran}"),
-                    width.saturating_sub(1),
-                ),
-                style,
-            ),
+            Span::raw(indent.clone()),
+            Span::styled(format!("{mark} "), mark_style),
+            Span::styled(cut(&format!("{task} · {end} · {spent}{ran}"), room), style),
         ])]);
     }
     // From the chosen one back, as many entries as fit; then on from the first one shown.
@@ -438,6 +456,19 @@ mod tests {
     use super::*;
     use crossterm::event::KeyEventKind;
     use unicode_width::UnicodeWidthStr;
+
+    #[test]
+    fn a_stopped_subagent_says_why_in_its_own_last_words() {
+        assert_eq!(
+            stopped_why("error: the subagent stopped without answering: Timeout").as_deref(),
+            Some("Timeout")
+        );
+        assert_eq!(
+            stopped_why("refused by the owner").as_deref(),
+            Some("refused by the owner")
+        );
+        assert_eq!(stopped_why(""), None);
+    }
 
     fn press(code: KeyCode) -> KeyEvent {
         KeyEvent {

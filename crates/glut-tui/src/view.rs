@@ -1429,6 +1429,8 @@ fn draw_panel(frame: &mut Frame, app: &mut App, area: Rect) {
                     row
                 }));
             }
+            // A line of air between the last card's frame and the keys, which would else read as its footer.
+            lines.push(Line::default());
             for row in wrap(tr!(background_keys), width) {
                 lines.push(Line::from(Span::styled(format!(" {row}"), theme::quiet())));
             }

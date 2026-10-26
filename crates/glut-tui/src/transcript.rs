@@ -126,6 +126,9 @@ pub struct Agent {
     pub output_tokens: u64,
     /// The last thing it did, for the tile.
     pub live: String,
+    /// Characters of thinking or text streamed since its last reply ended: a sign of life while a model thinks for
+    /// minutes before its first call (the owner took one for stuck).
+    streamed: usize,
     /// The model a named agent runs on (T37a), as its stream's start says; `None` for a plain subagent.
     pub model: Option<String>,
     /// Whether its `task` call named an agent.
@@ -146,6 +149,16 @@ impl Agent {
         (ran.as_secs() >= 1).then_some(ran)
     }
 
+    /// `state` with the size streamed so far, counted as the thinking's header counts it.
+    fn streaming(&self, state: &str) -> String {
+        tr!(
+            thought_size,
+            state = state,
+            size = tokens_short(self.streamed.div_ceil(4))
+        )
+        .to_string()
+    }
+
     /// It ended: its time stops.
     fn end(&mut self) {
         self.ended.get_or_insert_with(std::time::Instant::now);
@@ -163,6 +176,9 @@ impl Agent {
             self.input_tokens += input_tokens;
             self.output_tokens += output_tokens;
         }
+        if matches!(event, Event::Usage { .. } | Event::ToolCall { .. }) {
+            self.streamed = 0;
+        }
         match event {
             Event::Started { model, .. } if self.named => self.model = Some(model.clone()),
             Event::ToolCall {
@@ -171,8 +187,14 @@ impl Agent {
                 self.calls += 1;
                 self.live = format!("{name} {}", target_of(arguments));
             }
-            Event::TextDelta { .. } => "writing…".clone_into(&mut self.live),
-            Event::ReasoningDelta { .. } => "thinking…".clone_into(&mut self.live),
+            Event::TextDelta { text, .. } => {
+                self.streamed += text.chars().count();
+                self.live = self.streaming(tr!(agent_writing));
+            }
+            Event::ReasoningDelta { text, .. } => {
+                self.streamed += text.chars().count();
+                self.live = self.streaming(tr!(thinking_live));
+            }
             Event::AssistantText { text, .. } => {
                 if let Some(line) = text.lines().find(|line| !line.trim().is_empty()) {
                     self.live = line.trim().to_owned();
@@ -424,6 +446,7 @@ impl Transcript {
                         input_tokens: 0,
                         output_tokens: 0,
                         live: tr!(agent_starting).into(),
+                        streamed: 0,
                         model: None,
                         named: agent.is_some(),
                         started: Some(std::time::Instant::now()),
@@ -856,9 +879,22 @@ fn render(kind: &Kind, width: u16, thinking: Thinking, frame: usize) -> Vec<Line
         }
         Kind::Answer { text, streaming } => {
             lines.push(Line::default());
-            lines.extend(crate::markdown::render(text, width));
+            // A dot in the theme's glow marks where the model speaks, its lines kept under the dot's column; the
+            // tools' dots below say how each call went (the owner, 2026-10-26).
+            for (at, mut row) in crate::markdown::render(text, width - 2)
+                .into_iter()
+                .enumerate()
+            {
+                let mark = if at == 0 {
+                    Span::styled("● ", theme::glow())
+                } else {
+                    Span::raw("  ")
+                };
+                row.spans.insert(0, mark);
+                lines.push(row);
+            }
             if *streaming {
-                lines.push(Line::from(Span::styled("▍", theme::glow())));
+                lines.push(Line::from(Span::styled("  ▍", theme::glow())));
             }
         }
         Kind::Tool {
@@ -873,9 +909,9 @@ fn render(kind: &Kind, width: u16, thinking: Thinking, frame: usize) -> Vec<Line
         } => {
             let indent = "  ".repeat(*depth as usize);
             let (mark, mark_style) = match state {
-                ToolState::Running => ("◆", theme::glow()),
-                ToolState::Done => ("◇", theme::quiet()),
-                ToolState::Failed => ("✕", Style::default().fg(theme::c().fault)),
+                ToolState::Running => ("●", theme::glow()),
+                ToolState::Done => ("●", Style::default().fg(theme::c().fine)),
+                ToolState::Failed => ("●", Style::default().fg(theme::c().fault)),
                 ToolState::Refused => ("⊘", Style::default().fg(theme::c().fault)),
             };
             // The head is one line: the name and the gate's word cut first to what fits, the target gets the rest.
@@ -1157,7 +1193,7 @@ fn tile(agent: &Agent, width: usize, lines: &mut Vec<Line<'static>>) {
 }
 
 /// A count as people read it: 840, 1.2k.
-fn tokens_short(count: usize) -> String {
+pub(crate) fn tokens_short(count: usize) -> String {
     if count < 1000 {
         count.to_string()
     } else {
@@ -1264,6 +1300,89 @@ fn parts(line: &str) -> Vec<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_thinking_subagent_shows_how_much_it_thought_until_its_reply_ends() {
+        let mut stream = Transcript::default();
+        stream.take(&Event::ToolCall {
+            turn: 1,
+            id: "t1".into(),
+            name: "task".into(),
+            arguments: r#"{"description":"write a poem","prompt":"p"}"#.into(),
+        });
+        let sub = |event: Event| Event::Sub {
+            depth: 1,
+            task: None,
+            event: Box::new(event),
+        };
+        let live = |stream: &Transcript| match &stream.blocks[0].kind {
+            Kind::Agent(agent) => agent.live.clone(),
+            other => panic!("{other:?}"),
+        };
+        for _ in 0..3 {
+            stream.take(&sub(Event::ReasoningDelta {
+                turn: 1,
+                text: "x".repeat(2000),
+            }));
+        }
+        assert!(live(&stream).contains("1.5k"), "{}", live(&stream));
+        stream.take(&sub(Event::Usage {
+            turn: 1,
+            input_tokens: 10,
+            cached_input_tokens: 0,
+            output_tokens: 1500,
+        }));
+        stream.take(&sub(Event::TextDelta {
+            turn: 2,
+            text: "abcd".into(),
+        }));
+        assert!(
+            live(&stream).ends_with("~1 tokens"),
+            "counted anew: {}",
+            live(&stream)
+        );
+    }
+
+    #[test]
+    fn an_answer_starts_at_a_dot_and_a_tool_says_how_it_went_by_its_dots_colour() {
+        let mut stream = Transcript::default();
+        stream.push(Kind::Answer {
+            text: "first line\n\nsecond".into(),
+            streaming: false,
+        });
+        let rows = render(&stream.blocks[0].kind, 40, Thinking::Folded, 0);
+        let text = |row: &Line| {
+            row.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        };
+        assert_eq!(text(&rows[1]), "● first line");
+        assert!(
+            rows[2..]
+                .iter()
+                .all(|row| text(row).is_empty() || text(row).starts_with("  "))
+        );
+        let tool = |state| Kind::Tool {
+            id: "c".into(),
+            name: "bash".into(),
+            target: "ls".into(),
+            state,
+            gate: None,
+            output: String::new(),
+            unfolded: false,
+            depth: 0,
+        };
+        let dot = |state| {
+            render(&tool(state), 40, Thinking::Folded, 0)
+                .into_iter()
+                .flat_map(|row| row.spans)
+                .find(|span| span.content.trim() == "●")
+                .map(|span| span.style.fg)
+        };
+        assert_eq!(dot(ToolState::Done), Some(Some(theme::c().fine)));
+        assert_eq!(dot(ToolState::Failed), Some(Some(theme::c().fault)));
+    }
 
     #[test]
     fn a_subagent_is_a_tile_with_its_steps_in_its_own_stream() {

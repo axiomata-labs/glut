@@ -25,8 +25,10 @@ pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 pub const DEFAULT_SUBAGENT_MAX_TURNS: u32 = 15;
 
 /// How long one subagent (HS8, D6) may run; at runtime it is additionally capped by the time the parent has
-/// left, so a subagent can never outlive the run that started it.
-pub const DEFAULT_SUBAGENT_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+/// left, so a subagent can never outlive the run that started it. As long as a whole run: a model that thinks for
+/// minutes first (one did for four, then had its finished work cut off at five) is working, not stuck — a stuck one
+/// ends by the model's stall limit and each tool's own timeout, not by this.
+pub const DEFAULT_SUBAGENT_TIMEOUT: Duration = DEFAULT_TIMEOUT;
 
 /// How many subagents one run may start in all (HS8). Each brings up to [`DEFAULT_SUBAGENT_MAX_TURNS`] model
 /// calls of its own, so without a count a parent asking for one per turn could multiply the run's spend by

@@ -4766,9 +4766,17 @@ impl App {
                     Kind::Answer {
                         streaming: true, ..
                     } => return tr!(agent_writing).to_owned(),
+                    // With its size: a model may think for minutes before it does anything else.
                     Kind::Thinking {
-                        streaming: true, ..
-                    } => return tr!(thinking_live).to_owned(),
+                        text,
+                        streaming: true,
+                        ..
+                    } => {
+                        let size =
+                            crate::transcript::tokens_short(text.chars().count().div_ceil(4));
+                        return tr!(thought_size, state = tr!(thinking_live), size = size)
+                            .to_string();
+                    }
                     Kind::Owner(_) => break,
                     _ => {}
                 }
