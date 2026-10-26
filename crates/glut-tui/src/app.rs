@@ -236,6 +236,8 @@ pub struct App {
     pub ask: Option<OpenAsk>,
     pub usage: Usage,
     pub cost: Option<f64>,
+    /// The prices of the subagents on a model of their own (T37a), by their `task` call: what their calls cost.
+    sub_prices: std::collections::HashMap<String, glut::config::Prices>,
     /// The prompt tokens of the last model call: how full the window is.
     pub context_used: u64,
     /// Lines the stream is scrolled up from its end; 0 follows the end.
@@ -507,6 +509,7 @@ impl App {
             ask: None,
             usage: Usage::default(),
             cost: None,
+            sub_prices: std::collections::HashMap::new(),
             context_used: 0,
             scroll: 0,
             stream_lines: 0,
@@ -1197,6 +1200,55 @@ impl App {
         }
     }
 
+    /// A subagent's call costs as the session's own do (the owner's Mac test: a subagent's 216k tokens were in no
+    /// cost shown): priced by its own model where it runs on one, else by the session's. Its tokens count, never its
+    /// context — that is the subagent's, not the session's window.
+    fn count_subagent(&mut self, event: &Event) {
+        let mut task = None;
+        let mut inner = event;
+        while let Event::Sub {
+            task: named,
+            event: wrapped,
+            ..
+        } = inner
+        {
+            if named.is_some() {
+                task.clone_from(named);
+            }
+            inner = wrapped;
+        }
+        match inner {
+            Event::Started { prices, .. } => {
+                if let Some(task) = task {
+                    match prices {
+                        Some(own) => self.sub_prices.insert(task, *own),
+                        None => self.sub_prices.remove(&task),
+                    };
+                }
+            }
+            Event::Usage {
+                input_tokens,
+                cached_input_tokens,
+                output_tokens,
+                ..
+            } => {
+                let call = Usage {
+                    input_tokens: *input_tokens,
+                    cached_input_tokens: *cached_input_tokens,
+                    output_tokens: *output_tokens,
+                };
+                let prices = task
+                    .and_then(|task| self.sub_prices.get(&task).copied())
+                    .or(self.engine.prices);
+                if let Some(prices) = prices {
+                    *self.cost.get_or_insert(0.0) += prices.cost_usd(&call);
+                }
+                self.usage += call;
+            }
+            _ => {}
+        }
+    }
+
     fn handle(&mut self, report: Report) {
         self.settle_model_pick();
         match report {
@@ -1221,6 +1273,9 @@ impl App {
                     if *cached_input_tokens > 0 {
                         self.cache_seen = true;
                     }
+                }
+                if let Event::Sub { .. } = &event {
+                    self.count_subagent(&event);
                 }
                 // A compaction in the turn rewrote what came before: no mark's place in the conversation holds.
                 if let Event::Compacted { .. } = &event {
@@ -9047,6 +9102,51 @@ pub(crate) mod tests {
         wide(&mut app);
         agents_key(&mut app);
         assert_eq!((app.panel, app.agents_list), (Some(false), None));
+        let _ = std::fs::remove_dir_all(&app.parts.home);
+    }
+
+    #[test]
+    fn a_subagents_calls_count_in_the_session_cost_by_its_own_prices_where_it_has_them() {
+        let (mut app, _reports) = app();
+        app.engine.prices = Some(glut::Prices {
+            input_per_m: 1.0,
+            cached_input_per_m: None,
+            output_per_m: 1.0,
+        });
+        let sub = |task: &str, event: Event| Event::Sub {
+            depth: 1,
+            task: Some(task.into()),
+            event: Box::new(event),
+        };
+        let used = |tokens: u64| Event::Usage {
+            turn: 1,
+            input_tokens: tokens,
+            cached_input_tokens: 0,
+            output_tokens: 0,
+        };
+        // A plain subagent: the session's prices; a named one on its own model: its own, ten times as dear.
+        app.on_report(Report::Event(sub("t1", used(1_000_000))));
+        app.on_report(Report::Event(sub(
+            "t2",
+            Event::Started {
+                model: "dear".into(),
+                cwd: "/w".into(),
+                tools: Vec::new(),
+                prices: Some(glut::Prices {
+                    input_per_m: 10.0,
+                    cached_input_per_m: None,
+                    output_per_m: 10.0,
+                }),
+            },
+        )));
+        app.on_report(Report::Event(sub("t2", used(1_000_000))));
+        let cost = app.cost.unwrap();
+        assert!((cost - 11.0).abs() < 1e-9, "{cost}");
+        assert_eq!(app.usage.input_tokens, 2_000_000);
+        assert_eq!(
+            app.context_used, 0,
+            "a subagent's context is not the session's"
+        );
         let _ = std::fs::remove_dir_all(&app.parts.home);
     }
 
