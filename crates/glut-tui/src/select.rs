@@ -181,6 +181,10 @@ pub fn copy(text: &str) -> Result<Copied, String> {
 }
 
 fn pbcopy(text: &str) -> std::io::Result<()> {
+    // A test's copy never takes the owner's clipboard.
+    if cfg!(test) {
+        return Ok(());
+    }
     let mut child = Command::new("pbcopy")
         .stdin(Stdio::piped())
         .stdout(Stdio::null())

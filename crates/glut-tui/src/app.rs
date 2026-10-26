@@ -179,10 +179,15 @@ pub struct App {
     /// Where the input's text was drawn last, its first row shown and the width it was laid out at; `None` while a
     /// search or a secret takes its place — what a press there selects.
     pub input_spot: Option<(ratatui::layout::Rect, usize, usize)>,
-    /// A press in the input, at its place in the text, and the selection a drag made from it (the owner's Mac test:
-    /// the input could not be copied); a key lets the selection go.
+    /// A press in the input, at its place in the text, and the selection a drag or ⇧ made from it, as (anchor,
+    /// head) (the owner's Mac test: the input could not be copied); a key acts on the selection or lets it go (T71).
     input_press: Option<(usize, usize)>,
     pub input_selection: Option<((usize, usize), (usize, usize))>,
+    /// Whether the selection was made with ⇧ and not copied yet: the next key without ⇧ copies it, as a release
+    /// copies a drag (T71).
+    input_keyed: bool,
+    /// The input as it stood when Esc closed the `/` list over it: the list stays away until the text changes (T71).
+    suggestions_closed: Option<String>,
     /// The session as it is kept (T25).
     pub session: Session,
     /// The run's task list as `todo_write` last sent it (the Plan tab, T28).
@@ -481,6 +486,8 @@ impl App {
             input_spot: None,
             input_press: None,
             input_selection: None,
+            input_keyed: false,
+            suggestions_closed: None,
             session,
             todos: Vec::new(),
             project_todos: crate::todos::Todos::default(),
@@ -1765,6 +1772,14 @@ impl App {
                 self.on_key(key);
                 self.settle_model_pick();
                 self.refresh_paths();
+                // The `/` list Esc closed comes back once the text it closed over changed.
+                if self
+                    .suggestions_closed
+                    .as_ref()
+                    .is_some_and(|closed| *closed != self.input.text())
+                {
+                    self.suggestions_closed = None;
+                }
             }
             // The reading mode and the panel's focus type nothing, a paste neither (TUI9a).
             TermEvent::Paste(text)
@@ -1794,8 +1809,19 @@ impl App {
                         // A paste — a drop — of image files is the images (T45).
                         let home = self.parts.home.clone();
                         match crate::pictures::pasted_paths(&text, Some(&home)) {
-                            Some(paths) => self.attach_files(&paths),
-                            None => self.input.paste(&text),
+                            Some(paths) => {
+                                self.input_selection = None;
+                                self.input_keyed = false;
+                                self.attach_files(&paths);
+                            }
+                            None => {
+                                // A paste over a selection replaces it, as typing does (T71).
+                                if let Some((from, to)) = self.input_selection.take() {
+                                    self.input_keyed = false;
+                                    self.input.delete_between(from, to);
+                                }
+                                self.input.paste(&text);
+                            }
                         }
                         self.refresh_paths();
                     }
@@ -1880,6 +1906,7 @@ impl App {
                     self.selection = None;
                     self.press = None;
                     self.input_selection = None;
+                    self.input_keyed = false;
                     self.input_press = self.input_at(mouse.column, mouse.row);
                 }
                 MouseEventKind::Drag(MouseButton::Left) if self.input_press.is_some() => {
@@ -1934,9 +1961,23 @@ impl App {
     }
 
     fn on_key(&mut self, key: KeyEvent) {
-        // A key changes the text or moves on: what was selected in the input lets go, a press under way too.
-        self.input_selection = None;
+        // What was selected in the input is the input's keys' to act on (T71); a key anything else takes lets it go,
+        // a press under way too.
+        let selection = self.input_selection.take();
         self.input_press = None;
+        // A selection made with ⇧ is copied at the first key that does not go on with it, whoever takes that key.
+        if std::mem::take(&mut self.input_keyed)
+            && let Some((anchor, head)) = selection
+        {
+            if extends_selection(key) {
+                self.input_keyed = true;
+            } else {
+                let text = self.input.copied_between(anchor, head);
+                if !text.is_empty() {
+                    self.copy_text(&text);
+                }
+            }
+        }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
@@ -2027,6 +2068,9 @@ impl App {
             self.search = Some(Search::default());
             return;
         }
+        if !self.chord && self.on_selection_key(key, selection) {
+            return;
+        }
         // The vi mode sees a key before the input does: Normal mode's keys are its own, Insert mode types.
         if let Some(vi) = &mut self.vi
             && !self.chord
@@ -2051,6 +2095,8 @@ impl App {
             let chosen = suggestions[self.suggested.min(suggestions.len() - 1)].name;
             match key.code {
                 KeyCode::Up => return self.suggested = self.suggested.saturating_sub(1),
+                // Esc closes the list and only it (T71): the turn under it goes on, no rewind is armed.
+                KeyCode::Esc => return self.suggestions_closed = Some(self.input.text()),
                 KeyCode::Down => {
                     return self.suggested = (self.suggested + 1).min(suggestions.len() - 1);
                 }
@@ -2108,13 +2154,12 @@ impl App {
                 KeyCode::Enter if !shift && !alt && self.path_picked => {
                     return self.take_path(chosen);
                 }
-                // While Glut works, Esc stops the turn as ever; the list goes with the text it stood for.
+                // Esc closes the list and only it (T71); the next Esc stops the turn. The list goes with the text it
+                // stood for.
                 KeyCode::Esc => {
                     self.paths_closed = Some(self.input.text());
                     self.paths = None;
-                    if !self.working() || self.side.is_some() {
-                        return;
-                    }
+                    return;
                 }
                 _ => {}
             }
@@ -2262,6 +2307,69 @@ impl App {
         }
     }
 
+    /// ⇧←→ and ⇧Home/End select in the input, and a key reaching the input acts on what is selected (T71):
+    /// Backspace and Delete delete it, a plainly typed character replaces it, ← and → let it go at its edge; Esc keeps
+    /// it and does its own work, any other key lets it go first. `true` when the key is spent.
+    fn on_selection_key(
+        &mut self,
+        key: KeyEvent,
+        selection: Option<((usize, usize), (usize, usize))>,
+    ) -> bool {
+        if extends_selection(key) {
+            // A drag's head is where ⇧ goes on from; the cursor stands at the head from now on.
+            let anchor = match selection {
+                Some((anchor, head)) => {
+                    self.input.put_cursor(head);
+                    anchor
+                }
+                None => self.input.cursor(),
+            };
+            match key.code {
+                KeyCode::Left => self.input.left(),
+                KeyCode::Right => self.input.right(),
+                KeyCode::Home => self.input.put_cursor((0, 0)),
+                _ => self.input.put_cursor(self.input.last_place()),
+            }
+            let head = self.input.cursor();
+            self.input_selection = (anchor != head).then_some((anchor, head));
+            self.input_keyed = self.input_selection.is_some();
+            return true;
+        }
+        let Some((anchor, head)) = selection else {
+            return false;
+        };
+        let (from, to) = if anchor <= head {
+            (anchor, head)
+        } else {
+            (head, anchor)
+        };
+        // ⇧ only makes a capital: ⌥B or ⌃W are motions and edits of their own, the selection only lets go before them.
+        let plain = (key.modifiers - KeyModifiers::SHIFT).is_empty();
+        let normal = self
+            .vi
+            .as_ref()
+            .is_some_and(|vi| vi.mode == crate::vi::Mode::Normal);
+        match key.code {
+            KeyCode::Esc => self.input_selection = Some((anchor, head)),
+            KeyCode::Backspace | KeyCode::Delete => {
+                self.input.delete_between(from, to);
+                return true;
+            }
+            // In vi's Normal mode a letter is a command, not text: the selection only lets go.
+            KeyCode::Char(_) if plain && !normal => self.input.delete_between(from, to),
+            KeyCode::Left if key.modifiers.is_empty() => {
+                self.input.put_cursor(from);
+                return true;
+            }
+            KeyCode::Right if key.modifiers.is_empty() => {
+                self.input.put_cursor(to);
+                return true;
+            }
+            _ => {}
+        }
+        false
+    }
+
     /// The names that fit the path at the input's end (T68), read anew after every key — only while the input has
     /// the keys and no command list is up.
     fn refresh_paths(&mut self) {
@@ -2331,7 +2439,9 @@ impl App {
         let Some(typed) = text.strip_prefix('/') else {
             return Vec::new();
         };
-        if typed.contains([' ', '\n', '/']) {
+        if typed.contains([' ', '\n', '/'])
+            || self.suggestions_closed.as_deref() == Some(text.as_str())
+        {
             return Vec::new();
         }
         let mut fitting = crate::commands::fitting(typed);
@@ -6016,6 +6126,9 @@ impl App {
 
     /// An image read beside the screen came: into the message, or why not.
     fn attached(&mut self, name: Option<String>, kept: Result<glut::images::Image, String>) {
+        // The mark lands at the cursor, no key involved: a selection made meanwhile would no longer fit its text.
+        self.input_selection = None;
+        self.input_keyed = false;
         self.attaching = self.attaching.saturating_sub(1);
         if self.attaching == 0 {
             self.attaching_since = None;
@@ -6827,6 +6940,15 @@ fn reason(reason: FinishReason) -> &'static str {
     }
 }
 
+/// Whether `key` goes on with a selection in the input: ⇧ with ←→ or Home/End, nothing else held (T71).
+fn extends_selection(key: KeyEvent) -> bool {
+    key.modifiers == KeyModifiers::SHIFT
+        && matches!(
+            key.code,
+            KeyCode::Left | KeyCode::Right | KeyCode::Home | KeyCode::End
+        )
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -6904,6 +7026,70 @@ pub(crate) mod tests {
         ));
         app.on_terminal(mouse(MouseEventKind::Up(MouseButton::Left), x + 5, area.y));
         assert_eq!((app.input.row, app.input.col), (0, 5));
+        let _ = std::fs::remove_dir_all(&app.parts.home);
+    }
+
+    #[test]
+    fn shift_selects_in_the_input_and_a_key_acts_on_the_selection() {
+        let (mut app, _reports) = app();
+        type_text(&mut app, "hello world");
+        let shift = KeyModifiers::SHIFT;
+        for _ in 0..5 {
+            app.on_terminal(key(KeyCode::Left, shift));
+        }
+        let (from, to) = app.input_selection.expect("a selection");
+        assert_eq!(app.input.text_between(from, to), "world");
+        // Esc leaves it alone; a typed character replaces it.
+        app.on_terminal(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.input_selection.is_some(), "Esc keeps the selection");
+        // ⌥B moves by a word: it lets the selection go and deletes nothing.
+        app.on_terminal(key(KeyCode::Char('b'), KeyModifiers::ALT));
+        assert_eq!(app.input.text(), "hello world");
+        assert!(app.input_selection.is_none());
+        app.on_terminal(key(KeyCode::End, KeyModifiers::NONE));
+        for _ in 0..5 {
+            app.on_terminal(key(KeyCode::Left, shift));
+        }
+        app.on_terminal(key(KeyCode::Char('W'), shift));
+        assert_eq!(app.input.text(), "hello W");
+
+        // ⇧Home reaches the start of the whole input, ⌫ deletes what it selected.
+        app.on_terminal(key(KeyCode::Enter, shift));
+        type_text(&mut app, "next");
+        app.on_terminal(key(KeyCode::Left, KeyModifiers::NONE));
+        app.on_terminal(key(KeyCode::Home, shift));
+        app.on_terminal(key(KeyCode::Backspace, KeyModifiers::NONE));
+        assert_eq!(app.input.text(), "t");
+        assert!(app.input_selection.is_none());
+
+        // → lets a selection go at its right edge, without moving past it.
+        type_text(&mut app, "abc");
+        app.on_terminal(key(KeyCode::Home, KeyModifiers::NONE));
+        app.on_terminal(key(KeyCode::End, shift));
+        app.on_terminal(key(KeyCode::Right, KeyModifiers::NONE));
+        assert!(app.input_selection.is_none());
+        assert_eq!(app.input.cursor(), app.input.last_place());
+        // A paste over a selection replaces it.
+        app.on_terminal(key(KeyCode::Home, shift));
+        app.on_terminal(TermEvent::Paste("new".into()));
+        assert_eq!(app.input.text(), "new");
+        let _ = std::fs::remove_dir_all(&app.parts.home);
+    }
+
+    #[test]
+    fn esc_closes_the_command_list_and_the_path_list_without_stopping_the_turn() {
+        let (mut app, _reports) = app();
+        type_text(&mut app, "/mo");
+        assert!(!app.suggestions().is_empty());
+        app.on_terminal(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.suggestions().is_empty(), "Esc closed the list");
+        assert!(app.last_esc.is_none(), "and armed no rewind");
+        app.on_terminal(key(KeyCode::Backspace, KeyModifiers::NONE));
+        type_text(&mut app, "o");
+        assert!(
+            !app.suggestions().is_empty(),
+            "a changed text brings it back, the same text typed again too"
+        );
         let _ = std::fs::remove_dir_all(&app.parts.home);
     }
 

@@ -217,7 +217,22 @@ impl Input {
         } else {
             format!("{lines} lines")
         };
-        let mark = format!("[pasted {lines} #{}]", self.pastes.len() + 1);
+        // One past the highest number standing: a paste deleted or replaced leaves its number behind, and two marks
+        // alike would give their texts back in the wrong places.
+        let number = self
+            .pastes
+            .iter()
+            .filter_map(|(mark, _)| {
+                mark.rsplit_once('#')?
+                    .1
+                    .strip_suffix(']')?
+                    .parse::<usize>()
+                    .ok()
+            })
+            .max()
+            .unwrap_or(0)
+            + 1;
+        let mark = format!("[pasted {lines} #{number}]");
         for c in mark.chars() {
             self.insert(c);
         }
@@ -650,6 +665,58 @@ impl Input {
         self.row = place.0.min(self.lines.len() - 1);
         self.col = place.1.min(self.lines[self.row].chars().count());
     }
+
+    /// Where the cursor stands, as [`Input::place_at`] gives a place.
+    pub fn cursor(&self) -> (usize, usize) {
+        (self.row, self.col.min(self.len(self.row)))
+    }
+
+    /// The place after the last character.
+    pub fn last_place(&self) -> (usize, usize) {
+        let row = self.lines.len() - 1;
+        (row, self.len(row))
+    }
+
+    /// Deletes the text between two places, in either order, and leaves the cursor where it began (T71). A paste's
+    /// mark the stretch reaches into goes whole, and the paste with it, as ⌫ takes one: half a mark would send
+    /// neither.
+    pub fn delete_between(&mut self, a: (usize, usize), b: (usize, usize)) {
+        let clamp = |(row, col): (usize, usize)| {
+            let row = row.min(self.lines.len() - 1);
+            (row, col.min(self.len(row)))
+        };
+        let (mut from, mut to) = if a <= b {
+            (clamp(a), clamp(b))
+        } else {
+            (clamp(b), clamp(a))
+        };
+        let mut gone = Vec::new();
+        for (at, (mark, _)) in self.pastes.iter().enumerate() {
+            let width = mark.chars().count();
+            for (row, line) in self.lines.iter().enumerate() {
+                for (byte, _) in line.match_indices(mark.as_str()) {
+                    let start = (row, line[..byte].chars().count());
+                    let end = (row, start.1 + width);
+                    if start < to && from < end {
+                        from = from.min(start);
+                        to = to.max(end);
+                        gone.push(at);
+                    }
+                }
+            }
+        }
+        let head: String = self.lines[from.0].chars().take(from.1).collect();
+        let tail: String = self.lines[to.0].chars().skip(to.1).collect();
+        self.lines.splice(from.0..=to.0, [format!("{head}{tail}")]);
+        let text = self.text();
+        let mut at = 0;
+        self.pastes.retain(|(mark, _)| {
+            at += 1;
+            !gone.contains(&(at - 1)) || text.contains(mark.as_str())
+        });
+        self.browsing = None;
+        (self.row, self.col) = from;
+    }
 }
 
 #[cfg(test)]
@@ -695,6 +762,38 @@ mod tests {
         );
         input.put_cursor((0, 9));
         assert_eq!((input.row, input.col), (0, 6));
+    }
+
+    #[test]
+    fn a_stretch_is_deleted_across_lines_and_a_paste_mark_it_reaches_into_goes_whole() {
+        let mut input = typed("abcdef\nxyz");
+        input.delete_between((1, 1), (0, 2));
+        assert_eq!(input.text(), "abyz");
+        assert_eq!(input.cursor(), (0, 2), "the cursor where the stretch began");
+
+        let mut input = typed("see ");
+        input.paste(&"line\n".repeat(20));
+        input.insert_text(" ok");
+        let text = input.text();
+        assert_eq!(text, "see [pasted 20 lines #1] ok");
+        // From inside the mark to the end: the whole mark goes, its paste with it.
+        input.delete_between((0, 8), input.last_place());
+        assert_eq!(input.text(), "see ");
+        assert_eq!(input.broken_pastes(), 0);
+        assert_eq!(input.expanded(), "see ");
+
+        // A paste after the first of two went keeps its number apart from the second's.
+        let mut input = Input::new();
+        input.paste(&"a\n".repeat(20));
+        input.paste(&"b\n".repeat(20));
+        input.delete_between((0, 0), (0, 1));
+        input.paste(&"c\n".repeat(20));
+        assert_eq!(
+            input.text(),
+            "[pasted 20 lines #3][pasted 20 lines #2]",
+            "at the cursor, where #1 stood"
+        );
+        assert!(input.expanded().starts_with("c\n") && input.expanded().ends_with("b\n"));
     }
 
     #[test]
