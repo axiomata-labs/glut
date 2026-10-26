@@ -56,7 +56,11 @@ pub struct UnderWay {
 /// system prompt the turn wrote anew — the same but for a day or a role changed since. Older thinking is left out as
 /// the loop leaves it out, its images as the loop sends them.
 pub fn request(asked: &Asked, question: &str) -> (Vec<Message>, Vec<ToolSpec>) {
-    let ask = framed(question, asked.under_way.as_ref());
+    let asked_before = asked
+        .conversation
+        .iter()
+        .any(|message| message.role == Role::User);
+    let ask = framed(question, asked.under_way.as_ref(), asked_before);
     let called_tools = asked
         .conversation
         .iter()
@@ -93,12 +97,21 @@ pub fn request(asked: &Asked, question: &str) -> (Vec<Message>, Vec<ToolSpec>) {
 const SYSTEM: &str = "You answer the owner's side questions about a coding session. You have no tools; answer briefly.";
 
 /// The owner's question, framed so the model answers it from what it knows and leaves its work alone.
-fn framed(question: &str, under_way: Option<&UnderWay>) -> String {
+/// `asked_before`: whether the session was ever given a message — an agent at rest says so, or a model asked what it
+/// does makes up a task (the owner saw one invent an article it was never asked for).
+fn framed(question: &str, under_way: Option<&UnderWay>, asked_before: bool) -> String {
     let mut text = String::from(
         "[A side question from the owner. Answer it briefly from what you know and what the conversation shows. Do \
          not call any tool and do not go on with the work: this answer goes to the owner alone and is not part of \
          it.]\n\n",
     );
+    match under_way {
+        None if asked_before => text.push_str("You are not working on anything right now.\n\n"),
+        None => text.push_str(
+            "You are not working on anything right now: nothing has been asked of you in this session yet.\n\n",
+        ),
+        Some(_) => {}
+    }
     if let Some(turn) = under_way {
         text.push_str(&format!(
             "You are working on this message of the owner's right now:\n----\n{}\n----\n",
@@ -445,6 +458,34 @@ mod tests {
     }
 
     #[test]
+    fn an_agent_at_rest_is_told_so_and_one_never_asked_that_it_has_no_task() {
+        let asked_text = |conversation: Vec<Message>, under_way: Option<UnderWay>| {
+            let (messages, _) =
+                request(&asked(conversation, None, under_way), "what are you doing?");
+            messages
+                .last()
+                .and_then(|m| m.content.clone())
+                .unwrap_or_default()
+        };
+        let fresh = asked_text(vec![Message::system("You are a reviewer.")], None);
+        assert!(fresh.contains("nothing has been asked of you"), "{fresh}");
+        let resting = asked_text(called(), None);
+        assert!(
+            resting.contains("not working on anything")
+                && !resting.contains("nothing has been asked"),
+            "{resting}"
+        );
+        let working = asked_text(
+            vec![
+                Message::system("You are a reviewer."),
+                Message::user("Review it"),
+            ],
+            Some(under_way("Review it", &[])),
+        );
+        assert!(!working.contains("not working on anything"), "{working}");
+    }
+
+    #[test]
     fn a_side_question_goes_after_the_conversation_as_it_is_with_its_tools_so_the_cache_holds() {
         let conversation = called();
         let (messages, tools) = request(
@@ -462,7 +503,10 @@ mod tests {
         let text = last.content.as_deref().unwrap();
         assert!(text.contains("Do not call any tool"), "{text}");
         assert!(text.ends_with("The side question:\nwhy ls?"), "{text}");
-        assert!(!text.contains("working on"), "no turn under way: {text}");
+        assert!(
+            !text.contains("You are working on") && text.contains("not working on anything"),
+            "no turn under way: {text}"
+        );
         assert_eq!(tools, vec![tool("bash")]);
     }
 
