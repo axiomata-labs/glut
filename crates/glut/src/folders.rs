@@ -273,8 +273,17 @@ pub fn check(
     if cwd.starts_with(&real) {
         return Err(format!("{typed} holds the working folder"));
     }
-    if real.starts_with(&cwd) {
-        return Err(format!("{typed} is inside the working folder already"));
+    // Said with where the run already reaches it: a Glut started in the home folder has every folder of it.
+    if let Ok(inside) = real.strip_prefix(&cwd) {
+        let working = match cwd.strip_prefix(&home) {
+            Ok(rest) if rest.as_os_str().is_empty() => "~".to_owned(),
+            Ok(rest) => format!("~/{}", rest.display()),
+            Err(_) => cwd.display().to_string(),
+        };
+        return Err(format!(
+            "{typed} lies in the working folder {working} already: the run reaches it as {}/…",
+            inside.display()
+        ));
     }
     let secrets = crate::sandbox::secrets(&home, deny_read);
     if let Some(secret) = secrets
