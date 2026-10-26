@@ -832,9 +832,15 @@ impl App {
             Ok(owner) => owner,
             Err(err) => return self.transcript.note(err.to_string(), Tone::Fault),
         };
+        // What changed reaches the model with the owner's next message: it would else go on with the masked text it
+        // read before and never look again.
+        let mut note = None;
         let said = match word {
             "on" | "off" => {
                 let on = word == "on";
+                if masks.is_on() != on {
+                    note = Some(secrets_for_the_model(if on { Told::On } else { Told::Off }));
+                }
                 masks.set_on(on);
                 owner.mask = (!on).then_some(false);
                 if on {
@@ -860,8 +866,15 @@ impl App {
                         .note(tr!(secrets_no_such, n = number), Tone::Fault);
                 };
                 if !always {
-                    return self.say(tr!(secrets_allowed, n = number));
+                    self.pending
+                        .push(Message::user(secrets_for_the_model(Told::Allowed(number))));
+                    return self.say(format!(
+                        "{} · {}",
+                        tr!(secrets_allowed, n = number),
+                        tr!(secrets_next_read)
+                    ));
                 }
+                note = Some(secrets_for_the_model(Told::Allowed(number)));
                 masks.allow_always(&print);
                 if !owner.allowed.contains(&print) {
                     owner.allowed.push(print);
@@ -902,6 +915,14 @@ impl App {
                 tr!(secrets_removed, name = rest).to_string()
             }
             _ => return self.transcript.note(tr!(secrets_usage), Tone::Fault),
+        };
+        // The change holds for the session even when the file cannot keep it, so the model hears of it either way.
+        let said = match note {
+            Some(note) => {
+                self.pending.push(Message::user(note));
+                format!("{said} · {}", tr!(secrets_next_read))
+            }
+            None => said,
         };
         match owner.save(&home) {
             Ok(()) => self.say(said),
@@ -1094,6 +1115,8 @@ impl App {
         self.busy = Some(Busy::Turn);
         let inbox = glut::Inbox::default();
         self.steering = Some(inbox.clone());
+        // What waits for the model (a `/secrets` change, a review comment) goes before this message, not after it.
+        self.conversation.append(&mut self.pending);
         self.lend(Some(prompt.clone()));
         // Where this message begins, to rewind to before it; its run is known with its first snapshot.
         self.session.marks.push(crate::store::Mark {
@@ -6565,6 +6588,28 @@ fn parse_tokens(text: &str) -> Option<u32> {
     (tokens >= 1.0 && tokens <= f64::from(MAX_WINDOW)).then_some(tokens as u32)
 }
 
+/// What `/secrets` changed, as the model is told it with the owner's next message (T58).
+#[derive(Debug, Clone, Copy)]
+enum Told {
+    On,
+    Off,
+    Allowed(u32),
+}
+
+/// The note to the model for `told`: in English like every word Glut adds to the conversation.
+fn secrets_for_the_model(told: Told) -> String {
+    match told {
+        Told::On => "Glut hides secrets from you again: what tools answer from now on comes masked.".to_owned(),
+        Told::Off => "Glut no longer hides secrets from you. What you read masked before stays masked in this \
+                      conversation: read a file again to see its values."
+            .to_owned(),
+        Told::Allowed(n) => format!(
+            "Secret {n} is no longer hidden from you. Where you read it before, it stays masked in this \
+             conversation: read the file again to see its value."
+        ),
+    }
+}
+
 /// Whether `prompt` is one of the owner's messages of `conversation` already.
 fn told(conversation: &[Message], prompt: &str) -> bool {
     conversation.iter().any(|message| {
@@ -8181,6 +8226,23 @@ pub(crate) mod tests {
         assert!(!listed.contains(A_KEY), "never the value");
         app.secrets_command("allow 1 always");
         assert_eq!(masks.mask(A_KEY, "x").text, A_KEY);
+        // The model read the value masked before: it is told to read again, or it goes on with the placeholder.
+        let note = |app: &App| {
+            app.pending
+                .last()
+                .and_then(|m| m.content.clone())
+                .unwrap_or_default()
+        };
+        assert!(
+            note(&app).contains("Secret 1 is no longer hidden"),
+            "{}",
+            note(&app)
+        );
+        assert!(
+            app.toast
+                .as_ref()
+                .is_some_and(|(said, _)| said.contains("next read"))
+        );
         let owner = glut::masks::Owner::load(&home).unwrap();
         assert_eq!(owner.allowed, [glut::masks::fingerprint(A_KEY)]);
         app.secrets_command("add acme acme_[0-9]{6}");
@@ -8192,15 +8254,48 @@ pub(crate) mod tests {
         assert_eq!(masks.mask("acme_654321", "x").text, "acme_654321");
         app.secrets_command("off");
         assert!(!masks.is_on());
+        assert!(note(&app).contains("no longer hides"), "{}", note(&app));
+        let notes = app.pending.len();
+        app.secrets_command("off");
+        assert_eq!(
+            app.pending.len(),
+            notes,
+            "off again changes nothing to tell"
+        );
         assert_eq!(glut::masks::Owner::load(&home).unwrap().mask, Some(false));
         app.secrets_command("on");
         assert!(masks.is_on());
+        let before = app.pending.len();
         app.secrets_command("allow 9");
         assert!(
             last_note(&app).contains("no secret 9"),
             "{}",
             last_note(&app)
         );
+        assert_eq!(
+            app.pending.len(),
+            before,
+            "nothing to tell of a number no value has"
+        );
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[tokio::test]
+    async fn a_secrets_change_reaches_the_model_before_the_next_message() {
+        let (mut app, _reports) = app();
+        let home = app.parts.home.clone();
+        app.secrets_command("off");
+        app.send("show me the .env".into());
+        let lent = app
+            .lent
+            .as_ref()
+            .map(|lent| format!("{:?}", lent.conversation));
+        assert!(
+            lent.as_deref()
+                .is_some_and(|lent| lent.contains("no longer hides")),
+            "{lent:?}"
+        );
+        assert!(app.pending.is_empty());
         let _ = std::fs::remove_dir_all(&home);
     }
 

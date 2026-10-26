@@ -1584,6 +1584,8 @@ glut::catalog! {
         secrets_allowed: &'static str,
         /// Value `{n}` let through always.
         secrets_allowed_always: &'static str,
+        /// Added to what `/secrets on|off|allow` said: it holds from the next read, the model is told.
+        secrets_next_read: &'static str,
         /// `/secrets add` with a pattern that cannot be used: `{reason}`.
         secrets_bad_regex: &'static str,
         /// A format of the owner's added: `{name}`.

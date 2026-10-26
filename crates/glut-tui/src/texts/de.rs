@@ -1549,6 +1549,7 @@ pub const TEXTS: Texts = Texts {
     secrets_no_such: "kein Geheimnis {n} in dieser Session — /secrets listet sie",
     secrets_allowed: "Geheimnis {n} geht für diese Session durch",
     secrets_allowed_always: "Geheimnis {n} geht immer durch (sein Fingerabdruck steht in ~/.glut/secrets.json, nie der Wert)",
+    secrets_next_read: "ab dem nächsten Lesen — das Modell erfährt es mit deiner nächsten Nachricht",
     secrets_bad_regex: "kein Muster, das Glut nutzen kann: {reason}",
     secrets_added: "Format {name} hinzugefügt: ab dem nächsten Ergebnis verborgen",
     secrets_no_format: "kein eigenes Format namens {name}",

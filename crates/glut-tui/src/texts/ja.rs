@@ -1447,6 +1447,7 @@ pub const TEXTS: Texts = Texts {
     secrets_no_such: "このセッションにシークレット {n} はありません — /secrets で一覧できます",
     secrets_allowed: "シークレット {n} をこのセッションでは通します",
     secrets_allowed_always: "シークレット {n} を常に通します（~/.glut/secrets.json には指紋だけを保存し、値は保存しません）",
+    secrets_next_read: "次の読み取りから — モデルには次のメッセージで伝えます",
     secrets_bad_regex: "Glut が使えるパターンではありません: {reason}",
     secrets_added: "形式 {name} を追加しました: 次の結果から隠します",
     secrets_no_format: "{name} という自分の形式はありません",

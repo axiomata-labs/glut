@@ -1380,6 +1380,7 @@ pub const TEXTS: Texts = Texts {
     secrets_no_such: "本会话没有密钥 {n} — /secrets 会列出它们",
     secrets_allowed: "密钥 {n} 在本会话中放行",
     secrets_allowed_always: "密钥 {n} 始终放行（只在 ~/.glut/secrets.json 中保存其指纹，从不保存值）",
+    secrets_next_read: "从下一次读取起 — 模型会随你的下一条消息得知",
     secrets_bad_regex: "Glut 无法使用这个模式：{reason}",
     secrets_added: "已添加格式 {name}：从下一个结果起隐藏",
     secrets_no_format: "你没有名为 {name} 的格式",
