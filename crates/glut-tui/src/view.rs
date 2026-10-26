@@ -1198,7 +1198,8 @@ fn draw_input(
     // What a typed command still takes, faint after the cursor: its arguments, or the rest of the word begun.
     if rows.len() == 1
         && app.input.at_end()
-        && let Some(ghost) = crate::commands::ghost(&app.input.text())
+        && let Some(ghost) =
+            crate::commands::ghost(&app.input.text(), |source| app.argument_values(source))
         && let Some(line) = lines.last_mut()
     {
         line.spans.push(Span::styled(
@@ -1893,11 +1894,16 @@ fn draw_paths(frame: &mut Frame, app: &App, area: Rect) {
             theme::quiet(),
         )));
     }
-    let folder = crate::transcript::clean(&crate::projects::shown_path(
-        &listing.folder,
-        &app.parts.home,
-    ));
-    let title = format!(" {} ", tr!(paths_title, folder = folder));
+    let title = match &listing.values {
+        Some(command) => format!(" {command} "),
+        None => {
+            let folder = crate::transcript::clean(&crate::projects::shown_path(
+                &listing.folder,
+                &app.parts.home,
+            ));
+            format!(" {} ", tr!(paths_title, folder = folder))
+        }
+    };
     let needed = listing
         .entries
         .iter()

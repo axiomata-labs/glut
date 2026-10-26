@@ -38,6 +38,8 @@ pub struct Listing {
     pub more: usize,
     /// The folder read: a list of the same folder and start keeps the owner's place in it.
     pub folder: PathBuf,
+    /// A list of a command's words and values instead of a folder's names (T71): the command, for its title.
+    pub values: Option<String>,
 }
 
 impl Listing {
@@ -190,6 +192,7 @@ pub fn list(typed: Typed, home: &Path, cwd: &Path) -> Option<Listing> {
         entries,
         more,
         folder,
+        values: None,
     })
 }
 

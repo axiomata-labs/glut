@@ -175,6 +175,11 @@ pub struct App {
     path_picked: bool,
     /// The input as it stood when Esc closed the path list or a file was taken: no list for it again.
     paths_closed: Option<String>,
+    /// The input as it stood when ⇥ asked for its command's words and values with none begun (T71): the list shows
+    /// them until the text changes.
+    values_asked: Option<String>,
+    /// The owner's providers' ids as last read, and when, for `/provider`'s completion (T71).
+    provider_ids: std::cell::RefCell<Option<(Instant, Vec<String>)>>,
     /// The conversation between turns; taken while a turn runs.
     conversation: Vec<Message>,
     /// A copy of the conversation while a turn, a compaction or a handoff holds it: what a side question sees (T57).
@@ -489,6 +494,8 @@ impl App {
             path_chosen: 0,
             path_picked: false,
             paths_closed: None,
+            values_asked: None,
+            provider_ids: std::cell::RefCell::new(None),
             conversation: Vec::new(),
             lent: None,
             side_tools: None,
@@ -2330,9 +2337,18 @@ impl App {
             // A command's word half typed: ⇥ completes it (`/motion c` → `/motion calm`).
             KeyCode::Tab if self.input.at_end() => {
                 let text = self.input.text();
-                let completed = crate::commands::completion(&text);
-                match completed {
-                    Some(rest) => self.input.insert_text(&rest),
+                let offer =
+                    crate::commands::offer(&text, |source| self.argument_values(source), true);
+                match offer {
+                    // The one word it can become, a space after it: the next place shows faintly (T71).
+                    Some(offer) if !offer.start.is_empty() && offer.words.len() == 1 => {
+                        self.replace_path_start(&offer.start, &format!("{} ", offer.words[0]));
+                    }
+                    // Nothing begun, or a list Esc closed: ⇥ shows what the place takes.
+                    Some(_) => {
+                        self.paths_closed = None;
+                        self.values_asked = Some(text);
+                    }
                     None if self.working() => self.queue_next(),
                     None => self.input.insert(' '),
                 }
@@ -2433,10 +2449,35 @@ impl App {
             })
             .flatten()
             .and_then(|typed| crate::paths::list(typed, &self.parts.home, &self.parts.config.cwd));
+        // No path typed: a command's words and values (T71) — a list for several, one shows faintly instead.
+        if self.values_asked.as_deref() != Some(text.as_str()) {
+            self.values_asked = None;
+        }
+        let asked = self.values_asked.is_some();
+        let listing = listing.or_else(|| {
+            let offer = free
+                .then(|| {
+                    crate::commands::offer(&text, |source| self.argument_values(source), asked)
+                })
+                .flatten()
+                .filter(|offer| asked || offer.words.len() > 1)?;
+            Some(crate::paths::Listing {
+                start: offer.start,
+                entries: offer
+                    .words
+                    .into_iter()
+                    .map(|name| crate::paths::Entry { name, dir: false })
+                    .collect(),
+                more: 0,
+                folder: std::path::PathBuf::new(),
+                values: Some(offer.title),
+            })
+        });
         // The same folder and start keep the owner's place in the list.
         let same = matches!(
             (&self.paths, &listing),
-            (Some(old), Some(new)) if old.folder == new.folder && old.start == new.start
+            (Some(old), Some(new))
+                if old.folder == new.folder && old.start == new.start && old.values == new.values
         );
         if !same {
             self.path_chosen = 0;
@@ -2464,11 +2505,14 @@ impl App {
         let entry = &listing.entries[chosen.min(listing.entries.len() - 1)];
         let name = if entry.dir {
             format!("{}/", entry.name)
+        } else if listing.values.is_some() {
+            // A command's word taken, the next place follows a space: its arguments show faintly there.
+            format!("{} ", entry.name)
         } else {
             entry.name.clone()
         };
         self.replace_path_start(&listing.start, &name);
-        if !entry.dir {
+        if !entry.dir && listing.values.is_none() {
             self.paths_closed = Some(self.input.text());
         }
     }
@@ -5267,6 +5311,68 @@ impl App {
         self.agents_list = Some(row);
     }
 
+    /// The values a command's argument takes that only the running Glut knows (T71), for the completion.
+    pub fn argument_values(&self, source: crate::commands::Source) -> Vec<String> {
+        use crate::commands::Source;
+        match source {
+            Source::Themes => crate::theme::all()
+                .map(|palette| palette.name.to_owned())
+                .collect(),
+            Source::Languages => glut::lang::Lang::ALL
+                .into_iter()
+                .map(|lang| lang.code().to_owned())
+                .collect(),
+            Source::Efforts => std::iter::once("default".to_owned())
+                .chain(Effort::ALL.iter().map(ToString::to_string))
+                .collect(),
+            // Read again at most every few seconds: the faint text asks at every frame.
+            Source::Providers => {
+                let mut kept = self.provider_ids.borrow_mut();
+                if kept
+                    .as_ref()
+                    .is_none_or(|(read, _)| read.elapsed() > PROVIDERS_KEPT)
+                {
+                    let ids = Providers::load(&self.parts.home)
+                        .map(|list| list.providers.keys().cloned().collect())
+                        .unwrap_or_default();
+                    *kept = Some((Instant::now(), ids));
+                }
+                kept.as_ref()
+                    .map(|(_, ids)| ids.clone())
+                    .unwrap_or_default()
+            }
+            Source::Skills => self
+                .parts
+                .skills
+                .iter()
+                .map(|(name, _)| name.clone())
+                .collect(),
+            Source::Roles => std::iter::once("none".to_owned())
+                .chain(
+                    self.parts
+                        .config
+                        .agents
+                        .list()
+                        .iter()
+                        .map(|agent| agent.name.clone()),
+                )
+                .collect(),
+            Source::Agents => self
+                .background
+                .iter()
+                .map(|agent| agent.name.clone())
+                .collect(),
+            Source::Servers => self
+                .parts
+                .tools
+                .servers()
+                .list()
+                .into_iter()
+                .map(|server| server.entry.name)
+                .collect(),
+        }
+    }
+
     /// Whether ⌃X waits for its second key: the footer names them (T71).
     pub fn chord_waits(&self) -> bool {
         self.chord
@@ -7027,6 +7133,9 @@ fn reason(reason: FinishReason) -> &'static str {
     }
 }
 
+/// How long the providers' ids read for a completion stand before they are read again.
+const PROVIDERS_KEPT: Duration = Duration::from_secs(3);
+
 /// A key as the owner reads it on the keyboard: a letter as its capital, the rest by its sign or name.
 fn key_name(key: KeyEvent) -> String {
     let mut held = String::new();
@@ -7185,6 +7294,35 @@ pub(crate) mod tests {
         app.on_terminal(key(KeyCode::Home, shift));
         app.on_terminal(TermEvent::Paste("new".into()));
         assert_eq!(app.input.text(), "new");
+        let _ = std::fs::remove_dir_all(&app.parts.home);
+    }
+
+    #[test]
+    fn a_commands_values_open_a_list_tab_takes_one_and_the_next_place_shows_faintly() {
+        let (mut app, _reports) = app();
+        // Several themes begin so: the list; ⇥ completes what they share, then takes the chosen one.
+        type_text(&mut app, "/theme catppuccin-m");
+        let listing = app.paths.clone().expect("the themes that fit");
+        assert_eq!(listing.values.as_deref(), Some("/theme"));
+        assert_eq!(listing.entries.len(), 2, "macchiato and mocha");
+        app.on_terminal(key(KeyCode::Down, KeyModifiers::NONE));
+        app.on_terminal(key(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(app.input.text(), "/theme catppuccin-mocha ");
+        // One fit: no list, ⇥ completes it.
+        app.input.clear();
+        type_text(&mut app, "/theme tok");
+        assert!(app.paths.is_none());
+        app.on_terminal(key(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(app.input.text(), "/theme tokyo-night ");
+        // Nothing begun: ⇥ shows them all.
+        app.input.clear();
+        type_text(&mut app, "/theme ");
+        assert!(app.paths.is_none());
+        app.on_terminal(key(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(
+            app.paths.as_ref().map(|listing| listing.entries.len()),
+            Some(14)
+        );
         let _ = std::fs::remove_dir_all(&app.parts.home);
     }
 
@@ -8402,7 +8540,11 @@ pub(crate) mod tests {
         let (mut app, _reports) = app();
         type_text(&mut app, "/motion c");
         app.on_terminal(key(KeyCode::Tab, KeyModifiers::NONE));
-        assert_eq!(app.input.text(), "/motion calm");
+        assert_eq!(
+            app.input.text(),
+            "/motion calm ",
+            "a space after it, for the next place"
+        );
     }
 
     /// A PNG of 2 × 1 pixels, red and blue.

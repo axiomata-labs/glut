@@ -600,28 +600,210 @@ pub const KEYS: [Key; 43] = [
     key(Topic::Help, "⌃K", "this sheet of keys", "/help"),
 ];
 
-/// The words a command takes when they are a fixed few (`on|off`, `full|calm|off`); `None` for anything freer.
-fn choices(args: &str) -> Option<Vec<&str>> {
-    let words: Vec<&str> = args.split('|').collect();
-    (words.len() > 1
-        && words.iter().all(|word| {
-            !word.is_empty() && word.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
-        }))
-    .then_some(words)
+/// Where the values of a command's argument come from (T71): what only the running Glut knows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
+    /// The themes' names (`/theme`).
+    Themes,
+    /// Glut's languages' codes (`/language`).
+    Languages,
+    /// The effort levels and `default` (`/effort`).
+    Efforts,
+    /// The owner's providers' ids (`/provider`).
+    Providers,
+    /// The skills' names (`/skill`).
+    Skills,
+    /// The roles' names and `none` (`/role`, after `as` in `/bg` and `/split`).
+    Roles,
+    /// The agents in the background, by name (`/show`, `/peek`, `/close`, `/btw`, `/send`).
+    Agents,
+    /// The MCP servers (`/mcp login|logout|remove`).
+    Servers,
 }
 
-/// What a typed command still takes, shown faintly after the cursor (TUI9): after `/name ` its arguments as `/help`
-/// writes them, and after the start of one of its fixed words the rest of that word.
-pub fn ghost(text: &str) -> Option<String> {
+/// The catalog's words for something to be given, never one to complete to: `[name]`, `[path]`, `[n]` …
+const PLACEHOLDERS: [&str; 12] = [
+    "name", "id", "path", "n", "level", "code", "text", "tokens", "command", "branch", "question",
+    "role",
+];
+
+/// Where the values for the argument after `before` come from, for command `name`.
+fn source(name: &str, before: &[&str]) -> Option<Source> {
+    Some(match (name, before) {
+        ("theme", []) => Source::Themes,
+        ("language", []) => Source::Languages,
+        ("effort", []) => Source::Efforts,
+        ("provider", []) => Source::Providers,
+        ("skill", []) => Source::Skills,
+        ("role", []) => Source::Roles,
+        ("close" | "show" | "peek" | "btw" | "send", []) => Source::Agents,
+        ("mcp", ["login" | "logout" | "remove"]) => Source::Servers,
+        ("bg" | "split", [.., "as"]) => Source::Roles,
+        _ => return None,
+    })
+}
+
+/// A command's arguments as `/help` writes them, cut into their places: `[md|html] [full] [path]` → three, a
+/// bracket's inside (`[as <role>]`, `[here|tree [branch]]`) kept whole.
+fn slots(args: &str) -> Vec<&str> {
+    let mut slots = Vec::new();
+    let (mut depth, mut from) = (0usize, 0);
+    for (at, c) in args.char_indices() {
+        match c {
+            '[' | '<' => depth += 1,
+            ']' | '>' => depth = depth.saturating_sub(1),
+            ' ' if depth == 0 => {
+                if at > from {
+                    slots.push(&args[from..at]);
+                }
+                from = at + 1;
+            }
+            _ => {}
+        }
+    }
+    if from < args.len() {
+        slots.push(&args[from..]);
+    }
+    slots
+}
+
+/// A place's first part and the rest, its brackets taken off: `[as <role>]` → `as`, `<role>`.
+fn lead(slot: &str) -> (&str, &str) {
+    let inner = slot
+        .strip_prefix('[')
+        .and_then(|inner| inner.strip_suffix(']'))
+        .unwrap_or(slot);
+    slots(inner).first().map_or((inner, ""), |first| {
+        (first, inner[first.len()..].trim_start())
+    })
+}
+
+/// The fixed words a part of the arguments names, in their order: never a placeholder, nothing inside `<…>`.
+fn fixed_words(args: &str) -> Vec<&str> {
+    let mut words = Vec::new();
+    let mut angle = 0usize;
+    let mut from = None;
+    for (at, c) in args.char_indices().chain([(args.len(), ' ')]) {
+        if c.is_ascii_alphanumeric() || c == '-' {
+            from.get_or_insert(at);
+            continue;
+        }
+        if let Some(start) = from.take() {
+            let word = &args[start..at];
+            if angle == 0 && !PLACEHOLDERS.contains(&word) && !words.contains(&word) {
+                words.push(word);
+            }
+        }
+        match c {
+            '<' => angle += 1,
+            '>' => angle = angle.saturating_sub(1),
+            _ => {}
+        }
+    }
+    words
+}
+
+/// Whether a place must be given a word of the owner's before any later one: its first part is a placeholder.
+fn free_lead(slot: &str) -> bool {
+    let (first, _) = lead(slot);
+    first.starts_with('<') || first.split('|').any(|word| PLACEHOLDERS.contains(&word))
+}
+
+/// The places still open after the words typed, as far as the words tell: each word fills the first place from here on
+/// that names it, else the next one as its value; a place led by the word goes on with its rest (`as` → `<role>`).
+fn open_slots<'a>(args: &'a str, typed: &[&str]) -> Vec<&'a str> {
+    let mut open = slots(args);
+    let mut at = 0;
+    for word in typed {
+        let named = (at..open.len()).find(|&slot| fixed_words(lead(open[slot]).0).contains(word));
+        match named {
+            Some(slot) => {
+                // The rest belongs to the lead's last word: `tree` takes a `[branch]`, `here` none.
+                let (first, rest) = lead(open[slot]);
+                at = slot + 1;
+                if !rest.is_empty() && first.rsplit('|').next() == Some(*word) {
+                    open.insert(at, rest);
+                }
+            }
+            None => at += 1,
+        }
+        if at >= open.len() {
+            return Vec::new();
+        }
+    }
+    open.split_off(at.min(open.len()))
+}
+
+/// What the word being typed at the end of `text`, a command's argument, may become (T71): the fixed words of the
+/// places it may fill — up to the first that wants a word of the owner's — and the values `values` knows for it.
+/// A fixed word given before is not offered again; the case of what is typed does not count. `None` where nothing
+/// fits; an empty word only when `empty_too` (⇥ asks).
+pub fn offer(text: &str, values: impl Fn(Source) -> Vec<String>, empty_too: bool) -> Option<Offer> {
+    if text.contains('\n') {
+        return None;
+    }
+    let (name, rest) = text.strip_prefix('/')?.split_once(' ')?;
+    let command = COMMANDS.iter().find(|command| command.name == name)?;
+    let (before, start) = rest.rsplit_once(' ').unwrap_or(("", rest));
+    let before: Vec<&str> = before.split_whitespace().collect();
+    if start.is_empty() && !empty_too {
+        return None;
+    }
+    let open = open_slots(command.args, &before);
+    let mut words: Vec<String> = Vec::new();
+    for slot in &open {
+        words.extend(
+            fixed_words(lead(slot).0)
+                .into_iter()
+                .filter(|word| !before.contains(word))
+                .map(str::to_owned),
+        );
+        if free_lead(slot) {
+            break;
+        }
+    }
+    // A value may be a word given before: `/bg reviewer as reviewer`.
+    if let Some(source) = source(name, &before) {
+        words.extend(values(source));
+    }
+    let begun = start.to_lowercase();
+    let mut seen = std::collections::HashSet::new();
+    words.retain(|word| {
+        word.to_lowercase().starts_with(&begun) && word != start && seen.insert(word.clone())
+    });
+    (!words.is_empty()).then(|| Offer {
+        start: start.to_owned(),
+        words,
+        title: format!("/{name}"),
+    })
+}
+
+/// What a typed command's argument may become, as [`offer`] finds it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Offer {
+    /// The word typed so far, which a pick replaces.
+    pub start: String,
+    /// What it may become, the command's fixed words first.
+    pub words: Vec<String>,
+    /// The command, for the list's title.
+    pub title: String,
+}
+
+/// What a typed command still takes, shown faintly after the cursor (TUI9, T71): after a space the places still
+/// open, as `/help` writes them; inside a word the rest of the one word it can become.
+pub fn ghost(text: &str, values: impl Fn(Source) -> Vec<String>) -> Option<String> {
     let (name, rest) = text.strip_prefix('/')?.split_once(' ')?;
     let command = COMMANDS.iter().find(|command| command.name == name)?;
     if command.args.is_empty() || text.contains('\n') {
         return None;
     }
-    if rest.is_empty() {
-        return Some(command.args.to_owned());
+    if rest.is_empty() || rest.ends_with(' ') {
+        let typed: Vec<&str> = rest.split_whitespace().collect();
+        let open = open_slots(command.args, &typed);
+        return (!open.is_empty()).then(|| open.join(" "));
     }
-    completion(text)
+    let (start, word) = completion(text, values)?;
+    Some(word.chars().skip(start.chars().count()).collect())
 }
 
 /// Whether command `name` takes a path (T68: its arguments name `[path]`), what that place takes, and its fixed words
@@ -645,17 +827,11 @@ pub fn takes_path(name: &str) -> Option<(crate::paths::Wants, Vec<&'static str>)
     Some((wants, fixed))
 }
 
-/// The rest of the fixed word a typed command's argument begins (`/motion c` → `alm`), what ⇥ adds.
-pub fn completion(text: &str) -> Option<String> {
-    let (name, rest) = text.strip_prefix('/')?.split_once(' ')?;
-    if rest.is_empty() || rest.contains(char::is_whitespace) {
-        return None;
-    }
-    let command = COMMANDS.iter().find(|command| command.name == name)?;
-    choices(command.args)?
-        .into_iter()
-        .find(|word| word.starts_with(rest) && *word != rest)
-        .map(|word| word[rest.len()..].to_owned())
+/// The one word a typed command's argument can become, beside the start typed that it replaces (`/motion c` → `c`,
+/// `calm`); `None` where none or several fit.
+pub fn completion(text: &str, values: impl Fn(Source) -> Vec<String>) -> Option<(String, String)> {
+    let mut offer = offer(text, values, false)?;
+    (offer.words.len() == 1).then(|| (offer.start, offer.words.remove(0)))
 }
 
 /// The commands a typed `/` part fits: with nothing typed every one, by topic; else those whose name starts with it,
@@ -850,21 +1026,149 @@ mod tests {
         commands.iter().map(|command| command.name).collect()
     }
 
+    /// The values a test's Glut knows: two themes, one role, two agents in the background.
+    fn known(source: Source) -> Vec<String> {
+        let names: &[&str] = match source {
+            Source::Themes => &["glut", "github-light"],
+            Source::Roles => &["none", "reviewer"],
+            Source::Agents => &["critic", "coder"],
+            _ => &[],
+        };
+        names.iter().map(|name| (*name).to_owned()).collect()
+    }
+
     #[test]
     fn a_typed_command_shows_what_it_takes_and_tab_completes_a_fixed_word() {
-        assert_eq!(ghost("/motion ").as_deref(), Some("full|calm|off"));
-        assert_eq!(ghost("/motion c").as_deref(), Some("alm"));
-        assert_eq!(completion("/motion c").as_deref(), Some("alm"));
-        assert_eq!(ghost("/motion calm"), None, "the word is whole");
-        assert_eq!(ghost("/motion x"), None);
+        let whole = |start: &str, word: &str| Some((start.to_owned(), word.to_owned()));
+        assert_eq!(ghost("/motion ", known).as_deref(), Some("full|calm|off"));
+        assert_eq!(ghost("/motion c", known).as_deref(), Some("alm"));
+        assert_eq!(completion("/motion c", known), whole("c", "calm"));
+        assert_eq!(ghost("/motion calm", known), None, "the word is whole");
+        assert_eq!(ghost("/motion x", known), None);
         assert_eq!(
-            ghost("/bg ").as_deref(),
+            ghost("/bg ", known).as_deref(),
             Some("[name] [as <role>] [here|tree]")
         );
-        assert_eq!(completion("/bg h"), None, "free words are not completed");
-        assert_eq!(ghost("/motion"), None, "the name still typed");
-        assert_eq!(ghost("/clear "), None, "nothing to take");
-        assert_eq!(ghost("hello /motion "), None);
+        assert_eq!(
+            completion("/bg h", known),
+            None,
+            "a name is the owner's to give"
+        );
+        assert_eq!(ghost("/motion", known), None, "the name still typed");
+        assert_eq!(ghost("/clear ", known), None, "nothing to take");
+        assert_eq!(ghost("hello /motion ", known), None);
+    }
+
+    #[test]
+    fn every_word_in_the_catalogs_arguments_is_a_placeholder_or_a_word_to_complete_to() {
+        // A new placeholder (`[mode]`) missing from PLACEHOLDERS would be offered as the word "mode": named here, a
+        // change of the catalog has to say which it is.
+        let mut words: Vec<&str> = COMMANDS
+            .iter()
+            .flat_map(|command| fixed_words(command.args))
+            .collect();
+        words.sort_unstable();
+        words.dedup();
+        assert_eq!(
+            words,
+            [
+                "1h",
+                "add",
+                "after",
+                "allow",
+                "as",
+                "asks",
+                "blocks",
+                "calm",
+                "clean",
+                "clickable",
+                "copy",
+                "folded",
+                "full",
+                "here",
+                "html",
+                "inline",
+                "jsonl",
+                "login",
+                "logout",
+                "md",
+                "none",
+                "off",
+                "on",
+                "open",
+                "ping",
+                "plain",
+                "plan",
+                "powerline",
+                "read",
+                "remove",
+                "resume",
+                "session",
+                "system",
+                "tiles",
+                "tree",
+                "write",
+            ]
+        );
+    }
+
+    #[test]
+    fn every_place_of_a_command_completes_its_fixed_words_and_the_values_glut_knows() {
+        // A bracket's words, at a later place too; what is still open shows after a space.
+        assert_eq!(ghost("/secrets al", known).as_deref(), Some("low"));
+        assert_eq!(ghost("/export html f", known).as_deref(), Some("ull"));
+        assert_eq!(
+            ghost("/export html ", known).as_deref(),
+            Some("[full] [path]")
+        );
+        assert_eq!(
+            ghost("/bg critic as ", known).as_deref(),
+            Some("<role> [here|tree]")
+        );
+        assert_eq!(
+            ghost("/bg critic as reviewer ", known).as_deref(),
+            Some("[here|tree]")
+        );
+        assert_eq!(
+            ghost("/split here ", known),
+            None,
+            "only tree takes a branch"
+        );
+        assert_eq!(ghost("/split tree ", known).as_deref(), Some("[branch]"));
+        // Values: themes — whatever the case typed —, roles after `as`, the agents by name.
+        assert_eq!(ghost("/theme gith", known).as_deref(), Some("ub-light"));
+        assert_eq!(ghost("/theme GITH", known).as_deref(), Some("ub-light"));
+        assert_eq!(ghost("/bg critic as rev", known).as_deref(), Some("iewer"));
+        assert_eq!(
+            ghost("/bg reviewer as rev", known).as_deref(),
+            Some("iewer"),
+            "a role may be the name"
+        );
+        let agents = offer("/show c", known, false).expect("two agents fit");
+        assert_eq!(
+            (agents.start.as_str(), agents.words),
+            ("c", vec!["critic".to_owned(), "coder".to_owned()])
+        );
+        assert_eq!(
+            completion("/show c", known),
+            None,
+            "two fit: the list shows them"
+        );
+        // Nothing begun: only when ⇥ asks; a fixed word given is not offered again; free text ends the offers.
+        assert!(offer("/theme ", known, false).is_none());
+        assert_eq!(
+            offer("/theme ", known, true).map(|offer| offer.words.len()),
+            Some(2)
+        );
+        assert!(
+            offer("/export html h", known, false).is_none(),
+            "html is given already"
+        );
+        assert!(
+            offer("/todo buy op", known, false).is_none(),
+            "a to-do's text is free"
+        );
+        assert_eq!(ghost("/todo op", known).as_deref(), Some("en"));
     }
 
     #[test]
