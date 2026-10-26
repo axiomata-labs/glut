@@ -45,6 +45,11 @@ pub const TEXTS: Texts = Texts {
             "projects",
             "continuar em outro projeto: as pastas em que o Glut trabalhou, ou uma pelo caminho",
         ),
+        (
+            "folder",
+            "pastas ao lado da de trabalho nesta sessão: as ferramentas de arquivos as alcançam pelo caminho completo \
+             e os comandos escrevem nelas — /folder add <path>, /folder remove <path>",
+        ),
         ("compact", "resumir a conversa até aqui"),
         (
             "handoff",
@@ -1237,6 +1242,14 @@ pub const TEXTS: Texts = Texts {
              tempo (K5)",
         ),
         (
+            "A folder the run works in beside --cwd (T60c), the owner's word alone: the file tools reach it by its \
+             full path, commands write there, the snapshots record it. Refused: /, the home folder, one holding --cwd \
+             or a secret; repeatable",
+            "Uma pasta em que a execução trabalha ao lado de --cwd (T60c), só pela sua palavra: as ferramentas de \
+             arquivos a alcançam pelo caminho completo, os comandos escrevem nela, os snapshots a registram. \
+             Recusadas: /, a pasta pessoal, uma que contenha --cwd ou um segredo; repetível",
+        ),
+        (
             "A folder of skills beside `~/.glut/skills` (HS6, K2); repeatable",
             "Uma pasta de skills ao lado de `~/.glut/skills` (HS6, K2); repetível",
         ),
@@ -1541,6 +1554,18 @@ pub const TEXTS: Texts = Texts {
     secrets_heading: "oculto do modelo nesta sessão — /secrets allow <n> [always] deixa passar um:",
     secrets_row: "  {n}  {kind} · {chars} caracteres · visto em {seen}",
     secrets_usage: "/secrets · on|off · allow <n> [always] · add <name> <regex> · remove <name>",
+    folders_none: "nenhuma pasta ao lado da de trabalho — /folder add <path> dá uma a esta sessão",
+    folders_heading: "pastas ao lado da de trabalho, nesta sessão — as ferramentas de arquivos as alcançam pelo \
+                      caminho completo, os comandos escrevem nelas, desfazer as restaura:",
+    folder_added: "{folder} é agora uma pasta ao lado da de trabalho, nesta sessão",
+    folder_known: "{folder} já é uma",
+    folder_refused: "não como pasta ao lado da de trabalho: {reason}",
+    folder_removed: "{folder} não é mais uma pasta ao lado da de trabalho",
+    folder_unknown: "{folder} não é uma pasta desta sessão — /folder as lista",
+    folder_usage: "/folder · add <path> · remove <path>",
+    folder_overlaps: "{folder} está dentro de {other} ou o contém — um comando na externa poderia pôr um link no lugar \
+                      da interna: adicione só uma",
+    files_beside_not_restored: "uma pasta ao lado da de trabalho não voltou: {what}",
     secrets_no_such: "nenhum segredo {n} nesta sessão — /secrets os lista",
     secrets_allowed: "o segredo {n} passa nesta sessão",
     secrets_allowed_always: "o segredo {n} passa sempre (sua impressão guardada em ~/.glut/secrets.json, nunca o \

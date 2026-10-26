@@ -18,6 +18,7 @@ pub mod config;
 mod diagnostics;
 pub mod error;
 pub mod event;
+pub mod folders;
 pub mod guide;
 pub mod hooks;
 pub mod images;

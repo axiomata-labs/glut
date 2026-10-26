@@ -969,6 +969,66 @@ impl App {
         }
     }
 
+    /// `/folder`: the folders beside the working one (T60c), the owner's word for this session alone — listed alone,
+    /// one added (checked: never the home folder, one holding the project or a secret) or taken away. What is added
+    /// counts from the next call on: the file tools, the commands' sandbox, the gate and the snapshots share it.
+    fn folder_command(&mut self, rest: &str) {
+        let folders = self.parts.tools.folders().clone();
+        let rest = rest.trim();
+        let (word, path) = rest.split_once(' ').unwrap_or((rest, ""));
+        let path = path.trim();
+        match word {
+            "" => {
+                let listed = folders.list();
+                if listed.is_empty() {
+                    return self.tell(tr!(folders_none));
+                }
+                let mut text = tr!(folders_heading).to_string();
+                for folder in listed {
+                    text.push_str("\n  ");
+                    text.push_str(folder.shown());
+                }
+                self.tell(text);
+            }
+            "add" if !path.is_empty() => {
+                let deny = self
+                    .parts
+                    .config
+                    .sandbox
+                    .as_ref()
+                    .map(|sandbox| sandbox.deny_read.clone())
+                    .unwrap_or_default();
+                match glut::folders::check(path, &self.parts.config.cwd, &self.parts.home, &deny) {
+                    Ok(folder) => {
+                        let shown = folder.shown().to_owned();
+                        match folders.add(folder) {
+                            Ok(()) => self.tell(tr!(folder_added, folder = shown)),
+                            Err(glut::folders::NotAdded::Known) => {
+                                self.tell(tr!(folder_known, folder = shown));
+                            }
+                            Err(glut::folders::NotAdded::Overlaps(other)) => self.transcript.note(
+                                tr!(folder_overlaps, folder = shown, other = other),
+                                Tone::Fault,
+                            ),
+                        }
+                    }
+                    Err(reason) => self
+                        .transcript
+                        .note(tr!(folder_refused, reason = reason), Tone::Fault),
+                }
+            }
+            "remove" if !path.is_empty() => {
+                match folders.remove(path, &self.parts.config.cwd, &self.parts.home) {
+                    Some(folder) => self.tell(tr!(folder_removed, folder = folder.shown())),
+                    None => self
+                        .transcript
+                        .note(tr!(folder_unknown, folder = path), Tone::Fault),
+                }
+            }
+            _ => self.transcript.note(tr!(folder_usage), Tone::Fault),
+        }
+    }
+
     /// `/secrets` alone: every value hidden in this session, by number, kind, length and where it was seen — never the
     /// value.
     fn list_secrets(&mut self, masks: &glut::masks::Masks) {
@@ -1713,14 +1773,21 @@ impl App {
                 ),
             },
             Report::Restored(result) => match result {
-                Ok((commit, kept)) => self.transcript.note(
-                    tr!(
-                        files_restored,
-                        snapshot = &commit[..commit.len().min(8)],
-                        kept = kept
-                    ),
-                    Tone::Fine,
-                ),
+                Ok((commit, kept, missed)) => {
+                    self.transcript.note(
+                        tr!(
+                            files_restored,
+                            snapshot = &commit[..commit.len().min(8)],
+                            kept = kept
+                        ),
+                        Tone::Fine,
+                    );
+                    // T60c: the working folder is back; a folder beside it that is not is said, each one.
+                    for what in missed {
+                        self.transcript
+                            .note(tr!(files_beside_not_restored, what = what), Tone::Fault);
+                    }
+                }
                 Err(reason) => self
                     .transcript
                     .note(tr!(files_not_restored, reason = reason), Tone::Fault),
@@ -3096,6 +3163,7 @@ impl App {
             },
             "notify" => self.notify_command(rest),
             "secrets" => self.secrets_command(rest),
+            "folder" => self.folder_command(rest),
             "export" => self.export_command(rest),
             "links" => match crate::links::Links::parse(rest) {
                 Some(links) => {
@@ -4005,8 +4073,11 @@ impl App {
         let cwd = self.parts.config.cwd.clone();
         let reports = self.reports.clone();
         tokio::task::spawn_blocking(move || {
-            let restored = glut::snapshot::keep_now(&root, &cwd).and_then(|kept| {
-                glut::snapshot::restore(&root, &cwd, &run, step).map(|commit| (commit, kept))
+            // T60c: the folders beside the working one the run recorded too go back with it.
+            let beside = glut::snapshot::beside_of(&root, &cwd, &run);
+            let restored = glut::snapshot::keep_now(&root, &cwd, &beside).and_then(|kept| {
+                glut::snapshot::restore_all(&root, &cwd, &run, step)
+                    .map(|(commit, missed)| (commit, kept, missed))
             });
             let _ = reports.send(Report::Restored(restored));
         });
@@ -8925,6 +8996,48 @@ pub(crate) mod tests {
         pick(&mut app, 0);
         assert_eq!(app.queue, ["later: ‹secret 1: anthropic key, 49 chars›"]);
         assert!(app.input.is_empty());
+    }
+
+    /// T60c: `/folder` lists, adds after its check and takes away — the session's tools reach what it added.
+    #[test]
+    fn folder_adds_lists_and_takes_away_the_folders_beside() {
+        let (mut app, _reports) = app();
+        let home = app.parts.home.clone();
+        std::fs::create_dir_all(home.join("Vault")).unwrap();
+        app.folder_command("");
+        assert!(
+            last_note(&app).contains("no folders"),
+            "{}",
+            last_note(&app)
+        );
+        app.folder_command("add ~/Vault");
+        assert!(last_note(&app).contains("~/Vault"), "{}", last_note(&app));
+        assert_eq!(app.parts.tools.folders().list().len(), 1);
+        app.folder_command("add ~/Vault");
+        assert!(last_note(&app).contains("already"), "{}", last_note(&app));
+        app.folder_command("add ~");
+        assert!(
+            last_note(&app).contains("home folder"),
+            "{}",
+            last_note(&app)
+        );
+        app.folder_command("");
+        let listed = last_note(&app);
+        assert!(
+            listed.contains("back:") && listed.contains("~/Vault"),
+            "{listed}"
+        );
+        app.folder_command("remove ~/Elsewhere");
+        assert!(last_note(&app).contains("no folder of this session"));
+        app.folder_command("remove ~/Vault");
+        assert!(app.parts.tools.folders().is_empty());
+        app.folder_command("drop");
+        assert!(
+            last_note(&app).contains("/folder · add"),
+            "{}",
+            last_note(&app)
+        );
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]

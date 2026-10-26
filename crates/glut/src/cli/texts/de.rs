@@ -14,7 +14,8 @@ pub const TEXTS: Texts = Texts {
     no_model_list: "keine Modellliste von {provider}: {reason}",
     run_started: "Lauf {run} (geht er vor dem Ende verloren: glut resume {run})",
     skill_left_out: "Skill ausgelassen: {note}",
-    max_usd_no_prices: "--max-usd findet keine Preise für {model} in ~/.glut/settings.json oder der Liste des Providers: kein Budget in Geld",
+    max_usd_no_prices: "--max-usd findet keine Preise für {model} in ~/.glut/settings.json oder der Liste des \
+                        Providers: kein Budget in Geld",
     resume_running: "(läuft noch)",
     resume_name_run: "nenne den Lauf: glut resume <run> (glut resume --list zeigt sie)",
     resume_no_run: "kein unbeendeter Lauf {run} (glut resume --list zeigt sie)",
@@ -28,6 +29,7 @@ pub const TEXTS: Texts = Texts {
     undo_no_snapshots: "kein Lauf hat Snapshots von {path}",
     undo_back_step: "{path} ist wieder wie vor Schritt {step} von {run} ({commit})",
     undo_back: "{path} ist wieder wie vor {run} ({commit})",
+    undo_beside_missed: "ein Ordner daneben ist nicht zurück: {what}",
     models_no_provider: "noch kein Provider: glut providers add <kind> (glut providers catalog listet sie)",
     models_fetched: "{id} — {shown} von {all} Modellen (abgerufen {when})",
     models_count: Plural {
@@ -46,7 +48,8 @@ pub const TEXTS: Texts = Texts {
     catalog_key: "Schlüssel",
     catalog_custom_sign_in: "Schlüssel, oder --keyless",
     catalog_custom_note: "jeder andere Endpunkt, mit --root",
-    keyless_only_custom: "--keyless gilt nur für openai-compatible; der Katalog weiß, ob seine Provider einen Schlüssel brauchen",
+    keyless_only_custom: "--keyless gilt nur für openai-compatible; der Katalog weiß, ob seine Provider einen \
+                          Schlüssel brauchen",
     key_kept: "Der Schlüssel von {id} liegt in {place}.",
     key_shared: "{id} nimmt den Schlüssel, den der andere Provider seines Kontos hat, solange es keinen eigenen hat.",
     the_default: " (der Standard)",
@@ -75,15 +78,18 @@ pub const TEXTS: Texts = Texts {
     mcp_kept_nothing: "nicht angemeldet",
     mcp_stdio_no_login: "{name} startet Glut selbst: er braucht hier keine Anmeldung.",
     mcp_header_login: "{name} meldet sich mit dem Authorization-Header seines Eintrags an.",
-    mcp_not_approved: "{name} ist ein Server des Projekts, den du nicht freigegeben hast: glut run fragt im Terminal danach.",
+    mcp_not_approved: "{name} ist ein Server des Projekts, den du nicht freigegeben hast: glut run fragt im Terminal \
+                       danach.",
     mcp_secret_prompt: "Secret des Clients {id} (unsichtbar; Enter: keins): ",
     mcp_open: "{name} antwortet ohne Anmeldung.",
-    mcp_registered_only: "{name} bietet OAuth nur vorab registrierten Clients: gib hier ein Token ein — oder die clientId deines eigenen Clients als \"oauth\" in ~/.glut/mcp.json.",
+    mcp_registered_only: "{name} bietet OAuth nur vorab registrierten Clients: gib hier ein Token ein — oder die \
+                          clientId deines eigenen Clients als \"oauth\" in ~/.glut/mcp.json.",
     mcp_token_prompt: "Token für {name} auf {host} (unsichtbar): ",
     mcp_no_token: "Kein Token angegeben.",
     mcp_sign_in_at: "Anmeldung bei {host} für {name}:",
     mcp_browser_opened: "Im Browser geöffnet — warte, bis er zurückkommt.",
-    mcp_open_yourself: "Öffne sie im Browser. Endet er auf einer Adresse, die nicht lädt (über SSH), füge diese Adresse hier ein:",
+    mcp_open_yourself: "Öffne sie im Browser. Endet er auf einer Adresse, die nicht lädt (über SSH), füge diese \
+                        Adresse hier ein:",
     mcp_signed_in: "{name} ist angemeldet: {count} Werkzeuge.",
     mcp_signed_in_failed: "{name} ist angemeldet, startet aber noch nicht: {reason}",
     mcp_nothing_kept: "Für {name} ist nichts gespeichert.",
@@ -96,5 +102,6 @@ pub const TEXTS: Texts = Texts {
     mcp_not_owners: "{name} steht nicht in ~/.glut/mcp.json: einen Server des Projekts entfernt das Projekt.",
     mcp_removed: "{name} aus ~/.glut/mcp.json entfernt.",
     mcp_token_elsewhere: "{name} bekommt seine Tokens von {host}.",
-    mcp_enter_opens: "Drücke Enter, um sie im Browser zu öffnen — oder füge hier die Adresse ein, auf der der Browser endete:",
+    mcp_enter_opens: "Drücke Enter, um sie im Browser zu öffnen — oder füge hier die Adresse ein, auf der der Browser \
+                      endete:",
 };

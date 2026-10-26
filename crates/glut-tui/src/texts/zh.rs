@@ -41,6 +41,10 @@ pub const TEXTS: Texts = Texts {
             "projects",
             "在另一个项目中继续：Glut 工作过的文件夹，或按路径指定一个",
         ),
+        (
+            "folder",
+            "本会话中工作文件夹旁的文件夹：文件工具通过完整路径访问，命令也可写入 — /folder add <path>、/folder remove <path>",
+        ),
         ("compact", "总结到目前为止的对话"),
         (
             "handoff",
@@ -1100,6 +1104,12 @@ pub const TEXTS: Texts = Texts {
             "把一个 skill 作为运行的任务（HS6，K1.1）：其 SKILL.md 正文成为运行的指令，其 frontmatter 可以限制工具、选择模型并设置时间上限（K5）",
         ),
         (
+            "A folder the run works in beside --cwd (T60c), the owner's word alone: the file tools reach it by its \
+             full path, commands write there, the snapshots record it. Refused: /, the home folder, one holding --cwd \
+             or a secret; repeatable",
+            "运行在 --cwd 之外工作的文件夹（T60c），只凭所有者的指定：文件工具通过完整路径访问，命令可写入，快照会记录它。拒绝：/、主文件夹、包含 --cwd 或机密的文件夹；可重复",
+        ),
+        (
             "A folder of skills beside `~/.glut/skills` (HS6, K2); repeatable",
             "`~/.glut/skills` 之外的 skill 文件夹（HS6，K2）；可重复",
         ),
@@ -1389,6 +1399,16 @@ pub const TEXTS: Texts = Texts {
     secrets_heading: "本会话中对模型隐藏的内容 — /secrets allow <n> [always] 放行其一：",
     secrets_row: "  {n}  {kind} · {chars} 个字符 · 见于 {seen}",
     secrets_usage: "/secrets · on|off · allow <n> [always] · add <name> <regex> · remove <name>",
+    folders_none: "工作文件夹旁没有文件夹 — /folder add <path> 为本会话添加一个",
+    folders_heading: "本会话中工作文件夹旁的文件夹 — 文件工具通过完整路径访问，命令可写入，撤销会一并恢复：",
+    folder_added: "{folder} 从现在起是本会话工作文件夹旁的文件夹",
+    folder_known: "{folder} 已经是了",
+    folder_refused: "不能作为工作文件夹旁的文件夹：{reason}",
+    folder_removed: "{folder} 不再是工作文件夹旁的文件夹",
+    folder_unknown: "{folder} 不是本会话的文件夹 — /folder 列出它们",
+    folder_usage: "/folder · add <path> · remove <path>",
+    folder_overlaps: "{folder} 位于 {other} 之内或包含它 — 外层中的命令可能在内层的位置放一个链接：只添加其中一个",
+    files_beside_not_restored: "工作文件夹旁的一个文件夹未恢复：{what}",
     secrets_no_such: "本会话没有密钥 {n} — /secrets 会列出它们",
     secrets_allowed: "密钥 {n} 在本会话中放行",
     secrets_allowed_always: "密钥 {n} 始终放行（只在 ~/.glut/secrets.json 中保存其指纹，从不保存值）",

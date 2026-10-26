@@ -47,6 +47,10 @@ pub struct Step {
 pub struct Record {
     pub run: String,
     pub steps: Vec<Step>,
+    /// The folders beside the working one the run recorded too (T60c), each in a store of its own under the same run:
+    /// an undo puts them back with the working folder. Only in the working folder's record.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub beside: Vec<PathBuf>,
 }
 
 /// The snapshots of one work folder for one run.
@@ -122,8 +126,19 @@ impl Snapshots {
             record: Record {
                 run,
                 steps: Vec::new(),
+                beside: Vec::new(),
             },
         })
+    }
+
+    /// The folder recorded, resolved.
+    pub fn work_tree(&self) -> &Path {
+        &self.work_tree
+    }
+
+    /// Names `folders` as the ones beside this one the run records too (T60c), from the next step on.
+    pub fn set_beside(&mut self, folders: Vec<PathBuf>) {
+        self.record.beside = folders;
     }
 
     /// Records the folder before `turn`'s first change; once per turn. Returns the commit when one was made.
@@ -290,19 +305,83 @@ pub fn restore(
 /// Records the folder as it is now in a run of its own, before an undo puts it back (`before-undo-…`): what the
 /// owner had since is not lost, `glut undo --run <it>` brings it back. Returns that run.
 ///
+/// `beside`: the folders beside the working one the undo puts back too (T60c, [`beside_of`]), kept aside with it —
+/// one that cannot be is left out, never in the way of the undo.
+///
 /// # Errors
 ///
-/// Why no snapshot could be taken.
-pub fn keep_now(root: &Path, work_tree: &Path) -> Result<String, String> {
+/// Why no snapshot of the working folder could be taken.
+pub fn keep_now(root: &Path, work_tree: &Path, beside: &[PathBuf]) -> Result<String, String> {
     let run = format!(
         "before-undo-{}",
         SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .map_or(0, |since| since.as_millis())
     );
+    let mut kept = Vec::new();
+    for folder in beside {
+        let taken = Snapshots::open(root, folder, &run).and_then(|mut snaps| {
+            snaps.take(0)?;
+            Ok(snaps)
+        });
+        if let Ok(snaps) = taken {
+            kept.push(snaps.work_tree().to_path_buf());
+        }
+    }
     let mut snaps = Snapshots::open(root, work_tree, &run)?;
+    snaps.set_beside(kept);
     snaps.take(0)?;
     Ok(run)
+}
+
+/// The folders beside `work_tree` that `run` recorded too (T60c); none for a run without.
+pub fn beside_of(root: &Path, work_tree: &Path, run: &str) -> Vec<PathBuf> {
+    runs(root, work_tree)
+        .into_iter()
+        .find(|record| record.run == run)
+        .map(|record| record.beside)
+        .unwrap_or_default()
+}
+
+/// [`restore`] of `work_tree` and of every folder beside it the run recorded (T60c): each put back as it was before
+/// the step — a folder whose first snapshot came later, as before that one (nothing in it changed before). Returns
+/// the working folder's commit and each folder beside it that could not be put back, with why: the working folder
+/// is back all the same.
+///
+/// # Errors
+///
+/// The working folder's [`restore`] failing.
+pub fn restore_all(
+    root: &Path,
+    work_tree: &Path,
+    run: &str,
+    step: Option<u32>,
+) -> Result<(String, Vec<String>), String> {
+    let commit = restore(root, work_tree, run, step)?;
+    let mut failed = Vec::new();
+    for folder in beside_of(root, work_tree, run) {
+        if !folder.is_dir() {
+            failed.push(format!("{}: the folder is gone", folder.display()));
+            continue;
+        }
+        let later = runs(root, &folder)
+            .into_iter()
+            .find(|record| record.run == run)
+            .and_then(|record| {
+                record
+                    .steps
+                    .iter()
+                    .find(|taken| step.is_none_or(|step| taken.turn >= step))
+                    .map(|taken| taken.turn)
+            });
+        let Some(turn) = later else {
+            continue;
+        };
+        if let Err(reason) = restore(root, &folder, run, Some(turn)) {
+            failed.push(format!("{}: {reason}", folder.display()));
+        }
+    }
+    Ok((commit, failed))
 }
 
 /// The most of a step's change [`diff`] gives: a large change is cut, and says so.
@@ -655,7 +734,7 @@ mod tests {
             last.contains("made-since.txt"),
             "a file made since is part of the change: {last}"
         );
-        let kept = keep_now(&root, &folder).unwrap();
+        let kept = keep_now(&root, &folder, &[]).unwrap();
         restore(&root, &folder, "run1", None).unwrap();
         assert_eq!(
             std::fs::read_to_string(folder.join("a.txt")).unwrap(),
@@ -824,5 +903,81 @@ mod tests {
         assert!(checked_commit("--index-output=/tmp/x").is_err());
         assert!(checked_commit(&"a".repeat(40)).is_ok());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// T60c: the folders beside the working one go back with it — one whose first snapshot came after the step asked
+    /// for as before that snapshot, one the run never changed after it not at all.
+    #[test]
+    fn undo_puts_the_folders_beside_back_with_the_working_one() {
+        let (root, work, vault) = (temp("root"), temp("work"), temp("vault"));
+        std::fs::write(work.join("a.txt"), "w0").unwrap();
+        std::fs::write(vault.join("v.txt"), "v0").unwrap();
+        let mut working = Snapshots::open(&root, &work, "run1").unwrap();
+        working.take(1).unwrap();
+        std::fs::write(work.join("a.txt"), "w1").unwrap();
+        // The folder joins at step 2, as one added while the session runs.
+        let mut beside = Snapshots::open(&root, &vault, "run1").unwrap();
+        working.set_beside(vec![beside.work_tree().to_path_buf()]);
+        working.take(2).unwrap();
+        beside.take(2).unwrap();
+        std::fs::write(work.join("a.txt"), "w2").unwrap();
+        std::fs::write(vault.join("v.txt"), "v2").unwrap();
+        std::fs::write(vault.join("made.txt"), "new").unwrap();
+        assert_eq!(beside_of(&root, &work, "run1"), vec![vault.clone()]);
+
+        let kept = keep_now(&root, &work, &beside_of(&root, &work, "run1")).unwrap();
+        assert!(
+            restore_all(&root, &work, "run1", Some(1))
+                .unwrap()
+                .1
+                .is_empty()
+        );
+        let read = |path: PathBuf| std::fs::read_to_string(path).unwrap();
+        assert_eq!(read(work.join("a.txt")), "w0");
+        assert_eq!(
+            read(vault.join("v.txt")),
+            "v0",
+            "as before its first snapshot"
+        );
+        assert!(!vault.join("made.txt").exists());
+
+        assert!(restore_all(&root, &work, &kept, None).unwrap().1.is_empty());
+        assert_eq!(read(work.join("a.txt")), "w2");
+        assert_eq!(
+            read(vault.join("v.txt")),
+            "v2",
+            "kept aside with the working folder"
+        );
+        assert_eq!(read(vault.join("made.txt")), "new");
+        for dir in [root, work, vault] {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    /// T60c: a folder beside the working one that is gone is never in the way of the undo: left out of what is kept
+    /// aside, and named as not put back, the working folder back all the same.
+    #[test]
+    fn a_folder_beside_that_is_gone_does_not_stop_the_undo() {
+        let (root, work, vault) = (temp("root"), temp("work"), temp("vault"));
+        std::fs::write(work.join("a.txt"), "w0").unwrap();
+        std::fs::write(vault.join("v.txt"), "v0").unwrap();
+        let mut beside = Snapshots::open(&root, &vault, "run1").unwrap();
+        beside.take(1).unwrap();
+        let mut working = Snapshots::open(&root, &work, "run1").unwrap();
+        working.set_beside(vec![vault.clone()]);
+        working.take(1).unwrap();
+        std::fs::write(work.join("a.txt"), "w1").unwrap();
+        std::fs::remove_dir_all(&vault).unwrap();
+        let kept = keep_now(&root, &work, &beside_of(&root, &work, "run1")).unwrap();
+        assert!(
+            beside_of(&root, &work, &kept).is_empty(),
+            "nothing of it kept aside"
+        );
+        let (_, missed) = restore_all(&root, &work, "run1", None).unwrap();
+        assert_eq!(std::fs::read_to_string(work.join("a.txt")).unwrap(), "w0");
+        assert_eq!(missed.len(), 1, "{missed:?}");
+        for dir in [root, work] {
+            let _ = std::fs::remove_dir_all(dir);
+        }
     }
 }

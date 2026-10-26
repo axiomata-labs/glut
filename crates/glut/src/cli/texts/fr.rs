@@ -10,11 +10,13 @@ pub const TEXTS: Texts = Texts {
     gain_no_home: "aucun dossier personnel : définis HOME ou GLUT_HOME",
     gain_unreadable: "impossible de lire le décompte des économies : {err}",
     run_provider: "fournisseur {provider} · modèle {model}",
-    model_unlisted: "{model} n’est pas dans la liste des modèles de {provider} (glut models list --provider {provider})",
+    model_unlisted: "{model} n’est pas dans la liste des modèles de {provider} (glut models list --provider \
+                     {provider})",
     no_model_list: "pas de liste de modèles de {provider} : {reason}",
     run_started: "exécution {run} (si elle est perdue avant la fin : glut resume {run})",
     skill_left_out: "Skill ignoré : {note}",
-    max_usd_no_prices: "--max-usd ne trouve aucun prix pour {model} dans ~/.glut/settings.json ni dans la liste du fournisseur : pas de budget en argent",
+    max_usd_no_prices: "--max-usd ne trouve aucun prix pour {model} dans ~/.glut/settings.json ni dans la liste du \
+                        fournisseur : pas de budget en argent",
     resume_running: "(toujours en cours)",
     resume_name_run: "indique l’exécution : glut resume <run> (glut resume --list les affiche)",
     resume_no_run: "aucune exécution inachevée {run} (glut resume --list les affiche)",
@@ -28,7 +30,9 @@ pub const TEXTS: Texts = Texts {
     undo_no_snapshots: "aucune exécution n’a d’instantanés de {path}",
     undo_back_step: "{path} est revenu à l’état d’avant l’étape {step} de {run} ({commit})",
     undo_back: "{path} est revenu à l’état d’avant {run} ({commit})",
-    models_no_provider: "aucun fournisseur pour l’instant : glut providers add <kind> (glut providers catalog les liste)",
+    undo_beside_missed: "un dossier à côté n’est pas revenu : {what}",
+    models_no_provider: "aucun fournisseur pour l’instant : glut providers add <kind> (glut providers catalog les \
+                         liste)",
     models_fetched: "{id} — {shown} sur {all} modèles (récupérés le {when})",
     models_count: Plural {
         one: "{n} modèle",
@@ -46,7 +50,8 @@ pub const TEXTS: Texts = Texts {
     catalog_key: "clé",
     catalog_custom_sign_in: "clé, ou --keyless",
     catalog_custom_note: "tout autre point d’accès, avec --root",
-    keyless_only_custom: "--keyless ne vaut que pour openai-compatible ; le catalogue sait si ses fournisseurs ont besoin d’une clé",
+    keyless_only_custom: "--keyless ne vaut que pour openai-compatible ; le catalogue sait si ses fournisseurs ont \
+                          besoin d’une clé",
     key_kept: "La clé de {id} est dans {place}.",
     key_shared: "{id} prend la clé que garde l’autre fournisseur de son compte, sauf s’il a la sienne.",
     the_default: " (par défaut)",
@@ -75,15 +80,18 @@ pub const TEXTS: Texts = Texts {
     mcp_kept_nothing: "non connecté",
     mcp_stdio_no_login: "{name} est démarré par Glut lui-même : il n’a pas besoin de connexion ici.",
     mcp_header_login: "{name} se connecte avec l’en-tête Authorization de son entrée.",
-    mcp_not_approved: "{name} est un serveur du projet que tu n’as pas approuvé : glut run le demande dans un terminal.",
+    mcp_not_approved: "{name} est un serveur du projet que tu n’as pas approuvé : glut run le demande dans un \
+                       terminal.",
     mcp_secret_prompt: "Secret du client {id} (masqué ; Entrée : aucun) : ",
     mcp_open: "{name} répond sans connexion.",
-    mcp_registered_only: "{name} n’offre OAuth qu’aux clients enregistrés d’avance : donne un jeton ici — ou le clientId de ton propre client comme \"oauth\" dans ~/.glut/mcp.json.",
+    mcp_registered_only: "{name} n’offre OAuth qu’aux clients enregistrés d’avance : donne un jeton ici — ou le \
+                          clientId de ton propre client comme \"oauth\" dans ~/.glut/mcp.json.",
     mcp_token_prompt: "Jeton pour {name} sur {host} (masqué) : ",
     mcp_no_token: "Aucun jeton donné.",
     mcp_sign_in_at: "Connexion à {host} pour {name} :",
     mcp_browser_opened: "Ouvert dans ton navigateur — en attente de son retour.",
-    mcp_open_yourself: "Ouvre-la dans un navigateur. S’il finit sur une adresse qui ne charge pas (via SSH), colle cette adresse ici :",
+    mcp_open_yourself: "Ouvre-la dans un navigateur. S’il finit sur une adresse qui ne charge pas (via SSH), colle \
+                        cette adresse ici :",
     mcp_signed_in: "{name} est connecté : {count} outils.",
     mcp_signed_in_failed: "{name} est connecté, mais ne démarre pas encore : {reason}",
     mcp_nothing_kept: "Rien n’est gardé pour {name}.",
@@ -96,5 +104,6 @@ pub const TEXTS: Texts = Texts {
     mcp_not_owners: "{name} n’est pas dans ~/.glut/mcp.json : un serveur du projet se retire dans le projet.",
     mcp_removed: "{name} retiré de ~/.glut/mcp.json.",
     mcp_token_elsewhere: "{name} reçoit ses jetons de {host}.",
-    mcp_enter_opens: "Appuie sur Entrée pour l’ouvrir dans ton navigateur — ou colle ici l’adresse sur laquelle il a fini :",
+    mcp_enter_opens: "Appuie sur Entrée pour l’ouvrir dans ton navigateur — ou colle ici l’adresse sur laquelle il a \
+                      fini :",
 };

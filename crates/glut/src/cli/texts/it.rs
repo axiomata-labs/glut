@@ -14,7 +14,8 @@ pub const TEXTS: Texts = Texts {
     no_model_list: "nessun elenco di modelli di {provider}: {reason}",
     run_started: "esecuzione {run} (se va persa prima della fine: glut resume {run})",
     skill_left_out: "Skill escluso: {note}",
-    max_usd_no_prices: "--max-usd non trova prezzi per {model} in ~/.glut/settings.json né nell’elenco del provider: nessun budget in denaro",
+    max_usd_no_prices: "--max-usd non trova prezzi per {model} in ~/.glut/settings.json né nell’elenco del provider: \
+                        nessun budget in denaro",
     resume_running: "(ancora in corso)",
     resume_name_run: "indica l’esecuzione: glut resume <run> (glut resume --list le mostra)",
     resume_no_run: "nessuna esecuzione incompiuta {run} (glut resume --list le mostra)",
@@ -28,6 +29,7 @@ pub const TEXTS: Texts = Texts {
     undo_no_snapshots: "nessuna esecuzione ha snapshot di {path}",
     undo_back_step: "{path} è tornato com’era prima del passo {step} di {run} ({commit})",
     undo_back: "{path} è tornato com’era prima di {run} ({commit})",
+    undo_beside_missed: "una cartella accanto non è tornata: {what}",
     models_no_provider: "ancora nessun provider: glut providers add <kind> (glut providers catalog li elenca)",
     models_fetched: "{id} — {shown} su {all} modelli (scaricati il {when})",
     models_count: Plural {
@@ -46,9 +48,11 @@ pub const TEXTS: Texts = Texts {
     catalog_key: "chiave",
     catalog_custom_sign_in: "chiave, o --keyless",
     catalog_custom_note: "qualsiasi altro endpoint, con --root",
-    keyless_only_custom: "--keyless vale solo per openai-compatible; il catalogo sa se i suoi provider hanno bisogno di una chiave",
+    keyless_only_custom: "--keyless vale solo per openai-compatible; il catalogo sa se i suoi provider hanno bisogno \
+                          di una chiave",
     key_kept: "La chiave di {id} è in {place}.",
-    key_shared: "{id} usa la chiave che conserva l’altro provider del suo account, a meno che non ne abbia una propria.",
+    key_shared: "{id} usa la chiave che conserva l’altro provider del suo account, a meno che non ne abbia una \
+                 propria.",
     the_default: " (predefinito)",
     provider_added: "Provider {id} aggiunto{default}. glut providers test {id} fa una chiamata minima.",
     key_prompt_shared: "Chiave per {id} (nascosta; Invio usa quella dell’altro provider del suo account): ",
@@ -78,12 +82,14 @@ pub const TEXTS: Texts = Texts {
     mcp_not_approved: "{name} è un server del progetto che non hai approvato: glut run lo chiede in un terminale.",
     mcp_secret_prompt: "Secret del client {id} (nascosto; Invio: nessuno): ",
     mcp_open: "{name} risponde senza accesso.",
-    mcp_registered_only: "{name} offre OAuth solo ai client registrati in anticipo: inserisci qui un token — oppure il clientId del tuo client come \"oauth\" in ~/.glut/mcp.json.",
+    mcp_registered_only: "{name} offre OAuth solo ai client registrati in anticipo: inserisci qui un token — oppure il \
+                          clientId del tuo client come \"oauth\" in ~/.glut/mcp.json.",
     mcp_token_prompt: "Token per {name} su {host} (nascosto): ",
     mcp_no_token: "Nessun token inserito.",
     mcp_sign_in_at: "Accesso a {host} per {name}:",
     mcp_browser_opened: "Aperto nel browser — in attesa che torni.",
-    mcp_open_yourself: "Aprilo in un browser. Se finisce su un indirizzo che non si carica (via SSH), incolla qui quell’indirizzo:",
+    mcp_open_yourself: "Aprilo in un browser. Se finisce su un indirizzo che non si carica (via SSH), incolla qui \
+                        quell’indirizzo:",
     mcp_signed_in: "{name} ha effettuato l’accesso: {count} strumenti.",
     mcp_signed_in_failed: "{name} ha effettuato l’accesso, ma non si avvia ancora: {reason}",
     mcp_nothing_kept: "Per {name} non è salvato nulla.",

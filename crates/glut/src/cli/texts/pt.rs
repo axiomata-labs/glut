@@ -14,7 +14,8 @@ pub const TEXTS: Texts = Texts {
     no_model_list: "nenhuma lista de modelos de {provider}: {reason}",
     run_started: "execução {run} (se for perdida antes do fim: glut resume {run})",
     skill_left_out: "Skill deixado de fora: {note}",
-    max_usd_no_prices: "--max-usd não encontra preços para {model} em ~/.glut/settings.json nem na lista do provider: sem orçamento em dinheiro",
+    max_usd_no_prices: "--max-usd não encontra preços para {model} em ~/.glut/settings.json nem na lista do provider: \
+                        sem orçamento em dinheiro",
     resume_running: "(ainda em execução)",
     resume_name_run: "indique a execução: glut resume <run> (glut resume --list mostra todas)",
     resume_no_run: "nenhuma execução inacabada {run} (glut resume --list mostra todas)",
@@ -28,6 +29,7 @@ pub const TEXTS: Texts = Texts {
     undo_no_snapshots: "nenhuma execução tem snapshots de {path}",
     undo_back_step: "{path} voltou ao estado de antes da etapa {step} de {run} ({commit})",
     undo_back: "{path} voltou ao estado de antes de {run} ({commit})",
+    undo_beside_missed: "uma pasta ao lado não voltou: {what}",
     models_no_provider: "ainda nenhum provider: glut providers add <kind> (glut providers catalog lista todos)",
     models_fetched: "{id} — {shown} de {all} modelos (obtidos em {when})",
     models_count: Plural {
@@ -78,12 +80,14 @@ pub const TEXTS: Texts = Texts {
     mcp_not_approved: "{name} é um servidor do projeto que você não aprovou: glut run pergunta num terminal.",
     mcp_secret_prompt: "Segredo do cliente {id} (oculto; Enter: nenhum): ",
     mcp_open: "{name} responde sem login.",
-    mcp_registered_only: "{name} oferece OAuth só a clientes registrados antes: dê um token aqui — ou o clientId do seu próprio cliente como \"oauth\" em ~/.glut/mcp.json.",
+    mcp_registered_only: "{name} oferece OAuth só a clientes registrados antes: dê um token aqui — ou o clientId do \
+                          seu próprio cliente como \"oauth\" em ~/.glut/mcp.json.",
     mcp_token_prompt: "Token para {name} em {host} (oculto): ",
     mcp_no_token: "Nenhum token dado.",
     mcp_sign_in_at: "Fazendo login em {host} para {name}:",
     mcp_browser_opened: "Aberto no seu navegador — aguardando que volte.",
-    mcp_open_yourself: "Abra-o num navegador. Se terminar num endereço que não carrega (via SSH), cole esse endereço aqui:",
+    mcp_open_yourself: "Abra-o num navegador. Se terminar num endereço que não carrega (via SSH), cole esse endereço \
+                        aqui:",
     mcp_signed_in: "{name} está conectado: {count} ferramentas.",
     mcp_signed_in_failed: "{name} está conectado, mas ainda não inicia: {reason}",
     mcp_nothing_kept: "Nada está guardado para {name}.",

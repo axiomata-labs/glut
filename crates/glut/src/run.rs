@@ -378,7 +378,14 @@ async fn run_inner<M: ChatModel>(
     let mut resumed_calls = Vec::new();
     match opening {
         Opening::Fresh { earlier, prompt } => {
-            run.messages = opening_messages(config, model.name(), earlier, prompt, depth);
+            run.messages = opening_messages(
+                config,
+                model.name(),
+                earlier,
+                prompt,
+                depth,
+                &tools.folders().prompt(),
+            );
             if depth == 0
                 && let Some(spec) = &config.journal
             {
@@ -395,8 +402,17 @@ async fn run_inner<M: ChatModel>(
         Opening::Resumed { recorded, journal } => {
             let recorded = *recorded;
             // The system prompt is written anew (today's date, the instructions as they are now); the rest is kept.
-            let mut messages =
-                vec![opening_messages(config, model.name(), Vec::new(), "", depth).remove(0)];
+            let mut messages = vec![
+                opening_messages(
+                    config,
+                    model.name(),
+                    Vec::new(),
+                    "",
+                    depth,
+                    &tools.folders().prompt(),
+                )
+                .remove(0),
+            ];
             // Only the opening system prompt is replaced; a SessionStart context behind it stays (HS7).
             let mut saved = recorded.messages.into_iter().peekable();
             if saved.peek().is_some_and(|m| m.role == Role::System) {
@@ -502,8 +518,13 @@ const MOST_HELD_BYTES: u64 = 8 * 1024 * 1024;
 
 /// What the file a write names holds now (T58) — the file itself, its links followed, inside the folder only, a
 /// plain file not too large; anything else holds nothing, so no hidden value goes into it.
-fn held_text(cwd: &Path, path: &str) -> String {
-    let (Ok(root), Ok(real)) = (cwd.canonicalize(), lexical(cwd, path).canonicalize()) else {
+fn held_text(cwd: &Path, beside: &crate::folders::Folders, path: &str) -> String {
+    // T60c: a file in a folder beside the working one holds what it holds there, and only there.
+    let (root, full) = match beside.place(path) {
+        Some((folder, _)) => (folder.real, beside.full_path(path).unwrap_or_default()),
+        None => (cwd.to_path_buf(), lexical(cwd, path)),
+    };
+    let (Ok(root), Ok(real)) = (root.canonicalize(), full.canonicalize()) else {
         return String::new();
     };
     let plain =
@@ -517,12 +538,16 @@ fn held_text(cwd: &Path, path: &str) -> String {
 /// The conversation a run starts with: its system prompt — the caller's instructions at depth 0, the
 /// subagent's own prompt below (D5) — then the `earlier` conversation without its old system prompt, and the
 /// user's message.
+///
+/// `beside`: what the model is told of the folders beside the working one (T60c), after everything else so a folder
+/// added later keeps the cached start of the prompt.
 fn opening_messages(
     config: &RunConfig,
     model: &str,
     earlier: Vec<Message>,
     prompt: &str,
     depth: u32,
+    beside: &str,
 ) -> Vec<Message> {
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let system = if depth == 0 {
@@ -539,6 +564,11 @@ fn opening_messages(
             Some(agent) => format!("{frame}\n\n{agent}"),
             None => frame,
         }
+    };
+    let system = if beside.is_empty() {
+        system
+    } else {
+        format!("{system}\n\n{beside}")
     };
     let mut messages = vec![Message::system(system)];
     let mut earlier = earlier.into_iter().peekable();
@@ -731,9 +761,107 @@ struct ChainAnswer {
 /// Where a run's snapshots stand.
 enum SnapshotState {
     Unopened,
-    Open(Snapshots),
+    Open(Box<Taken>),
     /// They could not be taken (no git, no store): the run goes on without, and says so once.
     Off,
+}
+
+/// The snapshots a run takes: the working folder's, and those of the folders beside it (T60c), each in a store of its
+/// own under the run's id — the working folder's record names them, so an undo puts them back together.
+struct Taken {
+    working: Snapshots,
+    /// The folders beside it recorded at every step, as they stand in the session now.
+    beside: Vec<Snapshots>,
+    /// Every folder beside it that has a step of this run recorded — one taken away since included: an undo puts it
+    /// back as well.
+    recorded: Vec<PathBuf>,
+    /// Folders whose store could not be opened or whose snapshot failed: said once, not tried at every step.
+    given_up: Vec<PathBuf>,
+    /// The snapshots of folders taken away while the run went on: one added again goes on with its own record, never
+    /// with a new one that would write over its first steps.
+    parked: Vec<Snapshots>,
+}
+
+impl Taken {
+    fn new(working: Snapshots) -> Self {
+        Taken {
+            working,
+            beside: Vec::new(),
+            recorded: Vec::new(),
+            given_up: Vec::new(),
+            parked: Vec::new(),
+        }
+    }
+
+    /// Records every folder before step `turn`: first those of `folders` beside the working one — one added while the
+    /// session runs joins here, one taken away is recorded no more —, then the working folder, whose record names
+    /// them. The working folder's new commit, and what could not be recorded beside it, said once.
+    ///
+    /// # Errors
+    ///
+    /// The working folder's snapshot failing: the run then goes without any.
+    fn take(
+        &mut self,
+        root: &Path,
+        run: &str,
+        folders: &[PathBuf],
+        turn: u32,
+    ) -> Result<(Option<String>, Vec<String>), String> {
+        let mut notes = Vec::new();
+        let (kept, away): (Vec<Snapshots>, Vec<Snapshots>) = std::mem::take(&mut self.beside)
+            .into_iter()
+            .partition(|snaps| folders.iter().any(|folder| snaps.work_tree() == folder));
+        self.beside = kept;
+        self.parked.extend(away);
+        for folder in folders {
+            let known = self.beside.iter().any(|snaps| snaps.work_tree() == folder);
+            if known || self.given_up.contains(folder) {
+                continue;
+            }
+            if let Some(at) = self
+                .parked
+                .iter()
+                .position(|snaps| snaps.work_tree() == folder)
+            {
+                self.beside.push(self.parked.remove(at));
+                continue;
+            }
+            match Snapshots::open(root, folder, run) {
+                Ok(snaps) => self.beside.push(snaps),
+                Err(reason) => {
+                    notes.push(format!(
+                        "no snapshots of {} (undo cannot put it back): {reason}",
+                        folder.display()
+                    ));
+                    self.given_up.push(folder.clone());
+                }
+            }
+        }
+        let mut failed = Vec::new();
+        for snaps in &mut self.beside {
+            match snaps.take(turn) {
+                Ok(_) => {
+                    let folder = snaps.work_tree().to_path_buf();
+                    if !self.recorded.contains(&folder) {
+                        self.recorded.push(folder);
+                    }
+                }
+                Err(reason) => {
+                    notes.push(format!(
+                        "no more snapshots of {} (undo cannot put it back from here on): {reason}",
+                        snaps.work_tree().display()
+                    ));
+                    failed.push(snaps.work_tree().to_path_buf());
+                }
+            }
+        }
+        self.beside
+            .retain(|snaps| !failed.iter().any(|folder| snaps.work_tree() == folder));
+        self.given_up.extend(failed);
+        self.working.set_beside(self.recorded.clone());
+        let commit = self.working.take(turn)?;
+        Ok((commit, notes))
+    }
 }
 
 /// The tools a run offers the model, in the order they go out, and what a script finds in its catalog.
@@ -1919,8 +2047,8 @@ impl<M: ChatModel> Loop<'_, M> {
         // of that file is said so.
         let shared = self.sibling.as_ref().and_then(|sibling| {
             match self.tools.access_of(name, &call.function.arguments)? {
-                Access::Edit { path } => Some((sibling, true, lexical(&self.config.cwd, &path))),
-                Access::Read { path } => Some((sibling, false, lexical(&self.config.cwd, &path))),
+                Access::Edit { path } => Some((sibling, true, self.full_path(&path))),
+                Access::Read { path } => Some((sibling, false, self.full_path(&path))),
                 _ => None,
             }
         });
@@ -1986,6 +2114,14 @@ impl<M: ChatModel> Loop<'_, M> {
         Ok((called.ok, called.text))
     }
 
+    /// Where a path the rules see (`src/a.rs`, `~/Vault/a.md`) is on disk: in the working folder or one beside it.
+    fn full_path(&self, path: &str) -> PathBuf {
+        self.tools
+            .folders()
+            .full_path(path)
+            .unwrap_or_else(|| lexical(&self.config.cwd, path))
+    }
+
     /// The arguments a call runs with (T58): a write's placeholders with their values put back where the file
     /// already holds them, anything else as the model wrote it. `Err` with the model's words when a write would put a
     /// hidden value somewhere new.
@@ -2004,11 +2140,13 @@ impl<M: ChatModel> Loop<'_, M> {
             return Ok(arguments.clone());
         };
         let (cwd, arguments) = (self.config.cwd.clone(), arguments.clone());
+        let beside = self.tools.folders().clone();
         // The file is read only when a value is to go back, and off the runtime: it is the model's to name.
         let job = tokio::task::spawn_blocking(move || {
             let held = std::cell::OnceCell::new();
             masks.unmask(&arguments, |value| {
-                held.get_or_init(|| held_text(&cwd, &path)).contains(value)
+                held.get_or_init(|| held_text(&cwd, &beside, &path))
+                    .contains(value)
             })
         });
         let deadline = self.deadline;
@@ -2045,17 +2183,24 @@ impl<M: ChatModel> Loop<'_, M> {
             self.config.cwd.clone(),
         );
         let state = std::mem::replace(&mut self.snapshots, SnapshotState::Off);
+        let beside: Vec<PathBuf> = self
+            .tools
+            .folders()
+            .list()
+            .into_iter()
+            .map(|folder| folder.real)
+            .collect();
         // Git is blocking work; the snapshots move to a blocking thread and back.
         let job = tokio::task::spawn_blocking(move || {
-            let mut snaps = match state {
-                SnapshotState::Open(snaps) => snaps,
+            let mut taken = match state {
+                SnapshotState::Open(taken) => *taken,
                 _ => {
                     snapshot::sweep(&root);
-                    Snapshots::open(&root, &cwd, &run)?
+                    Taken::new(Snapshots::open(&root, &cwd, &run)?)
                 }
             };
-            let commit = snaps.take(turn)?;
-            Ok::<_, String>((snaps, commit))
+            let (commit, notes) = taken.take(&root, &run, &beside, turn)?;
+            Ok::<_, String>((taken, commit, notes))
         });
         // The run's end does not wait for a snapshot: git finishes on its own thread, the run goes without.
         let taken = tokio::select! {
@@ -2064,7 +2209,10 @@ impl<M: ChatModel> Loop<'_, M> {
             () = self.cancel.cancelled() => return,
         };
         match taken {
-            Ok((snaps, commit)) => {
+            Ok((taken, commit, notes)) => {
+                for message in notes {
+                    sink.emit(Event::Error { message });
+                }
                 if let Some(commit) = commit {
                     sink.emit(Event::Snapshot {
                         turn,
@@ -2072,7 +2220,7 @@ impl<M: ChatModel> Loop<'_, M> {
                         commit,
                     });
                 }
-                self.snapshots = SnapshotState::Open(snaps);
+                self.snapshots = SnapshotState::Open(Box::new(taken));
             }
             Err(reason) => sink.emit(Event::Error {
                 message: format!("no snapshots for this run (undo is not possible): {reason}"),
@@ -2099,6 +2247,10 @@ impl<M: ChatModel> Loop<'_, M> {
         else {
             return None;
         };
+        // The language servers know the working folder's project only; a folder beside it (T60c) is no part of it.
+        if path.starts_with(['~', '/']) {
+            return None;
+        }
         if self.diagnostics.is_none() {
             let profile = self.sandbox_profile()?;
             self.diagnostics = Some(Arc::new(std::sync::Mutex::new(
@@ -3178,6 +3330,7 @@ mod tests {
             vec![Message::user("first"), thought],
             "second",
             0,
+            "",
         );
         assert_eq!(messages.len(), 4);
         assert!(messages.iter().all(|message| !message.has_reasoning()));
@@ -6411,7 +6564,10 @@ mod tests {
             Ok(text("done")),
         ]);
         let mut tools = Toolbox::new();
-        tools.extend(crate::tools::files::file_tools(dir.path(), Default::default()).unwrap());
+        tools.extend(
+            crate::tools::files::file_tools(dir.path(), Default::default(), Default::default())
+                .unwrap(),
+        );
         let config = RunConfig::new(dir.path());
         let mut events = Vec::new();
         let outcome = run(&config, &model, &tools, "go", &mut events, &Cancel::new()).await;
@@ -6449,7 +6605,10 @@ mod tests {
             Ok(text("done")),
         ]);
         let mut tools = Toolbox::new();
-        tools.extend(crate::tools::files::file_tools(dir.path(), Default::default()).unwrap());
+        tools.extend(
+            crate::tools::files::file_tools(dir.path(), Default::default(), Default::default())
+                .unwrap(),
+        );
         let config = RunConfig {
             masks: None,
             ..RunConfig::new(dir.path())
@@ -6478,6 +6637,54 @@ mod tests {
     impl Drop for Scratch {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// T60c: the snapshots of a run take a folder beside the working one at the step after it was added, stop with it
+    /// taken away — still named for the undo —, and say a folder that cannot be recorded once.
+    #[test]
+    fn the_snapshots_follow_the_folders_beside_and_name_each_for_the_undo() {
+        let made = |name: &str| {
+            let dir = std::env::temp_dir().join(format!(
+                "glut-taken-{name}-{}-{}",
+                std::process::id(),
+                chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            dir.canonicalize().unwrap()
+        };
+        let (root, work, vault) = (made("root"), made("work"), made("vault"));
+        std::fs::write(vault.join("v.txt"), "v").unwrap();
+        let mut taken = Taken::new(Snapshots::open(&root, &work, "run1").unwrap());
+        let (_, notes) = taken.take(&root, "run1", &[], 1).unwrap();
+        assert!(notes.is_empty());
+        let gone = work.with_file_name("glut-taken-never-there");
+        let (_, notes) = taken
+            .take(&root, "run1", &[vault.clone(), gone.clone()], 2)
+            .unwrap();
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        let (_, notes) = taken
+            .take(&root, "run1", &[vault.clone(), gone], 3)
+            .unwrap();
+        assert!(notes.is_empty(), "said once: {notes:?}");
+        let (_, _) = taken.take(&root, "run1", &[], 4).unwrap();
+        assert!(taken.beside.is_empty(), "taken away: recorded no more");
+        // Added again: its record goes on, its first step kept.
+        let (_, _) = taken
+            .take(&root, "run1", std::slice::from_ref(&vault), 5)
+            .unwrap();
+        assert_eq!(
+            snapshot::beside_of(&root, &work, "run1"),
+            vec![vault.clone()]
+        );
+        let steps: Vec<u32> = snapshot::runs(&root, &vault)[0]
+            .steps
+            .iter()
+            .map(|step| step.turn)
+            .collect();
+        assert_eq!(steps, vec![2, 3, 5]);
+        for dir in [root, work, vault] {
+            let _ = std::fs::remove_dir_all(dir);
         }
     }
 }

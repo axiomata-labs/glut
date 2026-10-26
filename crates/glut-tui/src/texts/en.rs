@@ -855,6 +855,18 @@ pub const TEXTS: Texts = Texts {
     secrets_heading: "hidden from the model in this session — /secrets allow <n> [always] lets one through:",
     secrets_row: "  {n}  {kind} · {chars} chars · seen in {seen}",
     secrets_usage: "/secrets · on|off · allow <n> [always] · add <name> <regex> · remove <name>",
+    folders_none: "no folders beside the working one — /folder add <path> gives this session one",
+    folders_heading: "folders beside the working one, for this session — the file tools reach them by their full path, \
+                      commands write there, undo puts them back:",
+    folder_added: "{folder} is a folder beside the working one from now on, for this session",
+    folder_known: "{folder} is one already",
+    folder_refused: "not as a folder beside the working one: {reason}",
+    folder_removed: "{folder} is no folder beside the working one any more",
+    folder_unknown: "{folder} is no folder of this session — /folder lists them",
+    folder_usage: "/folder · add <path> · remove <path>",
+    folder_overlaps: "{folder} lies in {other} or holds it — a command in the outer one could put a link where the \
+                      inner one is: add only one",
+    files_beside_not_restored: "a folder beside the working one is not back: {what}",
     secrets_no_such: "no secret {n} in this session — /secrets lists them",
     secrets_allowed: "secret {n} goes through for this session",
     secrets_allowed_always: "secret {n} goes through always (its fingerprint kept in ~/.glut/secrets.json, never the \

@@ -131,11 +131,25 @@ pub fn available() -> bool {
     cfg!(target_os = "macos") && Path::new(SANDBOX_EXEC).is_file()
 }
 
+/// The places no command reads for the owner whose home is `home`, resolved: Glut's own list of secrets and the
+/// owner's `extra` ones from the settings.
+pub fn secrets(home: &Path, extra: &[PathBuf]) -> Vec<PathBuf> {
+    let real = |path: PathBuf| path.canonicalize().unwrap_or(path);
+    HOME_SECRETS
+        .iter()
+        .map(|rel| real(home.join(rel)))
+        .chain(extra.iter().cloned().map(real))
+        .collect()
+}
+
 /// What a run's sandbox allows, in resolved paths.
 #[derive(Debug, Clone, Default)]
 pub struct Policy {
     /// The working folder.
     pub root: PathBuf,
+    /// The folders beside it the owner gave the run (T60c), each written to as the working folder is — its
+    /// protected names, `.git` and `.env` files kept as there.
+    pub beside: Vec<PathBuf>,
     /// Folders a command may write, beside the working folder.
     pub writable: Vec<PathBuf>,
     /// Single files a command may write.
@@ -172,13 +186,9 @@ impl Policy {
         }
         writable.extend(HOME_WRITABLE.iter().map(|rel| real(home.join(rel))));
         writable.extend(extra_writable.iter().cloned().map(real));
-        let mut read_denied: Vec<PathBuf> = HOME_SECRETS
-            .iter()
-            .map(|rel| real(home.join(rel)))
-            .collect();
-        read_denied.extend(extra_secrets.iter().cloned().map(real));
         Policy {
             root: root.to_path_buf(),
+            beside: Vec::new(),
             writable,
             writable_files: HOME_WRITABLE_FILES
                 .iter()
@@ -188,11 +198,33 @@ impl Policy {
                 .iter()
                 .map(|name| root.join(name))
                 .collect(),
-            read_denied,
+            read_denied: secrets(home, extra_secrets),
             git_dirs: git_dirs(root),
             proxy_port: None,
             local_binding: false,
         }
+    }
+
+    /// This policy with `folders` beside the working folder (T60c), their repositories' git folders with them.
+    pub fn with_beside(&self, folders: &[crate::folders::Folder]) -> Policy {
+        let mut policy = self.clone();
+        for folder in folders {
+            policy.beside.push(folder.real.clone());
+            policy
+                .write_denied
+                .extend(PROTECTED_IN_ROOT.iter().map(|name| folder.real.join(name)));
+            for dir in &folder.git_dirs {
+                if !policy.git_dirs.contains(dir) {
+                    policy.git_dirs.push(dir.clone());
+                }
+            }
+        }
+        policy
+    }
+
+    /// The working folder and the folders beside it: where a command writes as in the run's own folder.
+    fn roots(&self) -> impl Iterator<Item = &PathBuf> {
+        std::iter::once(&self.root).chain(&self.beside)
     }
 
     /// The Seatbelt profile. Later rules win over earlier ones: the broad allows come first, the narrow denies last.
@@ -200,7 +232,9 @@ impl Policy {
         let mut out = String::from("(version 1)\n(allow default)\n");
         // Writing: nothing, then the allowed places, then the protected parts of them.
         out.push_str("(deny file-write*)\n(allow file-write*\n");
-        out.push_str(&format!("  (subpath {})\n", quoted(&self.root)));
+        for root in self.roots() {
+            out.push_str(&format!("  (subpath {})\n", quoted(root)));
+        }
         for dir in self.writable.iter().chain(&self.git_dirs) {
             out.push_str(&format!("  (subpath {})\n", quoted(dir)));
         }
@@ -227,14 +261,37 @@ impl Policy {
         // Inside the working folder, at any depth: every `.git` — folder or file, existing or new — is neither created,
         // moved nor removed (a new one, or a `.git` file pointing at a writable folder, would bring its own config;
         // `git init` there fails, by design), nor any git folder's runnable parts; and direnv's `.envrc`.
-        let root = regex_escape(&self.root);
-        out.push_str(&format!(
-            "  (regex #\"^{root}/(.*/)?\\.git/((modules|worktrees)/.+/)?{GIT_RUNS_PATTERN}$\")\n"
-        ));
-        out.push_str(&format!(
-            "  (regex #\"^{root}/(.*/)?\\.git{GIT_FOLDERS_PATTERN}$\")\n"
-        ));
-        out.push_str(&format!("  (regex #\"^{root}/(.*/)?\\.envrc$\")\n"));
+        // In a folder beside the working one — often one holding many projects — a protected name at any depth, in
+        // any case: a script can build a path the rules never read (`.vscode/tasks.json` of a project in it).
+        for root in &self.beside {
+            let root = regex_escape(root);
+            let names: Vec<String> = PROTECTED_IN_ROOT
+                .iter()
+                .chain(&[".jj"])
+                .map(|name| any_case(name))
+                .collect();
+            out.push_str(&format!(
+                "  (regex #\"^{root}/(.*/)?({})(/.*)?$\")\n",
+                names.join("|")
+            ));
+            // Its git folders' runnable parts in any case too: a new `.GIT/hooks` is git's `.git/hooks` there.
+            let git = any_case(".git");
+            let runs =
+                any_case("config|config.worktree|hooks|info|commondir|gitdir").replace("\\|", "|");
+            out.push_str(&format!(
+                "  (regex #\"^{root}/(.*/)?{git}/((modules|worktrees)/.+/)?({runs})(/.*)?$\")\n"
+            ));
+        }
+        for root in self.roots() {
+            let root = regex_escape(root);
+            out.push_str(&format!(
+                "  (regex #\"^{root}/(.*/)?\\.git/((modules|worktrees)/.+/)?{GIT_RUNS_PATTERN}$\")\n"
+            ));
+            out.push_str(&format!(
+                "  (regex #\"^{root}/(.*/)?\\.git{GIT_FOLDERS_PATTERN}$\")\n"
+            ));
+            out.push_str(&format!("  (regex #\"^{root}/(.*/)?\\.envrc$\")\n"));
+        }
         out.push_str(")\n");
         // Reading: everything but the secrets and the working folder's `.env` files.
         out.push_str("(deny file-read*\n");
@@ -284,9 +341,13 @@ impl Policy {
             }
         }
         out.push_str("(deny file-read*\n");
-        out.push_str(&format!(
-            "  (regex #\"^{root}/(.*/)?(\\.env(\\..*)?|[^/]*\\.env|\\.envrc(\\..*)?)$\"))\n"
-        ));
+        for root in self.roots() {
+            let root = regex_escape(root);
+            out.push_str(&format!(
+                "  (regex #\"^{root}/(.*/)?(\\.env(\\..*)?|[^/]*\\.env|\\.envrc(\\..*)?)$\")\n"
+            ));
+        }
+        out.push_str(")\n");
         // Driving other applications: not from here.
         out.push_str("(deny process-exec\n");
         for tool in APPLE_EVENT_TOOLS {
@@ -315,7 +376,7 @@ impl Policy {
 
 /// The repository's git folders for `root`: its own (`git rev-parse --absolute-git-dir`, for a worktree inside the main
 /// repository's `.git/worktrees/`) and the common one (the main repository's `.git`). None outside a repository.
-fn git_dirs(root: &Path) -> Vec<PathBuf> {
+pub(crate) fn git_dirs(root: &Path) -> Vec<PathBuf> {
     let ask = |flag: &str| {
         std::process::Command::new("git")
             .arg("-C")
@@ -344,6 +405,27 @@ fn git_dirs(root: &Path) -> Vec<PathBuf> {
         }
     }
     dirs
+}
+
+/// `name` as an SBPL regex matching it in any case (`.vscode` → `\.[vV][sS]…`): macOS volumes do not tell the cases
+/// apart.
+fn any_case(name: &str) -> String {
+    let mut out = String::new();
+    for c in name.chars() {
+        if c.is_ascii_alphabetic() {
+            out.push_str(&format!(
+                "[{}{}]",
+                c.to_ascii_lowercase(),
+                c.to_ascii_uppercase()
+            ));
+        } else if "\\.^$|?*+()[]{}\"".contains(c) {
+            out.push('\\');
+            out.push(c);
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// A path as an SBPL string literal.
@@ -423,6 +505,88 @@ mod tests {
             "no proxy, no network: {profile}"
         );
         assert!(regex_escape(Path::new("/a.b+c")).ends_with("a\\.b\\+c"));
+    }
+
+    /// T60c: a folder beside the working one is written as the working one is — its protected names, its `.git`
+    /// runnable parts and its `.env` files kept as there —, and only once the run has it.
+    #[test]
+    fn a_folder_beside_is_written_as_the_working_one() {
+        if !available() {
+            return;
+        }
+        let (home, root) = (temp("home"), temp("root"));
+        // Out of the temp folders, which every command writes anyway.
+        let vault = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+            "../../target/glut-sandbox-beside-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(vault.join(".git/hooks")).unwrap();
+        std::fs::create_dir_all(vault.join(".glut")).unwrap();
+        let vault = vault.canonicalize().unwrap();
+        std::fs::write(vault.join(".env"), "SECRET=1").unwrap();
+        let policy = Policy::new(&root, &home, &[], &[]);
+        let write = format!(
+            "echo x > {}/note.md && echo wrote || echo REFUSED",
+            vault.display()
+        );
+        assert!(
+            sandboxed(&policy, &write).contains("REFUSED"),
+            "not before it is given"
+        );
+        let policy = policy.with_beside(&[crate::folders::Folder {
+            real: vault.clone(),
+            shown: vault.display().to_string(),
+            git_dirs: vec![vault.join(".git")],
+        }]);
+        assert!(sandboxed(&policy, &write).contains("wrote"));
+        assert!(
+            sandboxed(
+                &policy,
+                &format!(
+                    "echo y > {}/.git/objects-probe && echo wrote",
+                    vault.display()
+                )
+            )
+            .contains("wrote")
+        );
+        for (script, what) in [
+            (format!("echo x > {}/.glut/x", vault.display()), "its .glut"),
+            (
+                format!("echo x > {}/.git/hooks/pre-commit", vault.display()),
+                "its git hooks",
+            ),
+            (format!("echo x > {}/.envrc", vault.display()), "its .envrc"),
+            (format!("cat {}/.env", vault.display()), "its .env"),
+            (
+                format!(
+                    "mkdir -p {0}/app/.vscode; echo x > {0}/app/.vscode/tasks.json",
+                    vault.display()
+                ),
+                "a project's .vscode in it",
+            ),
+            (
+                format!(
+                    "mkdir -p {0}/app/.Cargo; echo x > {0}/app/.Cargo/config.toml",
+                    vault.display()
+                ),
+                "a .cargo in another case",
+            ),
+            (
+                format!("echo x > {}/app/.mcp.json", vault.display()),
+                "a project's .mcp.json",
+            ),
+            (
+                format!(
+                    "mkdir -p {0}/app/.GIT/hooks; echo x > {0}/app/.GIT/hooks/pre-commit",
+                    vault.display()
+                ),
+                "a git hook in another case",
+            ),
+        ] {
+            let out = sandboxed(&policy, &format!("{script} || echo REFUSED"));
+            assert!(out.contains("REFUSED"), "{what}: {out}");
+        }
+        let _ = std::fs::remove_dir_all(&vault);
     }
 
     #[test]

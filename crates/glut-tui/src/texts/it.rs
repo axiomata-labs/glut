@@ -45,6 +45,11 @@ pub const TEXTS: Texts = Texts {
             "projects",
             "continuare in un altro progetto: le cartelle in cui Glut ha lavorato, o una dal suo percorso",
         ),
+        (
+            "folder",
+            "cartelle accanto a quella di lavoro per questa sessione: gli strumenti dei file le raggiungono dal \
+             percorso completo, i comandi ci scrivono — /folder add <path>, /folder remove <path>",
+        ),
         ("compact", "riassumere la conversazione finora"),
         (
             "handoff",
@@ -1264,6 +1269,14 @@ pub const TEXTS: Texts = Texts {
              fissare il limite di tempo (K5)",
         ),
         (
+            "A folder the run works in beside --cwd (T60c), the owner's word alone: the file tools reach it by its \
+             full path, commands write there, the snapshots record it. Refused: /, the home folder, one holding --cwd \
+             or a secret; repeatable",
+            "Una cartella in cui l'esecuzione lavora accanto a --cwd (T60c), solo per tua parola: gli strumenti dei \
+             file la raggiungono dal percorso completo, i comandi ci scrivono, gli snapshot la registrano. Rifiutate: \
+             /, la cartella home, una che contiene --cwd o un segreto; ripetibile",
+        ),
+        (
             "A folder of skills beside `~/.glut/skills` (HS6, K2); repeatable",
             "Una cartella di skill accanto a `~/.glut/skills` (HS6, K2); ripetibile",
         ),
@@ -1572,6 +1585,18 @@ pub const TEXTS: Texts = Texts {
     secrets_heading: "nascosto al modello in questa sessione — /secrets allow <n> [always] ne lascia passare uno:",
     secrets_row: "  {n}  {kind} · {chars} caratteri · visto in {seen}",
     secrets_usage: "/secrets · on|off · allow <n> [always] · add <name> <regex> · remove <name>",
+    folders_none: "nessuna cartella accanto a quella di lavoro — /folder add <path> ne dà una a questa sessione",
+    folders_heading: "cartelle accanto a quella di lavoro, per questa sessione — gli strumenti dei file le raggiungono \
+                      dal percorso completo, i comandi ci scrivono, l'annullamento le ripristina:",
+    folder_added: "{folder} è da ora una cartella accanto a quella di lavoro, per questa sessione",
+    folder_known: "{folder} lo è già",
+    folder_refused: "non come cartella accanto a quella di lavoro: {reason}",
+    folder_removed: "{folder} non è più una cartella accanto a quella di lavoro",
+    folder_unknown: "{folder} non è una cartella di questa sessione — /folder le elenca",
+    folder_usage: "/folder · add <path> · remove <path>",
+    folder_overlaps: "{folder} sta dentro {other} o lo contiene — un comando in quella esterna potrebbe mettere un \
+                      link al posto di quella interna: aggiungine solo una",
+    files_beside_not_restored: "una cartella accanto a quella di lavoro non è tornata: {what}",
     secrets_no_such: "nessun segreto {n} in questa sessione — /secrets li elenca",
     secrets_allowed: "il segreto {n} passa per questa sessione",
     secrets_allowed_always: "il segreto {n} passa sempre (la sua impronta in ~/.glut/secrets.json, mai il valore)",

@@ -141,6 +141,8 @@ pub struct Toolbox {
     servers: crate::mcp::Servers,
     /// Judges every call; without one, every call runs (a library caller that checks on its own, the tests).
     gate: Option<Arc<Gate>>,
+    /// The folders beside the working one (T60c), shared by the file tools, the shell and the gate.
+    folders: crate::folders::Folders,
 }
 
 impl Toolbox {
@@ -150,7 +152,13 @@ impl Toolbox {
 
     /// Puts every call under `gate` (HS3a).
     pub fn set_gate(&mut self, gate: Arc<Gate>) {
+        gate.set_beside(self.folders.clone());
         self.gate = Some(gate);
+    }
+
+    /// The folders beside the working one (T60c): what is added here, every tool of the box reaches at its next call.
+    pub fn folders(&self) -> &crate::folders::Folders {
+        &self.folders
     }
 
     pub fn gate(&self) -> Option<&Arc<Gate>> {

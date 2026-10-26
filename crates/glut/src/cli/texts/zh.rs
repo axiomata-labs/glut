@@ -28,6 +28,7 @@ pub const TEXTS: Texts = Texts {
     undo_no_snapshots: "没有任何运行保存了 {path} 的快照",
     undo_back_step: "{path} 已恢复到 {run} 第 {step} 步之前的状态（{commit}）",
     undo_back: "{path} 已恢复到 {run} 之前的状态（{commit}）",
+    undo_beside_missed: "旁边的一个文件夹未恢复：{what}",
     models_no_provider: "还没有提供商：glut providers add <kind>（glut providers catalog 会列出它们）",
     models_fetched: "{id} — {all} 个模型中的 {shown} 个（获取于 {when}）",
     models_count: Plural {

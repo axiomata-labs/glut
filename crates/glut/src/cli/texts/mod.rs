@@ -62,6 +62,8 @@ crate::catalog! {
         undo_back_step: &'static str,
         /// `glut undo` done, before a whole run: `{path}`, `{run}`, `{commit}`.
         undo_back: &'static str,
+        /// `glut undo`: a folder beside the working one (T60c) not put back, `{what}` which and why.
+        undo_beside_missed: &'static str,
         /// `glut models` without a provider.
         models_no_provider: &'static str,
         /// A provider's list, its head: `{id}`, `{shown}` of `{all}`, `{when}` it was fetched.

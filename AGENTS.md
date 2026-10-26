@@ -105,6 +105,10 @@ cargo run --release --bin glut   # the TUI in the current folder, on the default
   each model on the part that speaks its API, told by the model list (models.dev). Every `Model::new` from a resolved
   provider goes through `providers::route` with the list — `Model::new` refuses `Gateway`. Anthropic's betas and
   fallbacks are only sent to Anthropic itself, never through the gateway.
+- **Folders beside the working one are the owner's word alone** (T60c, `crates/glut/src/folders.rs`): only
+  `glut run --folder` and `/folder add` add one, after `folders::check` — never a model, a skill or a project. One
+  `Folders` per toolbox is shared by the file tools, the gate, the shell's sandbox and the snapshots: a new place that
+  resolves a run's file path must ask it too (`Folders::place`/`full_path`), or it treats such a path as outside.
 - **What a command *is* decides beside the rules** (TUI1e, `crates/glut/src/permissions/kinds.rs`): a command whose
   every part is a listed reader (`ls`, `grep`, `sed -n 1,9p`, `git status`, …) runs in every mode like `read_file`;
   in `auto` everything sandboxed runs but a `kinds::heavy` one (`rm -rf`, `git push`, `sudo`, …). A new reader needs

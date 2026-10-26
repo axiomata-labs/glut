@@ -194,6 +194,12 @@ pub struct RunArgs {
     /// A folder of skills beside `~/.glut/skills` (HS6, K2); repeatable.
     #[arg(long)]
     skill_dir: Vec<PathBuf>,
+    /// A folder the run works in beside --cwd (T60c), the owner's word alone: the file tools reach it by its full
+    /// path, commands write there, the snapshots record it. Refused: /, the home folder, one holding --cwd or a
+    /// secret; repeatable.
+    #[arg(long)]
+    #[serde(default)]
+    folder: Vec<String>,
     /// The run's MCP servers from this file alone (`{"mcpServers": …}`, Claude Code's shape and flag), instead of
     /// ~/.glut/mcp.json and the project's .mcp.json.
     #[arg(long)]
@@ -567,6 +573,7 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
         deny,
         skill,
         skill_dir,
+        folder,
         mcp_config,
         project,
         image,
@@ -580,6 +587,14 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
     if prompt.is_none() && skill.is_none() {
         return fail("name a prompt, or run a skill with --skill <name>".into());
     }
+    // A relative `--folder` is below where glut was started, as `--cwd` is; kept so, a resume finds the same folder.
+    let folder: Vec<String> = folder
+        .into_iter()
+        .map(|typed| match std::env::current_dir() {
+            Ok(here) if !typed.starts_with(['~', '/']) => here.join(&typed).display().to_string(),
+            _ => typed,
+        })
+        .collect();
     let (endpoint, provider) = match endpoint(provider.as_deref(), base_url, model).await {
         Ok(found) => found,
         Err(reason) => return fail(reason),
@@ -611,6 +626,7 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
         }
         let mut kept = journal_args;
         kept.cwd = cwd.clone();
+        kept.folder.clone_from(&folder);
         // A resume goes on with the provider and model the run began with, whatever the default is by then.
         if let Some(from) = &provider {
             kept.provider = Some(from.id.clone());
@@ -868,6 +884,13 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
         Ok(servers) => servers,
         Err(err) => return fail(err.to_string()),
     };
+    let mut beside = Vec::new();
+    for typed in &folder {
+        match crate::folders::check(typed, &cwd, &home, &built.sandbox.deny_read) {
+            Ok(checked) => beside.push(checked),
+            Err(reason) => return fail(format!("--folder {reason}")),
+        }
+    }
     let mut tools = match setup::toolbox(
         &cwd,
         &catalog,
@@ -892,6 +915,13 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
     // A skill run's task is the skill's body already: loading skills would only cost a turn (glut-round CP4).
     if skill.is_some() {
         tools.withdraw(crate::skills::tool::NAME);
+    }
+    for checked in beside {
+        if let Err(crate::folders::NotAdded::Overlaps(other)) = tools.folders().add(checked) {
+            return fail(format!(
+                "--folder: one lies in the other or holds it: {other}"
+            ));
+        }
     }
 
     // Ctrl-C, SIGTERM and SIGHUP end the run cleanly, with its `finished` line and every background job stopped.
@@ -947,8 +977,8 @@ fn undo(cwd: &std::path::Path, run: Option<String>, step: Option<u32>, list: boo
     let Some(run) = run.or_else(|| runs.first().map(|record| record.run.clone())) else {
         return fail(say!(undo_no_snapshots, path = cwd.display()));
     };
-    match snapshot::restore(&root, &cwd, &run, step) {
-        Ok(commit) => {
+    match snapshot::restore_all(&root, &cwd, &run, step) {
+        Ok((commit, missed)) => {
             match step {
                 Some(step) => println!(
                     "{}",
@@ -970,7 +1000,14 @@ fn undo(cwd: &std::path::Path, run: Option<String>, step: Option<u32>, list: boo
                     )
                 ),
             }
-            ExitCode::SUCCESS
+            for what in &missed {
+                eprintln!("glut undo: {}", say!(undo_beside_missed, what = what));
+            }
+            if missed.is_empty() {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(1)
+            }
         }
         Err(reason) => fail(reason),
     }

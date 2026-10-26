@@ -14,7 +14,8 @@ pub const TEXTS: Texts = Texts {
     no_model_list: "no model list of {provider}: {reason}",
     run_started: "run {run} (if it is lost before it ends: glut resume {run})",
     skill_left_out: "skill left out: {note}",
-    max_usd_no_prices: "--max-usd has no prices for {model} in ~/.glut/settings.json or the provider's list: no budget in money",
+    max_usd_no_prices: "--max-usd has no prices for {model} in ~/.glut/settings.json or the provider's list: no budget \
+                        in money",
     resume_running: "(still running)",
     resume_name_run: "name the run: glut resume <run> (glut resume --list shows them)",
     resume_no_run: "no unfinished run {run} (glut resume --list shows them)",
@@ -28,6 +29,7 @@ pub const TEXTS: Texts = Texts {
     undo_no_snapshots: "no run has snapshots of {path}",
     undo_back_step: "{path} is back as before step {step} of {run} ({commit})",
     undo_back: "{path} is back as before {run} ({commit})",
+    undo_beside_missed: "a folder beside it is not back: {what}",
     models_no_provider: "no provider yet: glut providers add <kind> (glut providers catalog lists them)",
     models_fetched: "{id} — {shown} of {all} models (fetched {when})",
     models_count: Plural {
@@ -78,12 +80,14 @@ pub const TEXTS: Texts = Texts {
     mcp_not_approved: "{name} is a project's server you have not approved: glut run in a terminal asks for it.",
     mcp_secret_prompt: "Secret of the client {id} (not shown; Enter: none): ",
     mcp_open: "{name} answers without a sign-in.",
-    mcp_registered_only: "{name} offers OAuth only to clients registered beforehand: give a token here — or your own client's clientId as \"oauth\" in ~/.glut/mcp.json.",
+    mcp_registered_only: "{name} offers OAuth only to clients registered beforehand: give a token here — or your own \
+                          client's clientId as \"oauth\" in ~/.glut/mcp.json.",
     mcp_token_prompt: "Token for {name} at {host} (not shown): ",
     mcp_no_token: "No token given.",
     mcp_sign_in_at: "Signing in to {host} for {name}:",
     mcp_browser_opened: "Opened in your browser — waiting for it to come back.",
-    mcp_open_yourself: "Open it in a browser. If it ends on an address that does not load (over SSH), paste that address here:",
+    mcp_open_yourself: "Open it in a browser. If it ends on an address that does not load (over SSH), paste that \
+                        address here:",
     mcp_signed_in: "{name} is signed in: {count} tools.",
     mcp_signed_in_failed: "{name} is signed in, but does not start yet: {reason}",
     mcp_nothing_kept: "Nothing is kept for {name}.",

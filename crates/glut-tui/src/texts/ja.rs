@@ -44,6 +44,10 @@ pub const TEXTS: Texts = Texts {
             "projects",
             "別のプロジェクトで続ける: Glut が作業したフォルダー、またはパスで指定したもの",
         ),
+        (
+            "folder",
+            "このセッションで作業フォルダの横に置くフォルダ：ファイルツールはフルパスで届き、コマンドも書き込めます — /folder add <path>、/folder remove <path>",
+        ),
         ("compact", "ここまでの会話を要約する"),
         (
             "handoff",
@@ -1165,6 +1169,13 @@ pub const TEXTS: Texts = Texts {
             "skill を実行のタスクとして動かす（HS6、K1.1）: その SKILL.md の本文が実行の指示になり、frontmatter でツールの制限、モデルの選択、制限時間の設定ができます（K5）",
         ),
         (
+            "A folder the run works in beside --cwd (T60c), the owner's word alone: the file tools reach it by its \
+             full path, commands write there, the snapshots record it. Refused: /, the home folder, one holding --cwd \
+             or a secret; repeatable",
+            "--cwd の横で実行が作業するフォルダ（T60c）。指定できるのはオーナーだけ：ファイルツールはフルパスで届き、コマンドも書き込み、スナップショットにも記録されます。拒否：/、ホームフォルダ、--cwd \
+             や秘密を含むフォルダ。繰り返し指定可",
+        ),
+        (
             "A folder of skills beside `~/.glut/skills` (HS6, K2); repeatable",
             "`~/.glut/skills` に加える skill のフォルダー（HS6、K2）; 繰り返し可",
         ),
@@ -1458,6 +1469,16 @@ pub const TEXTS: Texts = Texts {
     secrets_heading: "このセッションでモデルから隠したもの — /secrets allow <n> [always] で一つ通します:",
     secrets_row: "  {n}  {kind} · {chars} 文字 · {seen} で検出",
     secrets_usage: "/secrets · on|off · allow <n> [always] · add <name> <regex> · remove <name>",
+    folders_none: "作業フォルダの横にフォルダはありません — /folder add <path> でこのセッションに追加できます",
+    folders_heading: "このセッションで作業フォルダの横にあるフォルダ — ファイルツールはフルパスで届き、コマンドも書き込み、元に戻すと復元されます：",
+    folder_added: "{folder} はこのセッションで作業フォルダの横のフォルダになりました",
+    folder_known: "{folder} はすでに追加されています",
+    folder_refused: "作業フォルダの横のフォルダにはできません：{reason}",
+    folder_removed: "{folder} は作業フォルダの横のフォルダではなくなりました",
+    folder_unknown: "{folder} はこのセッションのフォルダではありません — /folder で一覧",
+    folder_usage: "/folder · add <path> · remove <path>",
+    folder_overlaps: "{folder} は {other} の中にあるか、それを含んでいます — 外側のコマンドが内側の場所にリンクを置けるため、どちらか一つだけ追加してください",
+    files_beside_not_restored: "作業フォルダの横のフォルダが戻りませんでした：{what}",
     secrets_no_such: "このセッションにシークレット {n} はありません — /secrets で一覧できます",
     secrets_allowed: "シークレット {n} をこのセッションでは通します",
     secrets_allowed_always: "シークレット {n} を常に通します（~/.glut/secrets.json には指紋だけを保存し、値は保存しません）",

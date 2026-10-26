@@ -97,7 +97,7 @@ const fn command(
 }
 
 /// Every command, grouped by topic in [`Topic::ALL`]'s order, the most used first inside a topic.
-pub const COMMANDS: [Command; 50] = [
+pub const COMMANDS: [Command; 51] = [
     command(Topic::Session, "clear", "", "start a new session"),
     command(
         Topic::Session,
@@ -123,6 +123,13 @@ pub const COMMANDS: [Command; 50] = [
         "projects",
         "[path]",
         "go on in another project: the folders Glut worked in, or one by its path",
+    ),
+    command(
+        Topic::Session,
+        "folder",
+        "[add|remove] [path]",
+        "folders beside the working one for this session: the file tools reach them by their full path, commands write \
+         there — /folder add <path>, /folder remove <path>",
     ),
     command(
         Topic::Session,
@@ -818,8 +825,8 @@ pub fn takes_path(name: &str) -> Option<(crate::paths::Wants, Vec<&'static str>)
         .split(|c: char| !c.is_ascii_alphanumeric())
         .filter(|word| !word.is_empty() && *word != "path")
         .collect();
-    // A project is a folder; every other place takes a file as well.
-    let wants = if name == "projects" {
+    // A project is a folder, and so is one beside the working folder (T60c); every other place takes a file as well.
+    let wants = if name == "projects" || name == "folder" {
         crate::paths::Wants::Folders
     } else {
         crate::paths::Wants::Any

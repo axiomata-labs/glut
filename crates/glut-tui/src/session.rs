@@ -65,9 +65,9 @@ pub enum Report {
     Diff(u32, Result<String, String>),
     /// The review's change (T17): of which scope, since before which message, and the diff or why there is none.
     Review(crate::review::Scope, String, Result<String, String>),
-    /// Rewinding the files ended: the commit the folder is back at and the run that keeps what it was just before,
-    /// or why not.
-    Restored(Result<(String, String), String>),
+    /// Rewinding the files ended: the commit the folder is back at, the run that keeps what it was just before and
+    /// each folder beside it not put back with why (T60c), or why not.
+    Restored(Result<(String, String, Vec<String>), String>),
     /// Every kept session, read beside the screen for `/resume`'s search (T55).
     Kept(Arc<crate::finder::Corpus>),
     /// A piece of a side question's answer, or its end (T57), under the question's id.

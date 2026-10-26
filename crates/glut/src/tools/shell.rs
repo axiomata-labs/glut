@@ -69,6 +69,8 @@ pub struct ShellOptions {
     pub sandbox: Option<crate::permissions::settings::SandboxSettings>,
     /// The caller's own programs a declared command may start directly — see [`DirectProgram`].
     pub direct: Vec<DirectProgram>,
+    /// The folders beside the working one (T60c): a sandboxed command writes there as in the working folder.
+    pub beside: crate::folders::Folders,
 }
 
 /// A program of the caller's own that a run starts directly — no shell, no sandbox, its words as its arguments — when
@@ -103,6 +105,7 @@ impl ShellOptions {
             ambient: std::env::vars_os().collect(),
             sandbox: Some(Default::default()),
             direct: Vec::new(),
+            beside: Default::default(),
         }
     }
 }
@@ -209,11 +212,9 @@ enum Sandboxing {
 /// A run's sandbox once its first command needs it.
 struct Sandbox {
     proxy: Option<Proxy>,
-    /// The Seatbelt profile, with the proxy's port as the one way to the network.
-    profile: String,
-    /// The same profile with no way to the network: for a named agent whose `tools` name none (T37a) — the proxy
-    /// judges on a task of its own, where the agent's narrowing is not seen.
-    offline: String,
+    /// What the sandbox allows, with the proxy's port as the one way to the network; the profile is made from it for
+    /// each command, with the folders beside the working one as they stand then (T60c).
+    policy: crate::sandbox::Policy,
 }
 
 /// What the shell tools of one run share — also the hooks of a run (HS7, D5): they get what a command gets.
@@ -236,6 +237,8 @@ pub(crate) struct Session {
     next_job: AtomicU32,
     next_note: AtomicU64,
     direct: Vec<DirectProgram>,
+    /// The folders beside the working one (T60c).
+    beside: crate::folders::Folders,
 }
 
 /// What `reader` writes, kept up to [`MAX_FOREGROUND_BYTES`]; the rest is read and dropped, so the program never
@@ -342,6 +345,7 @@ impl Session {
             next_job: AtomicU32::new(1),
             next_note: AtomicU64::new(1),
             direct: options.direct,
+            beside: options.beside,
         })
     }
 
@@ -389,14 +393,8 @@ impl Session {
                 // Without a proxy a command still runs, it just reaches no network: the profile then opens no port.
                 let proxy = Proxy::start(gate).await.ok();
                 let mut policy = policy.clone();
-                policy.proxy_port = None;
-                let offline = policy.profile();
                 policy.proxy_port = proxy.as_ref().map(Proxy::port);
-                Sandbox {
-                    profile: policy.profile(),
-                    offline,
-                    proxy,
-                }
+                Sandbox { policy, proxy }
             })
             .await;
         Some(sandbox)
@@ -429,13 +427,15 @@ impl Session {
                 if online && let Some(proxy) = &sandbox.proxy {
                     proxy_env = proxy.environment();
                 }
-                let profile = if online {
-                    &sandbox.profile
-                } else {
-                    &sandbox.offline
-                };
+                // Without the network for a named agent whose `tools` name none (T37a) — the proxy judges on a task of
+                // its own, where the agent's narrowing is not seen.
+                let mut policy = sandbox.policy.with_beside(&self.beside.list());
+                if !online {
+                    policy.proxy_port = None;
+                }
+                let profile = policy.profile();
                 let mut process = Command::new(crate::sandbox::SANDBOX_EXEC);
-                process.arg("-p").arg(profile).arg(&self.shell);
+                process.arg("-p").arg(&profile).arg(&self.shell);
                 process
             }
             None => Command::new(&self.shell),
@@ -1437,6 +1437,7 @@ mod tests {
             ambient,
             sandbox: None,
             direct: Vec::new(),
+            beside: Default::default(),
         };
         let mut tools = Toolbox::new();
         tools.extend(shell_tools(&dir, options).unwrap());
@@ -1697,6 +1698,7 @@ mod tests {
             ],
             sandbox: None,
             direct: Vec::new(),
+            beside: Default::default(),
         };
         let mut tools = Toolbox::new();
         tools.extend(shell_tools(&dir, options).unwrap());
@@ -1945,6 +1947,7 @@ mod tests {
             profile: false,
             ambient,
             sandbox: Some(Default::default()),
+            beside: Default::default(),
             direct: vec![DirectProgram {
                 name: "axiomata-cli".into(),
                 path: program,
@@ -1985,6 +1988,7 @@ mod tests {
                 profile: false,
                 ambient: Vec::new(),
                 sandbox: None,
+                beside: Default::default(),
                 direct: vec![DirectProgram {
                     name: "axiomata-cli".into(),
                     path: PathBuf::from("/bin/echo"),
@@ -2078,6 +2082,7 @@ mod tests {
             ambient,
             sandbox: Some(Default::default()),
             direct: Vec::new(),
+            beside: Default::default(),
         };
         let mut tools = Toolbox::new();
         tools.extend(shell_tools(&dir.join("work"), options).unwrap());

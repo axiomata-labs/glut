@@ -46,6 +46,11 @@ pub const TEXTS: Texts = Texts {
             "projects",
             "seguir en otro proyecto: las carpetas en las que trabajó Glut, o una por su ruta",
         ),
+        (
+            "folder",
+            "carpetas junto a la de trabajo para esta sesión: las herramientas de archivos las alcanzan por su ruta \
+             completa y los comandos escriben en ellas — /folder add <path>, /folder remove <path>",
+        ),
         ("compact", "resumir la conversación hasta ahora"),
         (
             "handoff",
@@ -1259,6 +1264,14 @@ pub const TEXTS: Texts = Texts {
              de tiempo (K5)",
         ),
         (
+            "A folder the run works in beside --cwd (T60c), the owner's word alone: the file tools reach it by its \
+             full path, commands write there, the snapshots record it. Refused: /, the home folder, one holding --cwd \
+             or a secret; repeatable",
+            "Una carpeta en la que la ejecución trabaja junto a --cwd (T60c), solo por tu palabra: las herramientas de \
+             archivos la alcanzan por su ruta completa, los comandos escriben en ella, las instantáneas la guardan. \
+             Rechazadas: /, la carpeta personal, una que contenga --cwd o un secreto; repetible",
+        ),
+        (
             "A folder of skills beside `~/.glut/skills` (HS6, K2); repeatable",
             "Una carpeta de skills junto a `~/.glut/skills` (HS6, K2); repetible",
         ),
@@ -1566,6 +1579,18 @@ pub const TEXTS: Texts = Texts {
     secrets_heading: "oculto al modelo en esta sesión — /secrets allow <n> [always] deja pasar uno:",
     secrets_row: "  {n}  {kind} · {chars} caracteres · visto en {seen}",
     secrets_usage: "/secrets · on|off · allow <n> [always] · add <name> <regex> · remove <name>",
+    folders_none: "no hay carpetas junto a la de trabajo — /folder add <path> le da una a esta sesión",
+    folders_heading: "carpetas junto a la de trabajo, para esta sesión — las herramientas de archivos las alcanzan por \
+                      su ruta completa, los comandos escriben en ellas, deshacer las restaura:",
+    folder_added: "{folder} es desde ahora una carpeta junto a la de trabajo, para esta sesión",
+    folder_known: "{folder} ya lo es",
+    folder_refused: "no como carpeta junto a la de trabajo: {reason}",
+    folder_removed: "{folder} ya no es una carpeta junto a la de trabajo",
+    folder_unknown: "{folder} no es una carpeta de esta sesión — /folder las lista",
+    folder_usage: "/folder · add <path> · remove <path>",
+    folder_overlaps: "{folder} está dentro de {other} o lo contiene — un comando en la exterior podría poner un enlace \
+                      donde está la interior: añade solo una",
+    files_beside_not_restored: "una carpeta junto a la de trabajo no ha vuelto: {what}",
     secrets_no_such: "no hay secreto {n} en esta sesión — /secrets los lista",
     secrets_allowed: "el secreto {n} pasa en esta sesión",
     secrets_allowed_always: "el secreto {n} pasa siempre (su huella guardada en ~/.glut/secrets.json, nunca el valor)",

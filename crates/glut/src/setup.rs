@@ -43,7 +43,13 @@ pub async fn toolbox(
         glut_files,
     } = extras;
     let mut tools = Toolbox::new();
-    tools.extend(file_tools(cwd, SkillRoots::new(&catalog.folders()))?);
+    // T60c: the folders beside the working one, which the caller adds to through `Toolbox::folders`.
+    let beside = tools.folders().clone();
+    tools.extend(file_tools(
+        cwd,
+        SkillRoots::new(&catalog.folders()),
+        beside.clone(),
+    )?);
     // The web is part of the core (docs/plans/glut-round.md): no MCP server to set up for a page.
     tools.extend([Box::new(crate::tools::web::WebFetch) as Box<dyn Tool>]);
     // `web_search` only for a caller that set up its providers and budget (glut-round CP3); none: no search offered.
@@ -70,6 +76,7 @@ pub async fn toolbox(
         ShellOptions {
             sandbox: Some(sandbox),
             direct,
+            beside,
             ..ShellOptions::from_environment()
         },
     )?);

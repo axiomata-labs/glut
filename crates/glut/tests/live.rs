@@ -24,7 +24,7 @@ async fn a_real_model_reads_a_file_and_answers() {
     })
     .unwrap();
     let mut tools = Toolbox::new();
-    tools.extend(file_tools(&dir, SkillRoots::default()).unwrap());
+    tools.extend(file_tools(&dir, SkillRoots::default(), Default::default()).unwrap());
     let mut events = Vec::new();
     let outcome = run(
         &RunConfig::new(&dir),

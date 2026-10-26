@@ -14,7 +14,8 @@ pub const TEXTS: Texts = Texts {
     no_model_list: "no hay lista de modelos de {provider}: {reason}",
     run_started: "ejecución {run} (si se pierde antes de terminar: glut resume {run})",
     skill_left_out: "Skill omitido: {note}",
-    max_usd_no_prices: "--max-usd no encuentra precios para {model} en ~/.glut/settings.json ni en la lista del proveedor: sin presupuesto en dinero",
+    max_usd_no_prices: "--max-usd no encuentra precios para {model} en ~/.glut/settings.json ni en la lista del \
+                        proveedor: sin presupuesto en dinero",
     resume_running: "(sigue en marcha)",
     resume_name_run: "indica la ejecución: glut resume <run> (glut resume --list las muestra)",
     resume_no_run: "no hay ejecución sin terminar {run} (glut resume --list las muestra)",
@@ -28,6 +29,7 @@ pub const TEXTS: Texts = Texts {
     undo_no_snapshots: "ninguna ejecución tiene instantáneas de {path}",
     undo_back_step: "{path} ha vuelto a como estaba antes del paso {step} de {run} ({commit})",
     undo_back: "{path} ha vuelto a como estaba antes de {run} ({commit})",
+    undo_beside_missed: "una carpeta al lado no ha vuelto: {what}",
     models_no_provider: "todavía no hay proveedor: glut providers add <kind> (glut providers catalog los enumera)",
     models_fetched: "{id} — {shown} de {all} modelos (obtenidos el {when})",
     models_count: Plural {
@@ -46,7 +48,8 @@ pub const TEXTS: Texts = Texts {
     catalog_key: "clave",
     catalog_custom_sign_in: "clave, o --keyless",
     catalog_custom_note: "cualquier otro endpoint, con --root",
-    keyless_only_custom: "--keyless es solo para openai-compatible; el catálogo sabe si sus proveedores necesitan clave",
+    keyless_only_custom: "--keyless es solo para openai-compatible; el catálogo sabe si sus proveedores necesitan \
+                          clave",
     key_kept: "La clave de {id} está en {place}.",
     key_shared: "{id} usa la clave que guarda el otro proveedor de su cuenta, salvo que tenga una propia.",
     the_default: " (predeterminado)",
@@ -78,12 +81,14 @@ pub const TEXTS: Texts = Texts {
     mcp_not_approved: "{name} es un servidor del proyecto que no has aprobado: glut run lo pregunta en una terminal.",
     mcp_secret_prompt: "Secreto del cliente {id} (oculto; Intro: ninguno): ",
     mcp_open: "{name} responde sin inicio de sesión.",
-    mcp_registered_only: "{name} ofrece OAuth solo a clientes registrados de antemano: da aquí un token — o el clientId de tu propio cliente como \"oauth\" en ~/.glut/mcp.json.",
+    mcp_registered_only: "{name} ofrece OAuth solo a clientes registrados de antemano: da aquí un token — o el \
+                          clientId de tu propio cliente como \"oauth\" en ~/.glut/mcp.json.",
     mcp_token_prompt: "Token para {name} en {host} (oculto): ",
     mcp_no_token: "No se dio ningún token.",
     mcp_sign_in_at: "Iniciando sesión en {host} para {name}:",
     mcp_browser_opened: "Abierto en tu navegador — esperando a que vuelva.",
-    mcp_open_yourself: "Ábrela en un navegador. Si termina en una dirección que no carga (por SSH), pega aquí esa dirección:",
+    mcp_open_yourself: "Ábrela en un navegador. Si termina en una dirección que no carga (por SSH), pega aquí esa \
+                        dirección:",
     mcp_signed_in: "{name} ha iniciado sesión: {count} herramientas.",
     mcp_signed_in_failed: "{name} ha iniciado sesión, pero aún no arranca: {reason}",
     mcp_nothing_kept: "No hay nada guardado para {name}.",

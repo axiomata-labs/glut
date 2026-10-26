@@ -47,6 +47,11 @@ pub const TEXTS: Texts = Texts {
             "in einem anderen Projekt weitermachen: die Ordner, in denen Glut gearbeitet hat, oder einer über \
              seinen Pfad",
         ),
+        (
+            "folder",
+            "Ordner neben dem Arbeitsordner für diese Session: die Dateiwerkzeuge erreichen sie über ihren vollen \
+             Pfad, Befehle schreiben dort — /folder add <path>, /folder remove <path>",
+        ),
         ("compact", "das bisherige Gespräch zusammenfassen"),
         (
             "handoff",
@@ -1260,6 +1265,14 @@ pub const TEXTS: Texts = Texts {
              das Zeitlimit setzen (K5)",
         ),
         (
+            "A folder the run works in beside --cwd (T60c), the owner's word alone: the file tools reach it by its \
+             full path, commands write there, the snapshots record it. Refused: /, the home folder, one holding --cwd \
+             or a secret; repeatable",
+            "Ein Ordner, in dem der Lauf neben --cwd arbeitet (T60c), allein auf dein Wort: die Dateiwerkzeuge \
+             erreichen ihn über seinen vollen Pfad, Befehle schreiben dort, die Snapshots halten ihn fest. Abgelehnt: \
+             /, der Home-Ordner, einer, der --cwd oder ein Geheimnis enthält; wiederholbar",
+        ),
+        (
             "A folder of skills beside `~/.glut/skills` (HS6, K2); repeatable",
             "Ein Ordner mit Skills neben `~/.glut/skills` (HS6, K2); wiederholbar",
         ),
@@ -1570,6 +1583,18 @@ pub const TEXTS: Texts = Texts {
     secrets_heading: "in dieser Session vor dem Modell verborgen — /secrets allow <n> [always] lässt einen durch:",
     secrets_row: "  {n}  {kind} · {chars} Zeichen · gesehen in {seen}",
     secrets_usage: "/secrets · on|off · allow <n> [always] · add <name> <regex> · remove <name>",
+    folders_none: "keine Ordner neben dem Arbeitsordner — /folder add <path> gibt dieser Session einen",
+    folders_heading: "Ordner neben dem Arbeitsordner, für diese Session — die Dateiwerkzeuge erreichen sie über ihren \
+                      vollen Pfad, Befehle schreiben dort, Undo holt sie zurück:",
+    folder_added: "{folder} ist ab jetzt ein Ordner neben dem Arbeitsordner, für diese Session",
+    folder_known: "{folder} ist schon einer",
+    folder_refused: "nicht als Ordner neben dem Arbeitsordner: {reason}",
+    folder_removed: "{folder} ist kein Ordner neben dem Arbeitsordner mehr",
+    folder_unknown: "{folder} ist kein Ordner dieser Session — /folder listet sie",
+    folder_usage: "/folder · add <path> · remove <path>",
+    folder_overlaps: "{folder} liegt in {other} oder enthält ihn — ein Befehl im äußeren könnte einen Link an die \
+                      Stelle des inneren setzen: nimm nur einen",
+    files_beside_not_restored: "ein Ordner neben dem Arbeitsordner ist nicht zurück: {what}",
     secrets_no_such: "kein Geheimnis {n} in dieser Session — /secrets listet sie",
     secrets_allowed: "Geheimnis {n} geht für diese Session durch",
     secrets_allowed_always: "Geheimnis {n} geht immer durch (sein Fingerabdruck steht in ~/.glut/secrets.json, nie \

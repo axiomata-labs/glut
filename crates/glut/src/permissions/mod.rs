@@ -21,6 +21,8 @@ use serde::Serialize;
 
 use command::{Analysis, analyze, names_protected};
 
+use crate::folders::Folders;
+
 /// What a tool call would touch, as the tool itself says.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Access {
@@ -538,13 +540,22 @@ impl RuleSet {
     }
 
     /// What the rules say about `access` of `tool`.
+    #[cfg(test)]
     fn verdict(&self, tool: &str, access: &Access) -> Said {
-        self.verdict_with(tool, access, true)
+        self.verdict_with(tool, access, true, &Folders::default())
     }
 
     /// [`Self::verdict`]; `readers_free`: a part of a command that only reads needs no rule of its own — not for an
     /// `allowed-tools` narrowing, which names every part it lets through.
-    fn verdict_with(&self, tool: &str, access: &Access, readers_free: bool) -> Said {
+    ///
+    /// `beside`: the folders beside the working one (T60c), where a command writes and reads as inside it.
+    fn verdict_with(
+        &self,
+        tool: &str,
+        access: &Access,
+        readers_free: bool,
+        beside: &Folders,
+    ) -> Said {
         match access {
             Access::Bash {
                 command,
@@ -557,6 +568,7 @@ impl RuleSet {
                     &analyze(command),
                     folder,
                     readers_free && *sandboxed,
+                    beside,
                 );
                 match said {
                     // Outside the sandbox the operating system holds nothing back: only a deny stays a deny, everything
@@ -598,6 +610,7 @@ impl RuleSet {
         analysis: &Analysis,
         folder: &str,
         readers_free: bool,
+        beside: &Folders,
     ) -> Said {
         let candidates = analysis.deny_candidates();
         let matching = |rules: &[Rule]| {
@@ -620,12 +633,15 @@ impl RuleSet {
                     format!("the command writes the protected path {target}"),
                 );
             }
-            // A relative path lands where the shell is, not at the top of the working folder.
-            let path = normal_path(&format!("{folder}/{target}"));
-            if target.starts_with('/')
-                || target.starts_with('~')
-                || target.contains('$')
-                || path.starts_with("..")
+            // A relative path lands where the shell is, not at the top of the working folder; a full one may name a
+            // folder beside it (T60c), judged as the file tools' paths there are.
+            let in_beside = beside.rule_path(target).filter(|_| !target.contains('$'));
+            let inside_beside = in_beside.is_some();
+            let path = in_beside.unwrap_or_else(|| normal_path(&format!("{folder}/{target}")));
+            if !inside_beside
+                && (target.starts_with(['/', '~'])
+                    || target.contains('$')
+                    || path.starts_with(".."))
             {
                 return Said::Unsure(format!(
                     "the command writes {target}, outside the working folder"
@@ -699,7 +715,7 @@ impl RuleSet {
                 None if readers_free
                     && kinds::reader(&part.words)
                     && self
-                        .reads_beyond(&part.words, &analysis.reads, folder)
+                        .reads_beyond(&part.words, &analysis.reads, folder, beside)
                         .is_none() => {}
                 None => return Said::Silent,
             }
@@ -730,6 +746,7 @@ impl RuleSet {
         words: &[String],
         redirected: &[String],
         folder: &str,
+        beside: &Folders,
     ) -> Option<&'static str> {
         let any_read_rule = self
             .deny
@@ -743,6 +760,13 @@ impl RuleSet {
             }
         });
         for word in paths {
+            // A folder beside the working one (T60c) reads as the working folder does, its rules included.
+            if let Some(path) = beside.rule_path(word).filter(|_| !word.contains('$')) {
+                if any_read_rule && self.read_held_back(&path) {
+                    return Some("the command reads a file a rule holds back");
+                }
+                continue;
+            }
             if word.starts_with(['/', '~', '$'])
                 || normal_path(&format!("{folder}/{word}")).starts_with("..")
             {
@@ -1011,6 +1035,8 @@ pub struct Gate {
     /// A pane's role (TUI T36c): its agent's `tools`, narrowing every run of the session — its subagents' too, whose
     /// own narrowing comes on top — and changed while the session runs ([`Gate::set_role`]).
     role: Mutex<Option<Arc<Narrowing>>>,
+    /// The folders beside the working one (T60c), shared with the run's tools ([`crate::Toolbox::set_gate`]).
+    beside: Mutex<Folders>,
 }
 
 /// One `allowed-tools` list and who declared it: only the calls these rules name are judged as usual, everything
@@ -1033,7 +1059,24 @@ impl Gate {
             granted: Mutex::new(Vec::new()),
             narrowings: Vec::new(),
             role: Mutex::new(None),
+            beside: Mutex::new(Folders::default()),
         }
+    }
+
+    /// Judges commands against `folders` too, the folders beside the working one (T60c).
+    pub fn set_beside(&self, folders: Folders) {
+        *self
+            .beside
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) = folders;
+    }
+
+    /// The folders beside the working one.
+    fn beside(&self) -> Folders {
+        self.beside
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone()
     }
 
     /// The role the session's pane plays now (TUI T36c): `by` names it in a refusal, `rules` are what it may call —
@@ -1299,7 +1342,7 @@ impl Gate {
             .rules
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
-            .verdict(tool, access);
+            .verdict_with(tool, access, true, &self.beside());
         let mode = format!("mode {}", self.mode_name());
         let (mut verdict, mut reason) = match said {
             Said::Verdict(verdict, why) => (verdict, why),
@@ -1422,15 +1465,15 @@ impl Gate {
         }
         let analysis = analyze(command);
         if kinds::reads_only(&analysis) {
+            let beside = self.beside();
             let beyond = {
                 let rules = self
                     .rules
                     .lock()
                     .unwrap_or_else(|poison| poison.into_inner());
-                analysis
-                    .parts
-                    .iter()
-                    .find_map(|part| rules.reads_beyond(&part.words, &analysis.reads, folder))
+                analysis.parts.iter().find_map(|part| {
+                    rules.reads_beyond(&part.words, &analysis.reads, folder, &beside)
+                })
             };
             return Some(match beyond {
                 // Outside the folder auto trusts the sandbox; the other modes ask, as `read_file` cannot go there. A
@@ -1740,7 +1783,7 @@ fn restrict_allows(rules: &[Rule], tool: &str, access: &Access) -> bool {
         deny: Vec::new(),
     };
     matches!(
-        only.verdict_with(tool, access, false),
+        only.verdict_with(tool, access, false, &Folders::default()),
         Said::Verdict(Verdict::Allow, _)
     )
 }
@@ -2790,6 +2833,80 @@ mod tests {
             "the allow rule does not carry over"
         );
         assert_eq!(said(&set, "bash", out("rm x")), Some(Verdict::Deny));
+    }
+
+    /// T60c: a command writing into a folder beside the working one is judged as a write there — by the edit rules on
+    /// its path as shown —, and one that only reads there reads as in the working folder; without the folder both
+    /// stay "outside".
+    #[tokio::test]
+    async fn a_command_in_a_folder_beside_is_judged_as_in_the_working_one() {
+        let gate = Gate::new(
+            rules(
+                &["Bash(echo:*)", "Edit(~/Vault/**)"],
+                &[],
+                &["Edit(~/Vault/locked/**)"],
+            ),
+            Mode::Default,
+            Arc::new(Nobody),
+        );
+        let write = bash("echo x > /Users/o/Vault/a.md");
+        assert!(
+            gate.judge("bash", &write).await.is_err(),
+            "outside: asked, nobody answers"
+        );
+        let folders = Folders::default();
+        folders
+            .add(crate::folders::Folder {
+                real: "/Users/o/Vault".into(),
+                shown: "~/Vault".into(),
+                git_dirs: Vec::new(),
+            })
+            .unwrap();
+        gate.set_beside(folders);
+        assert!(
+            gate.judge("bash", &write).await.is_ok(),
+            "allowed by Edit(~/Vault/**)"
+        );
+        assert!(
+            gate.judge("bash", &bash("echo x > ~/Vault/b.md"))
+                .await
+                .is_ok()
+        );
+        let locked = gate.judge("bash", &bash("echo x > ~/Vault/locked/c")).await;
+        assert!(locked.is_err_and(|why| why.contains("Vault/locked")));
+        for out in [
+            "echo x > ~/Vault/../.zshrc",
+            "echo x > $HOME/Vault/a",
+            "echo x > ~/Vaults/a",
+        ] {
+            assert!(gate.judge("bash", &bash(out)).await.is_err(), "{out}");
+        }
+        assert!(
+            gate.judge("bash", &bash("cat /Users/o/Vault/a.md"))
+                .await
+                .is_ok()
+        );
+        let held = Gate::new(
+            rules(&[], &[], &["Read(~/Vault/secret/**)"]),
+            Mode::Default,
+            Arc::new(Nobody),
+        );
+        held.set_beside(gate.beside());
+        assert!(
+            held.judge("bash", &bash("cat ~/Vault/secret/x"))
+                .await
+                .is_err()
+        );
+        assert!(
+            held.judge("bash", &bash("cat ~/Vault/open.md"))
+                .await
+                .is_ok()
+        );
+        assert!(
+            gate.judge("bash", &bash("cat ~/elsewhere.md"))
+                .await
+                .is_err()
+        );
     }
 
     #[test]

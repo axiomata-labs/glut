@@ -1582,6 +1582,26 @@ glut::catalog! {
         secrets_row: &'static str,
         /// How `/secrets` is used.
         secrets_usage: &'static str,
+        /// `/folder` alone with no folder beside the working one.
+        folders_none: &'static str,
+        /// Above the list of the folders beside the working one (T60c).
+        folders_heading: &'static str,
+        /// `/folder add`: `{folder}` added.
+        folder_added: &'static str,
+        /// `/folder add` of `{folder}`, added before.
+        folder_known: &'static str,
+        /// `/folder add` refused, `{reason}` why.
+        folder_refused: &'static str,
+        /// `/folder remove`: `{folder}` taken away.
+        folder_removed: &'static str,
+        /// `/folder remove` of `{folder}`, which is none.
+        folder_unknown: &'static str,
+        /// How `/folder` is used.
+        folder_usage: &'static str,
+        /// `/folder add` of `{folder}`, which lies in `{other}` or holds it.
+        folder_overlaps: &'static str,
+        /// After an undo: a folder beside the working one not put back, `{what}` which and why.
+        files_beside_not_restored: &'static str,
         /// `/secrets allow` with a number no value has: `{n}`.
         secrets_no_such: &'static str,
         /// Value `{n}` let through for this session.

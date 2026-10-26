@@ -28,6 +28,7 @@ pub const TEXTS: Texts = Texts {
     undo_no_snapshots: "{path} のスナップショットを持つ実行はありません",
     undo_back_step: "{path} を {run} のステップ {step} の前の状態に戻しました（{commit}）",
     undo_back: "{path} を {run} の前の状態に戻しました（{commit}）",
+    undo_beside_missed: "横のフォルダが戻りませんでした：{what}",
     models_no_provider: "プロバイダーがまだありません: glut providers add <kind>（glut providers catalog で一覧）",
     models_fetched: "{id} — {all} 件中 {shown} 件のモデル（{when} に取得）",
     models_count: Plural {
@@ -78,7 +79,8 @@ pub const TEXTS: Texts = Texts {
     mcp_not_approved: "{name} はまだ承認していないプロジェクトのサーバーです: glut run がターミナルで確認します。",
     mcp_secret_prompt: "クライアント {id} のシークレット（非表示、Enter: なし）: ",
     mcp_open: "{name} はサインインなしで応答します。",
-    mcp_registered_only: "{name} は事前登録したクライアントにしか OAuth を提供しません: ここでトークンを入力するか、~/.glut/mcp.json に \"oauth\" として自分のクライアントの clientId を書いてください。",
+    mcp_registered_only: "{name} は事前登録したクライアントにしか OAuth を提供しません: ここでトークンを入力するか、~/.glut/mcp.json に \"oauth\" \
+                          として自分のクライアントの clientId を書いてください。",
     mcp_token_prompt: "{host} の {name} 用トークン（非表示）: ",
     mcp_no_token: "トークンが入力されていません。",
     mcp_sign_in_at: "{name} のために {host} にサインインします:",
