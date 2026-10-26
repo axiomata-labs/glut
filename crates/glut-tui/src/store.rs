@@ -318,12 +318,15 @@ impl Session {
                 }
                 Role::Tool => {
                     if let Some(id) = &message.tool_call_id {
+                        let output = message.content.clone().unwrap_or_default();
                         transcript.take(&glut::Event::ToolResult {
                             turn: 0,
                             id: id.clone(),
                             name: String::new(),
-                            ok: true,
-                            output: message.content.clone().unwrap_or_default(),
+                            // A failed call's result says so in the loop's own words (AGENTS.md: the `error: `
+                            // prefix): read back, it fails again rather than standing as done.
+                            ok: !output.starts_with("error: "),
+                            output,
                             truncated: false,
                         });
                         // The images it showed, under it (T46).
@@ -556,8 +559,18 @@ mod tests {
         let mut result = Message::user("fn main() {}");
         result.role = Role::Tool;
         result.tool_call_id = Some("c1".into());
+        let failed_call: glut::ToolCall = serde_json::from_value(serde_json::json!({
+            "id": "c2", "type": "function", "function": {"name": "task", "arguments": "{\"description\":\"x\"}"}
+        }))
+        .unwrap();
+        let mut again = Message::user("");
+        again.role = Role::Assistant;
+        again.tool_calls = vec![failed_call];
+        let mut failed = Message::user("error: the subagent stopped without answering: Timeout");
+        failed.role = Role::Tool;
+        failed.tool_call_id = Some("c2".into());
         let mut session = Session::new(Path::new("/w"), "p", "m");
-        session.conversation = vec![Message::user("Look at a.rs"), answer, result];
+        session.conversation = vec![Message::user("Look at a.rs"), answer, result, again, failed];
         let mut transcript = Transcript::default();
         session.transcript(&mut transcript);
         let kinds: Vec<&str> = transcript
@@ -570,9 +583,11 @@ mod tests {
                     state: ToolState::Done,
                     ..
                 } => "tool done",
+                Kind::Agent(agent) if agent.state == ToolState::Failed => "agent failed",
                 _ => "other",
             })
             .collect();
-        assert_eq!(kinds, ["owner", "answer", "tool done"]);
+        // A result in the loop's words of failure comes back failed, not done.
+        assert_eq!(kinds, ["owner", "answer", "tool done", "agent failed"]);
     }
 }

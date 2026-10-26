@@ -205,9 +205,9 @@ pub struct App {
     pub review: crate::review::Review,
     /// The subagent whose own stream is open over the session's (T18).
     pub agent_view: Option<crate::agents::View>,
-    /// The Agents tab's chosen subagent, by its path, while its list has the keys (T34, `⌃X A`) — a path, not a row,
-    /// so the choice stays on its subagent as the list reorders; `None`: the input has them.
-    pub agents_list: Option<Vec<usize>>,
+    /// The Agents tab's chosen row while its list has the keys (T34, `⌃X A`): a background agent's card or a
+    /// subagent; `None`: the input has them.
+    pub agents_list: Option<crate::agents::Row>,
     /// The `CLAUDE.md` `/init` asks about while its question is open (T35), as the stream names it.
     init_claude: Option<String>,
     /// The plan `exit_plan` sent last (T19), and its view: the dialog while Glut asks, else only to read.
@@ -3387,6 +3387,8 @@ impl App {
     /// Ctrl+B the Plan tab, Ctrl+G the Gate tab: the panel opens on it or turns to it; on it already, the panel goes.
     pub fn show_tab(&mut self, tab: Tab) {
         if self.panel == Some(true) && self.tab == tab {
+            // The panel goes, and the keys it had with it.
+            self.leave_panel();
             return self.toggle_panel();
         }
         self.tab = tab;
@@ -4952,33 +4954,27 @@ impl App {
         self.offered_plan = None;
     }
 
-    /// `⌃X A`: the Agents tab with its list taking the keys; with the list taking them already, the panel goes.
+    /// `⌃X A`: the Agents tab with its list taking the keys; shown already, the panel goes — as every tab's key closes
+    /// its own tab (the owner, 2026-10-26: Esc is what gives the keys back).
     fn show_agents(&mut self) {
-        let first = crate::agents::overview(&self.transcript)
-            .first()
-            .map(|(path, _)| path.clone());
-        let shown = self.panel == Some(true) && self.tab == Tab::Agents;
-        // An empty list never takes the keys: there `⌃X A` hides at once.
-        if shown && (self.agents_list.is_some() || first.is_none()) {
-            self.agents_list = None;
+        if self.panel == Some(true) && self.tab == Tab::Agents {
+            self.leave_panel();
             return self.toggle_panel();
         }
         self.tab = Tab::Agents;
         if self.panel != Some(true) {
             self.toggle_panel();
         }
-        self.agents_list = first;
+        self.agents_list = self.agent_rows().into_iter().next();
     }
 
-    /// A tile's click (T69): the Agents tab shown, its list taking the keys at the subagent of `path`; `None`: a
-    /// background agent's, whose cards head the tab.
-    pub fn open_agents(&mut self, path: Option<Vec<usize>>) {
+    /// A tile's click (T69): the Agents tab shown, its list taking the keys at `row`.
+    pub fn open_agents(&mut self, row: crate::agents::Row) {
         self.tab = Tab::Agents;
         if self.panel != Some(true) {
             self.toggle_panel();
         }
-        // A background agent's card stands above the list: the keys stay with the input.
-        self.agents_list = path;
+        self.agents_list = Some(row);
     }
 
     /// Whether the turn under way was told to stop (Esc): what ends now ends as the owner wanted.
@@ -4986,33 +4982,66 @@ impl App {
         self.running.as_ref().is_some_and(Cancel::is_cancelled)
     }
 
-    /// The row of the Agents tab's chosen subagent; one no longer listed gives way to the first.
-    pub fn agents_chosen(&self) -> Option<usize> {
-        let chosen = self.agents_list.as_ref()?;
-        let list = crate::agents::overview(&self.transcript);
-        Some(
-            list.iter()
-                .position(|(path, _)| path == chosen)
-                .unwrap_or(0),
-        )
+    /// The Agents tab's rows in their order: the background agents' cards, then the subagents.
+    fn agent_rows(&self) -> Vec<crate::agents::Row> {
+        use crate::agents::Row;
+        self.background
+            .iter()
+            .map(|agent| Row::Behind(agent.name.clone()))
+            .chain(
+                crate::agents::overview(&self.transcript)
+                    .into_iter()
+                    .map(|(path, _)| Row::Sub(path)),
+            )
+            .collect()
     }
 
-    /// A key while the Agents tab's list has them: ↑↓ (j k) choose, Enter opens the chosen one's view, Esc gives the
-    /// keys back. Any other key gives them back too and is the input's — false: not taken here.
+    /// The row the Agents tab's keys stand on: the one chosen, or — gone from the tab (an agent closed or shown) —
+    /// the first, so what is lit is what the keys act on.
+    fn agents_row(&self) -> Option<crate::agents::Row> {
+        let chosen = self.agents_list.as_ref()?;
+        let rows = self.agent_rows();
+        rows.iter()
+            .find(|row| *row == chosen)
+            .or(rows.first())
+            .cloned()
+    }
+
+    /// The row of the Agents tab's chosen subagent. `None` while the keys stand on a background agent's card or are
+    /// the input's.
+    pub fn agents_chosen(&self) -> Option<usize> {
+        let crate::agents::Row::Sub(chosen) = self.agents_row()? else {
+            return None;
+        };
+        crate::agents::overview(&self.transcript)
+            .iter()
+            .position(|(path, _)| *path == chosen)
+    }
+
+    /// The background agent whose card the Agents tab's keys stand on.
+    pub fn background_chosen(&self) -> Option<usize> {
+        let crate::agents::Row::Behind(name) = self.agents_row()? else {
+            return None;
+        };
+        self.background.iter().position(|agent| agent.name == name)
+    }
+
+    /// A key while the Agents tab's list has them: ↑↓ (j k) choose among the background agents' cards and the
+    /// subagents, Enter brings a background agent forward (where its question is answered) or opens a subagent's
+    /// view, Esc gives the keys back. Any other key gives them back too and is the input's — false: not taken here.
     fn on_agents_list_key(&mut self, key: KeyEvent) -> bool {
-        let list: Vec<Vec<usize>> = crate::agents::overview(&self.transcript)
-            .into_iter()
-            .map(|(path, _)| path)
-            .collect();
+        use crate::agents::Row;
+        let rows = self.agent_rows();
         // A chord's second key is the chord's: `⌃X A` again hides the panel.
         if self.chord {
             return false;
         }
         let shown = self.panel == Some(true) && self.panel_drawn && self.tab == Tab::Agents;
-        let Some(chosen) = self.agents_chosen().filter(|_| shown && !list.is_empty()) else {
+        let Some(current) = self.agents_row().filter(|_| shown) else {
             self.agents_list = None;
             return false;
         };
+        let chosen = rows.iter().position(|row| *row == current).unwrap_or(0);
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             // ⌃X starts a chord whose second key decides; another tab's key turns to it — the list lets go.
             if key.code != KeyCode::Char('x') {
@@ -5027,15 +5056,23 @@ impl App {
         }
         match key.code {
             KeyCode::Up | KeyCode::Char('k') => {
-                self.agents_list = Some(list[chosen.saturating_sub(1)].clone())
+                self.agents_list = Some(rows[chosen.saturating_sub(1)].clone())
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                self.agents_list = Some(list[(chosen + 1).min(list.len() - 1)].clone())
+                self.agents_list = Some(rows[(chosen + 1).min(rows.len() - 1)].clone())
             }
-            KeyCode::Enter => {
-                self.agent_view = Some(crate::agents::View::new(list[chosen].clone()))
+            KeyCode::Enter => match &rows[chosen] {
+                Row::Behind(name) => {
+                    self.leave_panel();
+                    self.pane_request = Some(crate::panes::Request::Show(name.clone()));
+                }
+                Row::Sub(path) => self.agent_view = Some(crate::agents::View::new(path.clone())),
+            },
+            KeyCode::Char('x') => {
+                if let Row::Sub(path) = &rows[chosen] {
+                    self.stop_subagent(&path.clone());
+                }
             }
-            KeyCode::Char('x') => self.stop_subagent(&list[chosen]),
             KeyCode::Esc => self.agents_list = None,
             _ => {
                 self.agents_list = None;
@@ -6083,9 +6120,7 @@ impl App {
     /// The shown tab's list takes the keys where it has one (Agents, To-dos).
     fn key_the_tab(&mut self) {
         if self.tab == Tab::Agents && self.agents_list.is_none() {
-            self.agents_list = crate::agents::overview(&self.transcript)
-                .first()
-                .map(|(path, _)| path.clone());
+            self.agents_list = self.agent_rows().into_iter().next();
         }
         if self.tab == Tab::Todos && !self.project_todos.keys {
             self.project_todos.refresh(&self.parts.config.cwd);
@@ -8835,11 +8870,14 @@ pub(crate) mod tests {
         for event in subagent_events(true) {
             app.on_report(Report::Event(event));
         }
-        // Shown already, ⌃X A hands the list the keys; the nested one stands under its parent.
+        // Shown already, ⌃X A closes the tab as every tab's key does; opened, its list takes the keys; the nested one
+        // stands under its parent.
+        agents_key(&mut app);
+        assert_eq!(app.panel, Some(false));
         agents_key(&mut app);
         // A note may stand before it in the stream: its path is its block's.
         let tile = app.transcript.agent_blocks()[0];
-        assert_eq!(app.agents_list, Some(vec![tile]));
+        assert_eq!(app.agents_list, Some(crate::agents::Row::Sub(vec![tile])));
         let screen = wide(&mut app);
         assert!(
             screen.contains("find the callers") && screen.contains("deeper"),
@@ -8871,9 +8909,11 @@ pub(crate) mod tests {
         app.on_terminal(key(KeyCode::Esc, KeyModifiers::NONE));
         assert_eq!(app.agents_list, None);
         agents_key(&mut app);
+        agents_key(&mut app);
         app.on_terminal(key(KeyCode::Char('j'), KeyModifiers::ALT));
         assert_eq!(app.agents_list, None, "Alt+j is the input's");
         // A key of the input's gives it the keys back and is typed.
+        agents_key(&mut app);
         agents_key(&mut app);
         assert!(app.agents_list.is_some());
         app.on_terminal(key(KeyCode::Char('q'), KeyModifiers::NONE));
@@ -8881,11 +8921,54 @@ pub(crate) mod tests {
             (app.agents_list.clone(), app.input.text()),
             (None, "jq".to_owned())
         );
-        // ⌃X A takes the keys again, and once more hides the panel.
-        agents_key(&mut app);
+        // ⌃X A on the shown tab hides the panel, the keys with it.
         wide(&mut app);
         agents_key(&mut app);
         assert_eq!((app.panel, app.agents_list), (Some(false), None));
+        let _ = std::fs::remove_dir_all(&app.parts.home);
+    }
+
+    #[test]
+    fn a_background_agents_card_is_chosen_with_the_arrows_and_enter_brings_it_forward() {
+        let (mut app, _reports) = app();
+        let behind = |name: &str, doing| crate::agents::Behind {
+            name: name.into(),
+            role: "all-rounder".into(),
+            model: "m".into(),
+            doing,
+            live: "asks: cargo --version".into(),
+            cost: None,
+            cache: None,
+            working: None,
+        };
+        app.background = vec![
+            behind("texter", crate::agents::Doing::Rests),
+            behind("helfer", crate::agents::Doing::Asks),
+        ];
+        for event in task("t1", "a poem", true) {
+            app.on_report(Report::Event(event));
+        }
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(140, 30)).unwrap();
+        agents_key(&mut app);
+        terminal
+            .draw(|frame| crate::view::draw(frame, &mut app))
+            .unwrap();
+        assert_eq!(app.background_chosen(), Some(0), "the cards come first");
+        app.on_terminal(key(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(app.background_chosen(), Some(1));
+        app.on_terminal(key(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(
+            (app.background_chosen(), app.agents_chosen()),
+            (None, Some(0))
+        );
+        app.on_terminal(key(KeyCode::Up, KeyModifiers::NONE));
+        app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(
+            &app.pane_request,
+            Some(crate::panes::Request::Show(name)) if name == "helfer"
+        ));
+        assert_eq!(app.agents_list, None, "the keys go with it");
         let _ = std::fs::remove_dir_all(&app.parts.home);
     }
 
@@ -8898,6 +8981,8 @@ pub(crate) mod tests {
         }
         let mut terminal =
             ratatui::Terminal::new(ratatui::backend::TestBackend::new(140, 30)).unwrap();
+        // The second subagent opened the tab already: ⌃X A closes it, again opens it with the keys.
+        agents_key(&mut app);
         agents_key(&mut app);
         terminal
             .draw(|frame| crate::view::draw(frame, &mut app))

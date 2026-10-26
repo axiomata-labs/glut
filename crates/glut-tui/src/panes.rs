@@ -945,10 +945,12 @@ impl Panes {
         use crate::tiles::{Goes, Stand, Tile};
         let pane = &self.list[at];
         let who = self.shown_label(at);
-        let goes = if pane.background {
-            Goes::Behind
-        } else {
-            Goes::Pane(pane.id)
+        let goes = match (&pane.name, pane.background) {
+            (Some(name), true) => Goes::Behind {
+                name: name.clone(),
+                asks: matches!(tiled, Tiled::Asks(_)),
+            },
+            _ => Goes::Pane(pane.id),
         };
         match tiled {
             Tiled::Asks(target) if at != self.active => {
@@ -2117,11 +2119,21 @@ impl Panes {
         use crate::tiles::Goes;
         let at = |id: u64| self.list.iter().position(|pane| pane.id == id);
         match goes {
-            Goes::Behind => self.active().open_agents(None),
+            // A question is answered where its agent stands: brought forward, its ask card in front of the owner.
+            Goes::Behind { name, asks: true } => {
+                self.show(&name);
+                // No room to bring it forward (said already): its card, asking, is where the question stays seen.
+                if self.resolve_background(&name).is_some() {
+                    self.active().open_agents(crate::agents::Row::Behind(name));
+                }
+            }
+            Goes::Behind { name, asks: false } => {
+                self.active().open_agents(crate::agents::Row::Behind(name))
+            }
             Goes::Subagent { pane, path } => {
                 if let Some(at) = at(pane) {
                     self.focus(at);
-                    self.active().open_agents(Some(path));
+                    self.active().open_agents(crate::agents::Row::Sub(path));
                 }
             }
             Goes::Pane(pane) => {
@@ -2814,7 +2826,10 @@ mod tests {
                 "critic",
                 crate::tiles::Stand::Done,
                 vec!["Found two bugs.".to_owned()],
-                crate::tiles::Goes::Behind
+                crate::tiles::Goes::Behind {
+                    name: "critic".into(),
+                    asks: false
+                }
             )
         );
         // A question of the agent stays while it waits.
@@ -2888,6 +2903,24 @@ mod tests {
         panes.on_report(front, Report::Event(task("t2")));
         panes.on_report(front, Report::Event(result("t2")));
         assert_eq!(panes.tiles.list.len(), 2);
+        // A click on the question's tile brings its agent forward, where its ask card is answered.
+        panes.tiles.place(Rect::new(0, 0, 120, 40), &[]);
+        let spot = panes
+            .tiles
+            .list
+            .iter()
+            .find(|tile| tile.asks_of == Some(behind))
+            .unwrap()
+            .area;
+        panes.on_terminal(TermEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: spot.x + 2,
+            row: spot.y + 1,
+            modifiers: KeyModifiers::NONE,
+        }));
+        let at = panes.at(behind);
+        assert!(!panes.list[at].background, "brought forward");
+        assert_eq!(panes.active, at, "with the keys");
     }
 
     #[tokio::test]

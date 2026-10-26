@@ -377,6 +377,14 @@ pub struct Behind {
     pub working: Option<std::time::Duration>,
 }
 
+/// A row of the Agents tab its keys may stand on (T34, T69): a background agent's card, by its name, or a subagent,
+/// by its path — never a row number, so the choice stays on its agent as the tab reorders.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Row {
+    Behind(String),
+    Sub(Vec<usize>),
+}
+
 /// How a background agent stands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Doing {
@@ -388,23 +396,29 @@ pub enum Doing {
 
 impl Behind {
     /// One quiet line of it, where the tab is short of room: its name, how it stands, what it said last.
-    pub fn line(&self, width: usize) -> Vec<Line<'static>> {
+    pub fn line(&self, width: usize, picked: bool) -> Vec<Line<'static>> {
         let live = crate::transcript::clean(&self.live).replace('\n', " ");
+        let mut style = theme::quiet();
+        if picked {
+            style = style.add_modifier(ratatui::style::Modifier::BOLD);
+        }
         vec![Line::from(Span::styled(
             cut(
                 &format!(
-                    " ⬡ {} · {} · {live}",
+                    "{}⬡ {} · {} · {live}",
+                    if picked { "▸" } else { " " },
                     crate::transcript::clean(&self.name),
                     tr!(agent_rests_state)
                 ),
                 width,
             ),
-            theme::quiet(),
+            style,
         ))]
     }
 
-    /// Its card at `width`: glowing while it works or asks, what it asks in the glow.
-    pub fn lines(&self, width: usize) -> Vec<Line<'static>> {
+    /// Its card at `width`: glowing while it works or asks, what it asks in the glow; `picked` while the tab's keys
+    /// stand on it.
+    pub fn lines(&self, width: usize, picked: bool) -> Vec<Line<'static>> {
         let (state, style) = match self.doing {
             Doing::Asks => (tr!(agent_asks_state), theme::glow()),
             Doing::Holds => (tr!(agent_holds_state), theme::glow()),
@@ -435,7 +449,7 @@ impl Behind {
             live_style,
             stats: &stats,
             style,
-            picked: false,
+            picked,
         }
         .lines(width)
     }
@@ -551,7 +565,11 @@ mod tests {
             cache: Some(true),
             working: Some(std::time::Duration::from_secs(134)),
         };
-        let text: Vec<String> = behind.lines(48).iter().map(ToString::to_string).collect();
+        let text: Vec<String> = behind
+            .lines(48, false)
+            .iter()
+            .map(ToString::to_string)
+            .collect();
         assert_eq!(text.len(), 3);
         assert!(
             text[0].starts_with("╭─ ⬡ reviewer") && text[0].ends_with("works ─╮"),
@@ -566,7 +584,7 @@ mod tests {
             "{text:?}"
         );
         assert!(text.iter().all(|row| row.width() == 48), "{text:?}");
-        let narrow = behind.lines(20);
+        let narrow = behind.lines(20, false);
         assert_eq!(narrow.len(), 1, "too narrow for a frame");
         assert_eq!(took(std::time::Duration::from_secs(3723)), "1:02:03");
         assert_eq!(took(std::time::Duration::from_secs(45)), "45s");

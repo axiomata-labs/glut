@@ -57,8 +57,9 @@ pub enum Stand {
 /// Where a click on a tile goes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Goes {
-    /// The Agents tab, where the background agents stand.
-    Behind,
+    /// The background agent `name`: brought forward when it asks (its question is answered there), else the Agents
+    /// tab at its card.
+    Behind { name: String, asks: bool },
     /// The Agents tab of pane `pane` (its session's id), at the subagent of `path` — the newest of a shared tile.
     Subagent { pane: u64, path: Vec<usize> },
     /// Pane `pane` (its session's id), brought forward.
@@ -323,7 +324,10 @@ mod tests {
             "reviewer".into(),
             Stand::Asks,
             "bash rm -rf target",
-            Goes::Behind,
+            Goes::Behind {
+                name: "reviewer".into(),
+                asks: true,
+            },
         );
         asks.asks_of = Some(7);
         tiles.push(asks);
@@ -365,7 +369,10 @@ mod tests {
             "new".into(),
             Stand::Failed,
             "second\u{202e}",
-            Goes::Behind,
+            Goes::Behind {
+                name: "new".into(),
+                asks: false,
+            },
         ));
         let area = Rect::new(0, 0, 100, 40);
         let placed = tiles.place(area, &[]);

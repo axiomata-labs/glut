@@ -1418,11 +1418,13 @@ fn draw_panel(frame: &mut Frame, app: &mut App, area: Rect) {
             )));
             // Cards while they leave half the tab to the subagents; else those at rest fold to a line each.
             let cards = 3 * app.background.len() <= usize::from(area.height) / 2;
-            for agent in &app.background {
+            let chosen = app.background_chosen();
+            for (at, agent) in app.background.iter().enumerate() {
+                let picked = chosen == Some(at);
                 let rows = if cards || agent.doing != crate::agents::Doing::Rests {
-                    agent.lines(width + 1)
+                    agent.lines(width + 1, picked)
                 } else {
-                    agent.line(width + 1)
+                    agent.line(width + 1, picked)
                 };
                 lines.extend(rows.into_iter().map(|mut row| {
                     row.spans.insert(0, Span::raw(" "));
