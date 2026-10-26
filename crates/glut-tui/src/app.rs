@@ -2340,11 +2340,12 @@ impl App {
                 let offer =
                     crate::commands::offer(&text, |source| self.argument_values(source), true);
                 match offer {
-                    // The one word it can become, a space after it: the next place shows faintly (T71).
-                    Some(offer) if !offer.start.is_empty() && offer.words.len() == 1 => {
+                    // The one word it can become, begun or not (`/show ` with one agent), a space after it: the next
+                    // place shows faintly (T71).
+                    Some(offer) if offer.words.len() == 1 => {
                         self.replace_path_start(&offer.start, &format!("{} ", offer.words[0]));
                     }
-                    // Nothing begun, or a list Esc closed: ⇥ shows what the place takes.
+                    // Several, or a list Esc closed: ⇥ shows what the place takes.
                     Some(_) => {
                         self.paths_closed = None;
                         self.values_asked = Some(text);
@@ -7323,6 +7324,11 @@ pub(crate) mod tests {
             app.paths.as_ref().map(|listing| listing.entries.len()),
             Some(14)
         );
+        // The one word the place takes, nothing begun: ⇥ takes it, as one background agent at `/show `.
+        app.input.clear();
+        type_text(&mut app, "/export html ");
+        app.on_terminal(key(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(app.input.text(), "/export html full ");
         let _ = std::fs::remove_dir_all(&app.parts.home);
     }
 
