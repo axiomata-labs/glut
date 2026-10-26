@@ -1120,6 +1120,57 @@ impl App {
         }
     }
 
+    /// `/loop` (T60a): where a loop ends by itself is kept here; a loop to start, stop or list is the screen's.
+    fn loop_command(&mut self, rest: &str) {
+        use crate::looping::Command;
+        let home = self.parts.home.clone();
+        let limits = self.loop_limits();
+        match crate::looping::parse(rest) {
+            Err(reason) => self.transcript.note(reason, Tone::Fault),
+            Ok(Command::Rounds(None)) => self.tell(tr!(loop_rounds_now, n = limits.rounds)),
+            Ok(Command::Rounds(Some(n))) => match prefs::set_loop_rounds(&home, n) {
+                Ok(()) => self.say(tr!(loop_rounds_set, n = n)),
+                Err(reason) => self.transcript.note(reason, Tone::Fault),
+            },
+            Ok(Command::Budget(None)) => self.tell(tr!(
+                loop_budget_now,
+                usd = glut::lang::usd(limits.max_usd, 2)
+            )),
+            Ok(Command::Budget(Some(usd))) => match prefs::set_loop_max_usd(&home, usd) {
+                Ok(()) => self.say(tr!(loop_budget_set, usd = glut::lang::usd(usd, 2))),
+                Err(reason) => self.transcript.note(reason, Tone::Fault),
+            },
+            Ok(Command::Start(asked)) => {
+                self.pane_request = Some(crate::panes::Request::LoopStart(asked));
+            }
+            Ok(Command::Stop(name)) => {
+                self.pane_request = Some(crate::panes::Request::LoopStop(name))
+            }
+            Ok(Command::List) => self.pane_request = Some(crate::panes::Request::LoopList),
+        }
+    }
+
+    /// Where a loop ends by itself (T60a): what `/loop rounds` and `/loop budget` kept, else the owner's settings.
+    pub fn loop_limits(&self) -> crate::looping::Limits {
+        crate::looping::Limits::of(&Prefs::load(&self.parts.home), self.parts.loops)
+    }
+
+    /// One round of the loop this session runs (T60a): its task as the owner wrote it — a message, or a command that
+    /// hands the model work — after a new conversation when each round starts anew.
+    pub fn loop_round(&mut self, task: &str, fresh: bool) {
+        // Asked when the loop started; asked again where it runs, whoever made the task.
+        if let Err(reason) = crate::looping::allowed(task) {
+            return self.transcript.note(reason, Tone::Fault);
+        }
+        if fresh {
+            self.command("clear");
+        }
+        match task.strip_prefix('/') {
+            Some(command) => self.command(command),
+            None => self.send(task.to_owned()),
+        }
+    }
+
     /// A quiet line in the stream that stays, where a toast would pass: what happened to a pane (T36a).
     pub fn tell(&mut self, text: impl Into<String>) {
         self.transcript.note(text.into(), Tone::Quiet);
@@ -3119,6 +3170,7 @@ impl App {
             },
             "close" if rest.is_empty() => self.pane_request = Some(crate::panes::Request::Close),
             "close" => self.pane_request = Some(crate::panes::Request::End(rest.to_owned())),
+            "loop" => self.loop_command(rest),
             "bg" => match crate::panes::parse_background(rest) {
                 Ok(request) => self.pane_request = Some(request),
                 Err(reason) => self.transcript.note(reason, Tone::Fault),
@@ -7193,7 +7245,7 @@ fn waits(name: &str, rest: &str) -> bool {
 }
 
 /// A finish reason in words.
-fn reason(reason: FinishReason) -> &'static str {
+pub(crate) fn reason(reason: FinishReason) -> &'static str {
     match reason {
         FinishReason::Answered => tr!(ended_answered),
         FinishReason::MaxTurns => tr!(ended_steps),
@@ -9779,6 +9831,7 @@ pub(crate) mod tests {
             cost: None,
             cache: None,
             working: None,
+            looping: None,
         };
         app.background = vec![
             behind("texter", crate::agents::Doing::Rests),
@@ -10065,6 +10118,47 @@ pub(crate) mod tests {
     fn typed(app: &mut App, text: &str) {
         app.input.insert_text(text);
         app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
+    }
+
+    #[test]
+    fn loop_keeps_where_a_loop_ends_and_hands_a_loop_to_the_screen() {
+        let (mut app, _reports) = app();
+        assert_eq!(
+            app.loop_limits(),
+            crate::looping::Limits {
+                rounds: crate::looping::DEFAULT_ROUNDS,
+                max_usd: crate::looping::DEFAULT_MAX_USD
+            }
+        );
+        typed(&mut app, "/loop 5m as reviewer look at the diff");
+        assert!(matches!(
+            app.pane_request.take(),
+            Some(crate::panes::Request::LoopStart(asked))
+                if asked.task == "look at the diff" && asked.role.as_deref() == Some("reviewer")
+        ));
+        // A round never repeats the owner's own commands.
+        typed(&mut app, "/loop 5m /quit");
+        assert!(app.pane_request.is_none() && !app.quit);
+        typed(&mut app, "/loop stop tests");
+        assert_eq!(
+            app.pane_request.take(),
+            Some(crate::panes::Request::LoopStop(Some("tests".into())))
+        );
+        typed(&mut app, "/loop");
+        assert_eq!(
+            app.pane_request.take(),
+            Some(crate::panes::Request::LoopList)
+        );
+        typed(&mut app, "/loop rounds 20");
+        typed(&mut app, "/loop budget 2.5");
+        assert_eq!(
+            app.loop_limits(),
+            crate::looping::Limits {
+                rounds: 20,
+                max_usd: 2.5
+            }
+        );
+        assert!(app.pane_request.is_none());
     }
 
     /// Opens a question as the gate would, already on the screen long enough to be answered.

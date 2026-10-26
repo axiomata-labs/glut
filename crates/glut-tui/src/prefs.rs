@@ -70,6 +70,12 @@ pub struct Prefs {
     /// How many seconds a turn must have run before its end is told (T53, `/notify after`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notify_after: Option<u32>,
+    /// The most rounds a loop runs (T60a, `/loop rounds`); `None`: `loop.rounds` of the settings, else 50.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loop_rounds: Option<u32>,
+    /// The most a loop's session may cost in USD (T60a, `/loop budget`); `None`: `loop.maxUsd` of the settings, else 5.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loop_max_usd: Option<f64>,
     /// Whether tiles show at the window's top right (T69, `/notify tiles`); `None`: they do.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tiles: Option<bool>,
@@ -277,6 +283,28 @@ pub fn set_notify(
 pub fn set_notify_after(home: &Path, secs: u32) -> Result<(), String> {
     let mut prefs = Prefs::read(home)?;
     prefs.notify_after = Some(secs);
+    prefs.save(home)
+}
+
+/// Keeps the most rounds a loop runs (`/loop rounds`, T60a).
+///
+/// # Errors
+///
+/// A message when the file cannot be read (it is not written over) or written.
+pub fn set_loop_rounds(home: &Path, rounds: u32) -> Result<(), String> {
+    let mut prefs = Prefs::read(home)?;
+    prefs.loop_rounds = Some(rounds);
+    prefs.save(home)
+}
+
+/// Keeps the most a loop's session may cost (`/loop budget`, T60a).
+///
+/// # Errors
+///
+/// A message when the file cannot be read (it is not written over) or written.
+pub fn set_loop_max_usd(home: &Path, usd: f64) -> Result<(), String> {
+    let mut prefs = Prefs::read(home)?;
+    prefs.loop_max_usd = Some(usd);
     prefs.save(home)
 }
 

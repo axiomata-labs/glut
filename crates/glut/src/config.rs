@@ -308,6 +308,11 @@ impl Default for Compaction {
 /// ([`RunConfig::pane_tools`]) and never in a subagent — whatever the toolbox holds.
 pub const PANE_TOOLS: [&str; 1] = ["tell"];
 
+/// The tool a host's screen adds for a session that runs as a loop (TUI T60a): the model ends the loop with it once
+/// the loop's goal is reached. Like [`PANE_TOOLS`] offered only where the run says so ([`RunConfig::loop_tool`]), never
+/// in a subagent nor from a script.
+pub const LOOP_TOOL: &str = "end_loop";
+
 /// One run's settings.
 #[derive(Debug, Clone)]
 pub struct RunConfig {
@@ -350,6 +355,8 @@ pub struct RunConfig {
     /// Whether the run offers [`PANE_TOOLS`] (TUI T36c): the screen around it is split into panes of sessions that
     /// may write to each other. Never to a subagent.
     pub pane_tools: bool,
+    /// Whether the run offers [`LOOP_TOOL`] (TUI T60a): the session runs as a loop of the owner's. Never to a subagent.
+    pub loop_tool: bool,
     /// The images the run's prompt carries (T45): the owner's, pasted or `glut run --image`. Never a subagent's.
     pub prompt_images: Vec<crate::images::Image>,
     /// Where a tool's images are kept (T45: the owner's home, `~/.glut/images` below it); `None`: a tool's image is
@@ -461,6 +468,7 @@ impl RunConfig {
             models: None,
             glut_files: false,
             pane_tools: false,
+            loop_tool: false,
             prompt_images: Vec::new(),
             images_home: None,
             sees_images: None,

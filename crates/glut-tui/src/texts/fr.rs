@@ -142,6 +142,12 @@ pub const TEXTS: Texts = Texts {
             "lire le flux d’un agent en arrière-plan par-dessus ce pane ; Esc le ferme",
         ),
         (
+            "loop",
+            "lancer une tâche encore et encore dans un agent d'arrière-plan à elle, l'intervalle compté depuis la fin \
+             d'un tour — /loop 10m lance les tests ; /loop seul les liste, /loop stop [name] en arrête une, /loop \
+             rounds|budget fixent où une s'arrête",
+        ),
+        (
             "diff",
             "revoir ce que le dernier tour a changé, hunk par hunk ; /diff session (⌃R)",
         ),
@@ -1603,6 +1609,37 @@ pub const TEXTS: Texts = Texts {
     folder_overlaps: "{folder} se trouve dans {other} ou le contient — une commande dans l'extérieur pourrait mettre \
                       un lien à la place de l'intérieur : n'en ajoute qu'un",
     files_beside_not_restored: "un dossier à côté du dossier de travail n'est pas revenu : {what}",
+    loop_usage: "/loop <interval> [fresh] [as <role>] [notify] <task> — l'intervalle comme 30s, 5m, 2h ou 1h30m · \
+                 /loop stop [name] · /loop rounds [n] · /loop budget [usd]",
+    loop_interval_bad: "« {word} » n'est pas un intervalle : 30s, 5m, 2h ou 1h30m, de 10s à 24h — /loop <interval> \
+                        <task>",
+    loop_command_refused: "une boucle lance un message, /skill, /compact ou /init — pas /{name}",
+    loop_rounds_bad: "/loop rounds prend un nombre de 1 à {most}",
+    loop_budget_bad: "/loop budget prend un montant en USD au-dessus de 0 et jusqu'à 1000, comme 2.5",
+    loop_rounds_now: "une boucle s'arrête après {n} tours au plus — /loop rounds <n> le change",
+    loop_rounds_set: "une boucle lancée désormais s'arrête après {n} tours au plus",
+    loop_budget_now: "une boucle s'arrête dès que ses tours ont coûté {usd} ensemble, compté là où les prix de son \
+                      modèle sont connus — /loop budget <usd> le change",
+    loop_budget_set: "une boucle lancée désormais s'arrête dès que ses tours ont coûté {usd} ensemble",
+    loop_starts: "boucle {name} démarrée : toutes les {every} après la fin d'un tour — {task} · /loop la liste, /show \
+                  {name} la met devant, /loop stop {name} l'arrête",
+    loop_ended: "boucle {name} terminée : {why} — {rounds} tours, {cost}",
+    loop_why_goal: "son but est atteint ({reason})",
+    loop_why_stopped: "tu l'as arrêtée",
+    loop_why_failed: "un tour ne s'est pas terminé par une réponse ({reason})",
+    loop_why_rounds: "{n} tours effectués",
+    loop_why_budget: "son budget de {max} est épuisé",
+    loop_none: "aucune boucle ne tourne — /loop <interval> <task> en démarre une",
+    loop_which: "plusieurs boucles tournent : /loop stop <name>",
+    loop_unknown: "pas de boucle {name} — /loop les liste",
+    loops_heading: "Boucles :",
+    loop_line: "{name} : toutes les {every}, {round} sur {rounds} tours, {when}, {cost} — {task}",
+    loop_round_runs: "un tour est en cours",
+    loop_next_in: "prochain dans {time}",
+    loop_too_many: "{n} agents travaillent déjà en arrière-plan : ferme-en un avec /close avant de lancer une boucle",
+    loop_no_turn: "sa tâche n'a lancé aucun tour",
+    loop_role_kept: "ce pane joue {role} : une boucle lancée ici le joue aussi — /loop sans as",
+    loop_uncounted: "les prix de son modèle sont inconnus, seule la limite de tours l'arrête donc",
     secrets_no_such: "pas de secret {n} dans cette session — /secrets les liste",
     secrets_allowed: "le secret {n} passe pour cette session",
     secrets_allowed_always: "le secret {n} passe toujours (son empreinte gardée dans ~/.glut/secrets.json, jamais la \

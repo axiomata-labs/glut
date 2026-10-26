@@ -1572,6 +1572,8 @@ pub struct BuiltGate {
     pub guide_warn_bytes: u64,
     /// When the terminal UI tells the owner a turn ended or asks (TUI T53), from `~/.glut/settings.json`.
     pub notify: settings::NotifySection,
+    /// The owner's `loop` section (TUI T60a): where a loop ends by itself.
+    pub loops: settings::LoopSection,
 }
 
 impl BuiltGate {
@@ -1653,6 +1655,7 @@ pub fn build_gate(
         parallel_subagents: loaded.parallel_subagents,
         guide_warn_bytes: loaded.guide_warn_bytes,
         notify: loaded.notify,
+        loops: loaded.loops,
     })
 }
 
@@ -2367,6 +2370,7 @@ mod tests {
             parallel_subagents: crate::config::DEFAULT_PARALLEL_SUBAGENTS,
             guide_warn_bytes: u64::from(crate::config::DEFAULT_GUIDE_WARN_KB) * 1024,
             notify: settings::NotifySection::default(),
+            loops: settings::LoopSection::default(),
         };
         let off = built(true, true, false).notes();
         assert_eq!(off.len(), 3, "{off:?}");

@@ -196,12 +196,17 @@ pub struct Parts {
     /// When the owner is told a turn ended or asks (T53): the owner's `notify` in `~/.glut/settings.json`, the
     /// second source after `/notify`.
     pub notify: glut::permissions::settings::NotifySection,
+    /// Where a loop ends by itself (T60a): the owner's `loop` in `~/.glut/settings.json`, the second source after
+    /// `/loop rounds` and `/loop budget`.
+    pub loops: glut::permissions::settings::LoopSection,
     /// The skills `/skill` starts (T37c), by name with their description.
     pub skills: Vec<(String, String)>,
     /// The project's memory folder (T35), for `/memory`; a host's session has none.
     pub memory: Option<PathBuf>,
     /// What the screen tells this session's `tell` about the other panes (T36c).
     pub pane_link: Arc<crate::tell::Link>,
+    /// What the screen tells this session's `end_loop` about the loop it runs, if any (T60a).
+    pub loop_link: Arc<crate::looping::Link>,
 }
 
 /// The model the session talks to now.
@@ -359,6 +364,7 @@ pub async fn build(
     config.parallel_subagents = built.parallel_subagents;
     let guide_warn_bytes = built.guide_warn_bytes;
     let notify = built.notify;
+    let loops = built.loops;
     config.snapshots = Some(home.join(".glut").join("snapshots"));
     config.savings = Some(home.join(".glut").join(glut::lean::FILE));
     config.masks = masks(&home, &mut notes);
@@ -418,6 +424,9 @@ pub async fn build(
     // T36c: `tell` is in every screen session's toolbox, offered only while the screen is split.
     let pane_link = Arc::new(crate::tell::Link::default());
     let tell = crate::tell::Tell::new(Arc::clone(&pane_link), reports.clone());
+    // T60a: `end_loop` likewise, offered only while the session runs a loop.
+    let loop_link = Arc::new(crate::looping::Link::default());
+    let end_loop = crate::looping::EndLoop::new(Arc::clone(&loop_link));
     let mut sink = SharedSink::new(Box::new(ToScreen {
         reports,
         host: Arc::clone(&host),
@@ -445,7 +454,10 @@ pub async fn build(
     )
     .await
     .map_err(|err| err.to_string())?;
-    tools.extend([Box::new(tell) as Box<dyn glut::Tool>]);
+    tools.extend([
+        Box::new(tell) as Box<dyn glut::Tool>,
+        Box::new(end_loop) as Box<dyn glut::Tool>,
+    ]);
     for entry in refused {
         tools.servers().refused(entry);
     }
@@ -472,9 +484,11 @@ pub async fn build(
         guide_paths,
         guide_warn_bytes,
         notify,
+        loops,
         skills,
         memory,
         pane_link,
+        loop_link,
     };
     let engine = match launch.engine {
         EngineChoice::Providers { provider, model } => {
@@ -753,6 +767,7 @@ pub fn turn(
             ..engine.config(&parts)
         };
         config.pane_tools = parts.pane_link.split();
+        config.loop_tool = parts.loop_link.on();
         // The whole texts of long results stay with the session (T54): a later turn reads them on, `/export full`
         // writes them out. A host that keeps them elsewhere (an Axiomata chat) has set its own folder already.
         if config.results.is_none() {
@@ -1283,9 +1298,11 @@ pub fn for_tests() -> (Parts, Engine) {
         guide_paths: Vec::new(),
         guide_warn_bytes: u64::from(glut::config::DEFAULT_GUIDE_WARN_KB) * 1024,
         notify: glut::permissions::settings::NotifySection::default(),
+        loops: glut::permissions::settings::LoopSection::default(),
         skills: Vec::new(),
         memory: None,
         pane_link: Arc::new(crate::tell::Link::default()),
+        loop_link: Arc::new(crate::looping::Link::default()),
     };
     let engine = Engine {
         provider: "test".into(),

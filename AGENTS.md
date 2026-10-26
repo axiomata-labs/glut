@@ -109,6 +109,10 @@ cargo run --release --bin glut   # the TUI in the current folder, on the default
   `glut run --folder` and `/folder add` add one, after `folders::check` — never a model, a skill or a project. One
   `Folders` per toolbox is shared by the file tools, the gate, the shell's sandbox and the snapshots: a new place that
   resolves a run's file path must ask it too (`Folders::place`/`full_path`), or it treats such a path as outside.
+- **A loop repeats the owner's words, never more** (T60a, `crates/glut-tui/src/looping.rs`): a round sends the task
+  `/loop` was given, a command only of `looping::COMMANDS`; its agent takes the pane's mode, granted rules and folders,
+  and its asks wait for the owner like any. `end_loop` is a screen tool like `tell`: offered by `RunConfig::loop_tool`
+  at depth 0 only, never from a script.
 - **What a command *is* decides beside the rules** (TUI1e, `crates/glut/src/permissions/kinds.rs`): a command whose
   every part is a listed reader (`ls`, `grep`, `sed -n 1,9p`, `git status`, …) runs in every mode like `read_file`;
   in `auto` everything sandboxed runs but a `kinds::heavy` one (`rm -rf`, `git push`, `sudo`, …). A new reader needs

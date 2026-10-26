@@ -139,6 +139,12 @@ pub const TEXTS: Texts = Texts {
             "leer el flujo de un agente en segundo plano sobre este pane; Esc lo cierra",
         ),
         (
+            "loop",
+            "ejecutar una tarea una y otra vez en un agente en segundo plano propio, el intervalo contado desde el fin \
+             de una ronda — /loop 10m ejecuta los tests; /loop solo los lista, /loop stop [name] termina uno, /loop \
+             rounds|budget fijan dónde termina uno",
+        ),
+        (
             "diff",
             "revisar lo que cambió el último turno, hunk por hunk; /diff session (⌃R)",
         ),
@@ -1591,6 +1597,36 @@ pub const TEXTS: Texts = Texts {
     folder_overlaps: "{folder} está dentro de {other} o lo contiene — un comando en la exterior podría poner un enlace \
                       donde está la interior: añade solo una",
     files_beside_not_restored: "una carpeta junto a la de trabajo no ha vuelto: {what}",
+    loop_usage: "/loop <interval> [fresh] [as <role>] [notify] <task> — el intervalo como 30s, 5m, 2h o 1h30m · /loop \
+                 stop [name] · /loop rounds [n] · /loop budget [usd]",
+    loop_interval_bad: "«{word}» no es un intervalo: 30s, 5m, 2h o 1h30m, de 10s a 24h — /loop <interval> <task>",
+    loop_command_refused: "un bucle ejecuta un mensaje, /skill, /compact o /init — no /{name}",
+    loop_rounds_bad: "/loop rounds toma un número de 1 a {most}",
+    loop_budget_bad: "/loop budget toma un importe en USD mayor que 0 y hasta 1000, como 2.5",
+    loop_rounds_now: "un bucle termina tras {n} rondas como mucho — /loop rounds <n> lo cambia",
+    loop_rounds_set: "un bucle iniciado desde ahora termina tras {n} rondas como mucho",
+    loop_budget_now: "un bucle termina en cuanto sus rondas han costado {usd} juntas, contado donde se conocen los \
+                      precios de su modelo — /loop budget <usd> lo cambia",
+    loop_budget_set: "un bucle iniciado desde ahora termina en cuanto sus rondas han costado {usd} juntas",
+    loop_starts: "el bucle {name} empieza: cada {every} tras terminar una ronda — {task} · /loop lo lista, /show \
+                  {name} lo trae delante, /loop stop {name} lo termina",
+    loop_ended: "bucle {name} terminado: {why} — {rounds} rondas, {cost}",
+    loop_why_goal: "su objetivo se ha alcanzado ({reason})",
+    loop_why_stopped: "lo detuviste",
+    loop_why_failed: "una ronda no terminó con respuesta ({reason})",
+    loop_why_rounds: "{n} rondas hechas",
+    loop_why_budget: "su presupuesto de {max} está agotado",
+    loop_none: "no corre ningún bucle — /loop <interval> <task> inicia uno",
+    loop_which: "corren varios bucles: /loop stop <name>",
+    loop_unknown: "no hay bucle {name} — /loop los lista",
+    loops_heading: "Bucles:",
+    loop_line: "{name}: cada {every}, {round} de {rounds} rondas, {when}, {cost} — {task}",
+    loop_round_runs: "una ronda en curso",
+    loop_next_in: "siguiente en {time}",
+    loop_too_many: "{n} agentes trabajan ya en segundo plano: cierra uno con /close antes de iniciar un bucle",
+    loop_no_turn: "su tarea no inició ningún turno",
+    loop_role_kept: "este pane hace de {role}: un bucle iniciado aquí también — /loop sin as",
+    loop_uncounted: "los precios de su modelo son desconocidos, así que solo el límite de rondas lo termina",
     secrets_no_such: "no hay secreto {n} en esta sesión — /secrets los lista",
     secrets_allowed: "el secreto {n} pasa en esta sesión",
     secrets_allowed_always: "el secreto {n} pasa siempre (su huella guardada en ~/.glut/secrets.json, nunca el valor)",

@@ -895,6 +895,12 @@ impl Offer {
             direct.retain(|spec| !pane_tool(&spec.name));
             behind.retain(|spec| !pane_tool(&spec.name));
         }
+        // T60a: the loop's end only to a loop's own model.
+        let offers_loop = config.loop_tool && depth == 0;
+        if !offers_loop {
+            direct.retain(|spec| spec.name != crate::config::LOOP_TOOL);
+            behind.retain(|spec| spec.name != crate::config::LOOP_TOOL);
+        }
         let codemode = config.codemode && !(direct.is_empty() && behind.is_empty());
         let catalog = Arc::new(codemode::Catalog {
             specs: direct.iter().chain(&behind).cloned().collect(),
@@ -905,6 +911,7 @@ impl Offer {
             let mut all = tools.specs();
             all.retain(|spec| offers_glut || spec.name != glut_files::NAME);
             all.retain(|spec| offers_panes || !pane_tool(&spec.name));
+            all.retain(|spec| offers_loop || spec.name != crate::config::LOOP_TOOL);
             all
         };
         if codemode {
@@ -2006,6 +2013,14 @@ impl<M: ChatModel> Loop<'_, M> {
                 format!("error: {name} is offered only while the screen is split into panes"),
             ));
         }
+        if name == crate::config::LOOP_TOOL
+            && !self.offer.specs.iter().any(|spec| spec.name == *name)
+        {
+            return Ok((
+                false,
+                format!("error: {name} is offered only to a loop's own model"),
+            ));
+        }
         // T37b: what is not offered is not run, whatever the model calls.
         if name == glut_files::NAME && !self.offer.specs.iter().any(|spec| spec.name == *name) {
             return Ok((
@@ -2459,6 +2474,7 @@ impl<M: ChatModel> Loop<'_, M> {
             || name == crate::task::NAME
             || name == planning::EXIT_PLAN
             || crate::config::PANE_TOOLS.contains(&name.as_str())
+            || name == crate::config::LOOP_TOOL
         {
             let text = format!("not permitted: a script cannot start {name}");
             sink.emit(Event::tool_result(self.turns, &id, &name, false, &text));
@@ -3540,6 +3556,63 @@ mod tests {
             "never to a subagent"
         );
         assert!(names(&config, 1).contains(&"echo".to_owned()));
+    }
+
+    /// A stand-in for the screen's `end_loop` (TUI T60a).
+    struct LoopTool;
+
+    impl Tool for LoopTool {
+        fn spec(&self) -> ToolSpec {
+            ToolSpec {
+                name: crate::config::LOOP_TOOL.into(),
+                description: "l".into(),
+                parameters: json!({"type": "object"}),
+            }
+        }
+
+        fn access(&self, _arguments: &Value) -> crate::permissions::Access {
+            crate::permissions::Access::Own
+        }
+
+        fn call(&self, _arguments: Value, _context: crate::tools::CallContext) -> ToolFuture<'_> {
+            Box::pin(async move { Ok("ends".to_owned()) })
+        }
+    }
+
+    #[test]
+    fn the_loops_end_is_offered_only_to_a_loop_and_never_to_a_subagent() {
+        let mut tools = Toolbox::new();
+        tools.extend([
+            Box::new(LoopTool) as Box<dyn Tool>,
+            Box::new(PaneTool) as Box<dyn Tool>,
+        ]);
+        for codemode in [false, true] {
+            let names = |config: &RunConfig, depth: u32| -> Vec<String> {
+                let offer = Offer::of(config, &tools, depth, false);
+                offer
+                    .specs
+                    .iter()
+                    .chain(&offer.catalog.specs)
+                    .map(|spec| spec.name.clone())
+                    .collect()
+            };
+            let mut config = RunConfig::new("/tmp");
+            config.codemode = codemode;
+            config.pane_tools = true;
+            assert!(!names(&config, 0).contains(&"end_loop".to_owned()));
+            config.loop_tool = true;
+            config.pane_tools = false;
+            let offered = names(&config, 0);
+            assert!(offered.contains(&"end_loop".to_owned()));
+            assert!(
+                !offered.contains(&"tell".to_owned()),
+                "the panes' tool keeps its own switch"
+            );
+            assert!(
+                !names(&config, 1).contains(&"end_loop".to_owned()),
+                "never to a subagent"
+            );
+        }
     }
 
     #[test]

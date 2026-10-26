@@ -24,6 +24,7 @@ mod layout;
 mod linebreak;
 mod links;
 pub mod log;
+mod looping;
 mod markdown;
 mod mcp;
 mod memory;

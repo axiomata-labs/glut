@@ -108,7 +108,25 @@ struct File {
     /// owner's only.
     #[serde(default)]
     notify: Option<NotifySection>,
+    /// Where a loop of the terminal UI ends by itself (TUI T60a): `{"rounds": 50, "maxUsd": 5}`. The owner's only.
+    #[serde(default, rename = "loop")]
+    loops: Option<LoopSection>,
 }
+
+/// The `loop` section (TUI T60a): the second source after what `/loop rounds` and `/loop budget` kept.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LoopSection {
+    /// The most rounds one loop runs.
+    #[serde(default)]
+    pub rounds: Option<u32>,
+    /// The most a loop's session may cost in USD, counted where its model's prices are known.
+    #[serde(default, rename = "maxUsd")]
+    pub max_usd: Option<f64>,
+}
+
+/// The most rounds `loop.rounds` may say.
+pub const MAX_LOOP_ROUNDS: u32 = 1000;
 
 /// The `notify` section (TUI T53): the second source after what `/notify` kept.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -287,6 +305,8 @@ pub struct Settings {
     pub guide: Option<GuideSection>,
     /// The `notify` section as written (TUI T53); only the owner's is read.
     pub notify: Option<NotifySection>,
+    /// The `loop` section as written (TUI T60a); only the owner's is read.
+    pub loops: Option<LoopSection>,
 }
 
 /// Reads one settings file; a missing file says nothing.
@@ -412,6 +432,7 @@ fn settings_of(
         subagents: file.subagents,
         guide: file.guide,
         notify: file.notify,
+        loops: file.loops,
     })
 }
 
@@ -445,6 +466,8 @@ pub struct Loaded {
     pub guide_warn_bytes: u64,
     /// The owner's `notify` section (TUI T53).
     pub notify: NotifySection,
+    /// The owner's `loop` section (TUI T60a).
+    pub loops: LoopSection,
 }
 
 impl Loaded {
@@ -567,6 +590,22 @@ pub fn load(home: &Path, project: &Path, trusted: bool) -> Result<Loaded, Harnes
             reason: format!("notify.after is {after}, from 0 to {MAX_NOTIFY_AFTER} (seconds)"),
         });
     }
+    let loops = user.loops.unwrap_or_default();
+    if let Some(rounds) = loops
+        .rounds
+        .filter(|rounds| !(1..=MAX_LOOP_ROUNDS).contains(rounds))
+    {
+        return Err(HarnessError::Settings {
+            path: owners.display().to_string(),
+            reason: format!("loop.rounds is {rounds}, from 1 to {MAX_LOOP_ROUNDS}"),
+        });
+    }
+    if let Some(usd) = loops.max_usd.filter(|usd| !usd.is_finite() || *usd <= 0.0) {
+        return Err(HarnessError::Settings {
+            path: owners.display().to_string(),
+            reason: format!("loop.maxUsd is {usd}, a positive amount in USD"),
+        });
+    }
     let ceiling = user.mode.unwrap_or_default().looseness();
     let owner = &user.sandbox;
     let mut sandbox = SandboxSettings {
@@ -606,6 +645,7 @@ pub fn load(home: &Path, project: &Path, trusted: bool) -> Result<Loaded, Harnes
         parallel_subagents,
         guide_warn_bytes: u64::from(guide_warn_kb) * 1024,
         notify,
+        loops,
     };
     for file in project_files(project) {
         let settings = read(&file)?;
@@ -942,6 +982,45 @@ mod tests {
             load(&home, &project, false),
             Err(HarnessError::Settings { .. })
         ));
+    }
+
+    #[test]
+    fn the_owner_sets_where_a_loop_ends_a_project_does_not() {
+        let (home, project) = (temp("loop-home"), temp("loop-project"));
+        assert_eq!(
+            load(&home, &project, true).unwrap().loops,
+            LoopSection::default()
+        );
+        write(
+            &home.join(".glut/settings.json"),
+            r#"{"loop": {"rounds": 20, "maxUsd": 2.5}}"#,
+        );
+        write(
+            &project.join(".glut/settings.json"),
+            r#"{"loop": {"rounds": 1000}}"#,
+        );
+        assert_eq!(
+            load(&home, &project, true).unwrap().loops,
+            LoopSection {
+                rounds: Some(20),
+                max_usd: Some(2.5)
+            }
+        );
+        for odd in [
+            r#"{"loop": {"rounds": 0}}"#.to_owned(),
+            format!(r#"{{"loop": {{"rounds": {}}}}}"#, MAX_LOOP_ROUNDS + 1),
+            r#"{"loop": {"maxUsd": -1}}"#.to_owned(),
+            r#"{"loop": {"round": 3}}"#.to_owned(),
+        ] {
+            write(&home.join(".glut/settings.json"), &odd);
+            assert!(
+                matches!(
+                    load(&home, &project, true),
+                    Err(HarnessError::Settings { .. })
+                ),
+                "{odd}"
+            );
+        }
     }
 
     #[test]
