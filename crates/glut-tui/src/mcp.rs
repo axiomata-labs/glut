@@ -37,6 +37,11 @@ pub enum Step {
 /// The number the next sign-in is told by.
 static SIGN_INS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// The number the next sign-in is told by — an MCP server's or a subscription's (PV4), one count for both.
+pub fn next_sign_in() -> u64 {
+    SIGN_INS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 /// What a hidden entry is for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SecretFor {

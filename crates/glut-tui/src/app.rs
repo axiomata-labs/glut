@@ -3095,6 +3095,7 @@ impl App {
                 Some(self.engine.endpoint.effort),
             ),
             "provider" if rest.is_empty() => self.picker = Some(self.provider_picker()),
+            "login" => self.login_command(rest),
             "provider" => self.switch(
                 Some(rest.to_owned()),
                 None,
@@ -4056,6 +4057,7 @@ impl App {
             budget,
             usage: self.usage,
             cost: self.cost,
+            plan: self.engine.plan,
         }
     }
 
@@ -5334,6 +5336,26 @@ impl App {
                         }
                     }
                     Some(Pick::Skill(name)) => self.input.insert_text(&format!("/skill {name} ")),
+                    Some(Pick::Login(id)) => {
+                        let home = self.parts.home.clone();
+                        let signed = crate::login::standings(&home)
+                            .into_iter()
+                            .any(|standing| standing.id == id && standing.who.is_some());
+                        if signed {
+                            // A sign-out revokes at the provider: asked once more, never on one stray ⏎.
+                            let items = vec![
+                                Item::plain(tr!(login_sign_out_yes), "", Pick::Logout(id.clone())),
+                                Item::plain(tr!(login_sign_out_no), "", Pick::Shown),
+                            ];
+                            self.picker =
+                                Some(Picker::new(tr!(login_sign_out_title, id = id), items, None));
+                        } else {
+                            crate::login::sign_in(&self.parts, id, self.reports.clone());
+                        }
+                    }
+                    Some(Pick::Logout(id)) => {
+                        crate::login::sign_out(&self.parts, id, self.reports.clone())
+                    }
                     Some(Pick::Step { run, turn }) => self.picker = Some(step_do(run, turn)),
                     Some(Pick::StepDo { run, turn, restore }) => self.step_do(run, turn, restore),
                     Some(Pick::Rewind {
@@ -5637,6 +5659,10 @@ impl App {
                     .map(|(_, ids)| ids.clone())
                     .unwrap_or_default()
             }
+            Source::Subscriptions => crate::login::standings(&self.parts.home)
+                .into_iter()
+                .map(|standing| standing.id)
+                .collect(),
             Source::Plans => crate::schedule::Schedules::load(&self.parts.home)
                 .map(|schedules| schedules.plans.into_iter().map(|plan| plan.name).collect())
                 .unwrap_or_default(),
@@ -6041,7 +6067,8 @@ impl App {
         use crate::warm::CacheMode;
         let anthropic = matches!(*self.engine.model, glut::Model::Anthropic(_));
         let hour = self.cache_mode == CacheMode::Hour && anthropic;
-        if self.cache_seen {
+        // A plan has no call that only renews its cache (PV4): nothing to keep warm, no countdown to show.
+        if self.cache_seen && !self.engine.plan {
             let life = if hour {
                 crate::warm::HOUR
             } else {
@@ -6055,7 +6082,7 @@ impl App {
             // Only Anthropic lets the hour be asked for: elsewhere it is kept by reading, as with `ping`.
             CacheMode::Hour => !anthropic,
             CacheMode::Off => false,
-        };
+        } && !self.engine.plan;
         // Only after an answered turn: a call that failed or was stopped may have cached nothing. A ping is a paid
         // call outside a turn: the host's budget has its word first, as for `/compact` — and before every ping.
         let may_spend = self.parts.host.may_spend().is_ok();
@@ -7144,6 +7171,37 @@ impl App {
                 }
             }
         }
+    }
+
+    /// `/login [provider] [address]` (PV4): the subscriptions with how each stands, Enter signing in or out; with a
+    /// provider, its sign-in at once; with an address after it, the one the browser ended on, pasted back to the
+    /// sign-in that waits (over SSH).
+    fn login_command(&mut self, rest: &str) {
+        let (id, more) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+        if !more.trim().is_empty() {
+            return match self.mcp_waiting.remove(&crate::login::waiting_key(id)) {
+                Some((_, paste)) => {
+                    let _ = paste.send(more.trim().to_owned());
+                }
+                None => self
+                    .transcript
+                    .note(tr!(login_no_waiting, id = id), Tone::Quiet),
+            };
+        }
+        if !id.is_empty() {
+            return crate::login::sign_in(&self.parts, id.to_owned(), self.reports.clone());
+        }
+        let items: Vec<Item> = crate::login::standings(&self.parts.home)
+            .into_iter()
+            .map(|standing| {
+                let detail = match &standing.who {
+                    Some(who) => tr!(login_state_in, who = crate::transcript::clean(who)),
+                    None => tr!(login_state_out).to_owned(),
+                };
+                Item::plain(standing.id.clone(), detail, Pick::Login(standing.id))
+            })
+            .collect();
+        self.picker = Some(Picker::new(tr!(login_title), items, None));
     }
 
     /// The hidden entry's keys: typed, never shown; ⏎ hands it on, Esc gives it up. It came up while the owner may

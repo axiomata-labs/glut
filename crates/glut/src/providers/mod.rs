@@ -197,7 +197,10 @@ pub fn write_replacing(dir: &Path, path: &Path, bytes: &[u8], mode: u32) -> std:
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("file");
-    let temp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
+    // One process may write the same file from two tasks at once (a renewal and a sign-in): each its own temp file.
+    static WRITES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let nth = WRITES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let temp = dir.join(format!(".{name}.{}.{nth}.tmp", std::process::id()));
     let _ = std::fs::remove_file(&temp);
     let written = (|| -> std::io::Result<()> {
         let mut file = std::fs::OpenOptions::new()
@@ -256,6 +259,9 @@ impl Entry {
                 "unknown kind {:?} (glut providers catalog lists them)",
                 self.kind
             ));
+        } else if self.signs_in() && self.root.is_some() {
+            // A sign-in's tokens are OpenAI's to receive: another root would carry them to another host (PV4).
+            return Err("a sign-in provider takes no root of its own: its tokens go to its catalog root only".into());
         } else if self.key.is_some() {
             return Err("\"key\" is only for openai-compatible; the catalog knows whether its providers need one".into());
         }
@@ -297,6 +303,11 @@ impl Entry {
     /// The wire protocol of the provider's kind; an endpoint of the owner's own speaks chat completions.
     pub fn protocol(&self) -> catalog::Protocol {
         catalog::known(&self.kind).map_or_else(catalog::Protocol::default, |known| known.protocol)
+    }
+
+    /// Whether the owner signs in to it with an account instead of a key (PV4): ChatGPT's plan.
+    pub fn signs_in(&self) -> bool {
+        catalog::known(&self.kind).is_some_and(|known| known.sign_in == SignIn::ChatGpt)
     }
 
     /// Whether a run needs a key.
@@ -367,6 +378,8 @@ pub enum KeyFrom {
     Store,
     /// The provider needs none.
     NotNeeded,
+    /// A sign-in by subscription (PV4): the bearer token comes from it at every call.
+    SignedIn,
 }
 
 /// A provider made into a run's endpoint.
@@ -377,6 +390,17 @@ pub struct Resolved {
     pub key_from: KeyFrom,
     /// The wire protocol the provider speaks: which client a run talks to it with ([`crate::model::Model`]).
     pub protocol: catalog::Protocol,
+    /// The account of a signed-in subscription (PV4): the caller makes its [`crate::subscription::Credential`].
+    pub signed_in: Option<String>,
+}
+
+impl Resolved {
+    /// The credential of a signed-in subscription, kept in `home`'s store; `None` for a key.
+    pub fn credential(&self, home: &Path) -> Option<crate::subscription::Credential> {
+        self.signed_in
+            .as_deref()
+            .map(|account| crate::subscription::Credential::new(home, &self.id, account))
+    }
 }
 
 /// The endpoint of provider `id` (or the default one) for `model` (or its default model): the key from the
@@ -400,6 +424,30 @@ pub fn resolve(
     })?;
     // A key pasted into a variable or a store keeps no newline: it would go into the header with it.
     let trimmed = |value: String| Some(value.trim().to_owned()).filter(|value| !value.is_empty());
+    if entry.signs_in() {
+        let account = account(id, entry);
+        let signed = store
+            .get(&account)
+            .map_err(|err| err.to_string())?
+            .and_then(|secret| serde_json::from_str::<crate::subscription::Record>(&secret).ok())
+            .is_some_and(|record| record.signed_in());
+        if !signed {
+            return Err(crate::subscription::not_signed_in(id).to_string());
+        }
+        return Ok(Resolved {
+            id: id.to_owned(),
+            endpoint: ModelEndpoint {
+                base_url: entry.root().trim_end_matches('/').to_owned(),
+                api_key: None,
+                model: model.to_owned(),
+                effort: None,
+                versioned: true,
+            },
+            key_from: KeyFrom::SignedIn,
+            protocol: entry.protocol(),
+            signed_in: Some(account),
+        });
+    }
     let (api_key, key_from) = if !entry.needs_key() {
         (None, KeyFrom::NotNeeded)
     } else if let Some((name, key)) = entry
@@ -444,6 +492,7 @@ pub fn resolve(
         },
         key_from,
         protocol: entry.protocol(),
+        signed_in: None,
     })
 }
 
@@ -469,12 +518,7 @@ pub fn route(
     let (part, protocol) = match api {
         models::Api::Chat => ("openai/v1", catalog::Protocol::ChatCompletions),
         models::Api::Anthropic => ("anthropic/v1", catalog::Protocol::AnthropicMessages),
-        models::Api::Responses => {
-            return Err(format!(
-                "{} speaks OpenAI's Responses API, which Glut does not speak yet: pick another model",
-                endpoint.model
-            ));
-        }
+        models::Api::Responses => ("openai/v1", catalog::Protocol::Responses),
         models::Api::Google | models::Api::Other => {
             return Err(format!(
                 "{} speaks an API Glut does not speak: pick another model",
@@ -485,6 +529,66 @@ pub fn route(
     endpoint.base_url = format!("{}/{part}", endpoint.base_url.trim_end_matches('/'));
     endpoint.versioned = true;
     Ok((endpoint, protocol))
+}
+
+/// The account of provider `id`, which signs in (PV4): the catalog's subscription added to `providers.json` first
+/// where it is not there yet — `glut providers login chatgpt` (or `/login`) is all it takes.
+///
+/// # Errors
+///
+/// A message when there is no such provider, or it takes a key, or the file cannot be read or written.
+pub fn signing(home: &Path, id: &str) -> Result<String, String> {
+    let mut providers = Providers::load(home).map_err(|err| err.to_string())?;
+    if !providers.providers.contains_key(id) {
+        let known = catalog::known(id)
+            .filter(|known| known.sign_in == SignIn::ChatGpt)
+            .ok_or_else(|| format!("no provider {id} (glut providers list shows them)"))?;
+        let entry = Entry {
+            kind: known.id.to_owned(),
+            root: None,
+            model: None,
+            key_env: None,
+            key: None,
+            windows: BTreeMap::default(),
+        };
+        let first = providers.providers.is_empty();
+        providers.providers.insert(id.to_owned(), entry);
+        if first || providers.default.is_none() {
+            providers.default = Some(id.to_owned());
+        }
+        providers.save(home).map_err(|err| err.to_string())?;
+    }
+    let entry = &providers.providers[id];
+    if !entry.signs_in() {
+        return Err(format!(
+            "{id} takes a key, not a sign-in (glut providers add {id})"
+        ));
+    }
+    Ok(account(id, entry))
+}
+
+/// The providers the owner may sign in to (PV4): those of `providers.json` that do, and the catalog's not added yet —
+/// each with its account.
+pub fn subscriptions(home: &Path) -> Vec<(String, String)> {
+    let providers = Providers::load(home).unwrap_or_default();
+    let mut found: Vec<(String, String)> = providers
+        .providers
+        .iter()
+        .filter(|(_, entry)| entry.signs_in())
+        .map(|(id, entry)| (id.clone(), account(id, entry)))
+        .collect();
+    for known in catalog::CATALOG
+        .iter()
+        .filter(|known| known.sign_in == SignIn::ChatGpt)
+    {
+        if !providers.providers.contains_key(known.id) {
+            found.push((
+                known.id.to_owned(),
+                format!("{}@{}", known.id, host(known.root)),
+            ));
+        }
+    }
+    found
 }
 
 /// The account a provider's key is stored under: its id and the host of its root (`openrouter@openrouter.ai`). A
@@ -632,8 +736,11 @@ mod tests {
             Protocol::AnthropicMessages,
             "without a list, by its id"
         );
-        let refused = route(gateway_endpoint("gpt-6-luna"), Protocol::Gateway, None).unwrap_err();
-        assert!(refused.contains("Responses API"), "{refused}");
+        // PV4: a model of the Responses API goes to the part of the gateway that speaks OpenAI's.
+        let (responses, protocol) =
+            route(gateway_endpoint("gpt-6-luna"), Protocol::Gateway, None).unwrap();
+        assert_eq!(protocol, Protocol::Responses);
+        assert!(responses.base_url.ends_with("/openai/v1"));
         assert!(route(gateway_endpoint("gemini-4-argon"), Protocol::Gateway, None).is_err());
         let own = gateway_endpoint("glm-5.3");
         let (same, protocol) = route(own.clone(), Protocol::ChatCompletions, None).unwrap();

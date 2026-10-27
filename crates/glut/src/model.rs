@@ -139,7 +139,7 @@ impl Message {
         }
     }
 
-    fn text(role: Role, text: impl Into<String>) -> Self {
+    pub(crate) fn text(role: Role, text: impl Into<String>) -> Self {
         Message {
             role,
             content: Some(text.into()),
@@ -628,6 +628,7 @@ impl ChatModel for OpenAiCompat {
 pub enum Model {
     OpenAi(OpenAiCompat),
     Anthropic(crate::anthropic::AnthropicMessages),
+    Responses(crate::responses::ResponsesApi),
 }
 
 impl Model {
@@ -648,8 +649,30 @@ impl Model {
         endpoint: ModelEndpoint,
         protocol: crate::providers::catalog::Protocol,
     ) -> Result<Self, HarnessError> {
+        Self::signed(endpoint, protocol, None)
+    }
+
+    /// [`Self::new`], on a signed-in subscription where `credential` is one (PV4): its bearer token at every call.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::new`]; a sign-in for a protocol that has none.
+    pub fn signed(
+        endpoint: ModelEndpoint,
+        protocol: crate::providers::catalog::Protocol,
+        credential: Option<crate::subscription::Credential>,
+    ) -> Result<Self, HarnessError> {
         use crate::providers::catalog::Protocol;
+        if credential.is_some() && protocol != Protocol::Responses {
+            return Err(HarnessError::Protocol(
+                "a sign-in speaks the Responses API only".into(),
+            ));
+        }
         Ok(match protocol {
+            Protocol::Responses => Model::Responses(match credential {
+                Some(credential) => crate::responses::ResponsesApi::signed(endpoint, credential)?,
+                None => crate::responses::ResponsesApi::new(endpoint)?,
+            }),
             Protocol::ChatCompletions => Model::OpenAi(OpenAiCompat::new(endpoint)?),
             Protocol::AnthropicMessages => {
                 Model::Anthropic(crate::anthropic::AnthropicMessages::new(endpoint)?)
@@ -721,6 +744,7 @@ impl ChatModel for Model {
         match self {
             Model::OpenAi(model) => model.complete(messages, tools, max_output_tokens).await,
             Model::Anthropic(model) => model.complete(messages, tools, max_output_tokens).await,
+            Model::Responses(model) => model.complete(messages, tools, max_output_tokens).await,
         }
     }
 
@@ -742,6 +766,11 @@ impl ChatModel for Model {
                     .complete_streaming(messages, tools, max_output_tokens, on_text)
                     .await
             }
+            Model::Responses(model) => {
+                model
+                    .complete_streaming(messages, tools, max_output_tokens, on_text)
+                    .await
+            }
         }
     }
 
@@ -749,6 +778,7 @@ impl ChatModel for Model {
         match self {
             Model::OpenAi(model) => model.warm(messages, tools).await,
             Model::Anthropic(model) => model.warm(messages, tools).await,
+            Model::Responses(model) => model.warm(messages, tools).await,
         }
     }
 
@@ -756,6 +786,7 @@ impl ChatModel for Model {
         match self {
             Model::OpenAi(model) => model.name(),
             Model::Anthropic(model) => model.name(),
+            Model::Responses(model) => model.name(),
         }
     }
 
@@ -763,6 +794,7 @@ impl ChatModel for Model {
         match self {
             Model::OpenAi(model) => model.context_window().await,
             Model::Anthropic(model) => model.context_window().await,
+            Model::Responses(model) => model.context_window().await,
         }
     }
 }

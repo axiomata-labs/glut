@@ -1,7 +1,7 @@
 //! The commands' manual pages in Chinese (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 53] = [
+pub const PAGES: [(&str, &str); 54] = [
     (
         "clear",
         "在此文件夹中开始一个新的空会话。\n\
@@ -121,6 +121,19 @@ pub const PAGES: [(&str, &str); 53] = [
          \n\
          提供商保存在 `~/.glut/providers.json` 中，其密钥保存在钥匙串中（或 `~/.glut/credentials.json`）；`glut providers add <id>` 添加一个。\
          对话继续，下次启动从你选择的提供商开始。",
+    ),
+    (
+        "login",
+        "用订阅代替密钥登录 — 目前是你的 ChatGPT Plus 或 Pro 套餐。\n\
+         \n\
+         /login — 订阅列表及各自状态；⏎ 登录或退出\n\
+         /login <provider> — 立即登录该订阅，例如 /login chatgpt\n\
+         /login <provider> <address> — 通过 SSH：把浏览器最终停留的地址粘贴回来\n\
+         \n\
+         先显示地址；⏎ 在你的浏览器中打开它。Glut 把登录保存在钥匙串（或 `~/.glut/credentials.json`）中并自动续期；退出登录会在 OpenAI 撤销它。\n\
+         \n\
+         使用套餐时每次调用不花钱，但适用套餐的使用上限：达到上限时本轮结束，Glut 会指向 ChatGPT 设置 → 用量，你也可以在那里限制每个应用的用量。在 shell 中：glut providers \
+         login|logout <provider>。",
     ),
     (
         "effort",

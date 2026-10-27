@@ -70,6 +70,11 @@ pub const TEXTS: Texts = Texts {
         ),
         ("provider", "changer de fournisseur, ou /provider <id>"),
         (
+            "login",
+            "te connecter avec un abonnement — ton abonnement ChatGPT — au lieu d'une clé ; /login seul les liste avec \
+             leur état, ⏎ connecte ou déconnecte",
+        ),
+        (
             "effort",
             "à quel point le modèle réfléchit, ou /effort <level>",
         ),
@@ -1080,6 +1085,20 @@ pub const TEXTS: Texts = Texts {
     setup_provider_prompt: "Fournisseur :",
     cli: &[
         (
+            "Signs in to a subscription in the browser — your ChatGPT Plus or Pro plan: glut providers login chatgpt",
+            "Te connecte à un abonnement dans le navigateur — ton abonnement ChatGPT Plus ou Pro : glut providers \
+             login chatgpt",
+        ),
+        (
+            "The provider; one of the catalog's subscriptions is added on the way",
+            "Le fournisseur ; un abonnement du catalogue est ajouté au passage",
+        ),
+        (
+            "Signs out of a subscription: the sign-in revoked at its provider and forgotten here",
+            "Te déconnecte d'un abonnement : la connexion révoquée chez son fournisseur et oubliée ici",
+        ),
+        ("The provider", "Le fournisseur"),
+        (
             "Started by the owner's key, not at its time: a paused plan runs too, and its times stay as they were",
             "Lancé par la touche du propriétaire, pas à son heure : un plan en pause tourne aussi, et ses heures \
              restent les mêmes",
@@ -1837,6 +1856,7 @@ pub const TEXTS: Texts = Texts {
     schedule_outcome_stopped: "arrêté",
     schedule_outcome_skipped: "sauté",
     schedule_outcome_unstarted: "pas lancé",
+    schedule_outcome_plan_limit: "limite de l'abonnement atteinte",
     keys_runs: "↑↓ choisir · ⏎ ouvre · r lance maintenant · p met en pause · d supprime · ⎋ retour · ⌃X R masque",
     runs_delete_ask: "supprimer le plan {name} et l'historique de ses passages ? y oui, toute autre touche non — ses \
                       sessions restent",
@@ -1852,6 +1872,28 @@ pub const TEXTS: Texts = Texts {
     schedule_quote_open: "un guillemet n'est pas fermé",
     runs_since: "depuis ton dernier passage : {runs} — l'onglet Exécutions (⌃X R) les montre",
     runs_since_one: "{name} {n}× (dernier : {outcome})",
+    login_title: "Abonnements",
+    login_state_in: "connecté en tant que {who} — ⏎ déconnecte",
+    login_state_out: "non connecté — ⏎ connecte",
+    login_sign_out_title: "Se déconnecter de {id} ?",
+    login_sign_out_yes: "Se déconnecter — révoqué chez OpenAI",
+    login_sign_out_no: "Rester connecté",
+    login_failed: "{id} : la connexion n'a pas abouti : {reason}",
+    login_sign_in_at: "Connecte-toi avec ton abonnement ChatGPT sur {host} : {address}",
+    login_paste_back: "Ouvre-la là où tu es ; recolle l'adresse sur laquelle le navigateur s'arrête : /login {id} \
+                       <address>",
+    login_signed_in: "{id} est connecté en tant que {who}.",
+    login_welcome: "Glut utilise désormais ton abonnement ChatGPT : pas d'argent par appel, mais les limites d'usage \
+                    de l'abonnement — un abonnement Plus partage sa limite avec chaque app qui l'utilise. Quand elle \
+                    est atteinte, Glut le dit et s'arrête ; tu vois et limites ce que chaque app peut utiliser sur \
+                    {page}",
+    login_out_nothing: "{id} n'était pas connecté.",
+    login_out_revoked: "{id} est déconnecté ; la connexion est révoquée chez OpenAI.",
+    login_out_unconfirmed: "{id} est déconnecté ici, mais OpenAI n'a pas confirmé la révocation ({reason}) : \
+                            déconnecte Glut dans les réglages de ChatGPT.",
+    login_no_waiting: "aucune connexion de {id} n'attend d'adresse — /login {id} en commence une",
+    plan_footer: "abonnement ChatGPT",
+    meter_plan: "abonnement ChatGPT : pas de prix par appel — gérer l'usage sur {page}",
     schedule_program_writable: "{program} se trouve là où les commandes du plan écrivent : un passage pourrait laisser \
                                 au suivant un programme à lui — lance un Glut installé ailleurs (cargo install)",
     schedule_path_writable: "son PATH atteint un dossier où ses commandes écrivent — glut schedule add <name> le \

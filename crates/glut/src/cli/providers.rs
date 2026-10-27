@@ -55,6 +55,16 @@ pub enum ProvidersCommand {
     Remove { id: String },
     /// Makes a provider the one runs take without --provider.
     Default { id: String },
+    /// Signs in to a subscription in the browser — your ChatGPT Plus or Pro plan: glut providers login chatgpt.
+    Login {
+        /// The provider; one of the catalog's subscriptions is added on the way.
+        id: String,
+    },
+    /// Signs out of a subscription: the sign-in revoked at its provider and forgotten here.
+    Logout {
+        /// The provider.
+        id: String,
+    },
     /// One tiny call to the provider's model, to see that endpoint, key and model work.
     Test {
         /// The provider; the default one when left out.
@@ -102,6 +112,8 @@ pub async fn run(command: ProvidersCommand) -> ExitCode {
         ProvidersCommand::Remove { id } => remove(&home, &id),
         ProvidersCommand::Default { id } => make_default(&home, &id),
         ProvidersCommand::Test { id, model } => test(&home, id.as_deref(), model.as_deref()).await,
+        ProvidersCommand::Login { id } => login(&home, &id, false).await,
+        ProvidersCommand::Logout { id } => logout(&home, &id).await,
     };
     match outcome {
         Ok(()) => ExitCode::SUCCESS,
@@ -140,6 +152,7 @@ fn list(home: &Path) -> Result<(), String> {
                     KeyFrom::Env(name) => say!(key_from_env, name = name),
                     KeyFrom::Store => say!(key_in_store, place = store.place()),
                     KeyFrom::NotNeeded => say!(key_not_needed).to_owned(),
+                    KeyFrom::SignedIn => say!(key_signed_in).to_owned(),
                 },
                 Err(reason) => say!(key_missing, reason = reason),
             };
@@ -159,6 +172,7 @@ fn print_catalog() {
         let sign_in = match known.sign_in {
             SignIn::Key => known.key_env.unwrap_or(say!(catalog_key)),
             SignIn::None => say!(catalog_no_key),
+            SignIn::ChatGpt => say!(catalog_sign_in),
         };
         println!(
             "{:<14} {:<28} {:<20} {}",
@@ -385,9 +399,10 @@ async fn test(home: &Path, id: Option<&str>, model: Option<&str>) -> Result<(), 
     } else {
         None
     };
+    let credential = resolved.credential(home);
     let (endpoint, protocol) =
         providers::route(resolved.endpoint, resolved.protocol, list.as_ref())?;
-    let client = Model::new(endpoint, protocol).map_err(|err| err.to_string())?;
+    let client = Model::signed(endpoint, protocol, credential).map_err(|err| err.to_string())?;
     let started = Instant::now();
     let reply = client
         .complete(&[Message::user(TEST_PROMPT)], &[], Some(TEST_MAX_TOKENS))
@@ -412,6 +427,127 @@ async fn test(home: &Path, id: Option<&str>, model: Option<&str>) -> Result<(), 
             input = reply.usage.input_tokens,
             output = reply.usage.output_tokens
         )
+    );
+    Ok(())
+}
+
+/// `glut providers login <id>`: the browser's sign-in, opened on the owner's Enter, the tokens kept in the store —
+/// also Glut's first start in the terminal, where the owner picked a subscription.
+///
+/// # Errors
+///
+/// Why there is no sign-in, for the owner to read.
+pub async fn login(home: &Path, id: &str, setup: bool) -> Result<(), String> {
+    use crate::subscription::chatgpt;
+    let account = providers::signing(home, id)?;
+    let kept = crate::subscription::load(home, &account).map_err(|err| err.to_string())?;
+    let sign_in = chatgpt::begin(home, kept, chatgpt::Server::openai()).await?;
+    println!("{}", say!(plan_sign_in_at, host = sign_in.host()));
+    println!("{}", sign_in.address());
+    let local = crate::oauth::can_open();
+    println!(
+        "{}",
+        if local {
+            say!(mcp_enter_opens)
+        } else {
+            say!(mcp_open_yourself)
+        }
+    );
+    // As `glut mcp login` reads it: on a thread of its own, an empty line opens the browser (the owner's word), any
+    // other is the address pasted back. The first start reads one line and no more: its next question is the
+    // terminal's, and a thread still reading would take the owner's answer.
+    let (send, received) = tokio::sync::oneshot::channel::<String>();
+    if setup {
+        let address = sign_in.address().to_owned();
+        let line = tokio::task::spawn_blocking(|| {
+            let mut line = String::new();
+            std::io::stdin().read_line(&mut line).map(|_| line)
+        })
+        .await
+        .map_err(|err| err.to_string())?
+        .map_err(|err| err.to_string())?;
+        let line = line.trim().to_owned();
+        if !line.is_empty() {
+            let _ = send.send(line.chars().take(MAX_KEY_BYTES as usize).collect());
+        } else if local && crate::oauth::open_in_browser(&address) {
+            println!("{}", say!(mcp_browser_opened));
+        }
+    } else if std::io::stdin().is_terminal() {
+        let address = sign_in.address().to_owned();
+        std::thread::spawn(move || {
+            let mut lines = std::io::stdin().lock().lines();
+            while let Some(Ok(line)) = lines.next() {
+                let line = line.trim();
+                if !line.is_empty() {
+                    let _ = send.send(line.chars().take(MAX_KEY_BYTES as usize).collect());
+                    return;
+                }
+                if local && crate::oauth::open_in_browser(&address) {
+                    println!("{}", say!(mcp_browser_opened));
+                }
+            }
+        });
+    }
+    let pasted = async { received.await.ok() };
+    let record = sign_in
+        .finish(pasted)
+        .await
+        .map_err(|err| err.to_string())?;
+    // Kept under the record's lock: a renewal of another window must not write its older tokens over these.
+    let _lock = crate::subscription::Lock::take(home, &account)
+        .await
+        .map_err(|err| err.to_string())?;
+    crate::subscription::save(home, &account, &record).map_err(|err| err.to_string())?;
+    let who = record
+        .email
+        .clone()
+        .unwrap_or_else(|| record.subject.clone());
+    println!(
+        "{}",
+        say!(
+            plan_signed_in,
+            id = id,
+            who = crate::permissions::printable(&who)
+        )
+    );
+    Ok(())
+}
+
+/// `glut providers logout <id>`: the sign-in revoked at the provider, the tokens gone; the client stays for the
+/// next sign-in.
+async fn logout(home: &Path, id: &str) -> Result<(), String> {
+    use crate::subscription::chatgpt::{self, SignedOut};
+    let providers = load(home)?;
+    let entry = providers
+        .providers
+        .get(id)
+        .ok_or_else(|| say!(no_such_provider, id = id))?;
+    if !entry.signs_in() {
+        return Err(say!(not_a_sign_in, id = id));
+    }
+    let account = providers::account(id, entry);
+    // Under the record's lock: a renewal racing the sign-out would keep the account signed in.
+    let _lock = crate::subscription::Lock::take(home, &account)
+        .await
+        .map_err(|err| err.to_string())?;
+    let Some(record) = crate::subscription::load(home, &account).map_err(|err| err.to_string())?
+    else {
+        println!("{}", say!(plan_out_nothing, id = id));
+        return Ok(());
+    };
+    let (kept, done) = chatgpt::sign_out(&chatgpt::Server::openai(), &record).await;
+    crate::subscription::save(home, &account, &kept).map_err(|err| err.to_string())?;
+    println!(
+        "{}",
+        match done {
+            SignedOut::Nothing => say!(plan_out_nothing, id = id),
+            SignedOut::Revoked => say!(plan_out_revoked, id = id),
+            SignedOut::NotConfirmed(reason) => say!(
+                plan_out_unconfirmed,
+                id = id,
+                reason = crate::permissions::printable(&reason)
+            ),
+        }
     );
     Ok(())
 }

@@ -1,7 +1,7 @@
 //! The commands' manual pages in English (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 53] = [
+pub const PAGES: [(&str, &str); 54] = [
     (
         "clear",
         "Start a new, empty session in this folder.\n\
@@ -136,6 +136,21 @@ pub const PAGES: [(&str, &str); 53] = [
          Providers are kept in `~/.glut/providers.json`, their keys in the Keychain (or `~/.glut/credentials.json`); \
          `glut providers add <id>` adds one. The conversation goes on, and the next start begins with the provider you \
          picked.",
+    ),
+    (
+        "login",
+        "Sign in to a subscription instead of a key — today your ChatGPT Plus or Pro plan.\n\
+         \n\
+         /login — the subscriptions, each with how it stands; ⏎ signs in, or out\n\
+         /login <provider> — signs in to that one at once, as /login chatgpt\n\
+         /login <provider> <address> — over SSH: the address the browser ended on, pasted back\n\
+         \n\
+         The address is shown first; ⏎ opens it in your browser. Glut keeps the sign-in in the Keychain (or \
+         `~/.glut/credentials.json`) and renews it by itself; signing out revokes it at OpenAI.\n\
+         \n\
+         On the plan a call costs no money, but the plan's usage limits hold: when one is reached the turn ends and \
+         Glut points to ChatGPT Settings → Usage, where you also limit what each app may use. In the shell: glut \
+         providers login|logout <provider>.",
     ),
     (
         "effort",

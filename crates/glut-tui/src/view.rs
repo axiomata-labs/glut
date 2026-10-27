@@ -1318,6 +1318,9 @@ fn draw_keys(frame: &mut Frame, app: &App, area: Rect, branch: Option<String>, c
     }
     if let Some(cost) = app.cost {
         segments.push(Segment::calm(glut::lang::usd(cost, 4), 2));
+    } else if app.engine.plan {
+        // A subscription's use is the plan's (PV4): its name where money would stand.
+        segments.push(Segment::calm(tr!(plan_footer).to_owned(), 2));
     }
     if let Some(branch) = branch {
         segments.push(Segment::calm(

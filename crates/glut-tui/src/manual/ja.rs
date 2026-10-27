@@ -1,7 +1,7 @@
 //! The commands' manual pages in Japanese (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 53] = [
+pub const PAGES: [(&str, &str); 54] = [
     (
         "clear",
         "このフォルダーで、空の新しいセッションを始めます。\n\
@@ -122,6 +122,20 @@ pub const PAGES: [(&str, &str); 53] = [
          \n\
          プロバイダーは `~/.glut/providers.json` に、そのキーはキーチェーン（または `~/.glut/credentials.json`）に保存されます。`glut providers add \
          <id>` で追加します。会話は続き、次の起動は選んだプロバイダーで始まります。",
+    ),
+    (
+        "login",
+        "キーの代わりにサブスクリプションでサインインします — 現在は ChatGPT Plus または Pro プランです。\n\
+         \n\
+         /login — サブスクリプションの一覧と各状態。⏎ でサインインまたはサインアウト\n\
+         /login <provider> — すぐにサインインします（例：/login chatgpt）\n\
+         /login <provider> <address> — SSH 経由：ブラウザーが最後に表示したアドレスを貼り戻します\n\
+         \n\
+         まずアドレスが表示され、⏎ でブラウザーが開きます。Glut はサインインをキーチェーン（または `~/.glut/credentials.json`）に保存し、自動で更新します。サインアウトすると OpenAI \
+         側でも取り消されます。\n\
+         \n\
+         プランでは呼び出しごとの料金はかかりませんが、プランの利用上限があります。上限に達するとターンが終わり、Glut は ChatGPT の設定 → 利用状況 を案内します。各アプリの利用もそこで制限できます。シェルでは \
+         glut providers login|logout <provider> です。",
     ),
     (
         "effort",

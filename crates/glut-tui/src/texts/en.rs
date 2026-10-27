@@ -966,6 +966,7 @@ pub const TEXTS: Texts = Texts {
     schedule_outcome_stopped: "stopped",
     schedule_outcome_skipped: "skipped",
     schedule_outcome_unstarted: "not started",
+    schedule_outcome_plan_limit: "plan limit reached",
     keys_runs: "↑↓ choose · ⏎ opens · r runs now · p pauses · d deletes · ⎋ back · ⌃X R hides",
     runs_delete_ask: "delete plan {name} and its record of runs? y yes, any other key no — its sessions stay",
     runs_loops: "↻ {n} loops run while Glut is open — the Agents tab (⌃X A) shows them",
@@ -979,6 +980,26 @@ pub const TEXTS: Texts = Texts {
     schedule_quote_open: "a quote is left open",
     runs_since: "since you were last here: {runs} — the Runs tab (⌃X R) has them",
     runs_since_one: "{name} {n}× (last {outcome})",
+    login_title: "Subscriptions",
+    login_state_in: "signed in as {who} — ⏎ signs out",
+    login_state_out: "not signed in — ⏎ signs in",
+    login_sign_out_title: "Sign out of {id}?",
+    login_sign_out_yes: "Sign out — revoked at OpenAI",
+    login_sign_out_no: "Stay signed in",
+    login_failed: "{id}: the sign-in did not succeed: {reason}",
+    login_sign_in_at: "Sign in with your ChatGPT plan at {host}: {address}",
+    login_paste_back: "Open it where you sit; paste back the address the browser ends on: /login {id} <address>",
+    login_signed_in: "{id} is signed in as {who}.",
+    login_welcome: "Glut now uses your ChatGPT plan: no money per call, but the plan's usage limits — a Plus plan \
+                    shares its limit with every app that uses it. When it is reached, Glut says so and stops; you see \
+                    and limit what each app may use at {page}",
+    login_out_nothing: "{id} was not signed in.",
+    login_out_revoked: "{id} is signed out; the sign-in is revoked at OpenAI.",
+    login_out_unconfirmed: "{id} is signed out here, but OpenAI did not confirm the revocation ({reason}): disconnect \
+                            Glut in ChatGPT's settings.",
+    login_no_waiting: "no sign-in of {id} waits for an address — /login {id} begins one",
+    plan_footer: "ChatGPT plan",
+    meter_plan: "ChatGPT plan: no price per call — manage usage at {page}",
     schedule_program_writable: "{program} lies where the plan's commands write: a run could leave the next one a \
                                 program of its own — start a Glut installed elsewhere (cargo install)",
     schedule_path_writable: "its PATH reaches a folder its commands write — glut schedule add <name> makes it again \

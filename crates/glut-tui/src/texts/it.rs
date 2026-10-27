@@ -69,6 +69,11 @@ pub const TEXTS: Texts = Texts {
         ),
         ("provider", "cambiare provider, o /provider <id>"),
         (
+            "login",
+            "accedere con un abbonamento — il tuo piano ChatGPT — invece che con una chiave; /login da solo li elenca \
+             con il loro stato, ⏎ accede o esce",
+        ),
+        (
             "effort",
             "quanto a fondo pensa il modello, o /effort <level>",
         ),
@@ -1078,6 +1083,19 @@ pub const TEXTS: Texts = Texts {
     setup_provider_prompt: "Provider:",
     cli: &[
         (
+            "Signs in to a subscription in the browser — your ChatGPT Plus or Pro plan: glut providers login chatgpt",
+            "Accede a un abbonamento nel browser — il tuo piano ChatGPT Plus o Pro: glut providers login chatgpt",
+        ),
+        (
+            "The provider; one of the catalog's subscriptions is added on the way",
+            "Il provider; un abbonamento del catalogo viene aggiunto nel frattempo",
+        ),
+        (
+            "Signs out of a subscription: the sign-in revoked at its provider and forgotten here",
+            "Esce da un abbonamento: l'accesso revocato presso il suo provider e dimenticato qui",
+        ),
+        ("The provider", "Il provider"),
+        (
             "Started by the owner's key, not at its time: a paused plan runs too, and its times stay as they were",
             "Avviato dal tasto del proprietario, non al suo orario: gira anche un piano in pausa, e i suoi orari \
              restano com'erano",
@@ -1829,6 +1847,7 @@ pub const TEXTS: Texts = Texts {
     schedule_outcome_stopped: "fermato",
     schedule_outcome_skipped: "saltato",
     schedule_outcome_unstarted: "non avviato",
+    schedule_outcome_plan_limit: "limite del piano raggiunto",
     keys_runs: "↑↓ scegli · ⏎ apre · r esegue ora · p mette in pausa · d elimina · ⎋ indietro · ⌃X R nasconde",
     runs_delete_ask: "eliminare il piano {name} e il registro delle sue esecuzioni? y sì, qualsiasi altro tasto no — \
                       le sue sessioni restano",
@@ -1843,6 +1862,26 @@ pub const TEXTS: Texts = Texts {
     schedule_quote_open: "c'è una virgoletta non chiusa",
     runs_since: "dall'ultima volta: {runs} — la scheda Esecuzioni (⌃X R) le mostra",
     runs_since_one: "{name} {n}× (ultimo: {outcome})",
+    login_title: "Abbonamenti",
+    login_state_in: "accesso come {who} — ⏎ esce",
+    login_state_out: "non connesso — ⏎ accede",
+    login_sign_out_title: "Uscire da {id}?",
+    login_sign_out_yes: "Esci — revocato presso OpenAI",
+    login_sign_out_no: "Resta connesso",
+    login_failed: "{id}: l'accesso non è riuscito: {reason}",
+    login_sign_in_at: "Accedi con il tuo piano ChatGPT su {host}: {address}",
+    login_paste_back: "Aprila dove ti trovi; incolla l'indirizzo su cui finisce il browser: /login {id} <address>",
+    login_signed_in: "{id} ha effettuato l'accesso come {who}.",
+    login_welcome: "Glut ora usa il tuo piano ChatGPT: niente soldi per chiamata, ma i limiti d'uso del piano — un \
+                    piano Plus condivide il suo limite con ogni app che lo usa. Quando è raggiunto, Glut lo dice e si \
+                    ferma; vedi e limiti ciò che ogni app può usare su {page}",
+    login_out_nothing: "{id} non aveva effettuato l'accesso.",
+    login_out_revoked: "{id} è disconnesso; l'accesso è revocato presso OpenAI.",
+    login_out_unconfirmed: "{id} è disconnesso qui, ma OpenAI non ha confermato la revoca ({reason}): scollega Glut \
+                            nelle impostazioni di ChatGPT.",
+    login_no_waiting: "nessun accesso di {id} attende un indirizzo — /login {id} ne avvia uno",
+    plan_footer: "piano ChatGPT",
+    meter_plan: "piano ChatGPT: nessun prezzo per chiamata — gestisci l'uso su {page}",
     schedule_program_writable: "{program} si trova dove scrivono i comandi del piano: un'esecuzione potrebbe lasciare \
                                 alla successiva un programma suo — avvia un Glut installato altrove (cargo install)",
     schedule_path_writable: "il suo PATH arriva a una cartella in cui scrivono i suoi comandi — glut schedule add \

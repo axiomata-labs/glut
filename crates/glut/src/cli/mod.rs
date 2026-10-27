@@ -292,6 +292,8 @@ struct FromProvider {
     list: Option<crate::providers::models::ModelList>,
     /// The windows the owner set for the provider's models (T30).
     windows: std::collections::BTreeMap<String, u32>,
+    /// A signed-in subscription's credential (PV4): the run's bearer token at every call.
+    credential: Option<crate::subscription::Credential>,
 }
 
 /// The run's endpoint: a one-off `--base-url` with `GLUT_API_KEY`, else a provider of `~/.glut/providers.json` — then
@@ -343,35 +345,37 @@ async fn endpoint(
             model = resolved.endpoint.model
         )
     );
-    let list = match crate::providers::models::current(
-        &home,
-        &resolved.id,
-        &resolved.endpoint,
-        resolved.protocol,
-    )
-    .await
-    {
-        Ok(list) => {
-            if list.get(&resolved.endpoint.model).is_none() {
+    // A subscription's list is asked with the sign-in's token of the moment; the run's own calls ask theirs.
+    let credential = resolved.credential(&home);
+    let mut listing = resolved.endpoint.clone();
+    if let Some(credential) = &credential {
+        listing.api_key = Some(credential.bearer().await.map_err(|err| err.to_string())?);
+    }
+    let list =
+        match crate::providers::models::current(&home, &resolved.id, &listing, resolved.protocol)
+            .await
+        {
+            Ok(list) => {
+                if list.get(&resolved.endpoint.model).is_none() {
+                    eprintln!(
+                        "glut: {}",
+                        say!(
+                            model_unlisted,
+                            model = resolved.endpoint.model,
+                            provider = resolved.id
+                        )
+                    );
+                }
+                Some(list)
+            }
+            Err(reason) => {
                 eprintln!(
                     "glut: {}",
-                    say!(
-                        model_unlisted,
-                        model = resolved.endpoint.model,
-                        provider = resolved.id
-                    )
+                    say!(no_model_list, provider = resolved.id, reason = reason)
                 );
+                None
             }
-            Some(list)
-        }
-        Err(reason) => {
-            eprintln!(
-                "glut: {}",
-                say!(no_model_list, provider = resolved.id, reason = reason)
-            );
-            None
-        }
-    };
+        };
     // A gateway's model goes to the part of it that speaks its API.
     let (routed, protocol) =
         crate::providers::route(resolved.endpoint, resolved.protocol, list.as_ref())?;
@@ -386,6 +390,7 @@ async fn endpoint(
             id: resolved.id,
             protocol,
             list,
+            credential,
         }),
     ))
 }
@@ -417,34 +422,36 @@ impl crate::agents::ModelSource for CliModels {
                 (None, None) => Some(self.model.as_str()),
                 (_, model) => model,
             };
-            let (mut endpoint, protocol, listed, window) = match (provider, &self.one_off) {
-                (None, Some((endpoint, protocol))) => {
-                    let mut endpoint = endpoint.clone();
-                    if let Some(model) = model {
-                        model.clone_into(&mut endpoint.model);
+            let (mut endpoint, protocol, listed, window, credential) =
+                match (provider, &self.one_off) {
+                    (None, Some((endpoint, protocol))) => {
+                        let mut endpoint = endpoint.clone();
+                        if let Some(model) = model {
+                            model.clone_into(&mut endpoint.model);
+                        }
+                        (endpoint, *protocol, None, None, None)
                     }
-                    (endpoint, *protocol, None, None)
-                }
-                _ => {
-                    let id = provider.or(self.provider.as_deref());
-                    let (endpoint, from) = endpoint(id, None, model.map(str::to_owned)).await?;
-                    let from = from.ok_or("no provider to build the agent's model with")?;
-                    let info = from
-                        .list
-                        .as_ref()
-                        .and_then(|list| list.get(&endpoint.model));
-                    let listed = info.and_then(|info| info.prices);
-                    let window = from
-                        .windows
-                        .get(&endpoint.model)
-                        .copied()
-                        .or_else(|| info.and_then(|info| info.context_window));
-                    (endpoint, from.protocol, listed, window)
-                }
-            };
+                    _ => {
+                        let id = provider.or(self.provider.as_deref());
+                        let (endpoint, from) = endpoint(id, None, model.map(str::to_owned)).await?;
+                        let from = from.ok_or("no provider to build the agent's model with")?;
+                        let info = from
+                            .list
+                            .as_ref()
+                            .and_then(|list| list.get(&endpoint.model));
+                        let listed = info.and_then(|info| info.prices);
+                        let window = from
+                            .windows
+                            .get(&endpoint.model)
+                            .copied()
+                            .or_else(|| info.and_then(|info| info.context_window));
+                        (endpoint, from.protocol, listed, window, from.credential)
+                    }
+                };
             endpoint.effort = effort.or(self.effort);
             let prices = self.prices.get(&endpoint.model).copied().or(listed);
-            let model = Model::new(endpoint, protocol).map_err(|err| err.to_string())?;
+            let model =
+                Model::signed(endpoint, protocol, credential).map_err(|err| err.to_string())?;
             Ok(crate::agents::Picked {
                 model: Arc::new(model),
                 prices,
@@ -868,7 +875,8 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
         effort: built.effort,
     })));
     // The model is built after the command and the skill: either may name its own (C2, K5).
-    let model = match Model::new(endpoint, protocol) {
+    let credential = provider.as_ref().and_then(|from| from.credential.clone());
+    let model = match Model::signed(endpoint, protocol, credential) {
         Ok(model) => model,
         Err(err) => return fail(err.to_string()),
     };

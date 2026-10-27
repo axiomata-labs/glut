@@ -51,7 +51,7 @@ pub enum Api {
     Chat,
     /// Anthropic's Messages API.
     Anthropic,
-    /// OpenAI's Responses API: Glut does not speak it yet (PV4).
+    /// OpenAI's Responses API (PV4).
     Responses,
     /// Google's own API.
     Google,
@@ -62,7 +62,7 @@ pub enum Api {
 impl Api {
     /// Whether Glut has a client for it.
     pub fn spoken(self) -> bool {
-        matches!(self, Api::Chat | Api::Anthropic)
+        matches!(self, Api::Chat | Api::Anthropic | Api::Responses)
     }
 
     /// What a gateway model speaks when models.dev does not describe it: OpenCode's endpoint table of 2026-10-22
@@ -279,7 +279,10 @@ pub async fn fetch(endpoint: &ModelEndpoint, protocol: Protocol) -> Result<Model
         });
     }
     let value = get_json(&client, &format!("{base}/models"), endpoint, protocol).await?;
-    let models = parse(&value).ok_or("no model list: no `data` array")?;
+    // The ChatGPT plan's list is a list of its own (PV4): `models`, each with a slug and a display name.
+    let models = parse(&value)
+        .or_else(|| plan_models(&value))
+        .ok_or("no model list: no `data` array")?;
     // OpenRouter says which of them this account may use; a provider without such a list allows them all, and a
     // failed ask leaves the list as it is.
     let allowed = if crate::model::is_openrouter(root) && endpoint.api_key.is_some() {
@@ -569,6 +572,47 @@ pub fn printable(text: &str) -> String {
         .collect()
 }
 
+/// The models of the ChatGPT plan's list (`{"models": [{"slug", "display_name", "visibility"}, …]}`): those it lists
+/// (`visibility: "list"`), the slug sent, the display name shown.
+fn plan_models(list: &Value) -> Option<Vec<ModelInfo>> {
+    let entries = list.get("models")?.as_array()?;
+    Some(
+        entries
+            .iter()
+            .filter(|entry| {
+                entry
+                    .get("visibility")
+                    .and_then(Value::as_str)
+                    .is_none_or(|visibility| visibility == "list")
+            })
+            .filter_map(|entry| {
+                let slug = entry.get("slug")?.as_str()?.trim();
+                if slug.is_empty() || slug.chars().any(char::is_control) {
+                    return None;
+                }
+                Some(ModelInfo {
+                    id: slug.to_owned(),
+                    name: entry
+                        .get("display_name")
+                        .and_then(Value::as_str)
+                        .map(printable)
+                        .filter(|name| name != slug),
+                    context_window: entry
+                        .get("context_window")
+                        .and_then(Value::as_u64)
+                        .and_then(|tokens| u32::try_from(tokens).ok())
+                        .filter(|tokens| *tokens > 0),
+                    prices: None,
+                    reasoning: None,
+                    created: None,
+                    api: None,
+                    images: None,
+                })
+            })
+            .collect(),
+    )
+}
+
 /// The models of an OpenAI-shaped list (`{"data": [{"id": …}, …]}`), with what OpenRouter, Groq and others add.
 fn parse(list: &Value) -> Option<Vec<ModelInfo>> {
     let entries = list.get("data")?.as_array()?;
@@ -691,7 +735,17 @@ mod tests {
             described_model("gpt-6-luna", &gpt).unwrap().api,
             Some(Api::Responses)
         );
-        assert!(!Api::Responses.spoken() && Api::Anthropic.spoken());
+        assert!(Api::Responses.spoken() && Api::Anthropic.spoken() && !Api::Google.spoken());
+        let plan = plan_models(&serde_json::json!({"models": [
+            {"slug": "gpt-6.1-sol", "display_name": "GPT-6.1 Sol", "visibility": "list"},
+            {"slug": "hidden-1", "display_name": "Hidden", "visibility": "hide"},
+        ]}))
+        .unwrap();
+        assert_eq!(plan.len(), 1, "only what the plan lists");
+        assert_eq!(
+            (plan[0].id.as_str(), plan[0].name.as_deref()),
+            ("gpt-6.1-sol", Some("GPT-6.1 Sol"))
+        );
         assert_eq!(Api::guessed("muse-spark-1.3"), Api::Responses);
         assert_eq!(Api::guessed("kimi-k3"), Api::Chat);
         assert_eq!(Api::guessed("qwen3.7-max"), Api::Anthropic);

@@ -68,6 +68,10 @@ pub const TEXTS: Texts = Texts {
             "provider",
             "プロバイダーを切り替える、または /provider <id>",
         ),
+        (
+            "login",
+            "キーの代わりにサブスクリプション（ChatGPT プラン）でサインインします。/login だけで状態つきの一覧を表示し、⏎ でサインイン／サインアウト",
+        ),
         ("effort", "モデルがどれだけ考えるか、または /effort <level>"),
         ("context", "ウィンドウの埋まり具合; /context 64k で設定"),
         ("thinking", "モデルの思考: /thinking off、folded、open"),
@@ -997,6 +1001,19 @@ pub const TEXTS: Texts = Texts {
     setup_provider_prompt: "プロバイダー:",
     cli: &[
         (
+            "Signs in to a subscription in the browser — your ChatGPT Plus or Pro plan: glut providers login chatgpt",
+            "ブラウザーでサブスクリプションにサインインします — ChatGPT Plus または Pro プラン：glut providers login chatgpt",
+        ),
+        (
+            "The provider; one of the catalog's subscriptions is added on the way",
+            "プロバイダー。カタログのサブスクリプションはその場で追加されます",
+        ),
+        (
+            "Signs out of a subscription: the sign-in revoked at its provider and forgotten here",
+            "サブスクリプションからサインアウトします：プロバイダー側で取り消し、ここからも削除します",
+        ),
+        ("The provider", "プロバイダー"),
+        (
             "Started by the owner's key, not at its time: a paused plan runs too, and its times stay as they were",
             "予定時刻ではなくオーナーのキーで起動：一時停止中のプランも実行され、予定時刻は変わりません",
         ),
@@ -1702,6 +1719,7 @@ pub const TEXTS: Texts = Texts {
     schedule_outcome_stopped: "停止",
     schedule_outcome_skipped: "スキップ",
     schedule_outcome_unstarted: "未開始",
+    schedule_outcome_plan_limit: "プランの上限に到達",
     keys_runs: "↑↓ 選択 · ⏎ 開く · r 今すぐ実行 · p 一時停止 · d 削除 · ⎋ 戻る · ⌃X R 隠す",
     runs_delete_ask: "プラン {name} と実行の記録を削除しますか？ y で削除、他のキーで取り消し — セッションは残ります",
     runs_loops: "↻ Glut が開いている間 {n} 個のループが動いています — エージェントタブ（⌃X A）に表示されます",
@@ -1715,6 +1733,24 @@ pub const TEXTS: Texts = Texts {
     schedule_quote_open: "引用符が閉じられていません",
     runs_since: "前回からの実行：{runs} — 実行タブ（⌃X R）に表示されます",
     runs_since_one: "{name} {n} 回（前回：{outcome}）",
+    login_title: "サブスクリプション",
+    login_state_in: "{who} としてサインイン中 — ⏎ でサインアウト",
+    login_state_out: "未サインイン — ⏎ でサインイン",
+    login_sign_out_title: "{id} からサインアウトしますか？",
+    login_sign_out_yes: "サインアウト — OpenAI 側でも取り消し",
+    login_sign_out_no: "サインインしたままにする",
+    login_failed: "{id}：サインインできませんでした：{reason}",
+    login_sign_in_at: "{host} で ChatGPT プランにサインインしてください：{address}",
+    login_paste_back: "手元のブラウザーで開き、最後に表示されたアドレスを貼り付けてください：/login {id} <address>",
+    login_signed_in: "{id} は {who} としてサインインしました。",
+    login_welcome: "Glut は ChatGPT プランを使います：呼び出しごとの料金はかかりませんが、プランの利用上限があります — Plus プランの上限はそれを使うすべてのアプリで共有されます。上限に達すると \
+                    Glut はそう伝えて止まります。各アプリの利用は {page} で確認・制限できます",
+    login_out_nothing: "{id} はサインインしていませんでした。",
+    login_out_revoked: "{id} はサインアウトしました。OpenAI 側でもサインインを取り消しました。",
+    login_out_unconfirmed: "{id} はここではサインアウトしましたが、OpenAI は取り消しを確認していません（{reason}）：ChatGPT の設定で Glut の接続を解除してください。",
+    login_no_waiting: "{id} のサインインはアドレスを待っていません — /login {id} で始めます",
+    plan_footer: "ChatGPT プラン",
+    meter_plan: "ChatGPT プラン：呼び出しごとの料金なし — 利用の管理は {page}",
     schedule_program_writable: "{program} はプランのコマンドが書き込める場所にあります。実行が次回用に別のプログラムを仕込めてしまいます — 別の場所にインストールした Glut \
                                 を使ってください（cargo install）",
     schedule_path_writable: "PATH がコマンドの書き込めるフォルダーに届いています — glut schedule add <name> で安全な PATH で作り直せます",

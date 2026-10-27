@@ -946,7 +946,14 @@ async fn attempt(home: &Path, plan: &Plan, cancel: glut::Cancel) -> Attempt {
             None
         }
     };
-    let outcome_of = Outcome::of(outcome.reason);
+    // A failure that is the plan's usage limit (PV4) is kept as that: the owner's way out is the plan's settings.
+    let limit = error
+        .as_deref()
+        .is_some_and(|said| said.contains(glut::responses::PLAN_LIMIT));
+    let outcome_of = match Outcome::of(outcome.reason) {
+        Outcome::Failed if limit => Outcome::PlanLimit,
+        other => other,
+    };
     let said = match (&outcome.answer, outcome_of.well()) {
         (Some(answer), true) => first_line(answer),
         _ => first_line(&error.unwrap_or_else(|| outcome_of.said().to_owned())),

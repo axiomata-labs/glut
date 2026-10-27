@@ -220,6 +220,8 @@ pub struct Engine {
     pub window: Option<(u32, &'static str)>,
     /// Whether the model sees images, as the provider's list says (T45); `None`: unknown.
     pub images: Option<bool>,
+    /// Whether it runs on a signed-in subscription (PV4): the meter says "plan" where it says money.
+    pub plan: bool,
 }
 
 impl Engine {
@@ -517,6 +519,7 @@ pub async fn build(
                 .or(window),
             endpoint,
             images: None,
+            plan: false,
         },
     };
     Ok((parts, engine))
@@ -549,13 +552,13 @@ pub async fn engine(
             std::env::var(name).ok()
         })?
     };
-    let models = match models::current(
-        &parts.home,
-        &resolved.id,
-        &resolved.endpoint,
-        resolved.protocol,
-    )
-    .await
+    // A subscription's list is asked with the sign-in's token of the moment; the model asks its own at every call.
+    let credential = resolved.credential(&parts.home);
+    let mut listing = resolved.endpoint.clone();
+    if let Some(credential) = &credential {
+        listing.api_key = Some(credential.bearer().await.map_err(|err| err.to_string())?);
+    }
+    let models = match models::current(&parts.home, &resolved.id, &listing, resolved.protocol).await
     {
         Ok(models) => Some(models),
         Err(reason) => {
@@ -594,7 +597,9 @@ pub async fn engine(
     let (mut endpoint, protocol) =
         providers::route(resolved.endpoint, resolved.protocol, models.as_ref())?;
     endpoint.effort = effort.unwrap_or(parts.owner_effort);
-    let model = Model::new(endpoint.clone(), protocol).map_err(|err| err.to_string())?;
+    let plan = credential.is_some();
+    let model =
+        Model::signed(endpoint.clone(), protocol, credential).map_err(|err| err.to_string())?;
     Ok((
         Engine {
             provider: resolved.id,
@@ -603,6 +608,7 @@ pub async fn engine(
             prices,
             window,
             images: listed.as_ref().and_then(|info| info.images),
+            plan,
         },
         notes,
     ))
@@ -674,7 +680,11 @@ async fn without_model(parts: &Parts, id: Option<&str>) -> Option<String> {
         })
         .ok()?
     };
-    let _ = models::current(&parts.home, &found, &resolved.endpoint, resolved.protocol).await;
+    let mut listing = resolved.endpoint.clone();
+    if let Some(credential) = resolved.credential(&parts.home) {
+        listing.api_key = credential.bearer().await.ok();
+    }
+    let _ = models::current(&parts.home, &found, &listing, resolved.protocol).await;
     Some(found)
 }
 
@@ -1312,6 +1322,7 @@ pub fn for_tests() -> (Parts, Engine) {
         prices: None,
         window: Some((32_768, "settings.json")),
         images: None,
+        plan: false,
     };
     (parts, engine)
 }

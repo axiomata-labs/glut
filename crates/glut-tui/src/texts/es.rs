@@ -69,6 +69,11 @@ pub const TEXTS: Texts = Texts {
             "elegir un modelo del proveedor en uso, o /model <id>",
         ),
         ("provider", "cambiar de proveedor, o /provider <id>"),
+        (
+            "login",
+            "iniciar sesión con una suscripción — tu plan de ChatGPT — en lugar de una clave; /login solo las lista \
+             con su estado, ⏎ inicia o cierra la sesión",
+        ),
         ("effort", "cuánto piensa el modelo, o /effort <level>"),
         (
             "context",
@@ -1060,6 +1065,20 @@ pub const TEXTS: Texts = Texts {
     setup_provider_prompt: "Proveedor:",
     cli: &[
         (
+            "Signs in to a subscription in the browser — your ChatGPT Plus or Pro plan: glut providers login chatgpt",
+            "Inicia sesión en una suscripción en el navegador — tu plan ChatGPT Plus o Pro: glut providers login \
+             chatgpt",
+        ),
+        (
+            "The provider; one of the catalog's subscriptions is added on the way",
+            "El proveedor; una suscripción del catálogo se añade de paso",
+        ),
+        (
+            "Signs out of a subscription: the sign-in revoked at its provider and forgotten here",
+            "Cierra la sesión de una suscripción: el inicio de sesión revocado en su proveedor y olvidado aquí",
+        ),
+        ("The provider", "El proveedor"),
+        (
             "Started by the owner's key, not at its time: a paused plan runs too, and its times stay as they were",
             "Iniciado por la tecla del propietario, no a su hora: también se ejecuta un plan en pausa, y sus horas \
              siguen igual",
@@ -1809,6 +1828,7 @@ pub const TEXTS: Texts = Texts {
     schedule_outcome_stopped: "detenido",
     schedule_outcome_skipped: "omitido",
     schedule_outcome_unstarted: "no iniciado",
+    schedule_outcome_plan_limit: "límite del plan alcanzado",
     keys_runs: "↑↓ elegir · ⏎ abre · r ejecuta ahora · p pausa · d elimina · ⎋ volver · ⌃X R oculta",
     runs_delete_ask: "¿eliminar el plan {name} y su registro de ejecuciones? y sí, cualquier otra tecla no — sus \
                       sesiones se quedan",
@@ -1823,6 +1843,27 @@ pub const TEXTS: Texts = Texts {
     schedule_quote_open: "hay una comilla sin cerrar",
     runs_since: "desde tu última visita: {runs} — la pestaña Ejecuciones (⌃X R) las muestra",
     runs_since_one: "{name} {n}× (último: {outcome})",
+    login_title: "Suscripciones",
+    login_state_in: "sesión iniciada como {who} — ⏎ la cierra",
+    login_state_out: "sin sesión — ⏎ la inicia",
+    login_sign_out_title: "¿Cerrar la sesión de {id}?",
+    login_sign_out_yes: "Cerrar sesión — revocada en OpenAI",
+    login_sign_out_no: "Mantener la sesión",
+    login_failed: "{id}: el inicio de sesión no funcionó: {reason}",
+    login_sign_in_at: "Inicia sesión con tu plan de ChatGPT en {host}: {address}",
+    login_paste_back: "Ábrela donde estés; pega de vuelta la dirección en la que termina el navegador: /login {id} \
+                       <address>",
+    login_signed_in: "{id} tiene la sesión iniciada como {who}.",
+    login_welcome: "Glut usa ahora tu plan de ChatGPT: sin dinero por llamada, pero con los límites de uso del plan — \
+                    un plan Plus comparte su límite con cada app que lo usa. Cuando se alcanza, Glut lo dice y se \
+                    detiene; ves y limitas lo que puede usar cada app en {page}",
+    login_out_nothing: "{id} no tenía la sesión iniciada.",
+    login_out_revoked: "{id} cerró sesión; el inicio de sesión está revocado en OpenAI.",
+    login_out_unconfirmed: "{id} cerró sesión aquí, pero OpenAI no confirmó la revocación ({reason}): desconecta Glut \
+                            en los ajustes de ChatGPT.",
+    login_no_waiting: "ningún inicio de sesión de {id} espera una dirección — /login {id} inicia uno",
+    plan_footer: "plan de ChatGPT",
+    meter_plan: "plan de ChatGPT: sin precio por llamada — gestiona el uso en {page}",
     schedule_program_writable: "{program} está donde escriben los comandos del plan: una ejecución podría dejar a la \
                                 siguiente un programa propio — inicia un Glut instalado en otro sitio (cargo install)",
     schedule_path_writable: "su PATH llega a una carpeta donde escriben sus comandos — glut schedule add <name> lo \

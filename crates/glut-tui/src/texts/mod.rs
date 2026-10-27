@@ -1790,6 +1790,8 @@ glut::catalog! {
         schedule_outcome_skipped: &'static str,
         /// A run that could not start.
         schedule_outcome_unstarted: &'static str,
+        /// A run that reached its subscription's usage limit (PV4).
+        schedule_outcome_plan_limit: &'static str,
         /// The Runs tab's keys while its list has them.
         keys_runs: &'static str,
         /// `d` on the Runs tab: the question before a plan is deleted.
@@ -1814,6 +1816,40 @@ glut::catalog! {
         runs_since: &'static str,
         /// One plan in `runs_since`: how often it ran and how its last run ended.
         runs_since_one: &'static str,
+        /// The list `/login` opens.
+        login_title: &'static str,
+        /// A subscription signed in: `{who}` the account.
+        login_state_in: &'static str,
+        /// A subscription not signed in.
+        login_state_out: &'static str,
+        /// The question before a sign-out: `{id}`.
+        login_sign_out_title: &'static str,
+        /// The sign-out's yes.
+        login_sign_out_yes: &'static str,
+        /// The sign-out's no.
+        login_sign_out_no: &'static str,
+        /// A sign-in or sign-out that failed: `{id}`, `{reason}`.
+        login_failed: &'static str,
+        /// Where to sign in: `{host}`, `{address}`.
+        login_sign_in_at: &'static str,
+        /// Over SSH: how the address comes back: `{id}`.
+        login_paste_back: &'static str,
+        /// A sign-in done: `{id}`, `{who}`.
+        login_signed_in: &'static str,
+        /// Once, after the first sign-in: what the plan's limit means. `{page}` ChatGPT's usage page.
+        login_welcome: &'static str,
+        /// A sign-out with nothing signed in: `{id}`.
+        login_out_nothing: &'static str,
+        /// A sign-out done and revoked: `{id}`.
+        login_out_revoked: &'static str,
+        /// A sign-out done here, its revocation unconfirmed: `{id}`, `{reason}`.
+        login_out_unconfirmed: &'static str,
+        /// An address pasted back with no sign-in waiting: `{id}`.
+        login_no_waiting: &'static str,
+        /// The footer's word where money would stand: the session runs on a ChatGPT plan.
+        plan_footer: &'static str,
+        /// The meter's line where the price would stand: `{page}` ChatGPT's usage page.
+        meter_plan: &'static str,
         /// The program a plan would start lies where its commands write.
         schedule_program_writable: &'static str,
         /// A plan's run whose PATH reaches where its commands write.

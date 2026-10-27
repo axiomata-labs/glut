@@ -100,6 +100,8 @@ pub struct Window {
     /// The session's sums as the header shows them — a `/compact` and a handoff included, which are no turn.
     pub usage: Usage,
     pub cost: Option<f64>,
+    /// The session runs on a signed-in subscription (PV4): its use is the plan's, not money.
+    pub plan: bool,
 }
 
 impl Meter {
@@ -278,6 +280,10 @@ impl Meter {
         )))));
         lines.push(quiet(match cost {
             Some(cost) => format!("  {}", tr!(meter_price, cost = glut::lang::usd(cost, 4))),
+            None if window.plan => format!(
+                "  {}",
+                tr!(meter_plan, page = glut::subscription::chatgpt::USAGE_PAGE)
+            ),
             None => format!("  {}", tr!(meter_no_price)),
         }));
         if let Some(effort) = &window.effort {
@@ -629,6 +635,7 @@ mod tests {
             budget: None,
             usage: Usage::default(),
             cost: Some(12_345.678),
+            plan: false,
         };
         let lines = meter.lines(&window, 30, 25);
         assert!(lines.len() <= 25);

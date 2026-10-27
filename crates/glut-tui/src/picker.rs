@@ -53,6 +53,10 @@ pub enum Pick {
     TodoClean,
     /// `/skill` (T37c): a skill to start, by its name.
     Skill(String),
+    /// `/login` (PV4): a subscription to sign in to, or out of, by its provider id.
+    Login(String),
+    /// `/login`'s second ⏎ on a signed-in subscription: signed out, revoked at its provider.
+    Logout(String),
     /// `glut_file`'s `pick_model` (T37c): the model the owner picks for an agent's or a skill's own — never a switch
     /// of the session's, and no other list's pick ever answers it.
     OwnModel {

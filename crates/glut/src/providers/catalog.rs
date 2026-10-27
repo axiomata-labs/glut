@@ -9,6 +9,9 @@ pub enum Protocol {
     ChatCompletions,
     /// `POST {root}/messages` — Anthropic's own API (PV3, `crate::anthropic`).
     AnthropicMessages,
+    /// `POST {root}/responses` — OpenAI's Responses API (PV4, `crate::responses`): the ChatGPT plan, OpenAI's newer
+    /// models.
+    Responses,
     /// A gateway whose models speak different APIs below one root (OpenCode Zen and Go): each model's API comes from
     /// the model list, and [`crate::providers::route`] makes the endpoint and the protocol of one model of it.
     Gateway,
@@ -21,6 +24,8 @@ pub enum SignIn {
     Key,
     /// Nothing: a server on this machine.
     None,
+    /// The owner's ChatGPT plan, signed in in the browser (PV4, `crate::subscription::chatgpt`).
+    ChatGpt,
 }
 
 /// One provider of the catalog.
@@ -58,13 +63,27 @@ pub const CATALOG: &[Known] = &[
         "OPENROUTER_API_KEY",
         "hundreds of models, one key",
     ),
-    key(
-        "openai",
-        "OpenAI",
-        "https://api.openai.com/v1",
-        "OPENAI_API_KEY",
-        "API key (the ChatGPT sign-in comes in PV4)",
-    ),
+    Known {
+        protocol: Protocol::Responses,
+        ..key(
+            "openai",
+            "OpenAI",
+            "https://api.openai.com/v1",
+            "OPENAI_API_KEY",
+            "API key (a ChatGPT plan: chatgpt)",
+        )
+    },
+    Known {
+        id: "chatgpt",
+        name: "ChatGPT plan",
+        protocol: Protocol::Responses,
+        root: "https://api.openai.com/v1",
+        sign_in: SignIn::ChatGpt,
+        key_env: None,
+        note: "your ChatGPT Plus or Pro plan, signed in in the browser: glut providers login chatgpt",
+        described_by: None,
+        key_group: None,
+    },
     Known {
         protocol: Protocol::AnthropicMessages,
         ..key(
@@ -287,7 +306,9 @@ mod tests {
             );
             assert!(!known.root.ends_with('/'), "{}", known.id);
             match known.sign_in {
-                SignIn::Key => assert!(known.root.starts_with("https://"), "{}", known.id),
+                SignIn::Key | SignIn::ChatGpt => {
+                    assert!(known.root.starts_with("https://"), "{}", known.id)
+                }
                 SignIn::None => {
                     assert!(known.root.starts_with("http://localhost:"), "{}", known.id)
                 }

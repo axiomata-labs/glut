@@ -11,41 +11,23 @@
 //! redirect.
 
 use std::future::Future;
-use std::io::Read as _;
-use std::time::Duration;
 
 use reqwest::header::{ACCEPT, CONTENT_TYPE, WWW_AUTHENTICATE};
 use serde::Deserialize;
-use serde::de::DeserializeOwned;
 use serde_json::json;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpListener;
 use tokio::time::timeout;
 
 use super::config::ServerConfig;
 use super::keys::{Grant, Keys};
 use crate::error::HarnessError;
+use crate::oauth::{
+    Callback, TokenAnswer, TokenError, challenge_of, described, get_json, now, query_of, read,
+    said_error, same_url,
+};
+pub use crate::oauth::{SIGN_IN_TIMEOUT, can_open, open_in_browser};
 
-/// How long one request to an authorization server may take.
-const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
-/// How long a sign-in waits for the browser to come back: the owner may have to type a password, find a second
-/// factor.
-pub const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 /// The path the redirect comes back to.
 const CALLBACK: &str = "/callback";
-/// The largest metadata or token answer read: a few kilobytes are what they hold.
-const MAX_ANSWER_BYTES: usize = 256 * 1024;
-/// The largest request the listener reads: the browser's `GET` of the redirect.
-const MAX_CALLBACK_BYTES: usize = 16 * 1024;
-/// How long the listener waits for one connection to say what it wants: a port scanner that opens and stays silent
-/// must not hold the sign-in.
-const CALLBACK_READ: Duration = Duration::from_secs(10);
-/// The most connections the listener reads at once; more wait until one is done.
-const MAX_CALLBACK_READERS: usize = 32;
-/// Random bytes in a `state` and a PKCE verifier: 256 bits, 43 characters as base64url (RFC 7636 wants 43–128).
-const RANDOM_BYTES: usize = 32;
-/// How much of an authorization server's error description an error keeps.
-const DESCRIPTION_CHARS: usize = 200;
 /// The well-known suffix of a protected resource's metadata (RFC 9728).
 const RESOURCE_METADATA: &str = "/.well-known/oauth-protected-resource";
 /// The well-known suffixes of an authorization server's metadata: OAuth's (RFC 8414) and OpenID Connect's.
@@ -193,8 +175,7 @@ pub struct SignIn {
     server: String,
     address: String,
     host: String,
-    listener: TcpListener,
-    redirect: String,
+    callback: Callback,
     state: String,
     verifier: String,
     client: Registered,
@@ -232,59 +213,16 @@ impl SignIn {
         pasted: impl Future<Output = Option<String>>,
     ) -> Result<Grant, HarnessError> {
         let code = tokio::select! {
-            came = timeout(SIGN_IN_TIMEOUT, self.callback()) => came.map_err(|_| HarnessError::McpTimeout {
+            came = timeout(
+                SIGN_IN_TIMEOUT,
+                self.callback.wait(&self.state, |pairs| self.code_of(pairs)),
+            ) => came.map_err(|_| HarnessError::McpTimeout {
                 server: self.server.clone(),
                 timeout: SIGN_IN_TIMEOUT,
             })??,
             Some(address) = pasted => self.code_of(&query_of(&address))?,
         };
         self.exchange(&code).await
-    }
-
-    /// The code the browser brings to the listener. Every connection is read beside the others, so one that stays
-    /// silent holds nothing up; a request that is not this sign-in's redirect — another path, a stray query, another
-    /// `state` — is answered and passed by, never the end of the sign-in.
-    async fn callback(&self) -> Result<String, HarnessError> {
-        let mut reading = tokio::task::JoinSet::new();
-        loop {
-            tokio::select! {
-                accepted = self.listener.accept() => {
-                    if let Ok((mut socket, _)) = accepted
-                        && reading.len() < MAX_CALLBACK_READERS
-                    {
-                        reading.spawn(async move {
-                            let target = timeout(CALLBACK_READ, request_target(&mut socket))
-                                .await
-                                .ok()
-                                .flatten();
-                            (socket, target)
-                        });
-                    }
-                }
-                Some(Ok((mut socket, target))) = reading.join_next() => {
-                    let Some(target) = target else {
-                        continue;
-                    };
-                    let (path, query) = target.split_once('?').unwrap_or((&target, ""));
-                    let pairs = pairs_of(query);
-                    let ours = path == CALLBACK
-                        && pairs
-                            .iter()
-                            .any(|(key, value)| key == "state" && *value == self.state);
-                    if !ours {
-                        let _ = respond(&mut socket, "404 Not Found", "").await;
-                        continue;
-                    }
-                    let found = self.code_of(&pairs);
-                    let page = match &found {
-                        Ok(_) => "Glut is signed in. This tab may be closed.",
-                        Err(_) => "Glut's sign-in did not succeed; Glut says why.",
-                    };
-                    let _ = respond(&mut socket, "200 OK", page).await;
-                    return found;
-                }
-            }
-        }
     }
 
     /// The code among the redirect's parameters, once its `state` is this sign-in's and its issuer (RFC 9207, where
@@ -330,7 +268,7 @@ impl SignIn {
         let mut form = vec![
             ("grant_type", "authorization_code".to_owned()),
             ("code", code.to_owned()),
-            ("redirect_uri", self.redirect.clone()),
+            ("redirect_uri", self.callback.redirect.clone()),
             ("client_id", self.client.id.clone()),
             ("code_verifier", self.verifier.clone()),
             ("resource", self.resource.clone()),
@@ -410,20 +348,16 @@ pub async fn begin(name: &str, config: &ServerConfig, keys: &Keys) -> Result<Beg
             ),
         ));
     }
-    let listener = TcpListener::bind((
-        "127.0.0.1",
+    let callback = Callback::bind(
         oauth
             .as_ref()
             .and_then(|client| client.callback_port)
             .unwrap_or(0),
-    ))
+        CALLBACK,
+    )
     .await
-    .map_err(|error| err(name, format!("cannot listen for the sign-in: {error}")))?;
-    let port = listener
-        .local_addr()
-        .map_err(|error| err(name, error.to_string()))?
-        .port();
-    let redirect = format!("http://127.0.0.1:{port}{CALLBACK}");
+    .map_err(|reason| err(name, reason))?;
+    let redirect = callback.redirect.clone();
     let registered = match oauth {
         Some(own) => Registered {
             id: own.client_id.clone(),
@@ -438,16 +372,15 @@ pub async fn begin(name: &str, config: &ServerConfig, keys: &Keys) -> Result<Beg
             }
         },
     };
-    let state = random_text()?;
-    let verifier = random_text()?;
+    let state = crate::oauth::random_text().map_err(|reason| err(name, reason))?;
+    let verifier = crate::oauth::random_text().map_err(|reason| err(name, reason))?;
     let address = authorization_address(&found, &registered.id, &redirect, &state, &verifier)
         .map_err(|reason| err(name, reason))?;
     Ok(Begun::SignIn(Box::new(SignIn {
         server: name.to_owned(),
         host: host_of(&found.server.authorization_endpoint),
         address,
-        listener,
-        redirect,
+        callback,
         state,
         verifier,
         client: registered,
@@ -667,74 +600,6 @@ fn authorization_address(
     Ok(address.into())
 }
 
-/// A token endpoint's answer (RFC 6749 §5.1), what Glut keeps of it.
-#[derive(Deserialize)]
-struct TokenAnswer {
-    access_token: String,
-    #[serde(default)]
-    token_type: Option<String>,
-    #[serde(default)]
-    expires_in: Option<i64>,
-    #[serde(default)]
-    refresh_token: Option<String>,
-    #[serde(default)]
-    scope: Option<String>,
-}
-
-/// One request to a token endpoint; a refused grant (`invalid_grant`) is a sign-in to do again.
-async fn token_request(
-    name: &str,
-    endpoint: &str,
-    form: &[(&str, String)],
-) -> Result<TokenAnswer, HarnessError> {
-    let response = http(name)?
-        .post(endpoint)
-        .header(ACCEPT, "application/json")
-        .form(form)
-        .send()
-        .await
-        .map_err(|error| {
-            err(
-                name,
-                format!(
-                    "its token endpoint cannot be reached: {}",
-                    error.without_url()
-                ),
-            )
-        })?;
-    let status = response.status();
-    let text = read(response)
-        .await
-        .ok_or_else(|| err(name, "its token endpoint's answer is too large"))?;
-    if !status.is_success() {
-        if text.contains("invalid_grant") {
-            return Err(HarnessError::McpSignIn {
-                server: name.to_owned(),
-            });
-        }
-        return Err(err(
-            name,
-            format!("its token endpoint said no ({status}){}", said_error(&text)),
-        ));
-    }
-    let answer: TokenAnswer = serde_json::from_str(&text)
-        .map_err(|_| err(name, "its token endpoint's answer holds no token"))?;
-    if answer
-        .token_type
-        .as_deref()
-        .is_some_and(|kind| !kind.eq_ignore_ascii_case("bearer"))
-    {
-        return Err(err(
-            name,
-            "its token endpoint handed out a token that is no bearer token",
-        ));
-    }
-    if answer.access_token.is_empty() {
-        return Err(err(name, "its token endpoint handed out an empty token"));
-    }
-    Ok(answer)
-}
-
 /// `grant` refreshed (RFC 6749 §6): the new access token, the new refresh token where the server rotates it.
 ///
 /// # Errors
@@ -847,144 +712,25 @@ pub async fn sign_out(name: &str, url: &str, keys: &Keys) -> Result<SignedOut, H
     })
 }
 
-/// Whether a browser of this machine is the owner's: not over SSH, where the owner sits at another one.
-pub fn can_open() -> bool {
-    !["SSH_CONNECTION", "SSH_TTY", "SSH_CLIENT"]
-        .iter()
-        .any(|name| std::env::var_os(name).is_some())
-}
-
-/// Opens `address` in the browser of this machine — never over SSH ([`can_open`]), and only on the owner's word.
-/// `false`: the owner opens it.
-pub fn open_in_browser(address: &str) -> bool {
-    // Only an address of the web: `open` would run whatever else it is handed.
-    if !can_open() || !(address.starts_with("https://") || address.starts_with("http://")) {
-        return false;
-    }
-    let program = if cfg!(target_os = "macos") {
-        "open"
-    } else {
-        "xdg-open"
-    };
-    std::process::Command::new(program)
-        .arg(address)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
-}
-
-/// The client every request to an authorization server goes out with: no redirect followed (it would carry a code
-/// or a token elsewhere), a time limit.
-fn http(name: &str) -> Result<reqwest::Client, HarnessError> {
-    reqwest::Client::builder()
-        .timeout(HTTP_TIMEOUT)
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|error| err(name, error.to_string()))
-}
-
-/// A JSON document at `url`, `None` for anything else: an error status, HTML, an answer too large.
-async fn get_json<T: DeserializeOwned>(client: &reqwest::Client, url: &str) -> Option<T> {
-    let response = client
-        .get(url)
-        .header(ACCEPT, "application/json")
-        .send()
+/// One request to a token endpoint, its failure said as the server's: a refused grant is a sign-in to do again.
+async fn token_request(
+    name: &str,
+    endpoint: &str,
+    form: &[(&str, String)],
+) -> Result<TokenAnswer, HarnessError> {
+    crate::oauth::token_request(endpoint, form)
         .await
-        .ok()?;
-    if !response.status().is_success() {
-        return None;
-    }
-    serde_json::from_str(&read(response).await?).ok()
+        .map_err(|error| match error {
+            TokenError::Refused(_) => HarnessError::McpSignIn {
+                server: name.to_owned(),
+            },
+            TokenError::Failed(reason) => err(name, reason),
+        })
 }
 
-/// A response's body as text, `None` past [`MAX_ANSWER_BYTES`] or when it is no UTF-8.
-async fn read(mut response: reqwest::Response) -> Option<String> {
-    let mut body = Vec::new();
-    while let Some(chunk) = response.chunk().await.ok()? {
-        if body.len() + chunk.len() > MAX_ANSWER_BYTES {
-            return None;
-        }
-        body.extend_from_slice(&chunk);
-    }
-    String::from_utf8(body).ok()
-}
-
-/// What an OAuth error answer says (`error`, `error_description`), cut and made printable — never the whole body,
-/// which may echo what was sent.
-fn said_error(text: &str) -> String {
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
-        return String::new();
-    };
-    let field = |key: &str| {
-        value
-            .get(key)
-            .and_then(serde_json::Value::as_str)
-            .map(described)
-    };
-    match (field("error"), field("error_description")) {
-        (Some(error), Some(description)) => format!(": {error}: {description}"),
-        (Some(error), None) => format!(": {error}"),
-        _ => String::new(),
-    }
-}
-
-/// A server's words, cut to [`DESCRIPTION_CHARS`] and made printable for the owner's terminal.
-fn described(text: &str) -> String {
-    crate::permissions::printable(&text.chars().take(DESCRIPTION_CHARS).collect::<String>())
-}
-
-/// The request line's target of the browser's `GET`, read up to the end of its head.
-async fn request_target(socket: &mut tokio::net::TcpStream) -> Option<String> {
-    let mut head = Vec::new();
-    let mut buffer = [0u8; 2048];
-    while !head.windows(4).any(|window| window == b"\r\n\r\n") {
-        let read = socket.read(&mut buffer).await.ok()?;
-        if read == 0 || head.len() + read > MAX_CALLBACK_BYTES {
-            return None;
-        }
-        head.extend_from_slice(&buffer[..read]);
-    }
-    let line = std::str::from_utf8(&head).ok()?.lines().next()?;
-    let mut parts = line.split(' ');
-    (parts.next()? == "GET").then_some(())?;
-    parts.next().map(str::to_owned)
-}
-
-/// A short page to the browser, and the connection closed.
-async fn respond(
-    socket: &mut tokio::net::TcpStream,
-    status: &str,
-    text: &str,
-) -> std::io::Result<()> {
-    let body = format!(
-        "<!doctype html><meta charset=\"utf-8\"><title>Glut</title><p style=\"font: 16px system-ui; margin: 3em\">\
-         {text}</p>"
-    );
-    let response = format!(
-        "HTTP/1.1 {status}\r\ncontent-type: text/html; charset=utf-8\r\ncontent-length: {}\r\n\
-         cache-control: no-store\r\nconnection: close\r\n\r\n{body}",
-        body.len()
-    );
-    socket.write_all(response.as_bytes()).await?;
-    socket.shutdown().await
-}
-
-/// The parameters of a query string, decoded.
-fn pairs_of(query: &str) -> Vec<(String, String)> {
-    reqwest::Url::parse(&format!("http://x/?{query}"))
-        .map(|url| url.query_pairs().into_owned().collect())
-        .unwrap_or_default()
-}
-
-/// The parameters of an address the owner pasted: a whole URL, or only what follows its `?`.
-fn query_of(address: &str) -> Vec<(String, String)> {
-    let address = address.trim();
-    match address.split_once('?') {
-        Some((_, query)) => pairs_of(query.split('#').next().unwrap_or(query)),
-        None => pairs_of(address),
-    }
+/// The client every request to an authorization server goes out with ([`crate::oauth::http`]).
+fn http(name: &str) -> Result<reqwest::Client, HarnessError> {
+    crate::oauth::http().map_err(|reason| err(name, reason))
 }
 
 /// Whether `resource` speaks for the server at `url`: the same origin, and `url`'s path at or below its path.
@@ -1014,71 +760,16 @@ fn reachable(url: &str, endpoint: &str) -> bool {
     crate::model::secure_enough(endpoint) && (local(url) || !local(endpoint))
 }
 
-/// Whether two URLs are the same but for a trailing slash.
-fn same_url(a: &str, b: &str) -> bool {
-    a.trim_end_matches('/') == b.trim_end_matches('/')
-}
-
 fn host_of(url: &str) -> String {
     super::keys::host_of(url)
 }
 
-fn now() -> i64 {
-    chrono::Utc::now().timestamp()
-}
-
-/// [`RANDOM_BYTES`] from the system's random source, as base64url.
-fn random_text() -> Result<String, HarnessError> {
-    let mut bytes = [0u8; RANDOM_BYTES];
-    std::fs::File::open("/dev/urandom")
-        .and_then(|mut source| source.read_exact(&mut bytes))
-        .map_err(|error| err("glut", format!("no random bytes for the sign-in: {error}")))?;
-    Ok(base64url(&bytes))
-}
-
-/// PKCE's S256 challenge of `verifier` (RFC 7636 §4.2).
-fn challenge_of(verifier: &str) -> String {
-    use sha2::{Digest, Sha256};
-    base64url(&Sha256::digest(verifier.as_bytes()))
-}
-
-/// `bytes` as base64url without padding (RFC 4648 §5).
-fn base64url(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let triple = chunk.iter().enumerate().fold(0u32, |acc, (at, byte)| {
-            acc | u32::from(*byte) << (16 - 8 * at)
-        });
-        for at in 0..=chunk.len() {
-            out.push(char::from(
-                ALPHABET[(triple >> (18 - 6 * at) & 0x3f) as usize],
-            ));
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use tokio::io::AsyncWriteExt;
+    use tokio::net::TcpListener;
 
-    #[test]
-    fn base64url_and_the_pkce_challenge_are_the_rfc_s() {
-        assert_eq!(base64url(b""), "");
-        assert_eq!(base64url(b"f"), "Zg");
-        assert_eq!(base64url(b"fo"), "Zm8");
-        assert_eq!(base64url(b"foo"), "Zm9v");
-        assert_eq!(base64url(&[0xfb, 0xff]), "-_8");
-        // RFC 7636, appendix B.
-        assert_eq!(
-            challenge_of("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"),
-            "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
-        );
-        let (a, b) = (random_text().unwrap(), random_text().unwrap());
-        assert_eq!(a.len(), 43);
-        assert_ne!(a, b);
-    }
+    use super::*;
 
     #[test]
     fn a_bearer_challenge_is_read_with_its_quoted_values() {

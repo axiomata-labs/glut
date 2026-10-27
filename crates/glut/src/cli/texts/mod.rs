@@ -82,6 +82,22 @@ crate::catalog! {
         key_in_store: &'static str,
         /// A provider that needs no key.
         key_not_needed: &'static str,
+        /// A provider signed in to with an account (PV4).
+        key_signed_in: &'static str,
+        /// A catalog provider the owner signs in to.
+        catalog_sign_in: &'static str,
+        /// Above the sign-in's address: `{host}`.
+        plan_sign_in_at: &'static str,
+        /// A sign-in done: `{id}`, `{who}` the account.
+        plan_signed_in: &'static str,
+        /// `login`/`logout` on a provider with a key: `{id}`.
+        not_a_sign_in: &'static str,
+        /// `logout` with nothing signed in: `{id}`.
+        plan_out_nothing: &'static str,
+        /// A sign-out done and revoked: `{id}`.
+        plan_out_revoked: &'static str,
+        /// A sign-out done here, its revocation unconfirmed: `{id}`, `{reason}`.
+        plan_out_unconfirmed: &'static str,
         /// A provider without a key: `{reason}`.
         key_missing: &'static str,
         /// A provider without a model of its own.

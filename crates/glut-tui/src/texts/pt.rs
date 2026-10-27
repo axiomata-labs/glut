@@ -68,6 +68,11 @@ pub const TEXTS: Texts = Texts {
             "escolher um modelo do provedor em uso, ou /model <id>",
         ),
         ("provider", "trocar de provedor, ou /provider <id>"),
+        (
+            "login",
+            "entrar com uma assinatura — seu plano do ChatGPT — em vez de uma chave; /login sozinho as lista com o \
+             estado de cada uma, ⏎ entra ou sai",
+        ),
         ("effort", "o quanto o modelo pensa, ou /effort <level>"),
         (
             "context",
@@ -1056,6 +1061,19 @@ pub const TEXTS: Texts = Texts {
     setup_provider_prompt: "Provedor:",
     cli: &[
         (
+            "Signs in to a subscription in the browser — your ChatGPT Plus or Pro plan: glut providers login chatgpt",
+            "Entra em uma assinatura no navegador — seu plano ChatGPT Plus ou Pro: glut providers login chatgpt",
+        ),
+        (
+            "The provider; one of the catalog's subscriptions is added on the way",
+            "O provedor; uma assinatura do catálogo é adicionada no caminho",
+        ),
+        (
+            "Signs out of a subscription: the sign-in revoked at its provider and forgotten here",
+            "Sai de uma assinatura: o login revogado no provedor e esquecido aqui",
+        ),
+        ("The provider", "O provedor"),
+        (
             "Started by the owner's key, not at its time: a paused plan runs too, and its times stay as they were",
             "Iniciado pela tecla do dono, não no seu horário: um plano pausado também roda, e seus horários ficam como \
              estavam",
@@ -1798,6 +1816,7 @@ pub const TEXTS: Texts = Texts {
     schedule_outcome_stopped: "parado",
     schedule_outcome_skipped: "pulado",
     schedule_outcome_unstarted: "não iniciado",
+    schedule_outcome_plan_limit: "limite do plano atingido",
     keys_runs: "↑↓ escolher · ⏎ abre · r roda agora · p pausa · d exclui · ⎋ voltar · ⌃X R oculta",
     runs_delete_ask: "excluir o plano {name} e o registro das suas execuções? y sim, qualquer outra tecla não — as \
                       sessões dele ficam",
@@ -1812,6 +1831,26 @@ pub const TEXTS: Texts = Texts {
     schedule_quote_open: "há uma aspa não fechada",
     runs_since: "desde a sua última visita: {runs} — a aba Execuções (⌃X R) as mostra",
     runs_since_one: "{name} {n}× (último: {outcome})",
+    login_title: "Assinaturas",
+    login_state_in: "conectado como {who} — ⏎ sai",
+    login_state_out: "não conectado — ⏎ entra",
+    login_sign_out_title: "Sair de {id}?",
+    login_sign_out_yes: "Sair — revogado na OpenAI",
+    login_sign_out_no: "Continuar conectado",
+    login_failed: "{id}: o login não deu certo: {reason}",
+    login_sign_in_at: "Entre com seu plano do ChatGPT em {host}: {address}",
+    login_paste_back: "Abra onde você está; cole de volta o endereço em que o navegador termina: /login {id} <address>",
+    login_signed_in: "{id} está conectado como {who}.",
+    login_welcome: "O Glut agora usa seu plano do ChatGPT: sem dinheiro por chamada, mas com os limites de uso do \
+                    plano — um plano Plus divide seu limite com cada app que o usa. Quando ele é atingido, o Glut \
+                    avisa e para; você vê e limita o que cada app pode usar em {page}",
+    login_out_nothing: "{id} não estava conectado.",
+    login_out_revoked: "{id} saiu; o login foi revogado na OpenAI.",
+    login_out_unconfirmed: "{id} saiu aqui, mas a OpenAI não confirmou a revogação ({reason}): desconecte o Glut nas \
+                            configurações do ChatGPT.",
+    login_no_waiting: "nenhum login de {id} espera um endereço — /login {id} inicia um",
+    plan_footer: "plano do ChatGPT",
+    meter_plan: "plano do ChatGPT: sem preço por chamada — gerencie o uso em {page}",
     schedule_program_writable: "{program} fica onde os comandos do plano escrevem: uma execução poderia deixar para a \
                                 próxima um programa próprio — inicie um Glut instalado em outro lugar (cargo install)",
     schedule_path_writable: "o PATH dele alcança uma pasta onde seus comandos escrevem — glut schedule add <name> o \

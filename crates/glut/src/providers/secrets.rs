@@ -197,12 +197,34 @@ impl FileStore {
     }
 }
 
+impl FileStore {
+    /// The file's lock, held while one change reads and writes it whole: two writers at once (an MCP token, a
+    /// subscription's renewal, `glut providers add`) would otherwise each write back what the other did not see.
+    fn lock(&self) -> Result<std::fs::File, HarnessError> {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        let dir = self.path.parent().unwrap_or(Path::new("."));
+        super::make_private_dir(dir).map_err(|err| self.fail(err.to_string()))?;
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .mode(0o600)
+            .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
+            .open(dir.join(".credentials.lock"))
+            .map_err(|err| self.fail(err.to_string()))?;
+        rustix::fs::flock(&file, rustix::fs::FlockOperation::LockExclusive)
+            .map_err(|err| self.fail(err.to_string()))?;
+        Ok(file)
+    }
+}
+
 impl SecretStore for FileStore {
     fn get(&self, account: &str) -> Result<Option<String>, HarnessError> {
         Ok(self.load()?.secrets.remove(account))
     }
 
     fn set(&self, account: &str, secret: &str) -> Result<(), HarnessError> {
+        let _held = self.lock()?;
         let mut secrets = self.load()?;
         secrets
             .secrets
@@ -211,6 +233,7 @@ impl SecretStore for FileStore {
     }
 
     fn delete(&self, account: &str) -> Result<(), HarnessError> {
+        let _held = self.lock()?;
         let mut secrets = self.load()?;
         if secrets.secrets.remove(account).is_some() {
             self.save(&secrets)?;

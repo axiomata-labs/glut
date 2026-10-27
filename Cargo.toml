@@ -33,6 +33,8 @@ htmd = "0.5.6"
 rustix = { version = "1.1", default-features = false, features = ["std", "fs"] }
 # The fingerprint of an MCP server's config, which a project's server is approved by (HS5, M2).
 sha2 = "0.10"
+# RSA signatures of a sign-in's ID token (PV4): the crate rustls already builds for TLS, nothing new compiled in.
+ring = { version = "0.17", default-features = false, features = ["alloc"] }
 # Images sent to a model (T45): read, scaled to what the APIs take, written as PNG or JPEG — nothing else of the crate.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 # The terminal UI's terminal (docs/plans/glut-tui.md, T2): raw mode, events (keys, mouse, paste, resize, focus), the

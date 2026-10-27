@@ -46,6 +46,10 @@ pub async fn first_provider(home: &Path) -> Result<bool, String> {
     };
     let store = list.store(home).map_err(|err| err.to_string())?;
     let account = providers::account(known.id, &entry);
+    if known.sign_in == SignIn::ChatGpt {
+        glut::cli::providers::login(home, known.id, true).await?;
+        list = Providers::load(home).map_err(|err| err.to_string())?;
+    }
     if known.sign_in == SignIn::Key {
         let key = secret(&format!("{} ", tr!(setup_key, provider = known.name)))?;
         if key.is_empty() {
@@ -111,7 +115,11 @@ async fn choose_model(
         std::env::var(name).ok()
     })?;
     println!("{}", tr!(setup_asking_models, provider = name));
-    let offered = match models::fetch(&resolved.endpoint, resolved.protocol).await {
+    let mut endpoint = resolved.endpoint.clone();
+    if let Some(credential) = resolved.credential(home) {
+        endpoint.api_key = Some(credential.bearer().await.map_err(|err| err.to_string())?);
+    }
+    let offered = match models::fetch(&endpoint, resolved.protocol).await {
         Ok(found) => {
             let _ = models::keep(home, id, &found);
             let mut usable: Vec<&models::ModelInfo> = found

@@ -1,7 +1,7 @@
 //! The commands' manual pages in German (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 53] = [
+pub const PAGES: [(&str, &str); 54] = [
     (
         "clear",
         "Eine neue, leere Session in diesem Ordner beginnen.\n\
@@ -146,6 +146,21 @@ pub const PAGES: [(&str, &str); 53] = [
          Die Provider liegen in `~/.glut/providers.json`, ihre Keys im Schlüsselbund (oder in \
          `~/.glut/credentials.json`); `glut providers add <id>` fügt einen hinzu. Das Gespräch geht weiter, und der \
          nächste Start beginnt mit dem Provider, den du gewählt hast.",
+    ),
+    (
+        "login",
+        "Mit einem Abo statt mit einem Schlüssel anmelden — heute mit deinem ChatGPT-Plus- oder -Pro-Abo.\n\
+         \n\
+         /login — die Abos, jedes mit seinem Stand; ⏎ meldet an oder ab\n\
+         /login <provider> — meldet sich sofort bei diesem an, etwa /login chatgpt\n\
+         /login <provider> <address> — über SSH: die Adresse, auf der der Browser endete, zurück eingefügt\n\
+         \n\
+         Die Adresse wird zuerst gezeigt; ⏎ öffnet sie in deinem Browser. Glut bewahrt die Anmeldung in der Keychain \
+         auf (oder in `~/.glut/credentials.json`) und erneuert sie selbst; Abmelden widerruft sie bei OpenAI.\n\
+         \n\
+         Mit dem Abo kostet ein Aufruf kein Geld, aber die Nutzungsgrenzen des Abos gelten: Ist eine erreicht, endet \
+         der Turn und Glut verweist auf ChatGPT-Einstellungen → Nutzung, wo du auch begrenzt, was jede App nutzen \
+         darf. In der Shell: glut providers login|logout <provider>.",
     ),
     (
         "effort",

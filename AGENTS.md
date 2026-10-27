@@ -84,6 +84,12 @@ cargo run --release --bin glut   # the TUI in the current folder, on the default
   provider key variable — the catalog's and the owner's `keyEnv` — is kept out of MCP headers' `${…}`
   (`mcp::client::header_value`); a new catalog entry gets a variable of its own (a coding plan's key is not its
   pay-as-you-go key). `ModelEndpoint.versioned`: a provider's root already holds its version.
+- **A subscription's tokens live in the secret store and renew under a lock** (PV4, `crates/glut/src/subscription/`):
+  a sign-in (ChatGPT's plan) keeps a `Record` under `<id>@<host>` like a key; a run's model asks a `Credential` for
+  the bearer at every call — never put it in `ModelEndpoint::api_key` beyond fetching a model list. Its refresh
+  token rotates: renew only under `Lock::take` after reading the store again, or two windows sign each other out.
+  The ID token is verified in full (`chatgpt::verify`); Glut never borrows another tool's client or tokens, and never
+  drives another harness for a subscription (owner, PV4 Q3).
 - **Secrets are masked where a result enters the conversation, and go back only into a file that holds them**
   (T58, `crates/glut/src/masks.rs`): `perform_after` masks before the result event, the hooks, the store and the
   model — a new path of tool text into the conversation must go through it too. `Loop::unmasked` puts a placeholder's

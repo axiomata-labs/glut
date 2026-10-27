@@ -71,6 +71,11 @@ pub const TEXTS: Texts = Texts {
         ),
         ("provider", "den Provider wechseln, oder /provider <id>"),
         (
+            "login",
+            "dich mit einem Abo anmelden — deinem ChatGPT-Abo — statt mit einem Schlüssel; /login allein listet sie \
+             mit ihrem Stand, ⏎ meldet an oder ab",
+        ),
+        (
             "effort",
             "wie gründlich das Modell nachdenkt, oder /effort <level>",
         ),
@@ -1062,6 +1067,20 @@ pub const TEXTS: Texts = Texts {
     setup_provider_prompt: "Provider:",
     cli: &[
         (
+            "Signs in to a subscription in the browser — your ChatGPT Plus or Pro plan: glut providers login chatgpt",
+            "Meldet dich im Browser bei einem Abo an — deinem ChatGPT-Plus- oder -Pro-Abo: glut providers login \
+             chatgpt",
+        ),
+        (
+            "The provider; one of the catalog's subscriptions is added on the way",
+            "Der Provider; ein Abo aus dem Katalog wird dabei hinzugefügt",
+        ),
+        (
+            "Signs out of a subscription: the sign-in revoked at its provider and forgotten here",
+            "Meldet dich von einem Abo ab: die Anmeldung beim Anbieter widerrufen und hier vergessen",
+        ),
+        ("The provider", "Der Provider"),
+        (
             "Started by the owner's key, not at its time: a paused plan runs too, and its times stay as they were",
             "Von der Taste des Owners gestartet, nicht zu seiner Zeit: auch ein angehaltener Plan läuft, und seine \
              Zeiten bleiben, wie sie waren",
@@ -1815,6 +1834,7 @@ pub const TEXTS: Texts = Texts {
     schedule_outcome_stopped: "gestoppt",
     schedule_outcome_skipped: "übersprungen",
     schedule_outcome_unstarted: "nicht gestartet",
+    schedule_outcome_plan_limit: "Abo-Limit erreicht",
     keys_runs: "↑↓ wählen · ⏎ öffnet · r läuft jetzt · p hält an · d löscht · ⎋ zurück · ⌃X R blendet aus",
     runs_delete_ask: "Plan {name} und die Liste seiner Läufe löschen? y ja, jede andere Taste nein — seine Sessions \
                       bleiben",
@@ -1830,6 +1850,27 @@ pub const TEXTS: Texts = Texts {
     schedule_quote_open: "ein Anführungszeichen ist nicht geschlossen",
     runs_since: "seit du zuletzt hier warst: {runs} — der Reiter Läufe (⌃X R) zeigt sie",
     runs_since_one: "{name} {n}× (zuletzt {outcome})",
+    login_title: "Abos",
+    login_state_in: "angemeldet als {who} — ⏎ meldet ab",
+    login_state_out: "nicht angemeldet — ⏎ meldet an",
+    login_sign_out_title: "Von {id} abmelden?",
+    login_sign_out_yes: "Abmelden — bei OpenAI widerrufen",
+    login_sign_out_no: "Angemeldet bleiben",
+    login_failed: "{id}: die Anmeldung ist nicht gelungen: {reason}",
+    login_sign_in_at: "Melde dich mit deinem ChatGPT-Abo bei {host} an: {address}",
+    login_paste_back: "Öffne sie dort, wo du sitzt; füge die Adresse, auf der der Browser endet, zurück ein: /login \
+                       {id} <address>",
+    login_signed_in: "{id} ist als {who} angemeldet.",
+    login_welcome: "Glut nutzt jetzt dein ChatGPT-Abo: kein Geld pro Aufruf, aber die Nutzungsgrenzen des Abos — ein \
+                    Plus-Abo teilt seine Grenze mit jeder App, die es nutzt. Ist sie erreicht, sagt Glut das und hält \
+                    an; was jede App nutzen darf, siehst und begrenzt du unter {page}",
+    login_out_nothing: "{id} war nicht angemeldet.",
+    login_out_revoked: "{id} ist abgemeldet; die Anmeldung ist bei OpenAI widerrufen.",
+    login_out_unconfirmed: "{id} ist hier abgemeldet, aber OpenAI hat den Widerruf nicht bestätigt ({reason}): trenne \
+                            Glut in den ChatGPT-Einstellungen.",
+    login_no_waiting: "keine Anmeldung von {id} wartet auf eine Adresse — /login {id} beginnt eine",
+    plan_footer: "ChatGPT-Abo",
+    meter_plan: "ChatGPT-Abo: kein Preis pro Aufruf — Nutzung verwalten unter {page}",
     schedule_program_writable: "{program} liegt dort, wo die Befehle des Plans schreiben: ein Lauf könnte dem nächsten \
                                 ein eigenes Programm hinterlassen — starte ein anderswo installiertes Glut (cargo \
                                 install)",

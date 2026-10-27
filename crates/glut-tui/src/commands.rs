@@ -97,7 +97,7 @@ const fn command(
 }
 
 /// Every command, grouped by topic in [`Topic::ALL`]'s order, the most used first inside a topic.
-pub const COMMANDS: [Command; 53] = [
+pub const COMMANDS: [Command; 54] = [
     command(Topic::Session, "clear", "", "start a new session"),
     command(
         Topic::Session,
@@ -163,6 +163,13 @@ pub const COMMANDS: [Command; 53] = [
         "provider",
         "[id]",
         "switch the provider, or /provider <id>",
+    ),
+    command(
+        Topic::Model,
+        "login",
+        "[provider]",
+        "sign in to a subscription — your ChatGPT plan — instead of a key; /login alone lists them with how each \
+         stands, ⏎ signs in or out",
     ),
     command(
         Topic::Model,
@@ -648,12 +655,14 @@ pub enum Source {
     Servers,
     /// The plans' names (`/schedule run|pause|resume|remove`, T60b).
     Plans,
+    /// The subscriptions one signs in to (`/login`, PV4).
+    Subscriptions,
 }
 
 /// The catalog's words for something to be given, never one to complete to: `[name]`, `[path]`, `[n]` …
-const PLACEHOLDERS: [&str; 12] = [
+const PLACEHOLDERS: [&str; 13] = [
     "name", "id", "path", "n", "level", "code", "text", "tokens", "command", "branch", "question",
-    "role",
+    "role", "provider",
 ];
 
 /// Where the values for the argument after `before` come from, for command `name`.
@@ -663,6 +672,7 @@ fn source(name: &str, before: &[&str]) -> Option<Source> {
         ("language", []) => Source::Languages,
         ("effort", []) => Source::Efforts,
         ("provider", []) => Source::Providers,
+        ("login", []) => Source::Subscriptions,
         ("skill", []) => Source::Skills,
         ("role", []) => Source::Roles,
         ("close" | "show" | "peek" | "btw" | "send", []) => Source::Agents,

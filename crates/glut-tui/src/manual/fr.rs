@@ -1,7 +1,7 @@
 //! The commands' manual pages in French (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 53] = [
+pub const PAGES: [(&str, &str); 54] = [
     (
         "clear",
         "Commencer une nouvelle session vide dans ce dossier.\n\
@@ -148,6 +148,21 @@ pub const PAGES: [(&str, &str); 53] = [
          Les fournisseurs sont gardés dans `~/.glut/providers.json`, leurs clés dans le Trousseau (ou dans \
          `~/.glut/credentials.json`) ; `glut providers add <id>` en ajoute un. La conversation continue, et le \
          prochain démarrage commence avec le fournisseur que tu as choisi.",
+    ),
+    (
+        "login",
+        "Te connecter avec un abonnement au lieu d'une clé — aujourd'hui ton abonnement ChatGPT Plus ou Pro.\n\
+         \n\
+         /login — les abonnements, chacun avec son état ; ⏎ connecte ou déconnecte\n\
+         /login <provider> — s'y connecte tout de suite, comme /login chatgpt\n\
+         /login <provider> <address> — via SSH : l'adresse sur laquelle le navigateur s'est arrêté, recollée\n\
+         \n\
+         L'adresse est d'abord affichée ; ⏎ l'ouvre dans ton navigateur. Glut garde la connexion dans le trousseau \
+         (ou `~/.glut/credentials.json`) et la renouvelle tout seul ; la déconnexion la révoque chez OpenAI.\n\
+         \n\
+         Avec l'abonnement, un appel ne coûte rien, mais les limites d'usage de l'abonnement s'appliquent : quand \
+         l'une est atteinte, le tour s'arrête et Glut renvoie vers Réglages ChatGPT → Utilisation, où tu limites \
+         aussi ce que chaque app peut utiliser. Dans le shell : glut providers login|logout <provider>.",
     ),
     (
         "effort",

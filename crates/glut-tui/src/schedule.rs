@@ -481,6 +481,8 @@ pub enum Outcome {
     Skipped,
     /// Its folder, its provider or its settings were not there to start with.
     Unstarted,
+    /// A subscription's usage limit was reached (PV4): the plan's, not the run's.
+    PlanLimit,
 }
 
 impl Outcome {
@@ -512,6 +514,7 @@ impl Outcome {
             Outcome::Stopped => tr!(schedule_outcome_stopped),
             Outcome::Skipped => tr!(schedule_outcome_skipped),
             Outcome::Unstarted => tr!(schedule_outcome_unstarted),
+            Outcome::PlanLimit => tr!(schedule_outcome_plan_limit),
         }
     }
 }
