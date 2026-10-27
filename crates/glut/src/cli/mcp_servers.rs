@@ -59,6 +59,11 @@ pub async fn run(command: McpCommand) -> ExitCode {
         Ok(home) => home,
         Err(err) => return fail(&err.to_string()),
     };
+    if !matches!(command, McpCommand::List { .. })
+        && std::env::var_os(crate::tools::shell::SANDBOXED_ENV).is_some()
+    {
+        return fail(say!(owners_only));
+    }
     let outcome = match command {
         McpCommand::List { cwd } => list(&home, &cwd),
         McpCommand::Login { name, cwd } => login(&home, &cwd, &name).await,

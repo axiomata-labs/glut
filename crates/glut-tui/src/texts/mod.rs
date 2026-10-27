@@ -1524,6 +1524,36 @@ glut::catalog! {
         secret_token: &'static str,
         /// The hidden entry's prompt for a client's secret: `{id}`.
         secret_client: &'static str,
+        /// The hidden entry's prompt for a provider's new key (T70): `{id}`.
+        secret_provider_key: &'static str,
+        /// `/provider key` could not go on (T70): `{reason}`.
+        key_error: &'static str,
+        /// A key typed that is too long (T70): `{max}` bytes.
+        key_too_long: &'static str,
+        /// `/provider key` on a provider the owner signs in to instead (T70): `{id}`.
+        key_sign_in: &'static str,
+        /// `/provider key` on a provider that needs no key (T70): `{id}`.
+        key_no_key_needed: &'static str,
+        /// `/provider key` while the key comes from the environment right now (T70): `{id}`, `{name}` the variable.
+        key_env_now: &'static str,
+        /// Before the small call that proves the new key (T70): `{id}`.
+        key_checking: &'static str,
+        /// The new key does not prove itself (T70): `{reason}`.
+        key_check_failed: &'static str,
+        /// The frame of the question after a new key did not prove itself (T70).
+        key_ask_title: &'static str,
+        /// That question's choice: keep the new key anyway.
+        key_keep_new: &'static str,
+        /// That question's choice: keep the old key.
+        key_keep_old: &'static str,
+        /// The new key kept (T70): `{id}`.
+        key_changed: &'static str,
+        /// The old key kept, the new one not (T70): `{id}`.
+        key_kept_old: &'static str,
+        /// The new key of `{id}` kept while a turn is under way: it takes over as the turn ends (T70).
+        key_next_turn: &'static str,
+        /// `/provider key`: the entry's root changed while the key was typed: `{id}`.
+        key_moved: &'static str,
         /// The key line while a secret is typed.
         hint_secret: &'static str,
         /// A project's server not approved (T56): `{name}`.

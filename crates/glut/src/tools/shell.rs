@@ -32,6 +32,10 @@ use crate::model::ToolSpec;
 use crate::permissions::{Access, Gate};
 use crate::sandbox::proxy::Proxy;
 
+/// Set in every command Glut runs: the commands that keep a key or a sign-in (`glut providers key|add|login|…`,
+/// `glut mcp login|…`) refuse under it — the Keychain is reached past the sandbox, so a model must not drive them.
+/// A speed bump, not a barrier: a command can unset it; the owner's word stays the gate's.
+pub const SANDBOXED_ENV: &str = "GLUT_SANDBOXED";
 /// A command's time limit when the model names none.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
 /// The longest time limit the model may ask for.
@@ -447,6 +451,7 @@ impl Session {
             .envs(self.env.iter().cloned())
             .envs(proxy_env)
             .env("AXH_COMMAND", command)
+            .env(SANDBOXED_ENV, "1")
             .env("AXH_CWD", cwd)
             .env("AXH_SNAPSHOT", snapshot.as_deref().unwrap_or(Path::new("")))
             .env("AXH_CWD_FILE", cwd_file.unwrap_or(Path::new("")))

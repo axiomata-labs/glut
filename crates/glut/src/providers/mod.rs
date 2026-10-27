@@ -18,6 +18,9 @@ use crate::error::HarnessError;
 use catalog::{CUSTOM, SignIn};
 use secrets::{SecretStore, StoreChoice};
 
+/// The longest key read or typed: far above any provider's, a stop for something pasted in by mistake.
+pub const MAX_KEY_BYTES: u64 = 8 * 1024;
+
 /// The owner's folder below the home folder (as `permissions::settings::USER_DIR`).
 pub const DIR: &str = ".glut";
 /// The configured providers, below [`DIR`]. Glut writes it (`glut providers add`), the owner may edit it; it never
@@ -530,6 +533,136 @@ pub fn route(
     endpoint.base_url = format!("{}/{part}", endpoint.base_url.trim_end_matches('/'));
     endpoint.versioned = true;
     Ok((endpoint, protocol))
+}
+
+/// A provider's key to be changed alone (T70): where the new one goes — or what stands in the way of a key at all, so
+/// the owner is told instead of asked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KeyChange {
+    /// The new key goes to `account` in the store the owner chose; nothing else of the entry changes.
+    Asked { id: String, account: String },
+    /// The provider signs in to a subscription instead of taking a key (`SignIn::ChatGpt`).
+    SignedIn(String),
+    /// The provider needs no key (`SignIn::None`, local servers; an `openai-compatible` entry with `"key": false`).
+    NotNeeded(String),
+    /// The key comes from this environment variable right now (`KeyFrom::Env`): `$NAME` is where it is changed.
+    Env { id: String, name: String },
+}
+
+/// What `glut providers key <id>` and `/provider key [id]` find before a key is asked for (T70): the provider `id` —
+/// the default one when none is given — and where its new key would go, or why it takes none of its own.
+///
+/// # Errors
+///
+/// A message when there is no such provider, or no default and no id.
+pub fn key_change(
+    providers: &Providers,
+    id: Option<&str>,
+    env: impl Fn(&str) -> Option<String>,
+) -> Result<KeyChange, String> {
+    let (id, entry) = providers.pick(id)?;
+    if entry.signs_in() {
+        return Ok(KeyChange::SignedIn(id.to_owned()));
+    }
+    if !entry.needs_key() {
+        return Ok(KeyChange::NotNeeded(id.to_owned()));
+    }
+    // A key the environment holds right now is the one a run sends (KeyFrom::Env): a key kept beside it would lie
+    // unread in the store, so the variable is where it is changed (Q3).
+    if let Some(name) = entry.key_env()
+        && env(name).is_some_and(|value| !value.trim().is_empty())
+    {
+        return Ok(KeyChange::Env {
+            id: id.to_owned(),
+            name: name.to_owned(),
+        });
+    }
+    Ok(KeyChange::Asked {
+        id: id.to_owned(),
+        account: account(id, entry),
+    })
+}
+
+/// The small call that proves a new key before it replaces the old one (T70): the provider's model list with the new
+/// key in the endpoint — root and key, enough to see the provider takes it. The list itself is not kept: only the key
+/// changes.
+///
+/// # Errors
+///
+/// A message when the provider cannot be reached or refuses the key — never holding the key.
+pub async fn proves(providers: &Providers, id: &str, key: &str) -> Result<(), String> {
+    let entry = providers
+        .providers
+        .get(id)
+        .ok_or_else(|| format!("no provider {id} (glut providers list shows them)"))?;
+    let endpoint = ModelEndpoint {
+        base_url: entry.root().trim_end_matches('/').to_owned(),
+        api_key: Some(key.trim().to_owned()),
+        model: entry.model.clone().unwrap_or_default(),
+        effort: None,
+        versioned: true,
+    };
+    let redacted = |reason: String| crate::model::redact(&reason, endpoint.api_key.as_deref());
+    models::fetch(&endpoint, entry.protocol())
+        .await
+        .map_err(redacted)?;
+    // OpenRouter's model list is public: only its key endpoint says whether the key is one — over https alone.
+    if crate::model::is_openrouter(&endpoint.base_url) {
+        if !endpoint.base_url.starts_with("https://") {
+            return Err(format!(
+                "{id} points to OpenRouter without https: its key is not sent there"
+            ));
+        }
+        let status = crate::oauth::http()?
+            .get(format!("{}/key", endpoint.base_url))
+            .bearer_auth(key.trim())
+            .send()
+            .await
+            .map_err(|error| redacted(format!("{id} cannot be reached: {}", error.without_url())))?
+            .status();
+        if !status.is_success() {
+            return Err(format!("{id} refused the key ({status})"));
+        }
+    }
+    Ok(())
+}
+
+/// Whether the new key was kept (T70).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kept {
+    /// The check passed — or the owner kept the new key anyway: it is in the store under its account.
+    New,
+    /// The check failed and the owner kept the old one: nothing was written.
+    Old,
+}
+
+/// The new key of `account`, checked before it replaces the old one (T70): `checked` proves it against the provider's
+/// model list, and only when that fails is `ask` called with why — `true` keeps the new key anyway, `false` leaves the
+/// old one where it is. The entry itself is never touched here.
+///
+/// # Errors
+///
+/// The secret store could not be written.
+pub async fn change_key<Checked, Asked, Answer>(
+    store: &dyn SecretStore,
+    account: &str,
+    key: &str,
+    checked: Checked,
+    ask: Asked,
+) -> Result<Kept, String>
+where
+    Checked: std::future::Future<Output = Result<(), String>>,
+    Asked: FnOnce(&str) -> Answer,
+    Answer: std::future::Future<Output = bool>,
+{
+    let key = key.trim();
+    if let Err(reason) = checked.await
+        && !ask(&reason).await
+    {
+        return Ok(Kept::Old);
+    }
+    store.set(account, key).map_err(|err| err.to_string())?;
+    Ok(Kept::New)
 }
 
 /// The account of provider `id`, which signs in (PV4): the catalog's subscription added to `providers.json` first
@@ -1146,5 +1279,128 @@ mod tests {
             std::fs::write(Providers::path(&home), bad).unwrap();
             assert!(Providers::load(&home).is_err(), "{bad}");
         }
+    }
+
+    /// A home folder of its own for one test, for `Providers::save`.
+    fn home_of(test: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "glut-provider-key-{test}-{}-{}",
+            std::process::id(),
+            chrono::Local::now()
+                .timestamp_nanos_opt()
+                .unwrap_or_default()
+        ))
+    }
+
+    /// T70: the new key goes in under the account of `<id>@<host>` — the entry in `providers.json` is not written,
+    /// not one field of it.
+    #[tokio::test]
+    async fn a_new_key_is_kept_under_its_account_and_the_entry_stays_as_it_was() {
+        let home = home_of("kept");
+        let mut list = providers(&[("openrouter", entry("openrouter"))]);
+        list.default = Some("openrouter".into());
+        list.save(&home).unwrap();
+        let before = std::fs::read(Providers::path(&home)).unwrap();
+        let store = Memory::default();
+        let account = account("openrouter", &entry("openrouter"));
+        store.set(&account, "sk-old").unwrap();
+        let asked = match key_change(&list, None, |_| None).unwrap() {
+            KeyChange::Asked { id, account } => (id, account),
+            other => panic!("a provider of the catalog takes a key: {other:?}"),
+        };
+        assert_eq!(asked.0, "openrouter");
+        assert_eq!(asked.1, "openrouter@openrouter.ai");
+        let kept = change_key(&store, &asked.1, " sk-new\n", async { Ok(()) }, |_| async {
+            false
+        })
+        .await
+        .unwrap();
+        assert_eq!(kept, Kept::New);
+        assert_eq!(
+            store.get(&account).unwrap().as_deref(),
+            Some("sk-new"),
+            "trimmed, under the same account"
+        );
+        assert_eq!(
+            std::fs::read(Providers::path(&home)).unwrap(),
+            before,
+            "nothing else of the entry changed"
+        );
+        assert_eq!(
+            Providers::load(&home).unwrap().providers["openrouter"],
+            entry("openrouter")
+        );
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// T70 (Q1): the check is before the old key is replaced — it fails, and the owner says whether to keep the new
+    /// key anyway; until then the old one is where it was.
+    #[tokio::test]
+    async fn a_key_that_does_not_check_out_keeps_the_old_one_unless_the_owner_says_so() {
+        let store = Memory::default();
+        let account = "openrouter@openrouter.ai";
+        store.set(account, "sk-old").unwrap();
+        let checked = async { Err("the provider answered 401 Unauthorized".to_owned()) };
+        let asked = |reason: &str| {
+            let reason = reason.to_owned();
+            async move {
+                assert_eq!(reason, "the provider answered 401 Unauthorized");
+                false
+            }
+        };
+        let kept = change_key(&store, account, "sk-new", checked, asked).await;
+        assert_eq!(kept.unwrap(), Kept::Old);
+        assert_eq!(
+            store.get(account).unwrap().as_deref(),
+            Some("sk-old"),
+            "the old key stays"
+        );
+        let kept = change_key(
+            &store,
+            account,
+            "sk-new",
+            async { Err("the provider answered 401 Unauthorized".to_owned()) },
+            |_| async { true },
+        )
+        .await;
+        assert_eq!(kept.unwrap(), Kept::New, "the owner keeps it anyway");
+        assert_eq!(store.get(account).unwrap().as_deref(), Some("sk-new"));
+    }
+
+    /// T70 (Q3): a sign-in, a provider without a key and one whose key comes from its environment variable are told
+    /// so instead of asked — the variable named.
+    #[test]
+    fn a_provider_with_no_key_to_change_is_told_so_instead_of_asked() {
+        let chatgpt = providers(&[("chatgpt", entry("chatgpt"))]);
+        assert_eq!(
+            key_change(&chatgpt, None, |_| None).unwrap(),
+            KeyChange::SignedIn("chatgpt".into())
+        );
+        let local = providers(&[("ollama", entry("ollama"))]);
+        assert_eq!(
+            key_change(&local, None, |_| None).unwrap(),
+            KeyChange::NotNeeded("ollama".into())
+        );
+        let mut own = entry("openrouter");
+        own.key_env = Some("MY_OR_KEY".into());
+        let from_env = providers(&[("openrouter", own)]);
+        assert_eq!(
+            key_change(&from_env, None, env(&[("MY_OR_KEY", "sk-env")])).unwrap(),
+            KeyChange::Env {
+                id: "openrouter".into(),
+                name: "MY_OR_KEY".into(),
+            },
+            "the key is read from the variable right now"
+        );
+        // A variable of the entry's that holds nothing is no reason to keep the owner from a key of their own.
+        assert_eq!(
+            key_change(&from_env, None, env(&[("MY_OR_KEY", "  ")])).unwrap(),
+            KeyChange::Asked {
+                id: "openrouter".into(),
+                account: "openrouter@openrouter.ai".into(),
+            }
+        );
+        let missing = key_change(&from_env, Some("nonesuch"), |_| None).unwrap_err();
+        assert!(missing.contains("no provider nonesuch"), "{missing}");
     }
 }

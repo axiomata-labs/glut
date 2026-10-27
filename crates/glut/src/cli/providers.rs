@@ -12,7 +12,7 @@ use crate::{ChatModel, Message, Model};
 use clap::Subcommand;
 
 /// The longest key `add` reads: far above any provider's, a stop for a file piped in by mistake.
-const MAX_KEY_BYTES: u64 = 8 * 1024;
+const MAX_KEY_BYTES: u64 = providers::MAX_KEY_BYTES;
 /// What `test` gives the model to answer.
 const TEST_PROMPT: &str = "Answer with the single word OK.";
 /// `test`'s output limit: room for a reasoning model's few thoughts before its word.
@@ -55,6 +55,12 @@ pub enum ProvidersCommand {
     Remove { id: String },
     /// Makes a provider the one runs take without --provider.
     Default { id: String },
+    /// Changes a provider's key alone — its model, keyEnv and root stay as they are. The key is read without echo and
+    /// checked with one small call before the old one is replaced.
+    Key {
+        /// The provider whose key is changed.
+        id: String,
+    },
     /// Signs in in the browser — your ChatGPT Plus or Pro plan (glut providers login chatgpt), or OpenRouter for a
     /// key without copying it (glut providers login openrouter).
     Login {
@@ -82,6 +88,13 @@ pub async fn run(command: ProvidersCommand) -> ExitCode {
         Ok(home) => home,
         Err(err) => return fail(&err.to_string()),
     };
+    let writes = !matches!(
+        command,
+        ProvidersCommand::List | ProvidersCommand::Catalog | ProvidersCommand::Test { .. }
+    );
+    if writes && std::env::var_os(crate::tools::shell::SANDBOXED_ENV).is_some() {
+        return fail(say!(owners_only));
+    }
     let outcome = match command {
         ProvidersCommand::List => list(&home),
         ProvidersCommand::Catalog => {
@@ -112,6 +125,7 @@ pub async fn run(command: ProvidersCommand) -> ExitCode {
         ),
         ProvidersCommand::Remove { id } => remove(&home, &id),
         ProvidersCommand::Default { id } => make_default(&home, &id),
+        ProvidersCommand::Key { id } => new_key(&home, &id).await,
         ProvidersCommand::Test { id, model } => test(&home, id.as_deref(), model.as_deref()).await,
         ProvidersCommand::Login { id } => login(&home, &id, false).await,
         ProvidersCommand::Logout { id } => logout(&home, &id).await,
@@ -269,13 +283,25 @@ fn add(home: &Path, added: Added) -> Result<(), String> {
 /// The key, from the terminal without echo, or from stdin when it is no terminal. `None` when `shared` (another
 /// provider of the account keeps one) and nothing was typed.
 fn read_key(id: &str, shared: bool) -> Result<Option<String>, String> {
+    let prompt = if shared {
+        say!(key_prompt_shared, id = id)
+    } else {
+        say!(key_prompt, id = id)
+    };
+    read_key_from(prompt, shared)
+}
+
+/// The new key of `glut providers key <id>`, read exactly as `add` reads one (T70) — asked as what it is.
+fn read_new_key(id: &str) -> Result<String, String> {
+    read_key_from(say!(key_prompt_new, id = id), false)?
+        .ok_or_else(|| say!(no_key_given).to_owned())
+}
+
+/// [`read_key`]'s body: `prompt` on stderr, then the line itself.
+fn read_key_from(prompt: String, shared: bool) -> Result<Option<String>, String> {
     let stdin = std::io::stdin();
     let key = if stdin.is_terminal() {
-        if shared {
-            eprint!("{}", say!(key_prompt_shared, id = id));
-        } else {
-            eprint!("{}", say!(key_prompt, id = id));
-        }
+        eprint!("{prompt}");
         let _ = std::io::stderr().flush();
         let line = without_echo(|| {
             let mut line = String::new();
@@ -345,6 +371,62 @@ pub(super) fn without_echo<T>(read: impl FnOnce() -> std::io::Result<T>) -> std:
     drop(restore);
     interrupt.abort();
     result
+}
+
+/// `glut providers key <id>` (T70): the new key read without echo, checked against the provider's model list before
+/// the old one is replaced, and kept — or the old one stays where it is, as the owner says. Nothing else of the entry
+/// is touched: its model, its `keyEnv` and its root stay as they are.
+async fn new_key(home: &Path, id: &str) -> Result<(), String> {
+    let providers = load(home)?;
+    let store = providers.store(home).map_err(|err| err.to_string())?;
+    let (id, account) =
+        match providers::key_change(&providers, Some(id), |name| std::env::var(name).ok())? {
+            providers::KeyChange::Asked { id, account } => (id, account),
+            providers::KeyChange::SignedIn(id) => return Err(say!(key_sign_in, id = id)),
+            providers::KeyChange::NotNeeded(id) => return Err(say!(key_no_key_needed, id = id)),
+            providers::KeyChange::Env { id, name } => {
+                return Err(say!(key_env_now, id = id, name = name));
+            }
+        };
+    // Typed by the owner, never piped: a key changed by a script would be no one's word.
+    if !std::io::stdin().is_terminal() {
+        return Err(say!(key_needs_terminal).into());
+    }
+    let key = read_new_key(&account)?;
+    eprintln!("{}", say!(key_checking, id = id));
+    let kept = providers::change_key(
+        store.as_ref(),
+        &account,
+        &key,
+        providers::proves(&providers, &id, &key),
+        |reason| {
+            eprintln!(
+                "{}",
+                say!(
+                    key_check_failed,
+                    reason = crate::permissions::printable(reason)
+                )
+            );
+            async { keep_anyway() }
+        },
+    )
+    .await?;
+    match kept {
+        providers::Kept::New => println!("{}", say!(key_changed, id = id, place = store.place())),
+        providers::Kept::Old => println!("{}", say!(key_kept_old, id = id)),
+    }
+    Ok(())
+}
+
+/// The owner's word when the new key does not check out (T70): `y` or `Y` keeps it anyway, everything else — an empty
+/// line, a piped stdin — keeps the old key.
+fn keep_anyway() -> bool {
+    eprint!("{}", say!(key_keep_anyway));
+    let _ = std::io::stderr().flush();
+    let mut line = String::new();
+    let read = std::io::stdin().read_line(&mut line);
+    eprintln!();
+    read.is_ok() && matches!(line.trim().chars().next(), Some('y' | 'Y'))
 }
 
 fn remove(home: &Path, id: &str) -> Result<(), String> {
@@ -579,4 +661,58 @@ async fn logout(home: &Path, id: &str) -> Result<(), String> {
         }
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An entry as one of the tests' providers files holds it.
+    fn entry(kind: &str) -> Entry {
+        Entry {
+            kind: kind.into(),
+            root: None,
+            model: Some("deepseek/deepseek-v4.1-flash".into()),
+            key_env: None,
+            key: None,
+            windows: std::collections::BTreeMap::new(),
+        }
+    }
+
+    /// T70 (Q3): `glut providers key` says why there is none to change — a sign-in, a provider that needs no key —
+    /// and reads no key at all before that. The third refusal (a key from the environment) is the library's, where
+    /// the variable can be given to it (`providers::tests::a_provider_with_no_key_to_change_is_told_so…`).
+    #[tokio::test]
+    async fn key_says_why_there_is_no_key_to_change_before_it_reads_one() {
+        let home = std::env::temp_dir().join(format!(
+            "glut-provider-key-cli-{}-{}",
+            std::process::id(),
+            chrono::Local::now()
+                .timestamp_nanos_opt()
+                .unwrap_or_default()
+        ));
+        let mut server = entry(CUSTOM);
+        server.root = Some("http://localhost:8080/v1".into());
+        server.key = Some(false);
+        let mut list = Providers::default();
+        list.providers.insert("chatgpt".into(), entry("chatgpt"));
+        list.providers.insert("box".into(), server);
+        list.providers.insert("local".into(), entry("ollama"));
+        list.save(&home).unwrap();
+        assert_eq!(
+            new_key(&home, "chatgpt").await.unwrap_err(),
+            say!(key_sign_in, id = "chatgpt")
+        );
+        assert_eq!(
+            new_key(&home, "box").await.unwrap_err(),
+            say!(key_no_key_needed, id = "box")
+        );
+        assert_eq!(
+            new_key(&home, "local").await.unwrap_err(),
+            say!(key_no_key_needed, id = "local")
+        );
+        let missing = new_key(&home, "nonesuch").await.unwrap_err();
+        assert!(missing.contains("no provider nonesuch"), "{missing}");
+        let _ = std::fs::remove_dir_all(&home);
+    }
 }

@@ -161,8 +161,8 @@ pub const COMMANDS: [Command; 54] = [
     command(
         Topic::Model,
         "provider",
-        "[id]",
-        "switch the provider, or /provider <id>",
+        "[id|key [id]]",
+        "switch the provider, or /provider <id>; /provider key changes only its key",
     ),
     command(
         Topic::Model,
@@ -672,7 +672,7 @@ fn source(name: &str, before: &[&str]) -> Option<Source> {
         ("theme", []) => Source::Themes,
         ("language", []) => Source::Languages,
         ("effort", []) => Source::Efforts,
-        ("provider", []) => Source::Providers,
+        ("provider", [] | ["key"]) => Source::Providers,
         ("login", []) => Source::Subscriptions,
         ("skill", []) => Source::Skills,
         ("role", []) => Source::Roles,
@@ -1124,6 +1124,7 @@ mod tests {
                 "html",
                 "inline",
                 "jsonl",
+                "key",
                 "list",
                 "login",
                 "logout",
