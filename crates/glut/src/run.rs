@@ -382,6 +382,8 @@ async fn run_inner<M: ChatModel>(
         read_at: HashMap::new(),
         paid_usd: 0.0,
         since_todo: 0,
+        reminded_at: 0,
+        updating_todos: false,
         nudged: false,
     };
     let mut resumed_calls = Vec::new();
@@ -739,6 +741,11 @@ struct Loop<'a, M: ChatModel> {
     paid_usd: f64,
     /// Tool calls answered since the last `todo_write` (T73): the reminder's count.
     since_todo: u32,
+    /// The step Glut last reminded the model of its list in, and whether the step under way sends `todo_write`
+    /// itself: one reminder a step at most, none to a step that updates the list anyway (MiMo, a reminder thrice in
+    /// one batch of sixteen calls, sent the same batch again and again).
+    reminded_at: u32,
+    updating_todos: bool,
     /// Whether the run already asked its model to go on (T73): once per run.
     nudged: bool,
 }
@@ -1441,6 +1448,9 @@ impl<M: ChatModel> Loop<'_, M> {
         calls: Vec<ToolCall>,
         sink: &mut dyn EventSink,
     ) -> Result<(), FinishReason> {
+        self.updating_todos = calls
+            .iter()
+            .any(|call| call.function.name == planning::TODO);
         let mut calls = calls.into_iter().enumerate().peekable();
         while let Some((index, call)) = calls.next() {
             sink.emit(Event::tool_call(
@@ -2051,10 +2061,16 @@ impl<M: ChatModel> Loop<'_, M> {
             return output;
         }
         self.since_todo += 1;
-        if !self.config.todos || self.since_todo < REMIND_EVERY || !planning::open(&self.todos) {
+        if !self.config.todos
+            || self.since_todo < REMIND_EVERY
+            || self.updating_todos
+            || self.reminded_at == self.turns
+            || !planning::open(&self.todos)
+        {
             return output;
         }
         self.since_todo = 0;
+        self.reminded_at = self.turns;
         let note = planning::reminder(&self.todos, REMIND_EVERY);
         sink.emit(Event::Nudged {
             turn: self.turns,
@@ -4844,8 +4860,9 @@ mod tests {
 
     #[tokio::test]
     async fn a_list_left_open_is_carried_and_reminded_of_after_eight_calls() {
+        // Sixteen calls in one reply: one reminder, at the eighth, never a second in the same step.
         let echoes: Vec<(&str, &str, &str)> =
-            (0..9).map(|_| ("e", "echo", r#"{"text":"x"}"#)).collect();
+            (0..16).map(|_| ("e", "echo", r#"{"text":"x"}"#)).collect();
         let mut replies = vec![Ok(calls(&echoes))];
         replies.push(Ok(calls(&[(
             "t",
