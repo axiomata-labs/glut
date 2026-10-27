@@ -217,6 +217,15 @@ pub const TEXTS: Texts = Texts {
              como off)",
         ),
         (
+            "rule",
+            "una regla para esta sesión que el modelo sigue en cada turno — /rule solo las lista, /rule remove <n> \
+             retira una",
+        ),
+        (
+            "maxsteps",
+            "cuántos pasos da como máximo un turno antes de detenerse y que ⏎ siga — 100 salvo cambio",
+        ),
+        (
             "nudge",
             "si Glut pide una vez al modelo que siga cuando termina con su lista abierta o anunciando un paso",
         ),
@@ -635,12 +644,25 @@ pub const TEXTS: Texts = Texts {
     images_set: "imágenes: {images}",
     images_now: "imágenes: {images} — /images inline, blocks u off",
     reader_now: "lector de pantalla: {reader} — /reader on u off",
+    steps_reached: "el turno se detuvo en su límite de {n} pasos — ⏎ con la entrada vacía sigue donde se detuvo; \
+                    /maxsteps cambia el límite",
+    steps_now: "un turno da como máximo {n} pasos — /maxsteps <n> lo cambia",
+    steps_set: "un turno da desde ahora como máximo {n} pasos",
+    steps_bad: "/maxsteps toma un número de 1 a {most}",
     nudge_now: "pedir al modelo que siga: {nudge} — /nudge on u off",
     nudge_on: "Glut pide una vez al modelo que siga cuando termina con su lista abierta o anunciando un paso",
     nudge_off: "un turno termina donde el modelo lo termina",
     thinking_unknown: "/thinking {word}: off, folded u open",
     no_command: "no hay comando /{name} — /help los lista",
     model_locked: "el modelo de esta sesión lo fija el programa que la inició — aquí no se cambia",
+    rule_none: "ninguna regla para esta sesión — /rule <text> añade una",
+    rule_list: "las reglas de esta sesión:",
+    rule_added: "regla {n} guardada para esta sesión",
+    rule_removed: "regla {n} retirada",
+    rule_bad: "/rule remove toma el número que lista /rule",
+    rule_full: "como máximo {most} reglas por sesión — /rule remove <n> hace sitio",
+    switch_after_turn: "cambia a {what} al terminar este turno",
+    switch_footer: "→ {what} tras este turno",
     context_known: "contexto: {used} de {window} tokens usados ({share} %), la ventana según {from}; Glut compacta \
                     poco antes de que se llene — /context <tokens> ajusta otra",
     context_unknown: "contexto: {used} tokens usados; la ventana de {model} es desconocida — /context <tokens> la \
@@ -1626,6 +1648,9 @@ pub const TEXTS: Texts = Texts {
     nudged_reminder: "Glut recordó al modelo su lista de tareas",
     nudged_open: "Glut pidió al modelo que siguiera: su lista aún tiene puntos abiertos",
     nudged_announced: "Glut pidió al modelo que diera el paso que anunció",
+    nudged_repeated: "Glut no volvió a ejecutar las mismas llamadas: el modelo envió de nuevo su último paso",
+    nudged_reading: "Glut le dijo al modelo que solo ha leído durante muchos pasos: empezar el cambio o decir qué no \
+                     está claro",
     mode_now: "ahora en modo {mode}",
     thinking_live: "pensando…",
     thought: "pensamiento",

@@ -17,8 +17,8 @@ const WORKING: &str = "## How to work
 task is done, when you need the owner's answer, or when something blocks you — then say what.
 - Read as much as the task needs, then change. Long reading without a change is a sign to start, or to say what is \
 unclear.
-- Bundle reads that do not depend on each other into one reply. Change files with edit_file rather than writing \
-them anew.
+- Reads that do not depend on each other may go into one reply — a few at a time, never more than 16 calls in a \
+reply. Change files with edit_file rather than writing them anew.
 - When a command fails, read the error and fix its cause; do not repeat the same command unchanged. After two \
 failures with one approach, take another or say what blocks you.
 - Before you say the task is done, check it: run the project's tests or its gate where it has them, and look at \
@@ -99,6 +99,14 @@ mod tests {
             !bare.contains("todo_write"),
             "no list to keep where none is offered"
         );
+    }
+
+    #[test]
+    fn the_prompt_names_the_runs_limit_of_calls_per_reply() {
+        assert!(WORKING.contains(&format!(
+            "never more than {} calls",
+            crate::run::MAX_CALLS_PER_TURN
+        )));
     }
 
     #[test]

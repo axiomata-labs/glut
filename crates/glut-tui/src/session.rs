@@ -366,6 +366,9 @@ pub async fn build(
     }
     config.compaction.auto = built.compact_auto;
     config.nudge = built.nudge;
+    if let Some(turns) = built.max_turns {
+        config.max_turns = turns;
+    }
     config.hooks = built.hooks.clone();
     config.sandbox = Some(built.sandbox.clone());
     config.refusals = built.refusals;
@@ -766,6 +769,10 @@ pub struct Before {
     pub todos: Vec<glut::planning::TodoItem>,
     /// Whether the turn may ask its model once to go on (T73: `/nudge`, else the settings).
     pub nudge: bool,
+    /// The most steps the turn takes (T73b: `/maxsteps`, else `maxTurns`, else 100).
+    pub steps: u32,
+    /// The owner's rules for the session (T73b, `/rule`).
+    pub rules: Vec<String>,
 }
 
 /// Runs one turn in the background: `prompt` after `conversation` on `engine`, every step to the screen, the end as
@@ -784,6 +791,8 @@ pub fn turn(
         conversation,
         todos,
         nudge,
+        steps,
+        rules,
     } = before;
     let kept = conversation.clone();
     let host = Arc::clone(&parts.host);
@@ -803,6 +812,7 @@ pub fn turn(
         // A loop's round ends as its loop says, never asked to go on (T73).
         config.nudge = nudge && parts.loop_link.left().is_none();
         config.todo_list = todos;
+        config.max_turns = steps;
         // A loop's round stops at what its loop may still spend, not only once it is over.
         if let Some(left) = parts.loop_link.left() {
             let budget = &mut config.budget;
@@ -819,6 +829,15 @@ pub fn turn(
                 dir: crate::store::results_dir(&parts.home, &session_id),
                 tag: session_id,
             });
+        }
+        // T73b: the owner's rules for this session, after the guides — the owner's word holds until taken back.
+        if !rules.is_empty() {
+            let base = config.instructions.take().unwrap_or_default();
+            let listed: Vec<String> = rules.iter().map(|rule| format!("- {rule}")).collect();
+            config.instructions = Some(format!(
+                "{base}\n\n## The owner's rules for this session\n\n{}",
+                listed.join("\n")
+            ));
         }
         // T36c: the pane's role speaks after the guides, for every turn while it holds.
         if let Some((name, prompt)) = parts.pane_link.role() {

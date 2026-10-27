@@ -544,6 +544,8 @@ impl Transcript {
                     glut::NudgeKind::Reminder => tr!(nudged_reminder),
                     glut::NudgeKind::OpenItems => tr!(nudged_open),
                     glut::NudgeKind::Announced => tr!(nudged_announced),
+                    glut::NudgeKind::Repeated => tr!(nudged_repeated),
+                    glut::NudgeKind::Reading => tr!(nudged_reading),
                 },
                 Tone::Quiet,
             ),

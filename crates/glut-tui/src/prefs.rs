@@ -89,6 +89,9 @@ pub struct Prefs {
     /// How much the screen moves (TUI9b, `/motion`); `None`: fully.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub motion: Option<crate::motion::Motion>,
+    /// The most steps a turn takes (T73b, `/maxsteps`); `None`: `maxTurns` of the settings, else 100.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub steps: Option<u32>,
     /// Whether Glut asks the model once to go on (T73, `/nudge`); `None`: `nudge` of the settings, else on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nudge: Option<bool>,
@@ -359,6 +362,17 @@ pub fn set_tiles(home: &Path, on: bool) -> Result<(), String> {
 pub fn set_motion(home: &Path, motion: crate::motion::Motion) -> Result<(), String> {
     let mut prefs = Prefs::read(home)?;
     prefs.motion = Some(motion);
+    prefs.save(home)
+}
+
+/// Keeps the most steps a turn takes (`/maxsteps`, T73b).
+///
+/// # Errors
+///
+/// A message when the file cannot be read (it is not written over) or written.
+pub fn set_steps(home: &Path, steps: u32) -> Result<(), String> {
+    let mut prefs = Prefs::read(home)?;
+    prefs.steps = Some(steps);
     prefs.save(home)
 }
 

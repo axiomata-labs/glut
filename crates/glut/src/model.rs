@@ -16,8 +16,19 @@ use crate::error::HarnessError;
 pub(crate) const ERROR_BODY_CHARS: usize = 500;
 
 /// How long one model call may take before it counts as a failed connection. The run's own timeout is the real
-/// limit; this only keeps a hung connection from eating all of it silently.
-pub(crate) const REQUEST_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+/// limit; this only keeps a hung connection from eating all of it silently — a stream gone quiet is caught sooner by
+/// [`STALL_LIMIT`]. Thirty minutes (ten until T73b): a local model on a large context answers slowly but steadily,
+/// and ten cut it off mid-answer.
+pub(crate) const REQUEST_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+
+/// How the two ways a call is given up begin: silent past [`STALL_LIMIT`], or past [`REQUEST_TIMEOUT`].
+pub(crate) const STALLED: &str = "the model sent nothing for ";
+const OVERRAN: &str = "the call ran past its ";
+
+/// Whether `err` is a call given up because it hung (T73b): asked once more, the run need not end on it.
+pub(crate) fn is_stalled(err: &HarnessError) -> bool {
+    matches!(err, HarnessError::Transport(message) if message.starts_with(STALLED) || message.starts_with(OVERRAN))
+}
 
 /// The most reasoning one message keeps, in bytes (E4): more is dropped whole — a block cut short is no longer the one
 /// the model signed — so one answer at `max` cannot fill a chat's file or a run's journal.
@@ -935,13 +946,13 @@ async fn read_stream(
         let chunk = match tokio::time::timeout(stall, response.chunk()).await {
             Err(_) => {
                 return Err(HarnessError::Transport(format!(
-                    "the model sent nothing for {} s; the call was given up",
+                    "{STALLED}{} s; the call was given up",
                     stall.as_secs()
                 )));
             }
             Ok(Err(err)) if err.is_timeout() => {
                 return Err(HarnessError::Transport(format!(
-                    "the call ran past its {} min limit",
+                    "{OVERRAN}{} min limit",
                     REQUEST_TIMEOUT.as_secs() / 60
                 )));
             }

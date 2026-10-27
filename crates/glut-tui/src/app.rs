@@ -162,6 +162,24 @@ enum State {
     Rests,
 }
 
+/// The most rules `/rule` keeps for a session, and the most characters of one: a few lines the model reads at
+/// every turn, not a second guide.
+const MOST_RULES: usize = 20;
+const MOST_RULE_CHARS: usize = 500;
+
+/// A switch of provider, model or effort asked for while a turn ran (T73b), made as it ends.
+#[derive(Debug, Clone)]
+pub struct SwitchAfter {
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub effort: Option<Option<Effort>>,
+    /// What the footer names until then.
+    pub shown: String,
+}
+
+/// The owner's ⏎ after a turn stopped at the step limit (T73b): its words to the model.
+const GO_ON: &str = "Go on where you stopped.";
+
 /// What a cut-off turn going on works on, as a side question tells it to the model (T57).
 const RESUMED_TURN: &str = "(a turn that was cut off, going on where it stopped)";
 
@@ -305,6 +323,15 @@ pub struct App {
     key_answer: Option<oneshot::Sender<bool>>,
     /// A provider's key kept while a turn ran (T70): its engine is built again as that turn ends.
     key_switch: Option<String>,
+    /// The last turn ended at the step limit (T73b): ⏎ on the empty input goes on.
+    go_on: bool,
+    /// A switch asked for while a turn ran (T73b): provider, model, effort, and what the footer names — made as the
+    /// turn ends.
+    pub switch_after: Option<SwitchAfter>,
+    /// A switch made as a turn ended (T73b): what follows that turn waits for the new engine — `Some(answered)`.
+    after_switch: Option<bool>,
+    /// The owner's rules for this session (T73b, `/rule`): with every turn's instructions, kept across `/clear`.
+    pub rules: Vec<String>,
     /// A sign-in's address, waiting for the owner's ⏎ to open it in the browser (T56).
     pub opening: Option<crate::mcp::Opening>,
     /// The sign-ins that wait for the browser, by server, with their number: an address pasted back goes to the
@@ -578,6 +605,10 @@ impl App {
             secret: None,
             key_answer: None,
             key_switch: None,
+            go_on: false,
+            switch_after: None,
+            after_switch: None,
+            rules: Vec::new(),
             opening: None,
             mcp_waiting: std::collections::HashMap::new(),
             toast: None,
@@ -1220,6 +1251,88 @@ impl App {
         }
     }
 
+    /// What follows a turn that ended (`answered`: it ended answered): the host's first message after a resume, else
+    /// another model's waiting message, else the next queued one.
+    fn after_turn(&mut self, answered: bool) {
+        // The host's first message follows a cut-off turn however it ended — unless that turn had it already: a
+        // session nobody watches must not stand idle with its work unsent.
+        if let Some(first) = self.after_resume.take()
+            && !told(&self.conversation, &first)
+        {
+            return self.send(first);
+        }
+        // The next queued message follows a turn that answered; after a stop, a failure or a limit it waits for Enter,
+        // or it would run into the same wall.
+        // T36c: another model's message first — if this pane is still no wider than its sender was.
+        if answered && !self.waiting_models.is_empty() {
+            let (message, sender) = self.waiting_models.remove(0);
+            if self.no_wider_than(&sender) {
+                self.send(message);
+            } else {
+                self.hold(message, tr!(held_wider));
+            }
+        } else if answered && !self.queue.is_empty() {
+            let next = self.queue.remove(0);
+            self.send(next);
+        }
+    }
+
+    /// `/rule` (T73b): `<text>` adds a rule for this session, alone it lists them, `remove <n>` takes one back.
+    fn rule_command(&mut self, rest: &str) {
+        if rest.is_empty() {
+            if self.rules.is_empty() {
+                return self.tell(tr!(rule_none));
+            }
+            let listed: Vec<String> = self
+                .rules
+                .iter()
+                .enumerate()
+                .map(|(at, rule)| format!("{}. {}", at + 1, crate::transcript::clean(rule)))
+                .collect();
+            return self.tell(format!("{}\n{}", tr!(rule_list), listed.join("\n")));
+        }
+        if rest == "remove" {
+            return self.transcript.note(tr!(rule_bad), Tone::Fault);
+        }
+        if let Some(number) = rest.strip_prefix("remove ") {
+            return match number
+                .trim()
+                .parse::<usize>()
+                .ok()
+                .filter(|n| (1..=self.rules.len()).contains(n))
+            {
+                Some(n) => {
+                    self.rules.remove(n - 1);
+                    self.say(tr!(rule_removed, n = n));
+                }
+                None => self.transcript.note(tr!(rule_bad), Tone::Fault),
+            };
+        }
+        if self.rules.len() >= MOST_RULES {
+            return self
+                .transcript
+                .note(tr!(rule_full, most = MOST_RULES), Tone::Fault);
+        }
+        // One line a rule: a pasted heading of its own would stand as a section of the instructions.
+        let rule: String = rest
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .chars()
+            .take(MOST_RULE_CHARS)
+            .collect();
+        self.rules.push(rule);
+        self.say(tr!(rule_added, n = self.rules.len()));
+    }
+
+    /// The most steps a turn takes (T73b): what `/maxsteps` kept, else the owner's `maxTurns`, else 100.
+    fn steps_now(&self) -> u32 {
+        Prefs::load(&self.parts.home)
+            .steps
+            .filter(|steps| (1..=glut::config::MOST_TURNS).contains(steps))
+            .unwrap_or(self.parts.config.max_turns)
+    }
+
     /// Whether Glut asks the model once to go on (T73): what `/nudge` kept, else the owner's settings.
     fn nudges(&self) -> bool {
         Prefs::load(&self.parts.home)
@@ -1281,6 +1394,7 @@ impl App {
 
     /// Sends `prompt` as the next turn.
     pub fn send(&mut self, prompt: String) {
+        self.go_on = false;
         self.send_with(prompt, Vec::new());
     }
 
@@ -1340,6 +1454,8 @@ impl App {
                 conversation: std::mem::take(&mut self.conversation),
                 todos: self.todos.clone(),
                 nudge: self.nudges(),
+                steps: self.steps_now(),
+                rules: self.rules.clone(),
             },
             session::TurnInput::Message(prompt, images),
             cancel,
@@ -1354,6 +1470,7 @@ impl App {
         if self.working() {
             return;
         }
+        self.go_on = false;
         self.transcript.note(tr!(turn_resumed), Tone::Quiet);
         self.lend(Some(RESUMED_TURN.to_owned()));
         self.after_resume = then;
@@ -1371,6 +1488,8 @@ impl App {
                 conversation: std::mem::take(&mut self.conversation),
                 todos: self.todos.clone(),
                 nudge: self.nudges(),
+                steps: self.steps_now(),
+                rules: self.rules.clone(),
             },
             session::TurnInput::Resume(run),
             cancel,
@@ -1651,8 +1770,12 @@ impl App {
                     plan.state = crate::plan::State::Dropped;
                 }
                 self.transcript.settle();
-                // A key kept while it ran takes over now, on the same model (T70); a queued message waits for it.
-                if let Some(id) = self.key_switch.take()
+                // A switch asked for while it ran is made now (T73b), and a key kept meanwhile takes over with it
+                // (T70); a message queued behind the turn waits for the new engine.
+                let key_switch = self.key_switch.take();
+                if let Some(after) = self.switch_after.take() {
+                    self.switch(after.provider, after.model, after.effort);
+                } else if let Some(id) = key_switch
                     && id == self.engine.provider
                 {
                     let model = self.engine.model_name().to_owned();
@@ -1663,34 +1786,24 @@ impl App {
                     FinishReason::Cancelled => None,
                     _ => Some(false),
                 };
+                self.go_on = outcome.reason == FinishReason::MaxTurns;
                 match outcome.reason {
                     FinishReason::Answered => {}
                     FinishReason::Cancelled => self.transcript.note(tr!(stopped), Tone::Quiet),
+                    FinishReason::MaxTurns => {
+                        self.transcript
+                            .note(tr!(steps_reached, n = self.steps_now()), Tone::Heed);
+                    }
                     other => self
                         .transcript
                         .note(tr!(turn_ended, reason = reason(other)), Tone::Fault),
                 }
-                // The host's first message follows a cut-off turn however it ended — unless that turn had it already: a
-                // session nobody watches must not stand idle with its work unsent.
-                if let Some(first) = self.after_resume.take()
-                    && !told(&self.conversation, &first)
-                {
-                    self.send(first);
-                    return;
-                }
-                // The next queued message follows a turn that answered; after a stop, a failure or a limit it waits
-                // for Enter, or it would run into the same wall.
-                // T36c: another model's message first — if this pane is still no wider than its sender was.
-                if outcome.reason == FinishReason::Answered && !self.waiting_models.is_empty() {
-                    let (message, sender) = self.waiting_models.remove(0);
-                    if self.no_wider_than(&sender) {
-                        self.send(message);
-                    } else {
-                        self.hold(message, tr!(held_wider));
-                    }
-                } else if outcome.reason == FinishReason::Answered && !self.queue.is_empty() {
-                    let next = self.queue.remove(0);
-                    self.send(next);
+                let answered = outcome.reason == FinishReason::Answered;
+                // What follows the turn goes on the new engine where one is being built (T73b).
+                if matches!(self.busy, Some(Busy::Switching)) {
+                    self.after_switch = Some(answered);
+                } else {
+                    self.after_turn(answered);
                 }
             }
             Report::Compacted(result, before) => {
@@ -1936,6 +2049,9 @@ impl App {
             }
             Report::Switched(result) => {
                 self.busy = None;
+                // What follows a turn whose end switched (T73b) goes now — on the new engine, or on the old one when
+                // the switch failed, never left waiting.
+                let follow = self.after_switch.take();
                 match result {
                     Ok((engine, notes)) => {
                         if self.cost.is_some() && engine.prices.is_none() {
@@ -1968,6 +2084,9 @@ impl App {
                         );
                     }
                     Err(reason) => self.transcript.note(reason, Tone::Fault),
+                }
+                if let Some(answered) = follow {
+                    self.after_turn(answered);
                 }
             }
         }
@@ -2467,6 +2586,11 @@ impl App {
             KeyCode::Char('r') if ctrl => self.open_review(crate::review::Scope::Turn),
             KeyCode::Enter if shift || alt => self.input.newline(),
             KeyCode::Char('j') if ctrl => self.input.newline(),
+            // At the step limit, ⏎ on the empty input goes on where the turn stopped (T73b).
+            KeyCode::Enter if self.go_on && self.input.is_empty() && !self.working() => {
+                self.go_on = false;
+                self.send(GO_ON.to_owned());
+            }
             KeyCode::Enter => {
                 self.submit();
                 // A message that went starts the next one in Insert mode, as `/vim on` does.
@@ -3085,6 +3209,10 @@ impl App {
     fn command(&mut self, line: &str) {
         let (name, rest) = line.split_once(' ').unwrap_or((line, ""));
         let rest = rest.trim();
+        // A new or another conversation is no turn to go on with (T73b).
+        if matches!(name, "clear" | "resume" | "handoff") {
+            self.go_on = false;
+        }
         match name {
             // The help box (the owner's Mac test of T60): the list, or a command's page at once.
             "help" | "?" if rest.is_empty() => self.help = Some(crate::helpbox::HelpBox::default()),
@@ -3294,6 +3422,7 @@ impl App {
                 Some(mode) => self.set_cache(mode),
                 None => self.tell(tr!(cache_now, cache = self.cache_mode.label())),
             },
+            "rule" => self.rule_command(rest),
             "role" if rest.is_empty() => self.picker = Some(self.roles_picker()),
             "role" => match rest {
                 "none" | "all-rounder" => self.play(None),
@@ -3352,6 +3481,20 @@ impl App {
                     }
                 }
                 None => self.tell(tr!(images_now, images = crate::pictures::drawing().label())),
+            },
+            "maxsteps" if rest.is_empty() => self.tell(tr!(steps_now, n = self.steps_now())),
+            "maxsteps" => match rest
+                .parse::<u32>()
+                .ok()
+                .filter(|steps| (1..=glut::config::MOST_TURNS).contains(steps))
+            {
+                Some(steps) => match prefs::set_steps(&self.parts.home, steps) {
+                    Ok(()) => self.say(tr!(steps_set, n = steps)),
+                    Err(reason) => self.transcript.note(reason, Tone::Fault),
+                },
+                None => self
+                    .transcript
+                    .note(tr!(steps_bad, most = glut::config::MOST_TURNS), Tone::Fault),
             },
             "nudge" => match rest {
                 "on" | "off" => match prefs::set_nudge(&self.parts.home, rest == "on") {
@@ -3414,6 +3557,33 @@ impl App {
     ) {
         if self.parts.fixed_engine {
             return self.transcript.note(tr!(model_locked), Tone::Fault);
+        }
+        // Compacting, handing off or switching: the switch waits as any command does.
+        if self.working() && !matches!(self.busy, Some(Busy::Turn)) {
+            return self
+                .transcript
+                .note(tr!(command_waits, name = "model"), Tone::Quiet);
+        }
+        // A turn holds the engine (T73b): the switch is kept and made as it ends, a second one in its place.
+        if self.working() {
+            let shown = match (&model, &effort, &provider) {
+                (Some(model), Some(Some(effort)), _) if *model == self.engine.model_name() => {
+                    format!("{model} · {effort}")
+                }
+                (Some(model), _, _) => model.clone(),
+                (None, _, Some(provider)) => provider.clone(),
+                (None, _, None) => self.engine.model_name().to_owned(),
+            };
+            let shown = crate::transcript::clean(&shown);
+            self.transcript
+                .note(tr!(switch_after_turn, what = shown), Tone::Quiet);
+            self.switch_after = Some(SwitchAfter {
+                provider,
+                model,
+                effort,
+                shown,
+            });
+            return;
         }
         self.busy = Some(Busy::Switching);
         let provider = provider.or_else(|| Some(self.engine.provider.clone()));
@@ -7669,15 +7839,7 @@ fn told(conversation: &[Message], prompt: &str) -> bool {
 fn waits(name: &str, rest: &str) -> bool {
     matches!(
         name,
-        "model"
-            | "provider"
-            | "effort"
-            | "compact"
-            | "clear"
-            | "handoff"
-            | "resume"
-            | "init"
-            | "skill"
+        "compact" | "clear" | "handoff" | "resume" | "init" | "skill"
     ) || (name == "context" && !rest.is_empty())
 }
 
@@ -10989,13 +11151,46 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn rules_hold_for_the_session_and_enter_goes_on_at_the_step_limit() {
+        let (mut app, _reports) = app();
+        typed(&mut app, "/rule keep the task list current");
+        typed(&mut app, "/rule answer in German");
+        typed(&mut app, "/clear");
+        assert_eq!(app.rules.len(), 2, "kept across /clear");
+        typed(&mut app, "/rule remove 1");
+        assert_eq!(app.rules, ["answer in German"]);
+        typed(&mut app, "/rule remove 9");
+        assert_eq!(app.rules.len(), 1);
+
+        typed(&mut app, "/maxsteps 0");
+        typed(&mut app, "/maxsteps 60");
+        assert_eq!(app.steps_now(), 60);
+        app.go_on = true;
+        app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.working() && !app.go_on, "the empty ⏎ went on");
+    }
+
+    #[tokio::test]
     async fn a_command_that_must_wait_stays_in_the_input_and_a_path_is_a_message() {
         let (mut app, _reports) = app();
         app.busy = Some(Busy::Turn);
-        typed(&mut app, "/model other");
-        assert_eq!(app.input.text(), "/model other", "kept, not thrown away");
+        typed(&mut app, "/compact");
+        assert_eq!(app.input.text(), "/compact", "kept, not thrown away");
         assert!(app.picker.is_none());
         app.input.clear();
+        // A switch is kept for the turn's end instead (T73b), the last one asked.
+        typed(&mut app, "/model other");
+        typed(&mut app, "/model third");
+        assert!(app.input.is_empty());
+        let after = app.switch_after.clone().expect("kept");
+        assert_eq!(
+            (after.model.as_deref(), after.shown.as_str()),
+            (Some("third"), "third")
+        );
+        assert!(
+            matches!(app.busy, Some(Busy::Turn)),
+            "the engine stays the turn's"
+        );
         typed(&mut app, "/context");
         assert!(app.input.is_empty(), "showing the window does not wait");
         app.busy = None;

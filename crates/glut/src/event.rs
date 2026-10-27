@@ -62,6 +62,10 @@ pub enum NudgeKind {
     OpenItems,
     /// It ended announcing a next step.
     Announced,
+    /// It sent exactly the calls of its last step again; they were not run (T73b).
+    Repeated,
+    /// It only read for many steps in a row (T73b).
+    Reading,
 }
 
 /// One step of a run.

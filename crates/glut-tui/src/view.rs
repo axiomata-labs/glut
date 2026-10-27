@@ -1322,6 +1322,10 @@ fn draw_keys(frame: &mut Frame, app: &App, area: Rect, branch: Option<String>, c
         // A subscription's use is the plan's (PV4): its name where money would stand.
         segments.push(Segment::calm(tr!(plan_footer, name = known.name), 2));
     }
+    // A switch kept for the turn's end (T73b).
+    if let Some(after) = &app.switch_after {
+        segments.push(Segment::calm(tr!(switch_footer, what = after.shown), 1));
+    }
     if let Some(branch) = branch {
         segments.push(Segment::calm(
             format!("{} {branch}", separators.branch_sign()),

@@ -115,6 +115,9 @@ struct File {
     /// owner's only.
     #[serde(default)]
     nudge: Option<bool>,
+    /// The most model turns a run takes (T73b), else 100. The owner's only.
+    #[serde(default, rename = "maxTurns")]
+    max_turns: Option<u32>,
 }
 
 /// The `loop` section (TUI T60a): the second source after what `/loop rounds` and `/loop budget` kept.
@@ -319,6 +322,8 @@ pub struct Settings {
     pub loops: Option<LoopSection>,
     /// `nudge` as written (T73); only the owner's is read.
     pub nudge: Option<bool>,
+    /// `maxTurns` as written (T73b); only the owner's is read.
+    pub max_turns: Option<u32>,
 }
 
 /// Reads one settings file; a missing file says nothing.
@@ -446,6 +451,7 @@ fn settings_of(
         notify: file.notify,
         loops: file.loops,
         nudge: file.nudge,
+        max_turns: file.max_turns,
     })
 }
 
@@ -483,6 +489,8 @@ pub struct Loaded {
     pub loops: LoopSection,
     /// Whether runs ask their model once to go on (T73): the owner's `nudge`, else on.
     pub nudge: bool,
+    /// The owner's `maxTurns` (T73b); `None`: the default.
+    pub max_turns: Option<u32>,
 }
 
 impl Loaded {
@@ -615,6 +623,18 @@ pub fn load(home: &Path, project: &Path, trusted: bool) -> Result<Loaded, Harnes
             reason: format!("loop.rounds is {rounds}, from 1 to {MAX_LOOP_ROUNDS}"),
         });
     }
+    if let Some(turns) = user
+        .max_turns
+        .filter(|turns| !(1..=crate::config::MOST_TURNS).contains(turns))
+    {
+        return Err(HarnessError::Settings {
+            path: owners.display().to_string(),
+            reason: format!(
+                "maxTurns is {turns}, from 1 to {}",
+                crate::config::MOST_TURNS
+            ),
+        });
+    }
     if let Some(usd) = loops.max_usd.filter(|usd| !usd.is_finite() || *usd <= 0.0) {
         return Err(HarnessError::Settings {
             path: owners.display().to_string(),
@@ -665,6 +685,7 @@ pub fn load(home: &Path, project: &Path, trusted: bool) -> Result<Loaded, Harnes
             .and_then(|section| section.auto)
             .unwrap_or(true),
         nudge: user.nudge.unwrap_or(true),
+        max_turns: user.max_turns,
         context_windows: user.context_window,
         prices: user.prices,
         parallel_subagents,

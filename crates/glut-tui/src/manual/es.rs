@@ -1,7 +1,7 @@
 //! The commands' manual pages in Spanish (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 55] = [
+pub const PAGES: [(&str, &str); 57] = [
     (
         "clear",
         "Empieza una sesión nueva y vacía en esta carpeta.\n\
@@ -571,6 +571,30 @@ pub const PAGES: [(&str, &str); 55] = [
          \n\
          /motion solo muestra la elección actual. «Reducir movimiento» de macOS y el modo lector mantienen quieta la \
          pantalla elijas lo que elijas. Se guarda en `~/.glut/prefs.json`.",
+    ),
+    (
+        "rule",
+        "Una regla para esta sesión que el modelo sigue en cada turno.\n\
+         \n\
+         /rule <text> — guardarla, como «actualiza la lista de tareas en cada paso»\n\
+         /rule — las reglas actuales, numeradas\n\
+         /rule remove <n> — retirar la regla n\n\
+         \n\
+         Las reglas van con las instrucciones de cada turno, tras las guías, hasta que las retires; /clear las \
+         conserva, una sesión nueva empieza sin ellas. Como máximo 20, de 500 caracteres cada una. Para una regla de \
+         cada sesión, escríbela en `~/.glut/AGENTS.md` o en la guía del proyecto.",
+    ),
+    (
+        "maxsteps",
+        "Cuántos pasos da como máximo un turno.\n\
+         \n\
+         /maxsteps — el límite actual\n\
+         /maxsteps <n> — un turno se detiene tras n pasos, de 1 a 1000\n\
+         \n\
+         Un paso es una llamada al modelo. En el límite el turno se detiene y lo dice; ⏎ con la entrada vacía envía \
+         «Go on where you stopped.» y el trabajo sigue. Los presupuestos y el límite de tiempo siguen siendo los \
+         frenos reales. Guardado en `~/.glut/prefs.json`; `maxTurns` en `~/.glut/settings.json` lo fija para cada \
+         ejecución, `glut run --max-turns` para una.",
     ),
     (
         "nudge",

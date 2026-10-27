@@ -1,7 +1,7 @@
 //! The commands' manual pages in French (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 55] = [
+pub const PAGES: [(&str, &str); 57] = [
     (
         "clear",
         "Commencer une nouvelle session vide dans ce dossier.\n\
@@ -579,6 +579,30 @@ pub const PAGES: [(&str, &str); 55] = [
          \n\
          /motion seul montre le choix actuel. « Réduire les animations » de macOS et le mode lecteur tiennent l’écran \
          immobile quoi que tu choisisses. Gardé dans `~/.glut/prefs.json`.",
+    ),
+    (
+        "rule",
+        "Une règle pour cette session que le modèle suit à chaque tour.\n\
+         \n\
+         /rule <text> — la garder, comme « mets à jour la liste de tâches à chaque étape »\n\
+         /rule — les règles actuelles, numérotées\n\
+         /rule remove <n> — retirer la règle n\n\
+         \n\
+         Les règles accompagnent les instructions de chaque tour, après les guides, jusqu'à ce que tu les retires ; \
+         /clear les garde, une nouvelle session commence sans. Au plus 20, de 500 caractères chacune. Pour une règle \
+         de chaque session, écris-la dans `~/.glut/AGENTS.md` ou le guide du projet.",
+    ),
+    (
+        "maxsteps",
+        "Combien d'étapes un tour fait au plus.\n\
+         \n\
+         /maxsteps — la limite actuelle\n\
+         /maxsteps <n> — un tour s'arrête après n étapes, de 1 à 1000\n\
+         \n\
+         Une étape est un appel du modèle. À la limite le tour s'arrête et le dit ; ⏎ sur la saisie vide envoie « Go \
+         on where you stopped. » et le travail continue. Les budgets et la limite de temps restent les vrais freins. \
+         Gardé dans `~/.glut/prefs.json` ; `maxTurns` dans `~/.glut/settings.json` le fixe pour chaque exécution, \
+         `glut run --max-turns` pour une.",
     ),
     (
         "nudge",

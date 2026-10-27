@@ -789,6 +789,12 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
     config.sandbox = Some(built.sandbox.clone());
     config.refusals = built.refusals;
     config.nudge = built.nudge;
+    // The owner's `maxTurns` (T73b) where `--max-turns` named none.
+    if max_turns.is_none()
+        && let Some(turns) = built.max_turns
+    {
+        config.max_turns = turns;
+    }
     config.parallel_subagents = built.parallel_subagents;
     if let Some(window) = context_window {
         if window < crate::config::MIN_CONTEXT_WINDOW {

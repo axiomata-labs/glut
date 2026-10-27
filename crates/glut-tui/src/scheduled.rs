@@ -923,6 +923,8 @@ async fn attempt(home: &Path, plan: &Plan, cancel: glut::Cancel) -> Attempt {
             conversation: Vec::new(),
             todos: Vec::new(),
             nudge: false,
+            steps: parts.config.max_turns,
+            rules: Vec::new(),
         },
         session::TurnInput::Message(prompt, Vec::new()),
         cancel,

@@ -314,18 +314,21 @@ fn heavy_words(words: &[String]) -> Option<&'static str> {
     let args = &words[1..];
     let flag = |long: &[&str], short: &[char]| {
         args.iter().any(|arg| {
-            long.contains(&arg.as_str())
-                || (arg.starts_with('-')
-                    && !arg.starts_with("--")
-                    && arg.chars().skip(1).any(|c| short.contains(&c)))
+            // GNU tools take a long option shortened as far as it is unique (`--rec` for `--recursive`).
+            long.iter().any(|name| {
+                arg == name
+                    || (arg.len() > 3 && arg.starts_with("--") && name.starts_with(arg.as_str()))
+            }) || (arg.starts_with('-')
+                && !arg.starts_with("--")
+                && arg.chars().skip(1).any(|c| short.contains(&c)))
         })
     };
     let has = |word: &str| args.iter().any(|arg| arg == word);
     match first.as_str() {
         "sudo" | "doas" => Some("it runs as another user"),
-        "rm" if flag(&["--recursive", "--force"], &['r', 'R', 'f']) => {
-            Some("it deletes recursively or by force")
-        }
+        // Recursive only (T73b): `-f` alone deletes what plain `rm` would, without asking — the sandbox and the
+        // snapshots hold either way, and an unattended run refused it three times and ended (MiMo, `rm -f tally.txt`).
+        "rm" if flag(&["--recursive"], &['r', 'R']) => Some("it deletes recursively"),
         "find" if has("-delete") => Some("it deletes what it finds"),
         "rsync"
             if args
@@ -531,7 +534,9 @@ mod tests {
     fn heavy_commands_are_named_and_ordinary_ones_are_not() {
         for command in [
             "rm -rf target",
-            "rm -f a",
+            "rm -fr target",
+            "rm --recursive --force target",
+            "rm --rec target",
             "sudo ls",
             "git push origin main",
             "git -C . reset --hard HEAD",
@@ -550,6 +555,7 @@ mod tests {
         }
         for command in [
             "rm a.txt",
+            "rm -f a.txt b.txt",
             "cargo test",
             "git commit -m x",
             "git restore --staged a",

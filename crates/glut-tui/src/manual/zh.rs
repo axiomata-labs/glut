@@ -1,7 +1,7 @@
 //! The commands' manual pages in Chinese (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 55] = [
+pub const PAGES: [(&str, &str); 57] = [
     (
         "clear",
         "在此文件夹中开始一个新的空会话。\n\
@@ -497,6 +497,26 @@ pub const PAGES: [(&str, &str); 55] = [
          /motion off — 同 calm\n\
          \n\
          单独的 /motion 显示当前的选择。无论你如何选择，macOS 的“减弱动态效果”和阅读器模式都会让屏幕保持静止。保存在 `~/.glut/prefs.json` 中。",
+    ),
+    (
+        "rule",
+        "本会话中模型每个回合都遵守的规则。\n\
+         \n\
+         /rule <text> — 保留它，例如“每一步都更新任务清单”\n\
+         /rule — 当前规则，带编号\n\
+         /rule remove <n> — 撤回第 n 条\n\
+         \n\
+         规则在指南之后随每个回合的指示一起发送，直到你撤回；/clear 会保留它们，新会话从空开始。最多 20 条，每条 500 字符。若要每个会话都生效，请写入 `~/.glut/AGENTS.md` 或项目指南。",
+    ),
+    (
+        "maxsteps",
+        "一个回合最多走多少步。\n\
+         \n\
+         /maxsteps — 当前的上限\n\
+         /maxsteps <n> — 回合在 n 步后停下，1 到 1000\n\
+         \n\
+         一步就是一次模型调用。到达上限时回合停下并说明；在空输入上按 ⏎ 会发送“Go on where you stopped.”，工作继续。预算和时间限制仍是真正的刹车。保存在 \
+         `~/.glut/prefs.json`；`~/.glut/settings.json` 中的 `maxTurns` 对每次运行设置，`glut run --max-turns` 对一次运行设置。",
     ),
     (
         "nudge",

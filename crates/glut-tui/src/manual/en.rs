@@ -1,7 +1,7 @@
 //! The commands' manual pages in English (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 55] = [
+pub const PAGES: [(&str, &str); 57] = [
     (
         "clear",
         "Start a new, empty session in this folder.\n\
@@ -548,6 +548,30 @@ pub const PAGES: [(&str, &str); 55] = [
          \n\
          /motion alone shows the choice now. macOS's Reduce motion and the reader mode hold the screen still whatever \
          you choose. Kept in `~/.glut/prefs.json`.",
+    ),
+    (
+        "rule",
+        "A rule for this session that the model keeps at every turn.\n\
+         \n\
+         /rule <text> — keep it, as \"update the task list at every step\"\n\
+         /rule — the rules now, numbered\n\
+         /rule remove <n> — take rule n back\n\
+         \n\
+         The rules go with every turn's instructions, after the guides, until you take them back; /clear keeps them, \
+         a new session starts without. At most 20, of 500 characters each. For a rule of every session, write it into \
+         `~/.glut/AGENTS.md` or the project's guide.",
+    ),
+    (
+        "maxsteps",
+        "How many steps a turn takes at most.\n\
+         \n\
+         /maxsteps — the limit now\n\
+         /maxsteps <n> — a turn stops after n steps, from 1 to 1000\n\
+         \n\
+         A step is one call of the model. At the limit the turn stops and says so; ⏎ on the empty input sends \"Go on \
+         where you stopped.\" and the work goes on. Budgets and the time limit stay the real brakes. Kept in \
+         `~/.glut/prefs.json`; `maxTurns` in `~/.glut/settings.json` sets it for every run, `glut run --max-turns` \
+         for one.",
     ),
     (
         "nudge",

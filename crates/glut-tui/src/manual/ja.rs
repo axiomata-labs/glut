@@ -1,7 +1,7 @@
 //! The commands' manual pages in Japanese (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 55] = [
+pub const PAGES: [(&str, &str); 57] = [
     (
         "clear",
         "このフォルダーで、空の新しいセッションを始めます。\n\
@@ -505,6 +505,28 @@ pub const PAGES: [(&str, &str); 55] = [
          /motion off — calm と同じ\n\
          \n\
          /motion だけを入力すると現在の選択を表示します。macOS の「視差効果を減らす」とリーダーモードは、ここでの選択にかかわらず画面を静止させます。`~/.glut/prefs.json` に保存されます。",
+    ),
+    (
+        "rule",
+        "このセッションでモデルが毎ターン守るルール。\n\
+         \n\
+         /rule <text> — 保持する（例：「ステップごとにタスクリストを更新して」）\n\
+         /rule — 現在のルールを番号つきで\n\
+         /rule remove <n> — ルール n を取り消す\n\
+         \n\
+         ルールはガイドの後に毎ターンの指示と一緒に送られ、取り消すまで有効です。/clear では残り、新しいセッションは空で始まります。最大 20 件、各 500 文字まで。すべてのセッションのルールは \
+         `~/.glut/AGENTS.md` かプロジェクトのガイドに書いてください。",
+    ),
+    (
+        "maxsteps",
+        "1 ターンの最大ステップ数。\n\
+         \n\
+         /maxsteps — 現在の上限\n\
+         /maxsteps <n> — ターンは n ステップで止まります（1 から 1000）\n\
+         \n\
+         1 ステップはモデルの呼び出し 1 回です。上限に達するとターンは止まってそれを伝えます。空の入力で ⏎ を押すと「Go on where you \
+         stopped.」が送られ、作業が続きます。本当のブレーキは予算と時間制限です。`~/.glut/prefs.json` に保存。`~/.glut/settings.json` の `maxTurns` \
+         ですべての実行に、`glut run --max-turns` で 1 回に設定します。",
     ),
     (
         "nudge",

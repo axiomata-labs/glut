@@ -14,8 +14,11 @@ use crate::permissions::settings::SandboxSettings;
 pub const API_KEY_ENV: &str = "GLUT_API_KEY";
 
 /// The most model turns a run takes before it stops (a turn is one model call). Generous for real work, but an end
-/// to a model that keeps calling tools without ever answering.
-pub const DEFAULT_MAX_TURNS: u32 = 40;
+/// to a model that keeps calling tools without ever answering; 100 since T73b (40 ended a task of several files
+/// mid-way). Budgets and the run's time limit are the real brakes.
+pub const DEFAULT_MAX_TURNS: u32 = 100;
+/// The most `maxTurns` in the settings and `/steps` may say.
+pub const MOST_TURNS: u32 = 1000;
 
 /// How long a whole run may take before it stops.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(20 * 60);

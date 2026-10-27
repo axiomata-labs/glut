@@ -576,6 +576,14 @@ glut::catalog! {
         images_now: &'static str,
         /// `/reader` alone: `{reader}` on or off.
         reader_now: &'static str,
+        /// A turn stopped at the step limit `{n}` (T73b).
+        steps_reached: &'static str,
+        /// `/maxsteps` alone: `{n}`.
+        steps_now: &'static str,
+        /// `/maxsteps` kept `{n}`.
+        steps_set: &'static str,
+        /// `/maxsteps` with no number from 1 to `{most}`.
+        steps_bad: &'static str,
         /// `/nudge` alone: `{nudge}` on or off.
         nudge_now: &'static str,
         /// `/nudge on` (T73).
@@ -588,6 +596,22 @@ glut::catalog! {
         no_command: &'static str,
         /// A switch of model where the host fixes it.
         model_locked: &'static str,
+        /// `/rule` with no rules.
+        rule_none: &'static str,
+        /// `/rule`: above the list.
+        rule_list: &'static str,
+        /// `/rule <text>` kept rule `{n}`.
+        rule_added: &'static str,
+        /// `/rule remove` took rule `{n}` back.
+        rule_removed: &'static str,
+        /// `/rule remove` with no listed number.
+        rule_bad: &'static str,
+        /// `/rule` past `{most}` rules.
+        rule_full: &'static str,
+        /// A switch asked for during a turn, kept for its end (T73b): `{what}`.
+        switch_after_turn: &'static str,
+        /// The footer while such a switch waits: `{what}`.
+        switch_footer: &'static str,
         /// `/context` alone with a known window: `{used}` of `{window}` tokens, `{share}` percent, `{from}` where the
         /// window came from.
         context_known: &'static str,
@@ -1376,6 +1400,10 @@ glut::catalog! {
         nudged_open: &'static str,
         /// Glut asked the model to take the step it announced (T73).
         nudged_announced: &'static str,
+        /// Glut did not run a step repeated exactly (T73b).
+        nudged_repeated: &'static str,
+        /// Glut told the model it only read for many steps (T73b).
+        nudged_reading: &'static str,
         /// The permission mode changed: `{mode}` its name, as written.
         mode_now: &'static str,
         /// Over a model's thinking while it streams.

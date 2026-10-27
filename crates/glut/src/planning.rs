@@ -204,6 +204,18 @@ pub(crate) fn open_items_nudge(items: &[TodoItem]) -> String {
     )
 }
 
+/// Glut's word after `steps` steps that only read (T73b).
+pub(crate) fn reading_hint(steps: u32) -> String {
+    format!(
+        "[glut] You have only read for {steps} steps. Start the change now, or say in one line what is unclear and \
+         what you need to know."
+    )
+}
+
+/// Glut's answer to every call of a step that repeats the step before exactly (T73b).
+pub(crate) const REPEATED: &str = "error: not run — [glut] these are exactly the calls of your last step; their \
+     results are above. Take the next step instead, or say what blocks you.";
+
 /// Glut's one question when a run ends announcing a next step (T73).
 pub(crate) const ANNOUNCED_NUDGE: &str = "[glut] You ended with an announcement of your next step. Do that step \
      now. If the task is done, say so in one line.";

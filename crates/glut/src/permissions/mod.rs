@@ -1576,6 +1576,8 @@ pub struct BuiltGate {
     pub loops: settings::LoopSection,
     /// Whether runs ask their model once to go on (T73).
     pub nudge: bool,
+    /// The owner's `maxTurns` (T73b).
+    pub max_turns: Option<u32>,
 }
 
 impl BuiltGate {
@@ -1659,6 +1661,7 @@ pub fn build_gate(
         notify: loaded.notify,
         loops: loaded.loops,
         nudge: loaded.nudge,
+        max_turns: loaded.max_turns,
     })
 }
 
@@ -2375,6 +2378,7 @@ mod tests {
             notify: settings::NotifySection::default(),
             loops: settings::LoopSection::default(),
             nudge: true,
+            max_turns: None,
         };
         let off = built(true, true, false).notes();
         assert_eq!(off.len(), 3, "{off:?}");

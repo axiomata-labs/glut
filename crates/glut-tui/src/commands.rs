@@ -97,7 +97,7 @@ const fn command(
 }
 
 /// Every command, grouped by topic in [`Topic::ALL`]'s order, the most used first inside a topic.
-pub const COMMANDS: [Command; 55] = [
+pub const COMMANDS: [Command; 57] = [
     command(Topic::Session, "clear", "", "start a new session"),
     command(
         Topic::Session,
@@ -369,6 +369,19 @@ pub const COMMANDS: [Command; 55] = [
         "motion",
         "full|calm|off",
         "how much the screen moves; calm and off hold Glimm still (macOS Reduce motion counts as off)",
+    ),
+    command(
+        Topic::Settings,
+        "rule",
+        "[text|remove <n>]",
+        "a rule for this session that the model keeps at every turn — /rule alone lists them, /rule remove <n> takes \
+         one back",
+    ),
+    command(
+        Topic::Settings,
+        "maxsteps",
+        "[n]",
+        "how many steps a turn takes at most before it stops and ⏎ goes on — 100 unless changed",
     ),
     command(
         Topic::Settings,

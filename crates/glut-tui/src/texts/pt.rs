@@ -215,6 +215,15 @@ pub const TEXTS: Texts = Texts {
             "o quanto a tela se move; calm e off mantêm o Glimm parado (o “Reduzir movimento” do macOS conta como off)",
         ),
         (
+            "rule",
+            "uma regra para esta sessão que o modelo segue a cada turno — /rule sozinho as lista, /rule remove <n> \
+             retira uma",
+        ),
+        (
+            "maxsteps",
+            "quantos passos um turno dá no máximo antes de parar e ⏎ continuar — 100 se não mudado",
+        ),
+        (
             "nudge",
             "se o Glut pede uma vez ao modelo que continue quando ele termina com a lista aberta ou anunciando um \
              passo",
@@ -631,12 +640,25 @@ pub const TEXTS: Texts = Texts {
     images_set: "imagens: {images}",
     images_now: "imagens: {images} — /images inline, blocks ou off",
     reader_now: "leitor de tela: {reader} — /reader on ou off",
+    steps_reached: "o turno parou no seu limite de {n} passos — ⏎ na entrada vazia continua de onde parou; /maxsteps \
+                  muda o limite",
+    steps_now: "um turno dá no máximo {n} passos — /maxsteps <n> muda isso",
+    steps_set: "um turno dá a partir de agora no máximo {n} passos",
+    steps_bad: "/maxsteps recebe um número de 1 a {most}",
     nudge_now: "pedir ao modelo que continue: {nudge} — /nudge on ou off",
     nudge_on: "O Glut pede uma vez ao modelo que continue quando ele termina com a lista aberta ou anunciando um passo",
     nudge_off: "um turno termina onde o modelo o termina",
     thinking_unknown: "/thinking {word}: off, folded ou open",
     no_command: "não há comando /{name} — /help lista todos",
     model_locked: "o modelo desta sessão é definido pelo programa que a iniciou — sem troca aqui",
+    rule_none: "nenhuma regra para esta sessão — /rule <text> adiciona uma",
+    rule_list: "as regras desta sessão:",
+    rule_added: "regra {n} mantida para esta sessão",
+    rule_removed: "regra {n} retirada",
+    rule_bad: "/rule remove recebe o número que /rule lista",
+    rule_full: "no máximo {most} regras por sessão — /rule remove <n> abre espaço",
+    switch_after_turn: "muda para {what} quando este turno terminar",
+    switch_footer: "→ {what} após este turno",
     context_known: "contexto: {used} de {window} tokens usados ({share}%), a janela vem de {from}; o Glut compacta \
                     pouco antes de encher — /context <tokens> define outra",
     context_unknown: "contexto: {used} tokens usados; a janela de {model} é desconhecida — /context <tokens> a define",
@@ -1616,6 +1638,9 @@ pub const TEXTS: Texts = Texts {
     nudged_reminder: "O Glut lembrou o modelo da sua lista de tarefas",
     nudged_open: "O Glut pediu ao modelo que continuasse: a lista ainda tem itens abertos",
     nudged_announced: "O Glut pediu ao modelo que desse o passo que anunciou",
+    nudged_repeated: "O Glut não executou de novo as mesmas chamadas: o modelo reenviou seu último passo",
+    nudged_reading: "O Glut disse ao modelo que só leu por muitos passos: começar a mudança ou dizer o que não está \
+                     claro",
     mode_now: "agora no modo {mode}",
     thinking_live: "pensando…",
     thought: "pensamento",

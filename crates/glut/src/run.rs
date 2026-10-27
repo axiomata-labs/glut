@@ -30,6 +30,44 @@ use crate::tools::{StopFlag, Toolbox, glut_files};
 /// model gone wrong, not a plan. The rest are answered with an error, so every call still gets its reply (the API
 /// wants one per call id) and the model learns to ask for fewer at once.
 pub const MAX_CALLS_PER_TURN: usize = 16;
+/// A step's calls by tool and arguments, in a fixed order and with the arguments' JSON written alike — what tells
+/// one batch from the same batch again (T73b).
+fn batch_of(calls: &[ToolCall]) -> Vec<(String, String)> {
+    let mut batch: Vec<(String, String)> = calls
+        .iter()
+        .map(|call| {
+            let arguments = serde_json::from_str::<Value>(&call.function.arguments).map_or_else(
+                |_| call.function.arguments.clone(),
+                |value| value.to_string(),
+            );
+            (call.function.name.clone(), arguments)
+        })
+        .collect();
+    batch.sort();
+    batch
+}
+
+/// Steps in a row that only read before Glut tells the model so, once a run (T73b: MiMo read for forty).
+const READING_HINT_AT: u32 = 25;
+
+/// Whether `call` only reads: a reading tool, or a command whose every part is a listed reader.
+fn only_reads(call: &ToolCall) -> bool {
+    match call.function.name.as_str() {
+        "read_file" | "grep" | "glob" | "list_dir" | results::NAME | "web_fetch" | "web_search" => {
+            true
+        }
+        "bash" => serde_json::from_str::<Value>(&call.function.arguments)
+            .ok()
+            .and_then(|value| {
+                value["command"]
+                    .as_str()
+                    .map(crate::permissions::command::analyze)
+            })
+            .is_some_and(|analysis| crate::permissions::kinds::reads_only(&analysis)),
+        _ => false,
+    }
+}
+
 /// Tool calls without `todo_write` while its list has items open before Glut reminds the model of it (T73).
 const REMIND_EVERY: u32 = 8;
 
@@ -385,6 +423,11 @@ async fn run_inner<M: ChatModel>(
         reminded_at: 0,
         updating_todos: false,
         nudged: false,
+        last_batch: None,
+        refused_before_batch: 0,
+        streamed: false,
+        reading_steps: 0,
+        reading_told: false,
     };
     let mut resumed_calls = Vec::new();
     match opening {
@@ -748,6 +791,15 @@ struct Loop<'a, M: ChatModel> {
     updating_todos: bool,
     /// Whether the run already asked its model to go on (T73): once per run.
     nudged: bool,
+    /// The last step's calls, by tool and arguments (T73b): the same set again is not run.
+    last_batch: Option<Vec<(String, String)>>,
+    /// The refusals counted when the last step began: a step the gate refused in is not guarded against.
+    refused_before_batch: u32,
+    /// Whether the last model call streamed anything before it ended.
+    streamed: bool,
+    /// Steps in a row that only read (T73b), and whether the model was told so — once a run.
+    reading_steps: u32,
+    reading_told: bool,
 }
 
 /// What a run knows of its model's context window (#111, K2).
@@ -1169,9 +1221,20 @@ impl<M: ChatModel> Loop<'_, M> {
     ) -> Result<Vec<ToolCall>, FinishReason> {
         let turn = self.turns;
         let mut retried = false;
+        let mut stall_retried = false;
         let reply = loop {
             let reply = self.complete(specs, sink).await?;
             match reply {
+                // T73b: a call that hung is asked once more — a provider's stall or a slow local model must not end
+                // a run that was going well.
+                // Only a call that showed nothing yet: one whose text was already on the screen would show it twice.
+                Err(err) if !stall_retried && !self.streamed && crate::model::is_stalled(&err) => {
+                    stall_retried = true;
+                    sink.emit(Event::Error {
+                        message: format!("{err} — asked once more"),
+                    });
+                    continue;
+                }
                 // K4: the provider says the prompt does not fit — compacted once, asked again; a second time fails.
                 Err(err)
                     if !retried && self.compacts() && crate::model::is_context_overflow(&err) =>
@@ -1236,7 +1299,9 @@ impl<M: ChatModel> Loop<'_, M> {
         sink: &mut dyn EventSink,
     ) -> Result<Result<crate::model::Reply, HarnessError>, FinishReason> {
         let turn = self.turns;
+        let mut pieces = 0u32;
         let mut on_text = |piece: crate::model::Piece<'_>| {
+            pieces += 1;
             sink.emit(match piece {
                 crate::model::Piece::Text(text) => Event::TextDelta {
                     turn,
@@ -1261,11 +1326,14 @@ impl<M: ChatModel> Loop<'_, M> {
             self.config.max_output_tokens,
             &mut on_text,
         );
-        tokio::select! {
+        let ended = tokio::select! {
             reply = completion => Ok(reply),
             () = tokio::time::sleep_until(self.deadline) => Err(FinishReason::Timeout),
             () = self.cancel.cancelled() => Err(FinishReason::Cancelled),
-        }
+        };
+        drop(on_text);
+        self.streamed = pieces > 0;
+        ended
     }
 
     /// Whether this run compacts itself (#111): when the settings leave it on, and never in a subagent — its
@@ -1451,6 +1519,35 @@ impl<M: ChatModel> Loop<'_, M> {
         self.updating_todos = calls
             .iter()
             .any(|call| call.function.name == planning::TODO);
+        self.reading_steps = if calls.iter().all(only_reads) {
+            self.reading_steps + 1
+        } else {
+            0
+        };
+        // The same calls as the step before, once more (T73b: MiMo sent one batch of sixteen thirty times): not run
+        // again. A single call sent again is a retry, and one the gate refused is the refusal ledger's to end.
+        let batch = batch_of(&calls);
+        let repeated = batch.len() > 1
+            && self.last_batch.as_ref() == Some(&batch)
+            && self.refusals.total() == self.refused_before_batch;
+        self.last_batch = Some(batch);
+        self.refused_before_batch = self.refusals.total();
+        if repeated {
+            sink.emit(Event::Nudged {
+                turn: self.turns,
+                kind: NudgeKind::Repeated,
+            });
+            for call in calls {
+                sink.emit(Event::tool_call(
+                    self.turns,
+                    &call.id,
+                    &call.function.name,
+                    &call.function.arguments,
+                ));
+                self.answer_call(call, false, planning::REPEATED.to_owned(), sink);
+            }
+            return Ok(());
+        }
         let mut calls = calls.into_iter().enumerate().peekable();
         while let Some((index, call)) = calls.next() {
             sink.emit(Event::tool_call(
@@ -1461,7 +1558,9 @@ impl<M: ChatModel> Loop<'_, M> {
             ));
             if index >= MAX_CALLS_PER_TURN {
                 let output = format!(
-                    "error: at most {MAX_CALLS_PER_TURN} tool calls are run per turn; ask again"
+                    "error: not run — a reply may hold at most {MAX_CALLS_PER_TURN} tool calls, and the first \
+                     {MAX_CALLS_PER_TURN} of yours ran (their results are above). Send only what is still needed, \
+                     never the calls that ran again."
                 );
                 self.answer_call(call, false, output, sink);
                 continue;
@@ -2055,7 +2154,16 @@ impl<M: ChatModel> Loop<'_, M> {
     fn reminded(&mut self, name: &str, output: String, sink: &mut dyn EventSink) -> String {
         // Only Glut speaks as `[glut]` (the prompt tells the model to follow such lines): a file, a page or a server
         // writing one is quoted, never obeyed.
-        let output = planning::unforged(output);
+        let mut output = planning::unforged(output);
+        // Long reading without a change (T73b): said once, at the first result of the step that reaches the mark.
+        if self.reading_steps >= READING_HINT_AT && !self.reading_told && self.depth == 0 {
+            self.reading_told = true;
+            sink.emit(Event::Nudged {
+                turn: self.turns,
+                kind: NudgeKind::Reading,
+            });
+            output = format!("{output}\n\n{}", planning::reading_hint(self.reading_steps));
+        }
         if name == planning::TODO {
             self.since_todo = 0;
             return output;
@@ -4912,6 +5020,135 @@ mod tests {
             nudges(&events),
             [NudgeKind::Reminder],
             "all done: no question at the end"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_run_that_only_reads_for_long_is_told_once() {
+        let args: Vec<String> = (0..30)
+            .map(|at| format!(r#"{{"pattern":"p{at}"}}"#))
+            .collect();
+        let mut replies: Vec<Result<Reply, HarnessError>> = args
+            .iter()
+            .enumerate()
+            .map(|(at, arguments)| {
+                let id = format!("g{at}");
+                Ok(calls(&[(id.as_str(), "grep", arguments.as_str())]))
+            })
+            .collect();
+        replies.push(Ok(text("found it")));
+        let model = Script::new(replies);
+        let mut events = Vec::new();
+        run(
+            &RunConfig::new("/w"),
+            &model,
+            &toolbox(),
+            "go",
+            &mut events,
+            &Cancel::new(),
+        )
+        .await;
+        assert_eq!(
+            nudges(&events),
+            [NudgeKind::Reading],
+            "at the 25th step, and once"
+        );
+        let told = model.seen.lock().unwrap()[25]
+            .last()
+            .and_then(|message| message.content.clone())
+            .unwrap_or_default();
+        assert!(
+            told.contains("[glut] You have only read for 25 steps"),
+            "{told}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_call_that_hung_is_asked_once_more() {
+        let hung = || {
+            Err(HarnessError::Transport(format!(
+                "{}120 s; the call was given up",
+                crate::model::STALLED
+            )))
+        };
+        let model = Script::new(vec![hung(), Ok(text("done"))]);
+        let mut events = Vec::new();
+        let outcome = run(
+            &RunConfig::new("/w"),
+            &model,
+            &toolbox(),
+            "go",
+            &mut events,
+            &Cancel::new(),
+        )
+        .await;
+        assert_eq!(outcome.reason, FinishReason::Answered);
+        assert!(error_events(&events)[0].ends_with("asked once more"));
+
+        let model = Script::new(vec![hung(), hung(), Ok(text("never"))]);
+        let mut events = Vec::new();
+        let outcome = run(
+            &RunConfig::new("/w"),
+            &model,
+            &toolbox(),
+            "go",
+            &mut events,
+            &Cancel::new(),
+        )
+        .await;
+        assert_eq!(outcome.reason, FinishReason::Failed, "once, not again");
+    }
+
+    #[tokio::test]
+    async fn a_step_sent_again_exactly_is_not_run_again() {
+        let batch = [
+            ("a", "echo", r#"{"text":"x"}"#),
+            ("b", "echo", r#"{ "text": "y" }"#),
+        ];
+        let again = [
+            ("c", "echo", r#"{"text":"y"}"#),
+            ("d", "echo", r#"{"text": "x"}"#),
+        ];
+        let model = Script::new(vec![
+            Ok(calls(&batch)),
+            Ok(calls(&again)),
+            Ok(calls(&[("e", "echo", r#"{"text":"z"}"#)])),
+            Ok(text("done")),
+        ]);
+        let mut events = Vec::new();
+        let outcome = run(
+            &RunConfig::new("/w"),
+            &model,
+            &toolbox(),
+            "go",
+            &mut events,
+            &Cancel::new(),
+        )
+        .await;
+        assert_eq!(outcome.reason, FinishReason::Answered);
+        assert_eq!(
+            nudges(&events),
+            [NudgeKind::Repeated],
+            "the same set in another order and spacing"
+        );
+        let answers: Vec<String> = model.seen.lock().unwrap()[2]
+            .iter()
+            .filter(|m| m.role == Role::Tool)
+            .filter_map(|m| m.content.clone())
+            .collect();
+        assert_eq!(answers[..2], ["x", "y"]);
+        assert!(
+            answers[2..]
+                .iter()
+                .all(|answer| answer == crate::planning::REPEATED)
+        );
+        let ran = events
+            .iter()
+            .filter(|e| matches!(e, Event::ToolResult { ok: true, .. }))
+            .count();
+        assert_eq!(
+            ran, 3,
+            "the first batch and the new call ran, the repeat did not"
         );
     }
 

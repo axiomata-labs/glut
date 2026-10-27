@@ -623,7 +623,8 @@ async fn read_stream(
         let chunk = match tokio::time::timeout(stall, response.chunk()).await {
             Err(_) => {
                 return Err(HarnessError::Transport(format!(
-                    "the model sent nothing for {} s; the call was given up",
+                    "{}{} s; the call was given up",
+                    crate::model::STALLED,
                     stall.as_secs()
                 )));
             }
