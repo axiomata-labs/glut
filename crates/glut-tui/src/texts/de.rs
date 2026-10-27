@@ -431,7 +431,7 @@ pub const TEXTS: Texts = Texts {
               sie unterwegs ab.",
     done_of: "{done} von {all} erledigt",
     keys_tabs: "←→ Reiter",
-    keys_agents: "↑↓ wählen · ⏎ öffnet · x hält ihn an · ⎋ zurück zur Eingabe · ⌃X A blendet aus",
+    keys_agents: "↑↓ wählen · ⏎ oder Klick öffnet · x hält ihn an · ⎋ zurück zur Eingabe · ⌃X A blendet aus",
     keys_todos: "↑↓ wählen · Leertaste hakt ab · a fügt hinzu · o Editor · ⎋ zurück zur Eingabe · ⌃Y blendet aus",
     keys_focus: "←→ Reiter · ↑↓ PgUp PgDn blättern · ⎋ zurück zur Eingabe",
     key_hides: "{key} blendet aus",

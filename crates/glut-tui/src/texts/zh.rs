@@ -320,7 +320,7 @@ pub const TEXTS: Texts = Texts {
     no_plan: "还没有计划。对于多步骤的工作，Glut 会在这里写下任务列表，并边做边勾选。",
     done_of: "已完成 {done}/{all}",
     keys_tabs: "←→ 标签页",
-    keys_agents: "↑↓ 选择 · ⏎ 打开 · x 停止 · ⎋ 返回输入 · ⌃X A 隐藏",
+    keys_agents: "↑↓ 选择 · ⏎ 或点击打开 · x 停止 · ⎋ 返回输入 · ⌃X A 隐藏",
     keys_todos: "↑↓ 选择 · 空格 勾选 · a 添加 · o 编辑器 · ⎋ 返回输入 · ⌃Y 隐藏",
     keys_focus: "←→ 标签页 · ↑↓ PgUp PgDn 滚动 · ⎋ 返回输入",
     key_hides: "{key} 隐藏",

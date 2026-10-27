@@ -418,7 +418,7 @@ pub const TEXTS: Texts = Texts {
     no_plan: "Aún no hay plan. Para un trabajo de varios pasos, Glut escribe aquí su lista de tareas y la va marcando.",
     done_of: "{done} de {all} hechas",
     keys_tabs: "←→ pestañas",
-    keys_agents: "↑↓ elegir · ⏎ abre · x lo detiene · ⎋ vuelve a la entrada · ⌃X A oculta",
+    keys_agents: "↑↓ elegir · ⏎ o un clic abre · x lo detiene · ⎋ vuelve a la entrada · ⌃X A oculta",
     keys_todos: "↑↓ elegir · Espacio marca · a añade · o editor · ⎋ vuelve a la entrada · ⌃Y oculta",
     keys_focus: "←→ pestañas · ↑↓ PgUp PgDn desplazar · ⎋ vuelve a la entrada",
     key_hides: "{key} oculta",

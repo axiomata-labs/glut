@@ -419,7 +419,7 @@ pub const TEXTS: Texts = Texts {
               marcando.",
     done_of: "{done} de {all} feitas",
     keys_tabs: "←→ abas",
-    keys_agents: "↑↓ escolher · ⏎ abre · x para · ⎋ volta à entrada · ⌃X A esconde",
+    keys_agents: "↑↓ escolher · ⏎ ou um clique abre · x para · ⎋ volta à entrada · ⌃X A esconde",
     keys_todos: "↑↓ escolher · Espaço marca · a adiciona · o editor · ⎋ volta à entrada · ⌃Y esconde",
     keys_focus: "←→ abas · ↑↓ PgUp PgDn rolar · ⎋ volta à entrada",
     key_hides: "{key} esconde",

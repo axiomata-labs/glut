@@ -375,7 +375,7 @@ pub const TEXTS: Texts = Texts {
     no_plan: "まだプランはありません。複数ステップの作業では、Glut がここにタスク一覧を書き、進めながらチェックします。",
     done_of: "{all} 件中 {done} 件完了",
     keys_tabs: "←→ タブ",
-    keys_agents: "↑↓ で選択 · ⏎ で開く · x で止める · ⎋ で入力へ · ⌃X A で隠す",
+    keys_agents: "↑↓ で選択 · ⏎ かクリックで開く · x で止める · ⎋ で入力へ · ⌃X A で隠す",
     keys_todos: "↑↓ で選択 · スペースでチェック · a で追加 · o でエディター · ⎋ で入力へ · ⌃Y で隠す",
     keys_focus: "←→ タブ · ↑↓ PgUp PgDn でスクロール · ⎋ で入力へ",
     key_hides: "{key} で隠す",

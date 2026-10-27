@@ -103,7 +103,7 @@ pub const TEXTS: Texts = Texts {
     no_plan: "No plan yet. For work of several steps Glut writes its task list here, and ticks it off as it goes.",
     done_of: "{done} of {all} done",
     keys_tabs: "←→ tabs",
-    keys_agents: "↑↓ choose · ⏎ opens · x stops it · ⎋ back to the input · ⌃X A hides",
+    keys_agents: "↑↓ choose · ⏎ or a click opens · x stops it · ⎋ back to the input · ⌃X A hides",
     keys_todos: "↑↓ choose · Space ticks · a adds · o editor · ⎋ back to the input · ⌃Y hides",
     keys_focus: "←→ tabs · ↑↓ PgUp PgDn scroll · ⎋ back to the input",
     key_hides: "{key} hides",

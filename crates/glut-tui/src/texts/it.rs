@@ -433,7 +433,7 @@ pub const TEXTS: Texts = Texts {
               man mano.",
     done_of: "{done} di {all} fatte",
     keys_tabs: "←→ schede",
-    keys_agents: "↑↓ scegli · ⏎ apre · x lo ferma · ⎋ torna all’inserimento · ⌃X A nasconde",
+    keys_agents: "↑↓ scegli · ⏎ o un clic apre · x lo ferma · ⎋ torna all’inserimento · ⌃X A nasconde",
     keys_todos: "↑↓ scegli · Spazio spunta · a aggiunge · o editor · ⎋ torna all’inserimento · ⌃Y nasconde",
     keys_focus: "←→ schede · ↑↓ PgUp PgDn scorri · ⎋ torna all’inserimento",
     key_hides: "{key} nasconde",

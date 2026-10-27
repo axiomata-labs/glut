@@ -5953,9 +5953,11 @@ impl App {
                 }
                 self.focus_tab();
             }
+            // A click opens the agent as choosing it and ⏎ does (T76) — the finished subagents too.
             PanelSpot::Agent(row) => {
                 self.focus_tab();
-                self.agents_list = Some(row);
+                self.agents_list = Some(row.clone());
+                self.open_agent(row);
             }
             PanelSpot::Todo(pick) => {
                 self.focus_tab();
@@ -6064,13 +6066,7 @@ impl App {
             KeyCode::Down | KeyCode::Char('j') => {
                 self.agents_list = Some(rows[(chosen + 1).min(rows.len() - 1)].clone())
             }
-            KeyCode::Enter => match &rows[chosen] {
-                Row::Behind(name) => {
-                    self.leave_panel();
-                    self.pane_request = Some(crate::panes::Request::Show(name.clone()));
-                }
-                Row::Sub(path) => self.agent_view = Some(crate::agents::View::new(path.clone())),
-            },
+            KeyCode::Enter => self.open_agent(rows[chosen].clone()),
             KeyCode::Char('x') => match &rows[chosen] {
                 Row::Sub(path) => self.stop_subagent(&path.clone()),
                 // A loop's card (T60a): x ends the loop between its rounds too, where Esc reaches only
@@ -6092,6 +6088,17 @@ impl App {
             }
         }
         true
+    }
+
+    /// An agent of the Agents tab opened: a background agent's pane brought forward, a subagent's steps shown.
+    fn open_agent(&mut self, row: crate::agents::Row) {
+        match row {
+            crate::agents::Row::Behind(name) => {
+                self.leave_panel();
+                self.pane_request = Some(crate::panes::Request::Show(name));
+            }
+            crate::agents::Row::Sub(path) => self.agent_view = Some(crate::agents::View::new(path)),
+        }
     }
 
     /// x in the Agents tab (T40): the chosen subagent stops, the turn and the others go on. Only one that still runs
@@ -10508,7 +10515,7 @@ pub(crate) mod tests {
             screen.contains("find the callers") && screen.contains("deeper"),
             "{screen}"
         );
-        assert!(screen.contains("⏎ opens"));
+        assert!(screen.contains("⏎ or a click opens"));
         app.on_terminal(key(KeyCode::Down, KeyModifiers::NONE));
         app.on_terminal(key(KeyCode::Down, KeyModifiers::NONE));
         assert_eq!(
@@ -10546,6 +10553,23 @@ pub(crate) mod tests {
             (app.agents_list.clone(), app.input.text()),
             (None, "jq".to_owned())
         );
+        // T76: a click on a card opens it as ⏎ does — the finished nested subagent too.
+        app.input.clear();
+        wide(&mut app);
+        let (area, _) = app
+            .panel_spots
+            .iter()
+            .find(|(_, spot)| matches!(spot, PanelSpot::Agent(crate::agents::Row::Sub(path)) if path.len() == 2))
+            .cloned()
+            .expect("the nested subagent's row is a spot");
+        app.on_terminal(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            area.x,
+            area.y,
+        ));
+        assert_eq!(app.agent_view.as_ref().unwrap().path.len(), 2);
+        app.on_terminal(key(KeyCode::Esc, KeyModifiers::NONE));
+        app.on_terminal(key(KeyCode::Esc, KeyModifiers::NONE));
         // ⌃X A on the shown tab hides the panel, the keys with it.
         wide(&mut app);
         agents_key(&mut app);

@@ -434,7 +434,7 @@ pub const TEXTS: Texts = Texts {
               coche au fur et à mesure.",
     done_of: "{done} sur {all} faites",
     keys_tabs: "←→ onglets",
-    keys_agents: "↑↓ choisir · ⏎ ouvre · x l’arrête · ⎋ retour à la saisie · ⌃X A masque",
+    keys_agents: "↑↓ choisir · ⏎ ou un clic ouvre · x l’arrête · ⎋ retour à la saisie · ⌃X A masque",
     keys_todos: "↑↓ choisir · Espace coche · a ajoute · o éditeur · ⎋ retour à la saisie · ⌃Y masque",
     keys_focus: "←→ onglets · ↑↓ PgUp PgDn défiler · ⎋ retour à la saisie",
     key_hides: "{key} masque",
