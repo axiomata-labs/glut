@@ -904,23 +904,10 @@ pub fn fitting(typed: &str) -> Vec<&'static Command> {
     fits
 }
 
-/// What `/help` says: the commands, one row per topic, then the keys the same way, then what is neither.
-pub fn help() -> String {
-    let mut rows = vec![tr!(help_commands).to_owned()];
-    for topic in Topic::ALL {
-        let names: Vec<String> = COMMANDS
-            .iter()
-            .filter(|command| command.topic == topic)
-            .map(|command| match command.args {
-                "" => format!("/{}", command.name),
-                args => format!("/{} {args}", command.name),
-            })
-            .collect();
-        if !names.is_empty() {
-            rows.push(format!("  {}: {}", topic.label(), names.join(" · ")));
-        }
-    }
-    rows.push(tr!(help_keys, legend = tr!(legend)));
+/// The help box's last entry (`/help`): the keys by topic, then what is neither a command nor a key — the commands
+/// have entries of their own.
+pub fn help_more() -> String {
+    let mut rows = vec![tr!(help_keys, legend = tr!(legend))];
     for topic in Topic::ALL {
         let keys: Vec<String> = KEYS
             .iter()
@@ -998,9 +985,8 @@ mod tests {
     #[test]
     fn help_the_keys_and_the_suggestions_speak_the_language_read_now() {
         glut::lang::set_for_thread(Some(Lang::De));
-        let help = help();
-        assert!(help.starts_with("Befehle\n  Session: /clear"), "{help}");
-        assert!(help.contains("Tasten (⌃ Control · ⇧ Umschalt"), "{help}");
+        let help = help_more();
+        assert!(help.starts_with("Tasten (⌃ Control · ⇧ Umschalt"), "{help}");
         let sheet: Vec<String> = sheet(60).iter().map(ToString::to_string).collect();
         assert!(
             sheet.iter().any(|line| line.contains("Glut anhalten")),
@@ -1253,19 +1239,12 @@ mod tests {
     }
 
     #[test]
-    fn help_writes_every_command_and_key_by_topic() {
-        let help = help();
-        for command in &COMMANDS {
-            assert!(
-                help.contains(&format!("/{}", command.name)),
-                "/{}",
-                command.name
-            );
-        }
+    fn the_help_boxs_keys_entry_writes_every_key_by_topic() {
+        let help = help_more();
         for key in &KEYS {
             assert!(help.contains(key.key), "{}", key.key);
         }
-        assert!(help.contains("  Model: /model [id] · /provider [id]"));
+        assert!(help.contains("  View: ⌃F search the stream"), "{help}");
     }
 
     #[test]

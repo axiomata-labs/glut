@@ -30,6 +30,13 @@ pub const TEXTS: Texts = Texts {
     commands: &[],
     keys: &[],
     help_commands: "Commands",
+    help_title: "Help",
+    help_more: "Keys & more",
+    help_more_what: "every key by topic, !cmd and the vi mode",
+    help_list_keys: "↑↓ choose · ⏎ the whole help · typing filters · ⎋ closes",
+    help_page_keys: "↑↓ PgUp PgDn scroll · ⎋ back to the list · q closes",
+    help_page_keys_heading: "Keys",
+    help_unknown: "{name}: no such command — /help lists them",
     help_keys: "Keys ({legend}; ⌃K keeps them in the side panel)",
     help_also: "Also: !cmd runs a command and shows Glut its output · !!cmd runs it for you alone · a large paste \
                 stands as [pasted N lines] · drag to copy · a click on a subagent's tile opens it",
@@ -897,6 +904,9 @@ pub const TEXTS: Texts = Texts {
     loop_no_turn: "its task started no turn",
     loop_role_kept: "this pane plays {role}: a loop started here plays it too — /loop without as",
     loop_uncounted: "its model's prices are unknown, so only the rounds limit ends it",
+    loop_card_ended: "↻ ended {rounds}/{most}",
+    loop_pane_hint: "this agent runs a loop — /loop stop {name} ends it, as x on its card in the Agents tab does, or \
+                     Esc while a round runs",
     schedule_file_broken: "~/.glut/schedules.json cannot be read: {reason} — it is not written over",
     schedule_name_bad: "a plan's name is 1 to 40 small letters, digits and -, such as morning-tests",
     schedule_task_missing: "a new plan needs its task: a message, or /skill <name> [what for]",

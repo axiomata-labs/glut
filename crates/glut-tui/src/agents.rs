@@ -336,10 +336,17 @@ impl Card<'_> {
             width.saturating_sub(state.width() + 11).max(1),
         );
         let fill = width.saturating_sub(title.width() + state.width() + 10);
-        let live = cut(&one_line(self.live), inner);
-        let stats = cut(&one_line(self.stats), width.saturating_sub(6).max(1));
-        let bottom = width.saturating_sub(stats.width() + 5);
-        vec![
+        // Room above and below what it says, its last words on up to two rows, its numbers whole on their own rows.
+        let padded = |text: String, style: ratatui::style::Style| {
+            let pad = inner.saturating_sub(text.width());
+            Line::from(vec![
+                Span::styled("│ ", self.style),
+                Span::styled(text, style),
+                Span::raw(" ".repeat(pad)),
+                Span::styled(" │", self.style),
+            ])
+        };
+        let mut lines = vec![
             Line::from(vec![
                 Span::styled("╭─ ⬡ ", self.style),
                 Span::styled(title, title_style),
@@ -347,19 +354,57 @@ impl Card<'_> {
                 Span::styled(state, self.style),
                 Span::styled(" ─╮", self.style),
             ]),
-            Line::from(vec![
-                Span::styled("│ ", self.style),
-                Span::styled(live.clone(), self.live_style),
-                Span::raw(" ".repeat(inner.saturating_sub(live.width()))),
-                Span::styled(" │", self.style),
-            ]),
-            Line::from(vec![
-                Span::styled("╰─ ", self.style),
-                Span::styled(stats, theme::quiet()),
-                Span::styled(format!(" {}╯", "─".repeat(bottom)), self.style),
-            ]),
-        ]
+            padded(String::new(), self.style),
+        ];
+        lines.extend(
+            folded(&one_line(self.live), inner, CARD_LIVE_ROWS)
+                .into_iter()
+                .map(|text| padded(text, self.live_style)),
+        );
+        lines.push(padded(String::new(), self.style));
+        lines.extend(
+            folded(&one_line(self.stats), inner, CARD_STATS_ROWS)
+                .into_iter()
+                .map(|text| padded(text, theme::quiet())),
+        );
+        lines.push(Line::from(Span::styled(
+            format!("╰{}╯", "─".repeat(width.saturating_sub(2))),
+            self.style,
+        )));
+        lines
     }
+}
+
+/// How many rows a card gives an agent's last words, and its numbers (the owner's Mac test of T60a: more room).
+const CARD_LIVE_ROWS: usize = 2;
+const CARD_STATS_ROWS: usize = 2;
+
+/// `next` after `text` as words go on: a space between, but none where Chinese or Japanese goes on — its characters
+/// stand without one.
+pub(crate) fn join_words(text: &mut String, next: &str) {
+    let wide =
+        |c: Option<char>| c.is_some_and(|c| unicode_width::UnicodeWidthChar::width(c) == Some(2));
+    if !text.is_empty() && !wide(text.chars().next_back()) && !wide(next.chars().next()) {
+        text.push(' ');
+    }
+    text.push_str(next);
+}
+
+/// `text` wrapped at `width` on at most `rows` rows, the last one cut where more was left; one empty row for none.
+fn folded(text: &str, width: usize, rows: usize) -> Vec<String> {
+    let mut wrapped = crate::transcript::wrap(text, width);
+    if wrapped.len() > rows {
+        let mut rest = String::new();
+        for part in &wrapped[rows - 1..] {
+            join_words(&mut rest, part);
+        }
+        wrapped.truncate(rows - 1);
+        wrapped.push(cut(&rest, width));
+    }
+    if wrapped.is_empty() {
+        wrapped.push(String::new());
+    }
+    wrapped
 }
 
 /// A background agent as the Agents tab shows it (T69), told by the screen once per frame.
@@ -378,6 +423,8 @@ pub struct Behind {
     pub working: Option<std::time::Duration>,
     /// The loop it runs (T60a): its interval and its rounds, `↻ 5m 3/50`.
     pub looping: Option<String>,
+    /// The loop it ran, ended: `↻ ended 2/2`.
+    pub looped: Option<String>,
 }
 
 /// A row of the Agents tab its keys may stand on (T34, T69): a background agent's card, by its name, or a subagent,
@@ -429,7 +476,7 @@ impl Behind {
             Doing::Rests => (tr!(agent_rests_state), theme::quiet()),
         };
         let mut stats = format!("{} · {}", self.role, self.model);
-        if let Some(looping) = &self.looping {
+        if let Some(looping) = self.looping.as_ref().or(self.looped.as_ref()) {
             stats.push_str(&format!(" · {looping}"));
         }
         if let Some(cost) = self.cost {
@@ -539,18 +586,19 @@ mod tests {
             .map(|(_, line)| line)
             .collect::<Vec<_>>();
         let text: Vec<String> = rows.iter().map(ToString::to_string).collect();
-        // The running one is a card of three rows, an ended one a single line.
-        assert_eq!(text.len(), 3 + 1 + 1, "{text:?}");
+        // The running one is a card of six rows (room above and below its words), an ended one a single line.
+        assert_eq!(text.len(), 6 + 1 + 1, "{text:?}");
         assert!(
             text[0].starts_with("╭─ ⬡ third") && text[0].ends_with("running ─╮"),
             "{text:?}"
         );
-        assert!(text[1].starts_with("│ starting…"), "{text:?}");
-        assert!(text[2].starts_with("╰─ 0 calls"), "{text:?}");
-        assert!(text[3].contains("✓ second · done · 0 calls"), "{text:?}");
-        assert!(text[4].starts_with('▸') && text[4].contains("first"));
+        assert!(text[2].starts_with("│ starting…"), "{text:?}");
+        assert!(text[4].starts_with("│ 0 calls"), "{text:?}");
+        assert!(text[5].starts_with("╰──"), "{text:?}");
+        assert!(text[6].contains("✓ second · done · 0 calls"), "{text:?}");
+        assert!(text[7].starts_with('▸') && text[7].contains("first"));
         assert!(
-            text.iter().take(3).all(|row| row.width() == 40),
+            text.iter().take(6).all(|row| row.width() == 40),
             "the card fills the width: {text:?}"
         );
         // Little room: the chosen one is still shown.
@@ -580,24 +628,48 @@ mod tests {
             cache: Some(true),
             working: Some(std::time::Duration::from_secs(134)),
             looping: None,
+            looped: None,
         };
         let text: Vec<String> = behind
             .lines(48, false)
             .iter()
             .map(ToString::to_string)
             .collect();
-        assert_eq!(text.len(), 3);
+        // Room above and below its words; its numbers whole, wrapped rather than cut.
+        assert_eq!(text.len(), 6, "{text:?}");
         assert!(
             text[0].starts_with("╭─ ⬡ reviewer") && text[0].ends_with("works ─╮"),
             "{text:?}"
         );
+        assert!(text[1].trim_matches(|c| c == '│' || c == ' ').is_empty());
         assert!(
-            text[1].starts_with("│ bash cargo test ") && !text[1].contains('\u{202e}'),
+            text[2].starts_with("│ bash cargo test ") && !text[2].contains('\u{202e}'),
             "{text:?}"
         );
+        assert!(text[3].trim_matches(|c| c == '│' || c == ' ').is_empty());
         assert!(
-            text[2].contains("reviewer · m/x · $0.0123 · cache ● · 2:14"),
+            text[4].contains("reviewer · m/x · $0.0123 · cache ● · 2:14"),
             "{text:?}"
+        );
+        let long = Behind {
+            live: "word ".repeat(40),
+            looped: Some("↻ ended 2/2".into()),
+            ..behind.clone()
+        };
+        let text: Vec<String> = long
+            .lines(48, false)
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert_eq!(
+            text.len(),
+            8,
+            "two rows of words at the most, the numbers on two: {text:?}"
+        );
+        assert!(text[3].contains('…'), "{text:?}");
+        assert!(
+            text[5].contains("↻ ended 2/2"),
+            "an ended loop says so: {text:?}"
         );
         assert!(text.iter().all(|row| row.width() == 48), "{text:?}");
         let narrow = behind.lines(20, false);

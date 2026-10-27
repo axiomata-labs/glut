@@ -322,6 +322,13 @@ pub const TEXTS: Texts = Texts {
         ("⌃K", "esta folha de teclas"),
     ],
     help_commands: "Comandos",
+    help_title: "Ajuda",
+    help_more: "Teclas e mais",
+    help_more_what: "cada tecla por tema, !cmd e o modo vi",
+    help_list_keys: "↑↓ escolher · ⏎ a ajuda completa · digitar filtra · ⎋ fecha",
+    help_page_keys: "↑↓ PgUp PgDn rolar · ⎋ voltar à lista · q fecha",
+    help_page_keys_heading: "Teclas",
+    help_unknown: "{name}: esse comando não existe — /help lista todos",
     help_keys: "Teclas ({legend}; ⌃K as mantém no painel lateral)",
     help_also: "Também: !cmd executa um comando e mostra a saída ao Glut · !!cmd o executa só para você · uma \
                 colagem grande aparece como [pasted N lines] · arrastar copia · um clique no cartão de um subagente \
@@ -1727,6 +1734,9 @@ pub const TEXTS: Texts = Texts {
     loop_no_turn: "sua tarefa não iniciou nenhum turno",
     loop_role_kept: "este pane faz o papel de {role}: um ciclo iniciado aqui também — /loop sem as",
     loop_uncounted: "os preços do modelo são desconhecidos, então só o limite de rodadas o encerra",
+    loop_card_ended: "↻ encerrado {rounds}/{most}",
+    loop_pane_hint: "este agente executa um ciclo — /loop stop {name} o encerra, assim como x no cartão dele na aba \
+                     Agentes ou Esc durante uma rodada",
     schedule_file_broken: "~/.glut/schedules.json não pode ser lido: {reason} — ele não é sobrescrito",
     schedule_name_bad: "o nome de um plano tem de 1 a 40 letras minúsculas, dígitos e -, como morning-tests",
     schedule_task_missing: "um plano novo precisa da sua tarefa: uma mensagem, ou /skill <name> [para quê]",

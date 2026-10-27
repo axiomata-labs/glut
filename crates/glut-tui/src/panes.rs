@@ -906,6 +906,7 @@ impl Panes {
                             looping.limits.rounds
                         )
                     }),
+                    looped: pane.app.loop_ended.clone(),
                 }
             })
             .collect();
@@ -1750,6 +1751,10 @@ impl Panes {
                 let limits = app.loop_limits();
                 crate::looping::Loop::new(asked, limits, Arc::clone(&app.parts.loop_link))
             });
+            // Where the owner reads the loop's rounds, how it ends: /loop stop, x on its card, Esc in a round.
+            if looping.is_some() {
+                app.tell(tr!(loop_pane_hint, name = name));
+            }
             let said = match &looping {
                 Some(looping) => tr!(
                     loop_starts,
@@ -2185,6 +2190,11 @@ impl Panes {
         };
         looping.link.stop();
         self.list[at].app.stop_turn();
+        self.list[at].app.loop_ended = Some(tr!(
+            loop_card_ended,
+            rounds = looping.rounds,
+            most = looping.limits.rounds
+        ));
         let pane = &self.list[at];
         let name = pane.name.clone().unwrap_or_else(|| "loop".to_owned());
         let goes = if pane.background {

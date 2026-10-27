@@ -40,6 +40,20 @@ glut::catalog! {
         keys: &'static [(&'static str, &'static str)],
         /// `/help`'s heading of the commands.
         help_commands: &'static str,
+        /// The help box's title.
+        help_title: &'static str,
+        /// The help box's last entry: the keys and the rest.
+        help_more: &'static str,
+        /// What the help box's last entry holds.
+        help_more_what: &'static str,
+        /// The help box's keys while it lists the commands.
+        help_list_keys: &'static str,
+        /// The help box's keys while a command's page is open.
+        help_page_keys: &'static str,
+        /// Above the keys on a command's page.
+        help_page_keys_heading: &'static str,
+        /// `/help` with a word that names no command: `{name}`.
+        help_unknown: &'static str,
         /// `/help`'s heading of the keys: `{legend}` what the key symbols stand for.
         help_keys: &'static str,
         /// `/help`'s line of what is neither a command nor a key.
@@ -1656,6 +1670,10 @@ glut::catalog! {
         loop_role_kept: &'static str,
         /// Added where a loop starts on a model without prices.
         loop_uncounted: &'static str,
+        /// A loop's card once the loop ended: `{rounds}` of `{most}` rounds.
+        loop_card_ended: &'static str,
+        /// Said in a loop's own pane as it starts: how the loop ends.
+        loop_pane_hint: &'static str,
         /// `~/.glut/schedules.json` cannot be read.
         schedule_file_broken: &'static str,
         /// A plan's name that cannot be one.

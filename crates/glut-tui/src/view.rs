@@ -364,6 +364,8 @@ fn draw_in(frame: &mut Frame, app: &mut App, area: Rect, chrome: &Chrome) {
     }
     if app.picker.is_some() {
         draw_picker(frame, app, stream);
+    } else if app.help.is_some() {
+        draw_help(frame, app, stream);
     } else if app.keys_sheet.is_some() {
         draw_keys_sheet(frame, app, stream);
     } else if app.review.open {
@@ -1483,9 +1485,13 @@ fn draw_panel(frame: &mut Frame, app: &mut App, area: Rect) {
                 theme::strong(),
             )));
             // Cards while they leave half the tab to the subagents; else those at rest fold to a line each.
-            let cards = 3 * app.background.len() <= usize::from(area.height) / 2;
+            // A card is up to eight rows and one of air (the owner's Mac test of T60a asked for room).
+            let cards = 9 * app.background.len() <= usize::from(area.height) / 2;
             let chosen = app.background_chosen();
             for (at, agent) in app.background.iter().enumerate() {
+                if at > 0 && cards {
+                    lines.push(Line::default());
+                }
                 let picked = chosen == Some(at);
                 let rows = if cards || agent.doing != crate::agents::Doing::Rests {
                     agent.lines(width + 1, picked)
@@ -1990,6 +1996,38 @@ fn draw_keys_sheet(frame: &mut Frame, app: &mut App, area: Rect) {
     let scroll = app.keys_sheet.map_or(0, |scroll| scroll.min(most));
     app.keys_sheet = Some(scroll);
     let lines: Vec<Line> = sheet.into_iter().skip(scroll).take(rows).collect();
+    frame.render_widget(Clear, place);
+    frame.render_widget(Paragraph::new(lines).block(block), place);
+}
+
+/// The help box over the stream (`/help`), framed in yellow: its list or a command's page, its keys at the foot.
+fn draw_help(frame: &mut Frame, app: &mut App, area: Rect) {
+    // Too small to show: closed rather than left taking keys unseen.
+    if area.width < 24 || area.height < 6 {
+        app.help = None;
+        return;
+    }
+    let width = area.width.saturating_sub(4).min(100);
+    let place = Rect {
+        x: area.x + (area.width - width) / 2,
+        y: area.y + 1,
+        width,
+        height: area.height.saturating_sub(2),
+    };
+    let yellow = Style::default().fg(ratatui::style::Color::Yellow);
+    let Some(help) = &mut app.help else { return };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(yellow)
+        .title(Span::styled(format!(" {} ", help.title()), yellow))
+        .title_bottom(Span::styled(
+            format!(" {} ", crate::motion::spoken(help.hint())),
+            theme::quiet(),
+        ));
+    let inner = block.inner(place);
+    let rows = usize::from(inner.height);
+    let lines = help.lines(usize::from(inner.width).saturating_sub(1), rows);
+    app.overlay_rows = rows;
     frame.render_widget(Clear, place);
     frame.render_widget(Paragraph::new(lines).block(block), place);
 }

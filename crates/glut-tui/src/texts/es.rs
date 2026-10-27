@@ -323,6 +323,13 @@ pub const TEXTS: Texts = Texts {
         ("⌃K", "esta hoja de teclas"),
     ],
     help_commands: "Comandos",
+    help_title: "Ayuda",
+    help_more: "Teclas y más",
+    help_more_what: "cada tecla por tema, !cmd y el modo vi",
+    help_list_keys: "↑↓ elegir · ⏎ la ayuda completa · escribir filtra · ⎋ cierra",
+    help_page_keys: "↑↓ PgUp PgDn desplazar · ⎋ volver a la lista · q cierra",
+    help_page_keys_heading: "Teclas",
+    help_unknown: "{name}: ese comando no existe — /help los lista",
     help_keys: "Teclas ({legend}; ⌃K las deja en el panel lateral)",
     help_also: "Además: !cmd ejecuta un comando y muestra su salida a Glut · !!cmd lo ejecuta solo para ti · un \
                 pegado grande aparece como [pasted N lines] · arrastrar copia · un clic en la ficha de un subagente \
@@ -1738,6 +1745,9 @@ pub const TEXTS: Texts = Texts {
     loop_no_turn: "su tarea no inició ningún turno",
     loop_role_kept: "este pane hace de {role}: un bucle iniciado aquí también — /loop sin as",
     loop_uncounted: "los precios de su modelo son desconocidos, así que solo el límite de rondas lo termina",
+    loop_card_ended: "↻ terminado {rounds}/{most}",
+    loop_pane_hint: "este agente ejecuta un bucle — /loop stop {name} lo termina, igual que x en su tarjeta de la \
+                     pestaña Agentes o Esc durante una ronda",
     schedule_file_broken: "~/.glut/schedules.json no se puede leer: {reason} — no se sobrescribe",
     schedule_name_bad: "el nombre de un plan tiene de 1 a 40 minúsculas, cifras y -, como morning-tests",
     schedule_task_missing: "un plan nuevo necesita su tarea: un mensaje, o /skill <name> [para qué]",

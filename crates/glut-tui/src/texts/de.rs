@@ -333,6 +333,13 @@ pub const TEXTS: Texts = Texts {
         ("⌃K", "dieses Blatt der Tasten"),
     ],
     help_commands: "Befehle",
+    help_title: "Hilfe",
+    help_more: "Tasten & mehr",
+    help_more_what: "jede Taste nach Thema, !cmd und der vi-Modus",
+    help_list_keys: "↑↓ wählen · ⏎ die ganze Hilfe · Tippen filtert · ⎋ schließt",
+    help_page_keys: "↑↓ PgUp PgDn blättern · ⎋ zurück zur Liste · q schließt",
+    help_page_keys_heading: "Tasten",
+    help_unknown: "{name}: diesen Befehl gibt es nicht — /help listet sie",
     help_keys: "Tasten ({legend}; ⌃K behält sie in der Seitenleiste)",
     help_also: "Außerdem: !cmd führt einen Befehl aus und zeigt Glut seine Ausgabe · !!cmd führt ihn nur für dich \
                 aus · ein großes Einfügen steht als [pasted N lines] · Ziehen kopiert · ein Klick auf die Kachel \
@@ -1744,6 +1751,9 @@ pub const TEXTS: Texts = Texts {
     loop_no_turn: "ihre Aufgabe hat keinen Turn gestartet",
     loop_role_kept: "dieses Pane spielt {role}: eine hier gestartete Schleife spielt sie auch — /loop ohne as",
     loop_uncounted: "die Preise ihres Modells sind unbekannt, also beendet sie nur die Rundengrenze",
+    loop_card_ended: "↻ beendet {rounds}/{most}",
+    loop_pane_hint: "dieser Agent führt eine Schleife aus — /loop stop {name} beendet sie, ebenso x auf seiner Karte \
+                     im Reiter Agenten oder Esc während einer Runde",
     schedule_file_broken: "~/.glut/schedules.json lässt sich nicht lesen: {reason} — sie wird nicht überschrieben",
     schedule_name_bad: "der Name eines Plans hat 1 bis 40 Kleinbuchstaben, Ziffern und -, etwa morning-tests",
     schedule_task_missing: "ein neuer Plan braucht seine Aufgabe: eine Nachricht oder /skill <name> [wofür]",

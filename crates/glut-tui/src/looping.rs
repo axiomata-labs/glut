@@ -462,9 +462,12 @@ impl Tool for EndLoop {
         // The same for every round: a description that changed would cost the prompt's cached head.
         let description = format!(
             "End the loop you run in. The owner started a loop: the same task comes to you again {} after each round \
-             ends, for at most {} rounds — the task: {}. Call this once the task's goal is reached, or once it can no \
-             longer be reached, with a short reason for the owner; the loop then stops after this round. Do not call \
-             it only because a round found nothing new: a loop that waits for something keeps going.",
+             ends, for at most {} rounds — the task: {}. Call this only when the task itself names an end (\"until \
+             the tests pass\", \"stop once the file is there\") and that end is reached, or can never be reached any \
+             more; give a short reason for the owner, and the loop stops after this round. A task that is simply \
+             repeated — say, count, check, report, fetch — has no end of its own: never call this for it, even though \
+             one round did what it asks; the owner chose to have it again, and the rounds limit, the budget or the \
+             owner end it. Never call it because a round found nothing new either.",
             state.every,
             state.rounds,
             glut::permissions::printable(&crate::transcript::cut(&state.task, 300))

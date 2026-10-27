@@ -226,6 +226,10 @@ pub struct App {
     pub project_todos: crate::todos::Todos,
     /// Every plan's timed runs, the Runs tab's (T60b).
     pub runs: crate::runs::Board,
+    /// The help box, open (`/help`).
+    pub help: Option<crate::helpbox::HelpBox>,
+    /// The loop this session ran, ended, as its card says it (T60a): `↻ ended 2/2`.
+    pub loop_ended: Option<String>,
     /// `glut_file`'s `pick_model` waiting for the owner's pick (T37c).
     model_pick: Option<oneshot::Sender<Option<(String, String)>>>,
     /// When its list came up: keys before [`ASK_SETTLE`] has passed do not pick from it.
@@ -528,6 +532,8 @@ impl App {
             todos: Vec::new(),
             project_todos: crate::todos::Todos::default(),
             runs: crate::runs::Board::default(),
+            loop_ended: None,
+            help: None,
             model_pick: None,
             model_pick_opened: Instant::now(),
             guide_checked,
@@ -1519,6 +1525,7 @@ impl App {
                     self.picker = None;
                     self.review.open = false;
                     self.keys_sheet = None;
+                    self.help = None;
                     self.search = None;
                 } else if self.plan_view.as_ref().is_some_and(|view| view.asking) {
                     // A dialog whose ask is gone answers nothing else.
@@ -1942,6 +1949,7 @@ impl App {
             TermEvent::Paste(text)
                 if self.ask.is_none()
                     && self.picker.is_none()
+                    && self.help.is_none()
                     && self.keys_sheet.is_none()
                     && self.reading.is_none() =>
             {
@@ -1990,6 +1998,12 @@ impl App {
                 // Over a list, the review or the plan the stream below takes no wheel and no click.
                 MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
                     if self.picker.is_some() || self.review.open => {}
+                // The wheel over the help box rolls its list or its page.
+                MouseEventKind::ScrollUp | MouseEventKind::ScrollDown if self.help.is_some() => {
+                    if let Some(help) = &mut self.help {
+                        help.wheel(mouse.kind == MouseEventKind::ScrollUp, WHEEL_LINES);
+                    }
+                }
                 MouseEventKind::ScrollUp if self.keys_sheet.is_some() => {
                     if let Some(scroll) = &mut self.keys_sheet {
                         *scroll = scroll.saturating_sub(WHEEL_LINES);
@@ -2202,6 +2216,12 @@ impl App {
         }
         if self.picker.is_some() {
             return self.on_picker_key(key);
+        }
+        if let Some(help) = &mut self.help {
+            if help.key(key, self.overlay_rows) == crate::helpbox::Step::Close {
+                self.help = None;
+            }
+            return;
         }
         if self.keys_sheet.is_some() {
             return self.on_sheet_key(key);
@@ -3021,10 +3041,20 @@ impl App {
         let (name, rest) = line.split_once(' ').unwrap_or((line, ""));
         let rest = rest.trim();
         match name {
-            "help" | "?" => self.transcript.note(crate::commands::help(), Tone::Quiet),
+            // The help box (the owner's Mac test of T60): the list, or a command's page at once.
+            "help" | "?" if rest.is_empty() => self.help = Some(crate::helpbox::HelpBox::default()),
+            "help" | "?" => match crate::helpbox::HelpBox::at(rest) {
+                Some(help) => self.help = Some(help),
+                None => self.transcript.note(
+                    tr!(help_unknown, name = crate::transcript::clean(rest)),
+                    Tone::Quiet,
+                ),
+            },
             "mcp" => self.mcp_command(rest),
             "quit" | "exit" | "q" => self.quit = true,
             "clear" => {
+                // A loop that ended belongs to the conversation that goes.
+                self.loop_ended = None;
                 self.forget_warm();
                 self.forget_masks();
                 self.side = None;
@@ -5545,6 +5575,7 @@ impl App {
     fn overlaid(&self) -> bool {
         self.picture_view.is_some()
             || self.picker.is_some()
+            || self.help.is_some()
             || self.keys_sheet.is_some()
             || self.review.open
             || self.plan_view.is_some()
@@ -5776,11 +5807,20 @@ impl App {
                 }
                 Row::Sub(path) => self.agent_view = Some(crate::agents::View::new(path.clone())),
             },
-            KeyCode::Char('x') => {
-                if let Row::Sub(path) = &rows[chosen] {
-                    self.stop_subagent(&path.clone());
+            KeyCode::Char('x') => match &rows[chosen] {
+                Row::Sub(path) => self.stop_subagent(&path.clone()),
+                // A loop's card (T60a): x ends the loop between its rounds too, where Esc reaches only
+                // a round under way.
+                Row::Behind(name)
+                    if self
+                        .background
+                        .iter()
+                        .any(|agent| agent.name == *name && agent.looping.is_some()) =>
+                {
+                    self.pane_request = Some(crate::panes::Request::LoopStop(Some(name.clone())));
                 }
-            }
+                Row::Behind(_) => {}
+            },
             KeyCode::Esc => self.agents_list = None,
             _ => {
                 self.agents_list = None;
@@ -6418,7 +6458,7 @@ impl App {
                 plan.state = crate::plan::State::SentBack(None);
             }
         }
-        if self.picker.take().is_some() {
+        if self.picker.take().is_some() || self.help.take().is_some() {
             return;
         }
         if !self.input.is_empty() {
@@ -10050,6 +10090,7 @@ pub(crate) mod tests {
             cache: None,
             working: None,
             looping: None,
+            looped: None,
         };
         app.background = vec![
             behind("texter", crate::agents::Doing::Rests),
@@ -10507,6 +10548,12 @@ pub(crate) mod tests {
         let (mut app, _reports) = app();
         typed(&mut app, "/help");
         assert!(!app.working(), "a command starts no turn");
+        assert!(app.help.is_some(), "the help box");
+        app.on_terminal(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.help.is_none());
+        typed(&mut app, "/help loop");
+        assert!(app.help.as_ref().is_some_and(|help| help.opened.is_some()));
+        app.on_terminal(key(KeyCode::Char('q'), KeyModifiers::NONE));
         typed(&mut app, "/nonesuch");
         let notes: Vec<String> = app
             .transcript
@@ -10517,8 +10564,7 @@ pub(crate) mod tests {
                 _ => None,
             })
             .collect();
-        assert!(notes[0].starts_with("Commands\n"));
-        assert!(notes[1].contains("no command /nonesuch"));
+        assert!(notes[0].contains("no command /nonesuch"), "{notes:?}");
         typed(&mut app, "/effort");
         assert_eq!(
             app.picker.as_ref().map(|picker| picker.title.as_str()),
@@ -10554,13 +10600,8 @@ pub(crate) mod tests {
         app.input.clear();
         app.input.insert_text("/hel");
         app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
-        assert!(
-            app.transcript.blocks.iter().any(|block| matches!(
-                &block.kind,
-                crate::transcript::Kind::Note { text, .. } if text.starts_with("Commands\n")
-            )),
-            "Enter on a part of a name ran /help"
-        );
+        assert!(app.help.is_some(), "Enter on a part of a name ran /help");
+        app.help = None;
         app.input.clear();
         app.input.insert_text("/");
         app.suggested = 0;

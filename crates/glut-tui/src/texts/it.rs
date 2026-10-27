@@ -335,6 +335,13 @@ pub const TEXTS: Texts = Texts {
         ("⌃K", "questo foglio dei tasti"),
     ],
     help_commands: "Comandi",
+    help_title: "Aiuto",
+    help_more: "Tasti e altro",
+    help_more_what: "ogni tasto per tema, !cmd e la modalità vi",
+    help_list_keys: "↑↓ scegli · ⏎ l'aiuto completo · digitare filtra · ⎋ chiude",
+    help_page_keys: "↑↓ PgUp PgDn scorri · ⎋ torna all'elenco · q chiude",
+    help_page_keys_heading: "Tasti",
+    help_unknown: "{name}: questo comando non esiste — /help li elenca",
     help_keys: "Tasti ({legend}; ⌃K li tiene nel pannello laterale)",
     help_also: "Inoltre: !cmd esegue un comando e mostra a Glut il suo output · !!cmd lo esegue solo per te · un \
                 grande incolla appare come [pasted N lines] · trascina per copiare · un clic sulla tessera di un \
@@ -1758,6 +1765,9 @@ pub const TEXTS: Texts = Texts {
     loop_no_turn: "il suo compito non ha avviato alcun turno",
     loop_role_kept: "questo pane interpreta {role}: un ciclo avviato qui lo interpreta anche lui — /loop senza as",
     loop_uncounted: "i prezzi del suo modello sono sconosciuti, quindi lo ferma solo il limite di giri",
+    loop_card_ended: "↻ terminato {rounds}/{most}",
+    loop_pane_hint: "questo agente esegue un ciclo — /loop stop {name} lo termina, come x sulla sua scheda nella \
+                     scheda Agenti o Esc durante un giro",
     schedule_file_broken: "~/.glut/schedules.json non si può leggere: {reason} — non viene sovrascritto",
     schedule_name_bad: "il nome di un piano ha da 1 a 40 lettere minuscole, cifre e -, come morning-tests",
     schedule_task_missing: "un nuovo piano ha bisogno del suo compito: un messaggio, o /skill <name> [a che scopo]",
