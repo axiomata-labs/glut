@@ -67,7 +67,10 @@ pub const TEXTS: Texts = Texts {
             "model",
             "scegliere un modello del provider in uso, o /model <id>",
         ),
-        ("provider", "cambiare provider, o /provider <id>"),
+        (
+            "provider",
+            "cambiare provider, o /provider <id>; /provider key cambia solo la sua chiave",
+        ),
         (
             "login",
             "accedere con un abbonamento — il tuo piano ChatGPT — invece che con una chiave; /login da solo li elenca \
@@ -1083,6 +1086,17 @@ pub const TEXTS: Texts = Texts {
     setup_provider_prompt: "Provider:",
     cli: &[
         (
+            "Changes a provider's key alone — its model, keyEnv and root stay as they are. The key is read without \
+             echo and checked with one small call before the old one is replaced",
+            "Cambiare solo la chiave di un provider — il suo modello, la sua keyEnv e la sua root restano come sono. \
+             La chiave viene letta senza echo e controllata con una piccola chiamata prima di sostituire quella \
+             vecchia",
+        ),
+        (
+            "The provider whose key is changed",
+            "Il provider di cui si cambia la chiave",
+        ),
+        (
             "Signs in to a subscription in the browser — your ChatGPT Plus or Pro plan: glut providers login chatgpt",
             "Accede a un abbonamento nel browser — il tuo piano ChatGPT Plus o Pro: glut providers login chatgpt",
         ),
@@ -1700,6 +1714,20 @@ pub const TEXTS: Texts = Texts {
     mcp_no_waiting: "nessun accesso di {name} è in attesa — /mcp login {name}",
     secret_token: "token per {name} su {host}:",
     secret_client: "secret del client {id} (⏎ vuoto: nessuno):",
+    secret_provider_key: "nuova chiave per {id}:",
+    key_error: "/provider key: {reason}",
+    key_too_long: "più di {max} byte: nessuna chiave è così lunga — non è stato salvato nulla",
+    key_sign_in: "{id} accede a un abbonamento invece di prendere una chiave: /login {id}",
+    key_no_key_needed: "{id} non ha bisogno di chiave",
+    key_env_now: "la chiave di {id} viene da ${name}: cambiala lì",
+    key_checking: "controllo della nuova chiave di {id} sulla sua lista di modelli…",
+    key_check_failed: "la nuova chiave non funziona: {reason}",
+    key_ask_title: "La nuova chiave non funziona — la vecchia è ancora salvata",
+    key_keep_new: "Tieni comunque la nuova chiave",
+    key_keep_old: "Tieni la vecchia chiave",
+    key_changed: "La nuova chiave di {id} è salvata; nient’altro della sua voce è cambiato.",
+    key_kept_old: "La vecchia chiave di {id} resta; non è stato cambiato nulla.",
+    key_next_turn: "Il turno in corso tiene la vecchia chiave; /provider {id} prende la nuova quando finisce.",
     hint_secret: "nascosto · ⏎ salva · Esc rinuncia",
     mcp_refused: "non approvato — glut mcp login {name} lo chiede in un terminale",
     mcp_token_elsewhere: "{name} riceve i suoi token da {host}",

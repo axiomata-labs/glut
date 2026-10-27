@@ -17,6 +17,8 @@ pub enum Pick {
         model: String,
     },
     Provider(String),
+    /// `/provider key`'s question after a new key did not check out (T70): keep it anyway (`true`) or the old one.
+    KeyKeep(bool),
     Effort(Option<Effort>),
     Editor(String),
     Session(String),

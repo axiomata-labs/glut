@@ -22,6 +22,7 @@ mod helpbox;
 mod highlight;
 pub mod host;
 mod input;
+mod key;
 mod layout;
 mod linebreak;
 mod links;

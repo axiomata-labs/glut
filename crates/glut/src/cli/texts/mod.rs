@@ -132,6 +132,24 @@ crate::catalog! {
         no_key_given: &'static str,
         /// A key with spaces or control characters.
         key_odd: &'static str,
+        /// Asks for the key that changes another one (T70): `{id}`.
+        key_prompt_new: &'static str,
+        /// `key` on a provider the owner signs in to instead (T70): `{id}`.
+        key_sign_in: &'static str,
+        /// `key` on a provider that needs no key (T70): `{id}`.
+        key_no_key_needed: &'static str,
+        /// `key` while the key comes from the environment right now (T70): `{id}`, `{name}` the variable.
+        key_env_now: &'static str,
+        /// Before the small call that proves the new key (T70): `{id}`.
+        key_checking: &'static str,
+        /// The new key does not prove itself (T70): `{reason}`.
+        key_check_failed: &'static str,
+        /// Asked when the new key does not prove itself (T70): nothing typed keeps the old key.
+        key_keep_anyway: &'static str,
+        /// The new key kept, checked before it replaced the old one (T70): `{id}`, `{place}` the store.
+        key_changed: &'static str,
+        /// The old key kept, the new one not proven (T70): `{id}`.
+        key_kept_old: &'static str,
         /// A provider that is not there: `{id}`.
         no_such_provider: &'static str,
         /// A provider removed: `{id}`.

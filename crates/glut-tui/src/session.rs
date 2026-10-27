@@ -74,6 +74,8 @@ pub enum Report {
     Side(u64, crate::btw::Came),
     /// What a `/mcp` command came to (T56): a note, a secret to ask for, a sign-in that waits for the browser.
     Mcp(crate::mcp::Step),
+    /// What `/provider key` came to (T70): a note, the question after a check that failed, the outcome.
+    Key(crate::key::Step),
     /// The walk of the folder for `@` ended: its files, and whether there were more.
     Files((Vec<String>, bool)),
     /// `/handoff write` ended: where the handoff is and what it cost, or why there is none; the conversation as it was.

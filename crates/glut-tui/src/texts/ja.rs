@@ -66,7 +66,7 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "provider",
-            "プロバイダーを切り替える、または /provider <id>",
+            "プロバイダーを切り替える、または /provider <id>。/provider key はキーだけを変更します",
         ),
         (
             "login",
@@ -1001,6 +1001,16 @@ pub const TEXTS: Texts = Texts {
     setup_provider_prompt: "プロバイダー:",
     cli: &[
         (
+            "Changes a provider's key alone — its model, keyEnv and root stay as they are. The key is read without \
+             echo and checked with one small call before the old one is replaced",
+            "プロバイダーのキーだけを変更します — モデル、keyEnv、ルートはそのままです。キーはエコーなしで読み取り、\
+             古いものを置き換える前に小さな呼び出しで確認します",
+        ),
+        (
+            "The provider whose key is changed",
+            "キーを変更するプロバイダー",
+        ),
+        (
             "Signs in to a subscription in the browser — your ChatGPT Plus or Pro plan: glut providers login chatgpt",
             "ブラウザーでサブスクリプションにサインインします — ChatGPT Plus または Pro プラン：glut providers login chatgpt",
         ),
@@ -1583,6 +1593,20 @@ pub const TEXTS: Texts = Texts {
     mcp_no_waiting: "待機中の {name} のサインインはありません — /mcp login {name}",
     secret_token: "{host} の {name} 用 Token:",
     secret_client: "クライアント {id} のシークレット（⏎ 空: なし）:",
+    secret_provider_key: "{id} の新しいキー:",
+    key_error: "/provider key: {reason}",
+    key_too_long: "{max} バイトを超えています: そんなに長いキーはありません — 何も保存していません",
+    key_sign_in: "{id} はキーではなくサブスクリプションにサインインします: /login {id}",
+    key_no_key_needed: "{id} にキーは不要です",
+    key_env_now: "{id} のキーは ${name} から来ます。そこで変更してください",
+    key_checking: "{id} の新しいキーをモデル一覧で確認しています…",
+    key_check_failed: "新しいキーが使えません: {reason}",
+    key_ask_title: "新しいキーが使えません — 古いキーはまだ保存されています",
+    key_keep_new: "それでも新しいキーを保持する",
+    key_keep_old: "古いキーを保持する",
+    key_changed: "{id} の新しいキーを保存しました。エントリの他のものは変わっていません。",
+    key_kept_old: "{id} の従来のキーを残しました。何も変更していません。",
+    key_next_turn: "実行中のターンは古いキーのままです。終わったら /provider {id} が新しいキーを使います。",
     hint_secret: "非表示 · ⏎ 保存 · Esc やめる",
     mcp_refused: "未承認 — glut mcp login {name} がターミナルで確認します",
     mcp_token_elsewhere: "{name} は {host} から Token を受け取ります",

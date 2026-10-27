@@ -45,8 +45,17 @@ pub fn next_sign_in() -> u64 {
 /// What a hidden entry is for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SecretFor {
-    Token { name: String },
-    ClientSecret { name: String },
+    Token {
+        name: String,
+    },
+    ClientSecret {
+        name: String,
+    },
+    /// A provider's new key (`/provider key [id]`, T70): kept under `account` — the entry around it unchanged.
+    Key {
+        id: String,
+        account: String,
+    },
 }
 
 /// A secret the owner types, hidden (T56): a server's token, a client's secret.
@@ -273,6 +282,8 @@ pub fn secret_given(
 ) {
     let name = match &purpose {
         SecretFor::Token { name } | SecretFor::ClientSecret { name } => name.clone(),
+        // `/provider key` never comes here: the screen sends it to `key::change` (T70).
+        SecretFor::Key { id, .. } => id.clone(),
     };
     let found = entry(&parts, &name).and_then(|entry| Ok((hosted(&entry)?, entry)));
     let ((url, entry), keys) = match found.and_then(|found| Ok((found, keys(&parts)?))) {
@@ -302,6 +313,8 @@ pub fn secret_given(
             }
             begin(parts, entry, url, keys, reports);
         }
+        // `/provider key` never comes here (T70): `on_secret_key` sends it to `key::change`.
+        SecretFor::Key { .. } => {}
     }
 }
 

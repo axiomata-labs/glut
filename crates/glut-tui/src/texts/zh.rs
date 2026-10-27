@@ -57,7 +57,10 @@ pub const TEXTS: Texts = Texts {
         ("quit", "结束会话"),
         ("exit", "结束会话，同 /quit"),
         ("model", "选择当前提供商的模型，或 /model <id>"),
-        ("provider", "切换提供商，或 /provider <id>"),
+        (
+            "provider",
+            "切换提供商，或 /provider <id>；/provider key 只更改其密钥",
+        ),
         (
             "login",
             "用订阅（你的 ChatGPT 套餐）代替密钥登录；单独 /login 列出各订阅及其状态，⏎ 登录或退出",
@@ -926,6 +929,12 @@ pub const TEXTS: Texts = Texts {
     setup_provider_prompt: "提供商：",
     cli: &[
         (
+            "Changes a provider's key alone — its model, keyEnv and root stay as they are. The key is read without \
+             echo and checked with one small call before the old one is replaced",
+            "单独更改提供商的密钥 — 其模型、keyEnv 和根地址保持不变。密钥以无回显方式读取，并在替换旧密钥之前用一次小调用检查",
+        ),
+        ("The provider whose key is changed", "要更改其密钥的提供商"),
+        (
             "Signs in to a subscription in the browser — your ChatGPT Plus or Pro plan: glut providers login chatgpt",
             "在浏览器中登录订阅 — 你的 ChatGPT Plus 或 Pro 套餐：glut providers login chatgpt",
         ),
@@ -1490,6 +1499,20 @@ pub const TEXTS: Texts = Texts {
     mcp_no_waiting: "没有等待中的 {name} 登录 — /mcp login {name}",
     secret_token: "{name} 在 {host} 的 token：",
     secret_client: "客户端 {id} 的密钥（⏎ 留空：无）：",
+    secret_provider_key: "{id} 的新密钥：",
+    key_error: "/provider key：{reason}",
+    key_too_long: "超过 {max} 字节：没有这么长的密钥 — 未保存任何内容",
+    key_sign_in: "{id} 登录订阅而不使用密钥：/login {id}",
+    key_no_key_needed: "{id} 不需要密钥",
+    key_env_now: "{id} 的密钥来自 ${name}；请在那里更改",
+    key_checking: "正在用模型列表检查 {id} 的新密钥…",
+    key_check_failed: "新密钥不可用：{reason}",
+    key_ask_title: "新密钥不可用 — 旧密钥仍然保留",
+    key_keep_new: "仍然保留新密钥",
+    key_keep_old: "保留旧密钥",
+    key_changed: "{id} 的新密钥已保存；其条目的其他内容没有变化。",
+    key_kept_old: "{id} 的原密钥保持不变；没有做任何更改。",
+    key_next_turn: "正在进行的轮次沿用旧密钥；它结束后 /provider {id} 会使用新密钥。",
     hint_secret: "不显示 · ⏎ 保存 · Esc 放弃",
     mcp_refused: "未批准 — glut mcp login {name} 会在终端中询问",
     mcp_token_elsewhere: "{name} 从 {host} 获取其 token",

@@ -300,6 +300,9 @@ pub struct App {
     pub search: Option<Search>,
     /// A secret the owner types hidden for `/mcp login` (T56), while it is asked.
     pub secret: Option<crate::mcp::Secret>,
+    /// The answer to `/provider key`'s question after a check that failed (T70): the task holding the new key waits
+    /// for it, and no answer at all keeps the old key.
+    key_answer: Option<oneshot::Sender<bool>>,
     /// A sign-in's address, waiting for the owner's ⏎ to open it in the browser (T56).
     pub opening: Option<crate::mcp::Opening>,
     /// The sign-ins that wait for the browser, by server, with their number: an address pasted back goes to the
@@ -571,6 +574,7 @@ impl App {
             press: None,
             search: None,
             secret: None,
+            key_answer: None,
             opening: None,
             mcp_waiting: std::collections::HashMap::new(),
             toast: None,
@@ -1260,6 +1264,8 @@ impl App {
         }
         // A picker left open (glut -r with a first message) is no place to choose from while the turn runs.
         self.picker = None;
+        // Nor is the question of a new key: unanswered, the old key stays (T70).
+        self.key_answer = None;
         // The turn reads the cache itself: no keeping beside it.
         self.keeper = None;
         // Another pane's model is not the owner (T36c): its message stands apart, and only the owner's word ends a
@@ -1875,6 +1881,7 @@ impl App {
                 }
             }
             Report::Mcp(step) => self.mcp_step(step),
+            Report::Key(step) => self.key_step(step),
             Report::Side(id, came) => self.side_came(id, came),
             Report::Files(found) => {
                 let (files, truncated) = found;
@@ -3094,6 +3101,9 @@ impl App {
                 Some(rest.to_owned()),
                 Some(self.engine.endpoint.effort),
             ),
+            "provider" if rest == "key" || rest.starts_with("key ") => {
+                self.provider_key(rest.strip_prefix("key").unwrap_or_default().trim())
+            }
             "provider" if rest.is_empty() => self.picker = Some(self.provider_picker()),
             "login" => self.login_command(rest),
             "provider" => self.switch(
@@ -5211,6 +5221,8 @@ impl App {
         match key.code {
             KeyCode::Esc => {
                 self.picker = None;
+                // The question of a new key that did not check out: no answer keeps the old key (T70).
+                self.key_answer = None;
                 // `pick_model` waits for an answer: none picked is one.
                 if let Some(reply) = self.model_pick.take() {
                     let _ = reply.send(None);
@@ -5266,6 +5278,7 @@ impl App {
                         self.switch(Some(provider), None, Some(self.engine.endpoint.effort))
                     }
                     Some(Pick::Effort(effort)) => self.switch_effort(effort),
+                    Some(Pick::KeyKeep(keep)) => self.answer_key(keep),
                     Some(Pick::Editor(command)) => self.set_editor(&command),
                     // A turn under way holds the conversation: opening another now would save the turn into it.
                     Some(Pick::Session(_)) if self.working() => {
@@ -7173,6 +7186,92 @@ impl App {
         }
     }
 
+    /// `/provider key [id]` (T70): a provider's key changed alone. The key is asked for hidden; a provider that signs
+    /// in, needs none or takes its key from its environment variable right now is told so instead.
+    fn provider_key(&mut self, id: &str) {
+        if self.parts.fixed_engine {
+            return self.transcript.note(tr!(model_locked), Tone::Fault);
+        }
+        let providers = match Providers::load(&self.parts.home) {
+            Ok(providers) => providers,
+            Err(err) => {
+                return self
+                    .transcript
+                    .note(tr!(key_error, reason = err.to_string()), Tone::Fault);
+            }
+        };
+        let asked = (!id.is_empty()).then_some(id);
+        match glut::providers::key_change(&providers, asked, |name| std::env::var(name).ok()) {
+            Ok(glut::providers::KeyChange::Asked { id, account }) => {
+                self.secret = Some(crate::mcp::Secret {
+                    prompt: tr!(secret_provider_key, id = id),
+                    typed: String::new(),
+                    purpose: crate::mcp::SecretFor::Key { id, account },
+                    opened: Instant::now(),
+                });
+            }
+            Ok(glut::providers::KeyChange::SignedIn(id)) => {
+                self.transcript.note(tr!(key_sign_in, id = id), Tone::Quiet)
+            }
+            Ok(glut::providers::KeyChange::NotNeeded(id)) => self
+                .transcript
+                .note(tr!(key_no_key_needed, id = id), Tone::Quiet),
+            Ok(glut::providers::KeyChange::Env { id, name }) => self
+                .transcript
+                .note(tr!(key_env_now, id = id, name = name), Tone::Quiet),
+            Err(reason) => self
+                .transcript
+                .note(crate::transcript::clean(&reason), Tone::Fault),
+        }
+    }
+
+    /// What `/provider key` came to (T70).
+    fn key_step(&mut self, step: crate::key::Step) {
+        use crate::key::Step;
+        match step {
+            Step::Note(text, tone) => self.transcript.note(text, tone),
+            Step::Ask { reason, answer } => {
+                self.transcript.note(
+                    tr!(key_check_failed, reason = crate::transcript::clean(&reason)),
+                    Tone::Fault,
+                );
+                self.key_answer = Some(answer);
+                // The old key is the one selected: a stray ⏎ keeps what works.
+                let items = vec![
+                    Item::plain(tr!(key_keep_new), "", Pick::KeyKeep(true)),
+                    Item::plain(tr!(key_keep_old), "", Pick::KeyKeep(false)),
+                ];
+                self.picker = Some(
+                    Picker::new(tr!(key_ask_title), items, Some(&Pick::KeyKeep(false))).guarded(),
+                );
+            }
+            Step::Kept { id, kept: false } => self
+                .transcript
+                .note(tr!(key_kept_old, id = id), Tone::Quiet),
+            Step::Kept { id, kept: true } => {
+                self.transcript.note(tr!(key_changed, id = id), Tone::Fine);
+                // At once (Q2): the engine is built again as `/provider` does, so the next turn sends the new key.
+                if id != self.engine.provider {
+                    return;
+                }
+                if self.working() {
+                    return self
+                        .transcript
+                        .note(tr!(key_next_turn, id = id), Tone::Quiet);
+                }
+                let model = self.engine.model_name().to_owned();
+                self.switch(Some(id), Some(model), Some(self.engine.endpoint.effort));
+            }
+        }
+    }
+
+    /// The owner's word on keeping a new key that did not check out (T70).
+    fn answer_key(&mut self, keep: bool) {
+        if let Some(answer) = self.key_answer.take() {
+            let _ = answer.send(keep);
+        }
+    }
+
     /// `/login [provider] [address]` (PV4): the subscriptions with how each stands, Enter signing in or out; with a
     /// provider, its sign-in at once; with an address after it, the one the browser ended on, pasted back to the
     /// sign-in that waits (over SSH).
@@ -7221,12 +7320,22 @@ impl App {
             }
             KeyCode::Enter => {
                 if let Some(secret) = self.secret.take() {
-                    crate::mcp::secret_given(
-                        Arc::clone(&self.parts),
-                        secret.purpose,
-                        secret.typed,
-                        self.reports.clone(),
-                    );
+                    match secret.purpose {
+                        // A provider's new key (T70) is checked and kept beside the screen, never by the MCP code.
+                        crate::mcp::SecretFor::Key { id, account } => crate::key::change(
+                            Arc::clone(&self.parts),
+                            id,
+                            account,
+                            secret.typed,
+                            self.reports.clone(),
+                        ),
+                        purpose => crate::mcp::secret_given(
+                            Arc::clone(&self.parts),
+                            purpose,
+                            secret.typed,
+                            self.reports.clone(),
+                        ),
+                    }
                 }
             }
             KeyCode::Backspace => {
@@ -9589,6 +9698,136 @@ pub(crate) mod tests {
                 .is_some_and(|lent| lent.conversation == before),
             "the turn's copy untouched"
         );
+    }
+
+    /// T70: `/provider key` asks hidden, says why it asks nothing for a provider with no key of its own, and a key
+    /// that did not check out is a question whose default is the old key — Esc, a new turn and no answer all keep it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn provider_key_is_typed_hidden_asks_after_a_failed_check_and_switches_at_once() {
+        use crate::key::Step;
+        let (mut app, _reports) = app();
+        let home = app.parts.home.clone();
+        std::fs::create_dir_all(home.join(".glut")).unwrap();
+        std::fs::write(
+            home.join(".glut/providers.json"),
+            r#"{"credentialStore":"file","default":"openrouter","providers":{
+                "openrouter":{"kind":"openrouter","model":"m"},
+                "chatgpt":{"kind":"chatgpt"},"ollama":{"kind":"ollama"}}}"#,
+        )
+        .unwrap();
+        for (command, said) in [
+            ("provider key chatgpt", "signs in to a subscription"),
+            ("provider key ollama", "needs no key"),
+            ("provider key nonesuch", "no provider nonesuch"),
+        ] {
+            app.command(command);
+            assert!(app.secret.is_none(), "{command}: nothing to type");
+            assert!(
+                last_note(&app).contains(said),
+                "{command}: {}",
+                last_note(&app)
+            );
+        }
+        // Without an id the default provider's key is asked for, hidden.
+        app.command("provider key");
+        let secret = app.secret.as_ref().expect("the hidden entry is open");
+        assert_eq!(
+            secret.purpose,
+            crate::mcp::SecretFor::Key {
+                id: "openrouter".into(),
+                account: "openrouter@openrouter.ai".into()
+            }
+        );
+        assert!(secret.prompt.contains("openrouter"));
+        app.on_terminal(key(KeyCode::Char('x'), KeyModifiers::NONE));
+        assert_eq!(
+            app.secret.as_ref().map(|s| s.typed.as_str()),
+            Some(""),
+            "too soon"
+        );
+        std::thread::sleep(ASK_SETTLE);
+        app.on_terminal(TermEvent::Paste("sk-pasted\n".into()));
+        assert_eq!(
+            app.secret.as_ref().map(|s| s.typed.as_str()),
+            Some("sk-pasted")
+        );
+        assert!(app.input.text().is_empty(), "never the input's");
+        app.on_terminal(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.secret.is_none() && last_note(&app).contains("nothing kept"));
+
+        // The check failed: a picker with the old key chosen; Esc gives no answer, which keeps the old key.
+        let ask = |app: &mut App, reason: &str| {
+            let (answer, kept) = oneshot::channel();
+            app.on_report(Report::Key(Step::Ask {
+                reason: reason.into(),
+                answer,
+            }));
+            kept
+        };
+        let mut kept = ask(&mut app, "the provider answered 401 Unauthorized");
+        assert!(last_note(&app).contains("401 Unauthorized"));
+        assert_eq!(
+            app.picker.as_ref().and_then(|picker| picker.chosen()),
+            Some(Pick::KeyKeep(false)),
+            "a stray ⏎ keeps what works"
+        );
+        app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.picker.is_some(), "no key in the picker's first moment");
+        std::thread::sleep(ASK_SETTLE);
+        app.on_terminal(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.picker.is_none());
+        assert!(kept.try_recv().is_err(), "no answer: the old key stays");
+        // Keep it anyway, and the old one, by the owner's pick.
+        for (up, wanted) in [(true, true), (false, false)] {
+            let mut kept = ask(&mut app, "no list");
+            std::thread::sleep(ASK_SETTLE);
+            if up {
+                app.on_terminal(key(KeyCode::Up, KeyModifiers::NONE));
+            }
+            app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
+            assert_eq!(kept.try_recv().ok(), Some(wanted));
+        }
+        // A turn begun meanwhile ends the question: unanswered.
+        let mut kept = ask(&mut app, "no list");
+        app.send("hello".into());
+        assert!(app.picker.is_none() && kept.try_recv().is_err());
+        app.busy = None;
+
+        // The old key stays: a note, no switch. Another provider's key: no switch either.
+        app.on_report(Report::Key(Step::Kept {
+            id: "openrouter".into(),
+            kept: false,
+        }));
+        assert!(last_note(&app).contains("old key of openrouter stays"));
+        app.on_report(Report::Key(Step::Kept {
+            id: "openrouter".into(),
+            kept: true,
+        }));
+        assert!(last_note(&app).contains("new key of openrouter is kept"));
+        assert!(app.busy.is_none(), "the session is on another provider");
+        // The provider in use: the engine is built again, at once, on the same model — unless a turn is under way.
+        let in_use = app.engine.provider.clone();
+        app.busy = Some(Busy::Turn);
+        app.on_report(Report::Key(Step::Kept {
+            id: in_use.clone(),
+            kept: true,
+        }));
+        assert!(matches!(app.busy, Some(Busy::Turn)));
+        assert!(
+            last_note(&app).contains(&format!("/provider {in_use}")),
+            "{}",
+            last_note(&app)
+        );
+        app.busy = None;
+        app.on_report(Report::Key(Step::Kept {
+            id: in_use,
+            kept: true,
+        }));
+        assert!(
+            matches!(app.busy, Some(Busy::Switching)),
+            "built again as /provider does"
+        );
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[tokio::test(flavor = "multi_thread")]
