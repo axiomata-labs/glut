@@ -1656,6 +1656,154 @@ glut::catalog! {
         loop_role_kept: &'static str,
         /// Added where a loop starts on a model without prices.
         loop_uncounted: &'static str,
+        /// `~/.glut/schedules.json` cannot be read.
+        schedule_file_broken: &'static str,
+        /// A plan's name that cannot be one.
+        schedule_name_bad: &'static str,
+        /// A new plan without its task.
+        schedule_task_missing: &'static str,
+        /// A plan's task that is another of the owner's commands.
+        schedule_task_command: &'static str,
+        /// `--at` without a time of day.
+        schedule_at_bad: &'static str,
+        /// `--days` without days.
+        schedule_days_bad: &'static str,
+        /// `--every` without an interval Glut takes.
+        schedule_every_bad: &'static str,
+        /// `--days` given to a plan that runs `--every`.
+        schedule_days_without_at: &'static str,
+        /// A new plan without its times.
+        schedule_when_missing: &'static str,
+        /// `--mode` without a mode.
+        schedule_mode_bad: &'static str,
+        /// `--allow` or `--deny` with no rule.
+        schedule_rule_bad: &'static str,
+        /// `--max-usd` without an amount Glut takes.
+        schedule_usd_bad: &'static str,
+        /// `--max-minutes` out of its range.
+        schedule_minutes_bad: &'static str,
+        /// A plan's folder that is not there.
+        schedule_folder_gone: &'static str,
+        /// launchd refused a plan's agent.
+        schedule_launchd_failed: &'static str,
+        /// A plan's name that names none.
+        schedule_unknown: &'static str,
+        /// Above what a new plan may do.
+        schedule_made: &'static str,
+        /// Above what a changed plan may do.
+        schedule_changed: &'static str,
+        /// When and where a plan runs.
+        schedule_shown_when: &'static str,
+        /// A plan's task.
+        schedule_shown_task: &'static str,
+        /// A plan's model, fixed at making.
+        schedule_shown_model: &'static str,
+        /// A plan's mode and what it lets the run do.
+        schedule_shown_mode: &'static str,
+        /// What `ask` lets a plan's run do.
+        schedule_means_ask: &'static str,
+        /// What `build` lets a plan's run do.
+        schedule_means_build: &'static str,
+        /// What `plan` lets a plan's run do.
+        schedule_means_plan: &'static str,
+        /// What `dont_ask` lets a plan's run do.
+        schedule_means_dont_ask: &'static str,
+        /// What `auto` lets a plan's run do.
+        schedule_means_auto: &'static str,
+        /// The rules a plan allows.
+        schedule_shown_allow: &'static str,
+        /// The rules a plan refuses.
+        schedule_shown_deny: &'static str,
+        /// A plan's folders beside its own.
+        schedule_shown_folders: &'static str,
+        /// Where a plan's run ends.
+        schedule_shown_limits: &'static str,
+        /// Whose rules count beside a plan's.
+        schedule_shown_owner_rules: &'static str,
+        /// When launchd runs a plan.
+        schedule_shown_logged_in: &'static str,
+        /// A plan changed while it is paused.
+        schedule_shown_paused: &'static str,
+        /// A plan that runs every day.
+        schedule_when_at: &'static str,
+        /// A plan that runs on some days.
+        schedule_when_at_days: &'static str,
+        /// A plan that runs every so often.
+        schedule_when_every: &'static str,
+        /// `glut schedule list` without plans.
+        schedule_none: &'static str,
+        /// A paused plan's next time.
+        schedule_paused_mark: &'static str,
+        /// A plan that never ran.
+        schedule_never: &'static str,
+        /// How a plan's last run ended.
+        schedule_last: &'static str,
+        /// One plan in `glut schedule list`.
+        schedule_line: &'static str,
+        /// `glut schedule pause` done.
+        schedule_paused: &'static str,
+        /// `glut schedule resume` done.
+        schedule_resumed: &'static str,
+        /// `glut schedule remove` done.
+        schedule_removed: &'static str,
+        /// A plan's run while the one before still runs.
+        schedule_running_already: &'static str,
+        /// How a plan's run ended, told.
+        schedule_run_line: &'static str,
+        /// What a plan's run asked and was refused.
+        schedule_asks_refused: &'static str,
+        /// A plan's model without prices.
+        schedule_no_prices: &'static str,
+        /// `tell` in a plan's run.
+        schedule_no_panes: &'static str,
+        /// A run that answered.
+        schedule_outcome_answered: &'static str,
+        /// A run that failed.
+        schedule_outcome_failed: &'static str,
+        /// A run that spent its budget.
+        schedule_outcome_budget: &'static str,
+        /// A run past its time limit.
+        schedule_outcome_timeout: &'static str,
+        /// A run that refusals ended.
+        schedule_outcome_refused: &'static str,
+        /// A run that was stopped.
+        schedule_outcome_stopped: &'static str,
+        /// A run that did not start because the one before still ran.
+        schedule_outcome_skipped: &'static str,
+        /// A run that could not start.
+        schedule_outcome_unstarted: &'static str,
+        /// The Runs tab's keys while its list has them.
+        keys_runs: &'static str,
+        /// `d` on the Runs tab: the question before a plan is deleted.
+        runs_delete_ask: &'static str,
+        /// The Runs tab's top line while loops run (T60a).
+        runs_loops: &'static str,
+        /// The Runs tab without plans.
+        runs_none: &'static str,
+        /// When a plan runs next, on its tile.
+        runs_next: &'static str,
+        /// An opened plan's limits and model.
+        runs_limits: &'static str,
+        /// Above an opened plan's last runs.
+        runs_last_ten: &'static str,
+        /// `r` or `/schedule run`: a plan's run started beside Glut.
+        runs_started: &'static str,
+        /// `/schedule` with words it does not take.
+        schedule_usage: &'static str,
+        /// `/schedule add` with a quote left open.
+        schedule_quote_open: &'static str,
+        /// Said at the start: what the plans ran since Glut last started.
+        runs_since: &'static str,
+        /// One plan in `runs_since`: how often it ran and how its last run ended.
+        runs_since_one: &'static str,
+        /// The program a plan would start lies where its commands write.
+        schedule_program_writable: &'static str,
+        /// A plan's run whose PATH reaches where its commands write.
+        schedule_path_writable: &'static str,
+        /// An `auto` plan's run without the sandbox.
+        schedule_auto_unsandboxed: &'static str,
+        /// `r` on the Runs tab: the question before a plan runs now.
+        runs_run_ask: &'static str,
         /// `/secrets allow` with a number no value has: `{n}`.
         secrets_no_such: &'static str,
         /// Value `{n}` let through for this session.
@@ -1912,8 +2060,8 @@ mod tests {
     fn every_language_names_each_tab_and_sort() {
         for lang in Lang::ALL {
             let texts = of(lang);
-            assert_eq!(texts.tab_names.len(), 6, "{}", lang.code());
-            assert_eq!(texts.tab_words.len(), 6, "{}", lang.code());
+            assert_eq!(texts.tab_names.len(), 7, "{}", lang.code());
+            assert_eq!(texts.tab_words.len(), 7, "{}", lang.code());
             assert_eq!(texts.sort_names.len(), 4, "{}", lang.code());
             assert_eq!(texts.key_words.len(), 13, "{}", lang.code());
             assert!(

@@ -109,8 +109,22 @@ pub enum Tab {
     Agents,
     /// The project's `TODO.md` (T41).
     Todos,
+    /// Every plan's timed runs (T60b).
+    Runs,
     /// Every key by topic, only to read (T38).
     Keys,
+}
+
+/// The message `/skill <name> [what for]` sends: the skill loaded first, then followed — a plan's run too (T60b).
+pub(crate) fn skill_prompt(name: &str, text: &str) -> String {
+    let text = text.trim();
+    let mut prompt =
+        format!("Run the skill {name}: load it with the `skill` tool first, then follow it.");
+    if !text.is_empty() {
+        prompt.push_str("\n\n");
+        prompt.push_str(text);
+    }
+    prompt
 }
 
 /// What a click on the side panel lands on (T71): a tab's name, or a row of the Agents or To-dos list.
@@ -120,6 +134,8 @@ pub enum PanelSpot {
     Agent(crate::agents::Row),
     /// The To-dos list's pick, as ↑↓ count them.
     Todo(usize),
+    /// A plan's tile on the Runs tab, by its place in the list.
+    Plan(usize),
 }
 
 /// What runs in the background besides the screen.
@@ -208,6 +224,8 @@ pub struct App {
     pub todos: Vec<glut::planning::TodoItem>,
     /// The project's `TODO.md`, the To-dos tab's (T41).
     pub project_todos: crate::todos::Todos,
+    /// Every plan's timed runs, the Runs tab's (T60b).
+    pub runs: crate::runs::Board,
     /// `glut_file`'s `pick_model` waiting for the owner's pick (T37c).
     model_pick: Option<oneshot::Sender<Option<(String, String)>>>,
     /// When its list came up: keys before [`ASK_SETTLE`] has passed do not pick from it.
@@ -509,6 +527,7 @@ impl App {
             session,
             todos: Vec::new(),
             project_todos: crate::todos::Todos::default(),
+            runs: crate::runs::Board::default(),
             model_pick: None,
             model_pick_opened: Instant::now(),
             guide_checked,
@@ -2212,6 +2231,9 @@ impl App {
         if self.project_todos.keys && self.on_todos_key(key) {
             return;
         }
+        if self.runs.keys && self.on_runs_key(key) {
+            return;
+        }
         if self.search.is_some() {
             self.chord = false;
             return self.on_search_key(key);
@@ -2355,6 +2377,8 @@ impl App {
                 KeyCode::Char('h' | 'H') => self.pane_request = Some(crate::panes::Request::Hide),
                 // TUI9a: the Agents tab (⌃A is the line's start, as in the shell), the reading mode, the panel's keys.
                 KeyCode::Char('a' | 'A') => return self.show_agents(),
+                // T60b: the Runs tab (⌃R is the review).
+                KeyCode::Char('r' | 'R') => return self.open_tab(Tab::Runs),
                 KeyCode::Up => return self.start_reading(),
                 KeyCode::Tab => return self.focus_panel(),
                 // Esc only lets the chord go; another key says it is none (T71) instead of vanishing.
@@ -3171,6 +3195,7 @@ impl App {
             "close" if rest.is_empty() => self.pane_request = Some(crate::panes::Request::Close),
             "close" => self.pane_request = Some(crate::panes::Request::End(rest.to_owned())),
             "loop" => self.loop_command(rest),
+            "schedule" => self.schedule_command(rest),
             "bg" => match crate::panes::parse_background(rest) {
                 Ok(request) => self.pane_request = Some(request),
                 Err(reason) => self.transcript.note(reason, Tone::Fault),
@@ -3565,14 +3590,7 @@ impl App {
                 Tone::Fault,
             );
         }
-        let text = text.trim();
-        let mut prompt =
-            format!("Run the skill {name}: load it with the `skill` tool first, then follow it.");
-        if !text.is_empty() {
-            prompt.push_str("\n\n");
-            prompt.push_str(text);
-        }
-        self.send(prompt);
+        self.send(skill_prompt(name, text));
     }
 
     /// A `pick_model` whose list is no longer on the screen (another list, a dialog, a stop took its place) is
@@ -3674,6 +3692,129 @@ impl App {
             }
         }
         true
+    }
+
+    /// A key while the Runs tab's list has them (T60b): ↑↓ (j k) choose, Enter opens a plan and then a run's
+    /// session, r runs the plan now, p pauses or resumes it, d deletes it once y says yes, ⌫ goes back. Any other key
+    /// gives the keys back and is the input's — false: not taken here.
+    fn on_runs_key(&mut self, key: KeyEvent) -> bool {
+        if self.chord {
+            return false;
+        }
+        let shown = self.panel == Some(true) && self.panel_drawn && self.tab == Tab::Runs;
+        if !shown || !key.modifiers.is_empty() {
+            self.runs.keys = false;
+            return false;
+        }
+        // A held key acts once: each act starts a run or rewrites the plans.
+        if key.kind == crossterm::event::KeyEventKind::Repeat
+            && !matches!(
+                key.code,
+                KeyCode::Up | KeyCode::Down | KeyCode::Char('j' | 'k')
+            )
+        {
+            return true;
+        }
+        self.runs.refresh(&self.parts.home);
+        match self.runs.key(key.code) {
+            None => {
+                self.runs.keys = false;
+                false
+            }
+            Some(None) => true,
+            Some(Some(act)) => {
+                self.runs_act(act);
+                true
+            }
+        }
+    }
+
+    /// What a key on the Runs tab asked for.
+    fn runs_act(&mut self, act: crate::runs::Act) {
+        use crate::runs::Act;
+        let home = self.parts.home.clone();
+        match act {
+            Act::Open { session, folder } if folder == self.parts.config.cwd => {
+                self.open_kept(&session, None)
+            }
+            // T55's way: a session of another project opens there, Glut starting anew in its folder.
+            Act::Open { .. } if !self.parts.projects => self.tell(tr!(projects_hosted)),
+            Act::Open { session, folder } => {
+                self.pane_request = Some(crate::panes::Request::Switch(crate::panes::Switch {
+                    folder,
+                    session: Some(session),
+                    find: None,
+                }));
+            }
+            Act::Run(name) => match crate::scheduled::run_beside(&name) {
+                Ok(()) => self.say(tr!(runs_started, name = name)),
+                Err(reason) => self.transcript.note(reason, Tone::Fault),
+            },
+            Act::Hold(name, paused) => {
+                match crate::scheduled::hold(&home, &name, paused, &crate::schedule::Launchd) {
+                    Ok(said) => self.say(said),
+                    Err(reason) => self.transcript.note(reason, Tone::Fault),
+                }
+                self.runs.stale();
+            }
+            Act::Delete(name) => {
+                match crate::scheduled::remove(&home, &name, &crate::schedule::Launchd) {
+                    Ok(said) => self.say(said),
+                    Err(reason) => self.transcript.note(reason, Tone::Fault),
+                }
+                self.runs.stale();
+            }
+        }
+    }
+
+    /// A run's tile clicked (T60b): the Runs tab at its plan, the list taking the keys.
+    pub fn open_runs(&mut self, plan: &str) {
+        if !(self.panel == Some(true) && self.tab == Tab::Runs) {
+            self.show_tab(Tab::Runs);
+        }
+        self.focus_tab();
+        self.runs.stale();
+        self.runs.refresh(&self.parts.home);
+        self.runs.choose(plan);
+    }
+
+    /// `/schedule` (T60b): the Runs tab; `list` the plans in the stream; `add …` as `glut schedule add`, in this
+    /// session's folder; `run|pause|resume|remove <name>`.
+    fn schedule_command(&mut self, rest: &str) {
+        let home = self.parts.home.clone();
+        let (word, name) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+        let name = name.trim();
+        let launchd = crate::schedule::Launchd;
+        let done = match (word, name) {
+            ("", _) => return self.open_tab(Tab::Runs),
+            ("list", "") => crate::scheduled::list(&home),
+            ("add", _) => {
+                let cwd = self.parts.config.cwd.clone();
+                crate::scheduled::add_line(&home, name, &cwd, &launchd)
+            }
+            ("run", name) if !name.is_empty() => crate::schedule::Schedules::load(&home)
+                .and_then(|schedules| {
+                    schedules
+                        .get(name)
+                        .map(|_| ())
+                        .ok_or_else(|| tr!(schedule_unknown, name = crate::transcript::clean(name)))
+                })
+                .and_then(|()| crate::scheduled::run_beside(name))
+                .map(|()| tr!(runs_started, name = name)),
+            ("pause", name) if !name.is_empty() => {
+                crate::scheduled::hold(&home, name, true, &launchd)
+            }
+            ("resume", name) if !name.is_empty() => {
+                crate::scheduled::hold(&home, name, false, &launchd)
+            }
+            ("remove", name) if !name.is_empty() => crate::scheduled::remove(&home, name, &launchd),
+            _ => Err(tr!(schedule_usage).to_owned()),
+        };
+        self.runs.stale();
+        match done {
+            Ok(said) => self.tell(said),
+            Err(reason) => self.transcript.note(reason, Tone::Fault),
+        }
     }
 
     /// What the editor said of a file it had open (`/memory open`).
@@ -5465,6 +5606,9 @@ impl App {
                     .map(|(_, ids)| ids.clone())
                     .unwrap_or_default()
             }
+            Source::Plans => crate::schedule::Schedules::load(&self.parts.home)
+                .map(|schedules| schedules.plans.into_iter().map(|plan| plan.name).collect())
+                .unwrap_or_default(),
             Source::Skills => self
                 .parts
                 .skills
@@ -5509,6 +5653,7 @@ impl App {
                 if tab != self.tab {
                     self.agents_list = None;
                     self.project_todos.keys = false;
+                    self.runs.keys = false;
                     self.show_tab(tab);
                 }
                 self.focus_tab();
@@ -5520,6 +5665,13 @@ impl App {
             PanelSpot::Todo(pick) => {
                 self.focus_tab();
                 self.project_todos.chosen = pick;
+            }
+            PanelSpot::Plan(at) => {
+                self.focus_tab();
+                self.runs.chosen = at;
+                self.runs.opened = None;
+                self.runs.deleting = false;
+                self.runs.running = false;
             }
         }
     }
@@ -6678,6 +6830,7 @@ impl App {
         self.panel_focus = false;
         self.agents_list = None;
         self.project_todos.keys = false;
+        self.runs.keys = false;
     }
 
     /// The shown tab's list takes the keys where it has one (Agents, To-dos).
@@ -6689,18 +6842,23 @@ impl App {
             self.project_todos.refresh(&self.parts.config.cwd);
             self.project_todos.keys = true;
         }
+        if self.tab == Tab::Runs && !self.runs.keys {
+            self.runs.refresh(&self.parts.home);
+            self.runs.keys = self.runs.len() > 0;
+        }
     }
 
     /// A key while the panel has them: ←→ the tabs, Esc back to the input, the rest the tab's — its list's (Agents,
     /// To-dos) or its scrolling. A key with ⌃ or ⌥ goes on as ever, and a key the tab does not use gives the keys back
     /// and is the input's (T71: the owner types on after a tab's key) — false: not taken here.
     fn on_panel_key(&mut self, key: KeyEvent) -> bool {
-        const TABS: [Tab; 6] = [
+        const TABS: [Tab; 7] = [
             Tab::Plan,
             Tab::Gate,
             Tab::Meter,
             Tab::Agents,
             Tab::Todos,
+            Tab::Runs,
             Tab::Keys,
         ];
         if self.panel != Some(true) || !self.panel_drawn {
@@ -6738,10 +6896,13 @@ impl App {
                 };
                 self.agents_list = None;
                 self.project_todos.keys = false;
+                self.runs.keys = false;
                 self.show_tab(TABS[next]);
                 self.key_the_tab();
                 return true;
             }
+            // What lies open on the Runs tab closes first: its question, an opened plan (T71's rule for Esc).
+            KeyCode::Esc if self.tab == Tab::Runs && self.runs.back() => return true,
             KeyCode::Esc => {
                 self.leave_panel();
                 return true;
@@ -6764,6 +6925,14 @@ impl App {
                 if !taken || !keyed {
                     // A key the list did not take, or one that gave the keys away on purpose (`a` writes `/todo `
                     // into the input): the panel lets go too, and a key not taken is the input's.
+                    self.leave_panel();
+                }
+                return taken;
+            }
+            Tab::Runs => {
+                self.key_the_tab();
+                let taken = self.on_runs_key(key);
+                if !taken || !self.runs.keys {
                     self.leave_panel();
                 }
                 return taken;
@@ -9655,6 +9824,55 @@ pub(crate) mod tests {
             app.search.as_ref().map(|search| search.query.as_str()),
             Some("ab")
         );
+        let _ = std::fs::remove_dir_all(&app.parts.home);
+    }
+
+    #[test]
+    fn the_runs_tab_shows_every_plan_opens_one_and_esc_closes_what_lies_on_top_first() {
+        let (mut app, _reports) = app();
+        let mut schedules = crate::schedule::Schedules::default();
+        schedules.put(crate::schedule::sample("nightly"));
+        schedules.save(&app.parts.home).unwrap();
+        wide_screen(&mut app);
+        app.on_terminal(key(KeyCode::Char('x'), KeyModifiers::CONTROL));
+        app.on_terminal(key(KeyCode::Char('r'), KeyModifiers::NONE));
+        let screen = wide_screen(&mut app);
+        assert_eq!((app.panel, app.tab), (Some(true), Tab::Runs));
+        assert!(app.runs.keys && screen.contains("nightly"), "{screen}");
+        app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.runs.opened, Some(0));
+        assert!(wide_screen(&mut app).contains("run the tests"));
+        // Esc closes the opened plan first, then gives the keys back.
+        app.on_terminal(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.runs.opened.is_none() && app.panel_focus);
+        app.on_terminal(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!app.panel_focus && !app.runs.keys);
+        // d asks, and a no deletes nothing.
+        app.on_terminal(key(KeyCode::Char('x'), KeyModifiers::CONTROL));
+        app.on_terminal(key(KeyCode::Tab, KeyModifiers::NONE));
+        wide_screen(&mut app);
+        app.on_terminal(key(KeyCode::Char('d'), KeyModifiers::NONE));
+        assert!(app.runs.deleting);
+        assert!(wide_screen(&mut app).contains("y yes"));
+        app.on_terminal(key(KeyCode::Char('n'), KeyModifiers::NONE));
+        assert!(!app.runs.deleting);
+        assert_eq!(
+            crate::schedule::Schedules::load(&app.parts.home)
+                .unwrap()
+                .plans
+                .len(),
+            1
+        );
+        // A word /schedule does not take says what it takes.
+        app.command("schedule nonsense");
+        let said = app
+            .transcript
+            .blocks
+            .iter()
+            .any(|block| {
+                matches!(&block.kind, crate::transcript::Kind::Note { text, .. } if text == tr!(schedule_usage))
+            });
+        assert!(said);
         let _ = std::fs::remove_dir_all(&app.parts.home);
     }
 

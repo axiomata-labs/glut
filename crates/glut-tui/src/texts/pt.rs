@@ -144,6 +144,11 @@ pub const TEXTS: Texts = Texts {
              rounds|budget definem onde um termina",
         ),
         (
+            "schedule",
+            "planos que rodam com o Glut fechado, a uma hora ou de tempos em tempos — /schedule add tests --at 07:00 \
+             --days mo-fr rode os testes; /schedule sozinho abre a aba Execuções (⌃X R)",
+        ),
+        (
             "diff",
             "revisar o que o último turno mudou, hunk por hunk; /diff session (⌃R)",
         ),
@@ -255,6 +260,10 @@ pub const TEXTS: Texts = Texts {
         (
             "⌃X A",
             "a aba Agentes: cada subagente e os agentes em segundo plano, ao vivo",
+        ),
+        (
+            "⌃X R",
+            "a aba Execuções: os planos de cada projeto, quando rodam da próxima vez e como terminaram",
         ),
         (
             "⌃X ↑",
@@ -391,7 +400,15 @@ pub const TEXTS: Texts = Texts {
     sorted_by: "ordenado por {sort}{free} · ⌃S ordenar · ⌃F gratuitos",
     not_usable: "{detail} · não utilizável aqui",
     nothing_matches: "nada corresponde",
-    tab_names: &["Plano", "Gate", "Medidor", "Agentes", "Pendentes", "Teclas"],
+    tab_names: &[
+        "Plano",
+        "Gate",
+        "Medidor",
+        "Agentes",
+        "Pendentes",
+        "Execuções",
+        "Teclas",
+    ],
     meter_context: "Contexto",
     meter_of: "{used} de {size} ({share}%)",
     meter_compacts_at: "compacta-se em {at} (│)",
@@ -486,7 +503,15 @@ pub const TEXTS: Texts = Texts {
     review_why: "por quê (⏎ rejeita, pode ficar vazio)",
     review_comment: "comentário (⏎ envia com sua próxima mensagem)",
     review_keys: "↑↓ hunk · ←→ arquivo · a aceitar · r rejeitar · c comentar · v revisado · s turno/sessão · ⎋",
-    tab_words: &["plano", "gate", "medidor", "agentes", "pendentes", "teclas"],
+    tab_words: &[
+        "plano",
+        "gate",
+        "medidor",
+        "agentes",
+        "pendentes",
+        "execuções",
+        "teclas",
+    ],
     sort_names: &["nome", "mais recentes", "mais baratos", "maior janela"],
     session_unkept: "não foi possível guardar a sessão: {reason}",
     session_opened: "sessão de {when} aberta — ela continua daqui",
@@ -1023,6 +1048,106 @@ pub const TEXTS: Texts = Texts {
     ],
     setup_provider_prompt: "Provedor:",
     cli: &[
+        (
+            "Started by the owner's key, not at its time: a paused plan runs too, and its times stay as they were",
+            "Iniciado pela tecla do dono, não no seu horário: um plano pausado também roda, e seus horários ficam como \
+             estavam",
+        ),
+        (
+            "The rules and folders given take the place of the plan's, instead of joining them",
+            "As regras e pastas dadas substituem as do plano em vez de se somarem a elas",
+        ),
+        (
+            "Plans that run while Glut is closed: at a time of day, or every so often (T60b)",
+            "Planos que rodam com o Glut fechado: a uma hora do dia, ou de tempos em tempos (T60b)",
+        ),
+        (
+            "Make a plan, or change the one of that name and keep what is not given again",
+            "Cria um plano, ou altera o de mesmo nome mantendo o que não for dado de novo",
+        ),
+        (
+            "The plan's name: small letters, digits and -, such as morning-tests",
+            "O nome do plano: letras minúsculas, dígitos e -, como morning-tests",
+        ),
+        (
+            "The time it runs at, such as 07:00",
+            "O horário em que roda, como 07:00",
+        ),
+        (
+            "The days it runs on with --at: mo-fr, sa,su; every day without",
+            "Os dias em que roda com --at: mo-fr, sa,su; sem isso, todo dia",
+        ),
+        (
+            "How often it runs: 30m, 2h, 1d",
+            "Com que frequência roda: 30m, 2h, 1d",
+        ),
+        (
+            "The folder it works in; where the plan is made otherwise",
+            "A pasta em que trabalha; senão, aquela em que o plano é criado",
+        ),
+        (
+            "A provider of ~/.glut/providers.json; the default one otherwise, fixed from now on",
+            "Um provedor de ~/.glut/providers.json; senão, o padrão, fixado a partir de agora",
+        ),
+        (
+            "The model; the provider's default otherwise, fixed from now on",
+            "O modelo; senão, o padrão do provedor, fixado a partir de agora",
+        ),
+        (
+            "What it may do without a rule: ask (the default), build, plan, dont_ask or auto. Nobody is there to \
+             answer: every ask is refused",
+            "O que pode fazer sem regra: ask (o padrão), build, plan, dont_ask ou auto. Ninguém está lá para \
+             responder: todo pedido é recusado",
+        ),
+        (
+            "A rule it may do, in Claude Code's format (`Bash(cargo test:*)`); repeatable",
+            "Uma regra que pode fazer, no formato do Claude Code (`Bash(cargo test:*)`); repetível",
+        ),
+        (
+            "A rule it is refused; repeatable",
+            "Uma regra que lhe é recusada; repetível",
+        ),
+        (
+            "A folder it works in beside its own (T60c); repeatable",
+            "Uma pasta em que trabalha ao lado da sua (T60c); repetível",
+        ),
+        (
+            "The most a run may cost in USD; 1 otherwise",
+            "O máximo que uma execução pode custar em USD; senão 1",
+        ),
+        (
+            "The most minutes a run may take; 30 otherwise",
+            "O máximo de minutos que uma execução pode levar; senão 30",
+        ),
+        (
+            "The task: a message, or /skill <name> [what for]",
+            "A tarefa: uma mensagem, ou /skill <name> [para quê]",
+        ),
+        (
+            "Every plan: when it runs next and how it ran last",
+            "Cada plano: quando roda da próxima vez e como foi a última",
+        ),
+        (
+            "A plan's run now, as it runs at its times",
+            "Uma execução do plano agora, como nos seus horários",
+        ),
+        ("The plan's name", "O nome do plano"),
+        (
+            "Started by launchd: the end is told by a notification",
+            "Iniciado pelo launchd: o fim é avisado por uma notificação",
+        ),
+        (
+            "Hold a plan: it does not run until resume",
+            "Pausa um plano: ele não roda até resume",
+        ),
+        (
+            "A held plan runs at its times again",
+            "Um plano pausado volta a rodar nos seus horários",
+        ),
+        (
+            "A plan and its record of runs gone; its sessions stay",
+            "Um plano e o registro das suas execuções removidos; as sessões dele ficam",
+        ),
         (
             "Send what the tools answer as it is, without hiding the keys in it (T58; `\"mask\": false` in \
              ~/.glut/secrets.json, which `/secrets off` writes)",
@@ -1602,6 +1727,87 @@ pub const TEXTS: Texts = Texts {
     loop_no_turn: "sua tarefa não iniciou nenhum turno",
     loop_role_kept: "este pane faz o papel de {role}: um ciclo iniciado aqui também — /loop sem as",
     loop_uncounted: "os preços do modelo são desconhecidos, então só o limite de rodadas o encerra",
+    schedule_file_broken: "~/.glut/schedules.json não pode ser lido: {reason} — ele não é sobrescrito",
+    schedule_name_bad: "o nome de um plano tem de 1 a 40 letras minúsculas, dígitos e -, como morning-tests",
+    schedule_task_missing: "um plano novo precisa da sua tarefa: uma mensagem, ou /skill <name> [para quê]",
+    schedule_task_command: "a tarefa de um plano é uma mensagem ou /skill <name> [para quê], nenhum outro comando: \
+                            ninguém está lá quando ele roda",
+    schedule_at_bad: "--at recebe um horário como 07:00",
+    schedule_days_bad: "--days recebe dias como mo-fr ou sa,su (mo tu we th fr sa su)",
+    schedule_every_bad: "--every recebe um intervalo de 10m a 7d, como 30m, 2h ou 1d",
+    schedule_days_without_at: "--days vai com --at, não com --every",
+    schedule_when_missing: "um plano novo precisa de --at <time> ou --every <interval>",
+    schedule_mode_bad: "--mode recebe ask, build, plan, dont_ask ou auto",
+    schedule_rule_bad: "{rule} não é uma regra: {reason}",
+    schedule_usd_bad: "--max-usd recebe um valor em USD acima de 0 e até 1000, como 2.5",
+    schedule_minutes_bad: "--max-minutes recebe de 1 a 1440",
+    schedule_folder_gone: "a pasta {folder} não existe",
+    schedule_launchd_failed: "o launchd não aceitou o plano {name}: {reason}",
+    schedule_unknown: "não há plano {name} — glut schedule list mostra os planos",
+    schedule_made: "plano {name} criado:",
+    schedule_changed: "plano {name} alterado:",
+    schedule_shown_when: "roda {when} em {folder}",
+    schedule_shown_task: "tarefa: {task}",
+    schedule_shown_model: "modelo: {model} de {provider}",
+    schedule_shown_mode: "modo {mode}: {means}",
+    schedule_means_ask: "ele lê; toda alteração e todo comando que nenhuma regra permite é recusado",
+    schedule_means_build: "ele lê e edita arquivos; todo comando que nenhuma regra permite é recusado",
+    schedule_means_plan: "ele só lê; nada muda",
+    schedule_means_dont_ask: "só o que uma regra permite",
+    schedule_means_auto: "tudo dentro do sandbox, exceto comandos pesados (rm -rf, git push, sudo), que são recusados",
+    schedule_shown_allow: "permitido: {rules}",
+    schedule_shown_deny: "recusado: {rules}",
+    schedule_shown_folders: "pastas ao lado da sua: {folders}",
+    schedule_shown_limits: "uma execução termina assim que custou {usd} ou após {minutes} min",
+    schedule_shown_owner_rules: "as regras do seu ~/.glut/settings.json também valem, nunca as do projeto",
+    schedule_shown_logged_in: "só roda enquanto você está conectado; um horário perdido em repouso é recuperado uma \
+                               vez ao acordar",
+    schedule_shown_paused: "pausado — glut schedule resume {name} o retoma",
+    schedule_when_at: "todo dia às {time}",
+    schedule_when_at_days: "às {time} em {days}",
+    schedule_when_every: "a cada {every}",
+    schedule_none: "nenhum plano — glut schedule add <name> --at 07:00 <task> cria um",
+    schedule_paused_mark: "pausado",
+    schedule_never: "nunca rodou",
+    schedule_last: "{outcome} {ago} ({cost})",
+    schedule_line: "{name}  {when}  {folder}  próximo: {next}  último: {last}",
+    schedule_paused: "plano {name} pausado",
+    schedule_resumed: "o plano {name} volta a rodar nos seus horários",
+    schedule_removed: "plano {name} removido; as sessões dele ficam",
+    schedule_running_already: "a execução anterior ainda está rodando",
+    schedule_run_line: "{name}: {outcome} — {said} ({cost})",
+    schedule_asks_refused: "{n} pedidos recusados, o primeiro: {first} — glut schedule add {name} --allow <rule> \
+                            permite",
+    schedule_no_prices: "os preços do modelo são desconhecidos: só o limite de tempo o encerra",
+    schedule_no_panes: "a execução de um plano não tem outro pane",
+    schedule_outcome_answered: "respondido",
+    schedule_outcome_failed: "falhou",
+    schedule_outcome_budget: "orçamento esgotado",
+    schedule_outcome_timeout: "limite de tempo atingido",
+    schedule_outcome_refused: "encerrado por recusas",
+    schedule_outcome_stopped: "parado",
+    schedule_outcome_skipped: "pulado",
+    schedule_outcome_unstarted: "não iniciado",
+    keys_runs: "↑↓ escolher · ⏎ abre · r roda agora · p pausa · d exclui · ⎋ voltar · ⌃X R oculta",
+    runs_delete_ask: "excluir o plano {name} e o registro das suas execuções? y sim, qualquer outra tecla não — as \
+                      sessões dele ficam",
+    runs_loops: "↻ {n} ciclos rodam enquanto o Glut está aberto — a aba Agentes (⌃X A) os mostra",
+    runs_none: "ainda não há planos — /schedule add <name> --at 07:00 <task> cria um: ele roda com o Glut fechado",
+    runs_next: "próximo: {at}",
+    runs_limits: "no máximo {usd} e {minutes} min por execução · {model} de {provider}",
+    runs_last_ten: "últimas execuções",
+    runs_started: "o plano {name} roda agora ao lado do Glut — o fim chega como notificação e bloco",
+    schedule_usage: "/schedule abre a aba Execuções; /schedule list, /schedule add <name> --at 07:00 <task>, /schedule \
+                     run|pause|resume|remove <name>",
+    schedule_quote_open: "há uma aspa não fechada",
+    runs_since: "desde a sua última visita: {runs} — a aba Execuções (⌃X R) as mostra",
+    runs_since_one: "{name} {n}× (último: {outcome})",
+    schedule_program_writable: "{program} fica onde os comandos do plano escrevem: uma execução poderia deixar para a \
+                                próxima um programa próprio — inicie um Glut instalado em outro lugar (cargo install)",
+    schedule_path_writable: "o PATH dele alcança uma pasta onde seus comandos escrevem — glut schedule add <name> o \
+                             refaz com um PATH seguro",
+    schedule_auto_unsandboxed: "auto só roda atrás do sandbox, e aqui ele está desligado",
+    runs_run_ask: "rodar o plano {name} agora? y sim, qualquer outra tecla não",
     secrets_no_such: "nenhum segredo {n} nesta sessão — /secrets os lista",
     secrets_allowed: "o segredo {n} passa nesta sessão",
     secrets_allowed_always: "o segredo {n} passa sempre (sua impressão guardada em ~/.glut/secrets.json, nunca o \

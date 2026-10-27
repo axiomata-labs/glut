@@ -113,6 +113,14 @@ cargo run --release --bin glut   # the TUI in the current folder, on the default
   `/loop` was given, a command only of `looping::COMMANDS`; its agent takes the pane's mode, granted rules and folders,
   and its asks wait for the owner like any. `end_loop` is a screen tool like `tell`: offered by `RunConfig::loop_tool`
   at depth 0 only, never from a script.
+- **A plan runs with its own rights alone, and only the owner makes one** (T60b, `crates/glut-tui/src/schedule.rs`,
+  `scheduled.rs`): a plan's run is the owner's session with nobody there — the plan's mode and rules, the folder
+  never trusted, `~/.glut/mcp.json` alone, every ask refused (`Unattended`), its budget and time limit always. Plans
+  come only from `glut schedule add` and `/schedule add` (the owner's words; a loop's task never), and the sandbox
+  keeps `~/.glut` out of a command's writes and refuses to start `launchctl` — keep both. What launchd starts (the
+  program, every `PATH` folder) never lies where a plan's commands write, or a run would leave the next one a
+  program outside the sandbox. A plan's name is a file's and a launchd label's part: `check_name` before it reaches
+  a path.
 - **What a command *is* decides beside the rules** (TUI1e, `crates/glut/src/permissions/kinds.rs`): a command whose
   every part is a listed reader (`ls`, `grep`, `sed -n 1,9p`, `git status`, …) runs in every mode like `read_file`;
   in `auto` everything sandboxed runs but a `kinds::heavy` one (`rm -rf`, `git push`, `sudo`, …). A new reader needs

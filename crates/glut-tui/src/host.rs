@@ -119,6 +119,8 @@ pub enum Search {
 pub enum Servers {
     /// `~/.glut/mcp.json` and the project's `.mcp.json` as the owner approved them.
     Owner,
+    /// `~/.glut/mcp.json` alone, never a project's — a plan's run (T60b), where nobody is there to approve one.
+    OwnerAlone,
     /// The servers of the file at this path alone (a card's team server), never the owner's nor the project's.
     Only(PathBuf),
     /// The owner's servers as [`Servers::Owner`] has them, and the file's beside them (`glut --mcp-config`, a master's

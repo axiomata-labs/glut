@@ -333,6 +333,9 @@ async fn run_loop(
     // Held still (TUI9b), a frame a second: the seconds of "working" go on, nothing else moves.
     let mut second = tokio::time::interval(Duration::from_secs(1));
     second.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // The plans' records looked at now and then (T60b): the first tick at once, for what ran while Glut was closed.
+    let mut runs_look = tokio::time::interval(crate::panes::RUNS_LOOK);
+    runs_look.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut terminate = signal(SignalKind::terminate())?;
     let mut hangup = signal(SignalKind::hangup())?;
     // Raw mode sends no SIGINT; at the scrollback's prompt (cooked mode) Ctrl+C would end Glut mid-turn: it goes
@@ -531,6 +534,8 @@ async fn run_loop(
         let loop_at =
             tokio::time::Instant::from_std(loop_due.unwrap_or_else(std::time::Instant::now));
         tokio::select! {
+            // A plan's run that ended while Glut is open comes as a tile (T60b); the first look says what ran before.
+            _ = runs_look.tick() => panes.watch_runs(chrono::Utc::now()),
             // A closed window or a kill ends the session cleanly: the turn stopped, the terminal given back.
             _ = terminate.recv() => panes.list.iter_mut().for_each(|pane| pane.app.abandon()),
             _ = hangup.recv() => panes.list.iter_mut().for_each(|pane| pane.app.abandon()),

@@ -87,6 +87,11 @@ enum Command {
         #[arg(long)]
         all: bool,
     },
+    /// Plans that run while Glut is closed: at a time of day, or every so often (T60b).
+    Schedule {
+        #[command(subcommand)]
+        what: glut_tui::ScheduleCommand,
+    },
     #[command(flatten)]
     Headless(glut::cli::Command),
 }
@@ -159,6 +164,7 @@ fn main() -> std::process::ExitCode {
             Some(Command::Search { words, all }) => {
                 (glut_tui::search_headless(&words, all, &cli.cwd), None)
             }
+            Some(Command::Schedule { what }) => (glut_tui::schedule_headless(what).await, None),
             Some(Command::Headless(command)) => (glut::cli::dispatch(command).await, None),
             None => {
                 if cli.reader {

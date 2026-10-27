@@ -64,6 +64,8 @@ pub enum Goes {
     Subagent { pane: u64, path: Vec<usize> },
     /// Pane `pane` (its session's id), brought forward.
     Pane(u64),
+    /// The Runs tab at the plan of this name (T60b): a run that ended while Glut was open.
+    Runs(String),
 }
 
 /// One tile.

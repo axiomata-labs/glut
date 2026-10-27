@@ -70,6 +70,9 @@ pub struct Prefs {
     /// How many seconds a turn must have run before its end is told (T53, `/notify after`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notify_after: Option<u32>,
+    /// When Glut last looked for the plans' runs (T60b): the next start tells what ran since.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runs_seen: Option<chrono::DateTime<chrono::Utc>>,
     /// The most rounds a loop runs (T60a, `/loop rounds`); `None`: `loop.rounds` of the settings, else 50.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loop_rounds: Option<u32>,
@@ -294,6 +297,17 @@ pub fn set_notify_after(home: &Path, secs: u32) -> Result<(), String> {
 pub fn set_loop_rounds(home: &Path, rounds: u32) -> Result<(), String> {
     let mut prefs = Prefs::read(home)?;
     prefs.loop_rounds = Some(rounds);
+    prefs.save(home)
+}
+
+/// Keeps when Glut last looked for the plans' runs (T60b).
+///
+/// # Errors
+///
+/// A message when the file cannot be read (it is not written over) or written.
+pub fn set_runs_seen(home: &Path, at: chrono::DateTime<chrono::Utc>) -> Result<(), String> {
+    let mut prefs = Prefs::read(home)?;
+    prefs.runs_seen = Some(at);
     prefs.save(home)
 }
 

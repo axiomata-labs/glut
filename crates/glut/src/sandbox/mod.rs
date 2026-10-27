@@ -118,12 +118,14 @@ const GIT_FOLDERS_PATTERN: &str = "(/modules/[^/]+)*(/modules|/worktrees(/[^/]+)
 /// script` would run anything outside the sandbox. Seatbelt's `appleevent-send`, `lsopen` and `mach-lookup` rules do
 /// not stop them (tried on macOS 2026-10-13); refusing to start them does, also through a link, and a copy of such a
 /// system program is killed by macOS itself.
-const APPLE_EVENT_TOOLS: [&str; 5] = [
+const APPLE_EVENT_TOOLS: [&str; 6] = [
     "/usr/bin/osascript",
     "/usr/bin/osacompile",
     "/usr/bin/open",
     "/usr/bin/automator",
     "/usr/bin/shortcuts",
+    // A job handed to launchd runs outside the sandbox, at a time of its own (T60b's plans made it matter).
+    "/bin/launchctl",
 ];
 
 /// Whether commands can run in the sandbox here.
@@ -497,7 +499,8 @@ mod tests {
         );
         assert!(profile.contains("(allow signal (target same-sandbox))"));
         assert!(
-            profile.contains("(literal \"/usr/bin/osascript\")"),
+            profile.contains("(literal \"/usr/bin/osascript\")")
+                && profile.contains("(literal \"/bin/launchctl\")"),
             "{profile}"
         );
         assert!(
@@ -787,6 +790,7 @@ mod tests {
              echo x > sub/.git/objects/o && echo OBJECTS-WRITTEN; \
              mkdir -p deep && (echo x > deep/.envrc || echo ENVRC-REFUSED); \
              /usr/bin/osascript -e 'return 1' || echo OSASCRIPT-REFUSED; \
+             /bin/launchctl print-disabled gui/0 >/dev/null 2>&1 || echo LAUNCHCTL-REFUSED; \
              mkdir -p ev/hooks && echo x > ev/hooks/pre-commit && (mv ev sub2.git; mkdir sub2; mv sub2.git sub2/.git \
                || echo MOVE-IN-REFUSED); \
              mv sub/.git sub/old-git || echo MOVE-OUT-REFUSED; \
@@ -803,6 +807,7 @@ mod tests {
             "OBJECTS-WRITTEN",
             "ENVRC-REFUSED",
             "OSASCRIPT-REFUSED",
+            "LAUNCHCTL-REFUSED",
         ] {
             assert!(out.contains(expected), "{expected}: {out}");
         }

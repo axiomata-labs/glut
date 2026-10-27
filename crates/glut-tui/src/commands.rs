@@ -97,7 +97,7 @@ const fn command(
 }
 
 /// Every command, grouped by topic in [`Topic::ALL`]'s order, the most used first inside a topic.
-pub const COMMANDS: [Command; 52] = [
+pub const COMMANDS: [Command; 53] = [
     command(Topic::Session, "clear", "", "start a new session"),
     command(
         Topic::Session,
@@ -275,6 +275,13 @@ pub const COMMANDS: [Command; 52] = [
          10m run the tests; /loop alone lists them, /loop stop [name] ends one, /loop rounds|budget set where one ends",
     ),
     command(
+        Topic::Panes,
+        "schedule",
+        "[list|add|run|pause|resume|remove] [name]",
+        "plans that run while Glut is closed, at a time or every so often — /schedule add tests --at 07:00 --days \
+         mo-fr run the tests; /schedule alone opens the Runs tab (⌃X R)",
+    ),
+    command(
         Topic::Changes,
         "diff",
         "[session]",
@@ -427,7 +434,7 @@ const fn key(topic: Topic, key: &'static str, what: &'static str, command: &'sta
 }
 
 /// Every key Glut has, grouped as [`COMMANDS`] are; a topic without keys shows no heading.
-pub const KEYS: [Key; 43] = [
+pub const KEYS: [Key; 44] = [
     key(
         Topic::Session,
         "⇧⇥",
@@ -480,6 +487,12 @@ pub const KEYS: [Key; 43] = [
         "⌃X A",
         "the Agents tab: every subagent and the agents in the background, live",
         "/agents",
+    ),
+    key(
+        Topic::View,
+        "⌃X R",
+        "the Runs tab: every project's plans, when they run next and how they ended",
+        "/schedule",
     ),
     key(
         Topic::View,
@@ -633,6 +646,8 @@ pub enum Source {
     Agents,
     /// The MCP servers (`/mcp login|logout|remove`).
     Servers,
+    /// The plans' names (`/schedule run|pause|resume|remove`, T60b).
+    Plans,
 }
 
 /// The catalog's words for something to be given, never one to complete to: `[name]`, `[path]`, `[n]` …
@@ -660,6 +675,7 @@ fn source(name: &str, before: &[&str]) -> Option<Source> {
             Source::Roles
         }
         ("loop", ["stop"]) => Source::Agents,
+        ("schedule", ["run" | "pause" | "resume" | "remove"]) => Source::Plans,
         _ => return None,
     })
 }
@@ -1111,6 +1127,7 @@ mod tests {
                 "html",
                 "inline",
                 "jsonl",
+                "list",
                 "login",
                 "logout",
                 "md",
@@ -1119,6 +1136,7 @@ mod tests {
                 "off",
                 "on",
                 "open",
+                "pause",
                 "ping",
                 "plain",
                 "plan",
@@ -1126,6 +1144,7 @@ mod tests {
                 "read",
                 "remove",
                 "resume",
+                "run",
                 "session",
                 "system",
                 "tiles",

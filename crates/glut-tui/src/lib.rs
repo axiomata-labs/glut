@@ -40,6 +40,9 @@ mod plan;
 mod prefs;
 mod projects;
 mod review;
+mod runs;
+mod schedule;
+mod scheduled;
 mod screen;
 mod scrollback;
 mod select;
@@ -67,6 +70,7 @@ pub use host::{
     Standalone, State, Turn,
 };
 pub use panes::Switch;
+pub use scheduled::{Command as ScheduleCommand, headless as schedule_headless};
 pub use screen::{Open, restart_in, run, standalone, standalone_switching};
 pub use texts::force as force_language;
 

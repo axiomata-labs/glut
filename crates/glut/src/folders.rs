@@ -285,10 +285,66 @@ pub fn check(
             inside.display()
         ));
     }
-    let secrets = crate::sandbox::secrets(&home, deny_read);
+    refuse_reached(typed, &real, &home, deny_read)?;
+    let shown = match real.strip_prefix(&home) {
+        Ok(inside) => format!("~/{}", inside.to_string_lossy()),
+        Err(_) => real.to_string_lossy().into_owned(),
+    };
+    // Its name goes into the model's prompt and onto the screen as it is.
+    let hidden = |c: char| {
+        c.is_control()
+            || matches!(c, '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}')
+    };
+    if shown.chars().any(hidden) {
+        return Err(format!(
+            "{typed}: a folder whose name holds a control, bidi or zero-width character"
+        ));
+    }
+    Ok(Folder {
+        git_dirs: crate::sandbox::git_dirs(&real),
+        real,
+        shown,
+    })
+}
+
+/// `typed` as the folder an unattended run works in (T60b, a plan's own): it must exist and be a folder; refused are
+/// `/`, the home folder and every folder above it, and — as for a folder beside a run — one inside or holding a place
+/// no command reads, one inside a protected folder, and one reaching a place whose files run as programs: what its
+/// commands write there would run later outside the sandbox, with nobody there to see it.
+///
+/// # Errors
+///
+/// Why the folder is refused, for the owner to read.
+pub fn check_working(typed: &Path, home: &Path, deny_read: &[PathBuf]) -> Result<PathBuf, String> {
+    let shown = typed.display().to_string();
+    let real = typed
+        .canonicalize()
+        .map_err(|err| format!("{shown}: {err}"))?;
+    if !real.is_dir() {
+        return Err(format!("{shown} is no folder"));
+    }
+    let home = home.canonicalize().unwrap_or_else(|_| home.to_path_buf());
+    if real == Path::new("/") || home.starts_with(&real) {
+        return Err(format!(
+            "{shown} holds the home folder: name a folder inside it"
+        ));
+    }
+    refuse_reached(&shown, &real, &home, deny_read)?;
+    Ok(real)
+}
+
+/// Why `real` (typed as `typed`) reaches a place no run's folder may: a secret, a place whose files run as programs, a
+/// protected folder.
+fn refuse_reached(
+    typed: &str,
+    real: &Path,
+    home: &Path,
+    deny_read: &[PathBuf],
+) -> Result<(), String> {
+    let secrets = crate::sandbox::secrets(home, deny_read);
     if let Some(secret) = secrets
         .iter()
-        .find(|secret| real.starts_with(secret) || secret.starts_with(&real))
+        .find(|secret| real.starts_with(secret) || secret.starts_with(real))
     {
         return Err(format!(
             "{typed} reaches {}, which no command reads",
@@ -312,9 +368,9 @@ pub fn check(
         .into_iter()
         .filter(|dir| dir.is_absolute())
         .map(resolved)
-        .filter(|dir| real.starts_with(dir) || dir.starts_with(&real));
+        .filter(|dir| real.starts_with(dir) || dir.starts_with(real));
     if let Some(place) = runs
-        .filter(|place| real.starts_with(place) || place.starts_with(&real))
+        .filter(|place| real.starts_with(place) || place.starts_with(real))
         .chain(on_path)
         .next()
     {
@@ -337,25 +393,7 @@ pub fn check(
             "{typed} lies in a protected folder (.git, .glut, …), which the run never writes"
         ));
     }
-    let shown = match real.strip_prefix(&home) {
-        Ok(inside) => format!("~/{}", inside.to_string_lossy()),
-        Err(_) => real.to_string_lossy().into_owned(),
-    };
-    // Its name goes into the model's prompt and onto the screen as it is.
-    let hidden = |c: char| {
-        c.is_control()
-            || matches!(c, '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}')
-    };
-    if shown.chars().any(hidden) {
-        return Err(format!(
-            "{typed}: a folder whose name holds a control, bidi or zero-width character"
-        ));
-    }
-    Ok(Folder {
-        git_dirs: crate::sandbox::git_dirs(&real),
-        real,
-        shown,
-    })
+    Ok(())
 }
 
 #[cfg(test)]

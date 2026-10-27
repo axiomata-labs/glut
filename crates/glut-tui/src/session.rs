@@ -402,6 +402,7 @@ pub async fn build(
     let servers = match &launch.servers {
         // Nobody can be asked about a project's new server before the screen is up: it is left out and said so.
         Servers::Owner => mcp::config::load(&home, &cwd).and_then(&mut permitted),
+        Servers::OwnerAlone => mcp::config::owner(&home),
         Servers::Only(file) => mcp::config::named(file),
         Servers::Also(file) => mcp::config::load(&home, &cwd)
             .and_then(&mut permitted)

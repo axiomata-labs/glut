@@ -1423,7 +1423,8 @@ fn draw_panel(frame: &mut Frame, app: &mut App, area: Rect) {
         (Tab::Meter, names[2]),
         (Tab::Agents, names[3]),
         (Tab::Todos, todos_title.as_str()),
-        (Tab::Keys, names[5]),
+        (Tab::Runs, names[5]),
+        (Tab::Keys, names[6]),
     ];
     let title = tab_titles(&tabs, app.tab, usize::from(area.width.saturating_sub(1)));
     // Each name where a click finds it (T71): the title stands right of the edge, a name and a gap by turns.
@@ -1539,6 +1540,32 @@ fn draw_panel(frame: &mut Frame, app: &mut App, area: Rect) {
         // Scrolled no further than its end: the wheel past it does not leave rows to scroll back first.
         app.keys_scroll = app.keys_scroll.min(sheet.len().saturating_sub(room));
         lines.extend(sheet.into_iter().skip(app.keys_scroll).take(room));
+        lines.push(Line::default());
+        lines.extend(keys);
+        frame.render_widget(Paragraph::new(lines).block(block), area);
+        return;
+    }
+    if app.tab == Tab::Runs {
+        lines.push(Line::default());
+        app.runs.refresh(&app.parts.home);
+        let keys = panel_keys(app, width);
+        let room = usize::from(area.height).saturating_sub(lines.len() + keys.len() + 3);
+        let loops = app
+            .background
+            .iter()
+            .filter(|agent| agent.looping.is_some())
+            .count();
+        let mut spots = Vec::new();
+        for (plan, line) in
+            app.runs
+                .lines(&app.parts.home, width + 1, room, loops, chrono::Utc::now())
+        {
+            if let Some(plan) = plan {
+                spots.push((lines.len(), crate::app::PanelSpot::Plan(plan)));
+            }
+            lines.push(line);
+        }
+        app.panel_spots.extend(row_spots(inner, spots));
         lines.push(Line::default());
         lines.extend(keys);
         frame.render_widget(Paragraph::new(lines).block(block), area);
@@ -1738,6 +1765,18 @@ fn panel_keys(app: &App, width: usize) -> Vec<Line<'static>> {
         format!("{tabs}{}", tr!(keys_agents))
     } else if app.tab == Tab::Todos && app.project_todos.keys {
         format!("{tabs}{}", tr!(keys_todos))
+    } else if app.tab == Tab::Runs && app.runs.running {
+        tr!(
+            runs_run_ask,
+            name = app.runs.chosen_name().unwrap_or_default()
+        )
+    } else if app.tab == Tab::Runs && app.runs.deleting {
+        tr!(
+            runs_delete_ask,
+            name = app.runs.chosen_name().unwrap_or_default()
+        )
+    } else if app.tab == Tab::Runs && app.runs.keys {
+        format!("{tabs}{}", tr!(keys_runs))
     } else if app.panel_focus {
         tr!(keys_focus).to_owned()
     } else {
@@ -1748,7 +1787,8 @@ fn panel_keys(app: &App, width: usize) -> Vec<Line<'static>> {
             (Tab::Meter, "⌃N", names[2]),
             (Tab::Agents, "⌃X A", names[3]),
             (Tab::Todos, "⌃Y", names[4]),
-            (Tab::Keys, "⌃K", names[5]),
+            (Tab::Runs, "⌃X R", names[5]),
+            (Tab::Keys, "⌃K", names[6]),
         ]
         .iter()
         .map(|(tab, key, name)| {

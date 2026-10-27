@@ -629,6 +629,18 @@ pub struct Panes {
     pub tiles: crate::tiles::Tiles,
     /// The left button went down on a tile: its release and drags are the tile's too.
     tile_pressed: bool,
+    /// Where the look for the plans' ended runs stands (T60b); `None` before the first.
+    runs_seen: Option<RunsSeen>,
+}
+
+/// How often an open Glut looks whether a plan's run ended (T60b): a tile for it, as for an agent's end.
+pub const RUNS_LOOK: Duration = Duration::from_secs(15);
+
+/// The runs told so far: those ended until `from`; the records' folder as it was then, read again only once it
+/// changed.
+struct RunsSeen {
+    from: chrono::DateTime<chrono::Utc>,
+    folder: Option<std::time::SystemTime>,
 }
 
 /// A kept layout coming back: the panes still to build, and each kept pane's session id once it stands.
@@ -679,6 +691,7 @@ impl Panes {
         let panes = Panes {
             notifier: crate::notify::Notifier::new(&notify_env),
             tiles: crate::tiles::Tiles::default(),
+            runs_seen: None,
             tile_pressed: false,
             notify_env,
             cwd,
@@ -2416,7 +2429,76 @@ impl Panes {
                     self.focus(at);
                 }
             }
+            Goes::Runs(plan) => self.active().open_runs(&plan),
         }
+    }
+
+    /// The plans' runs that ended (T60b): at the first look, what ran since Glut last started, said in the pane in
+    /// front; later each one ended since as a tile. Glut on its own only: a host's window shows its own.
+    pub fn watch_runs(&mut self, now: chrono::DateTime<chrono::Utc>) {
+        use crate::tiles::{Goes, Stand, Tile};
+        if !self.may_split {
+            return;
+        }
+        let home = self.active().parts.home.clone();
+        let folder = std::fs::metadata(crate::schedule::dir(&home))
+            .and_then(|meta| meta.modified())
+            .ok();
+        let Some(seen) = &mut self.runs_seen else {
+            let since = crate::prefs::Prefs::load(&home).runs_seen;
+            self.runs_seen = Some(RunsSeen { from: now, folder });
+            let _ = crate::prefs::set_runs_seen(&home, now);
+            let Some(since) = since else {
+                return;
+            };
+            let ended = crate::schedule::ended_since(&home, since);
+            // What the note tells is not tiled again, ended a moment after `now` as it may be.
+            if let (Some(seen), Some((_, last))) = (&mut self.runs_seen, ended.last()) {
+                seen.from = seen.from.max(last.ended);
+            }
+            if ended.is_empty() {
+                return;
+            }
+            let mut told: Vec<(String, usize, crate::schedule::Outcome)> = Vec::new();
+            for (name, record) in ended {
+                match told.iter_mut().find(|(known, ..)| *known == name) {
+                    Some((_, count, outcome)) => {
+                        *count += 1;
+                        *outcome = record.outcome;
+                    }
+                    None => told.push((name, 1, record.outcome)),
+                }
+            }
+            let runs: Vec<String> = told
+                .into_iter()
+                .map(|(name, n, outcome)| {
+                    tr!(runs_since_one, name = name, n = n, outcome = outcome.said())
+                })
+                .collect();
+            return self.active().tell(tr!(runs_since, runs = runs.join(", ")));
+        };
+        if seen.folder == folder {
+            return;
+        }
+        seen.folder = folder;
+        let ended = crate::schedule::ended_since(&home, seen.from);
+        for (name, record) in ended {
+            seen.from = seen.from.max(record.ended);
+            let stand = if record.outcome.well() {
+                Stand::Done
+            } else {
+                Stand::Failed
+            };
+            let line = if record.said.is_empty() {
+                record.outcome.said().to_owned()
+            } else {
+                record.said.clone()
+            };
+            self.tiles
+                .push(Tile::new(name.clone(), stand, &line, Goes::Runs(name)));
+            self.redraw = true;
+        }
+        let _ = crate::prefs::set_runs_seen(&home, now);
     }
 
     /// `/swap [n]`: the main pane and pane `n` trade places — without a number the asking pane, or with only two the
@@ -4026,7 +4108,9 @@ mod tests {
             .transcript
             .blocks
             .iter()
-            .filter(|block| matches!(&block.kind, crate::transcript::Kind::Owner(text) if text.ends_with("update plan")))
+            .filter(|block| {
+                matches!(&block.kind, crate::transcript::Kind::Owner(text) if text.ends_with("update plan"))
+            })
             .count();
         assert_eq!(owners, 1);
     }
@@ -4063,6 +4147,57 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[tokio::test]
+    async fn a_plans_run_that_ended_is_said_at_the_start_and_comes_as_a_tile_while_glut_is_open() {
+        use crate::schedule::{Outcome, Record};
+        let (first, reports) = app();
+        let (mut panes, _inlets) = Panes::new(first, reports, true, Servers::Owner);
+        let home = panes.active().parts.home.clone();
+        let mut schedules = crate::schedule::Schedules::default();
+        schedules.put(crate::schedule::sample("nightly"));
+        schedules.save(&home).unwrap();
+        let at = |minutes: i64| chrono::Utc::now() + chrono::Duration::minutes(minutes);
+        let record = |ended: chrono::DateTime<chrono::Utc>, outcome| Record {
+            started: ended - chrono::Duration::minutes(1),
+            ended,
+            outcome,
+            by_hand: false,
+            cost: None,
+            said: "all green".into(),
+            session: None,
+            refused: Vec::new(),
+            unpriced: false,
+        };
+        // Glut last looked an hour ago; two runs ended since.
+        crate::prefs::set_runs_seen(&home, at(-60)).unwrap();
+        crate::schedule::keep_run(&home, "nightly", &record(at(-30), Outcome::Answered)).unwrap();
+        crate::schedule::keep_run(&home, "nightly", &record(at(-10), Outcome::Failed)).unwrap();
+        panes.watch_runs(at(0));
+        let said = notes(&panes.list[0].app);
+        assert!(
+            said.iter().any(|note| note.contains("nightly 2×")),
+            "{said:?}"
+        );
+        assert!(
+            panes.tiles.list.is_empty(),
+            "what ran before is said once, not tiled"
+        );
+        // Nothing new: nothing more.
+        panes.watch_runs(at(1));
+        assert!(panes.tiles.list.is_empty());
+        // A run ends while Glut is open: a tile, going to its plan on the Runs tab.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        crate::schedule::keep_run(&home, "nightly", &record(at(2), Outcome::Answered)).unwrap();
+        panes.watch_runs(at(3));
+        assert_eq!(panes.tiles.list.len(), 1);
+        assert_eq!(panes.tiles.list[0].who, "nightly");
+        assert_eq!(
+            panes.tiles.list[0].goes,
+            crate::tiles::Goes::Runs("nightly".into())
+        );
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     fn owners_words(app: &App) -> Vec<String> {
