@@ -1,7 +1,7 @@
 //! The commands' manual pages in Japanese (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 54] = [
+pub const PAGES: [(&str, &str); 55] = [
     (
         "clear",
         "このフォルダーで、空の新しいセッションを始めます。\n\
@@ -505,6 +505,17 @@ pub const PAGES: [(&str, &str); 54] = [
          /motion off — calm と同じ\n\
          \n\
          /motion だけを入力すると現在の選択を表示します。macOS の「視差効果を減らす」とリーダーモードは、ここでの選択にかかわらず画面を静止させます。`~/.glut/prefs.json` に保存されます。",
+    ),
+    (
+        "nudge",
+        "モデルが終わる代わりに、Glut が一度続行を求めるかどうか。\n\
+         \n\
+         /nudge on — タスクリストの項目が未完了のまま、または次の手順を予告する言葉（「次に…」、末尾のコロン）でターンが終わると、Glut \
+         は自分の一行をモデルに送り、続けるか止める理由を言わせます。履歴には控えめに表示されます\n\
+         /nudge off — ターンはモデルが終えたところで終わります\n\
+         \n\
+         ターンごとに一度だけ。plan モード、あなたへの質問の後、ループのラウンド、スケジュールの実行では行いません。/nudge だけで現在の選択を表示。`~/.glut/prefs.json` \
+         に保存。`~/.glut/settings.json` の `\"nudge\": false` ですべての実行で無効になります。",
     ),
     (
         "reader",

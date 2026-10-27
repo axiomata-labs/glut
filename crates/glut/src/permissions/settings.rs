@@ -111,6 +111,10 @@ struct File {
     /// Where a loop of the terminal UI ends by itself (TUI T60a): `{"rounds": 50, "maxUsd": 5}`. The owner's only.
     #[serde(default, rename = "loop")]
     loops: Option<LoopSection>,
+    /// Whether a run asks its model once to go on when it ends with its list open (T73): `false` turns it off. The
+    /// owner's only.
+    #[serde(default)]
+    nudge: Option<bool>,
 }
 
 /// The `loop` section (TUI T60a): the second source after what `/loop rounds` and `/loop budget` kept.
@@ -313,6 +317,8 @@ pub struct Settings {
     pub notify: Option<NotifySection>,
     /// The `loop` section as written (TUI T60a); only the owner's is read.
     pub loops: Option<LoopSection>,
+    /// `nudge` as written (T73); only the owner's is read.
+    pub nudge: Option<bool>,
 }
 
 /// Reads one settings file; a missing file says nothing.
@@ -439,6 +445,7 @@ fn settings_of(
         guide: file.guide,
         notify: file.notify,
         loops: file.loops,
+        nudge: file.nudge,
     })
 }
 
@@ -474,6 +481,8 @@ pub struct Loaded {
     pub notify: NotifySection,
     /// The owner's `loop` section (TUI T60a).
     pub loops: LoopSection,
+    /// Whether runs ask their model once to go on (T73): the owner's `nudge`, else on.
+    pub nudge: bool,
 }
 
 impl Loaded {
@@ -655,6 +664,7 @@ pub fn load(home: &Path, project: &Path, trusted: bool) -> Result<Loaded, Harnes
             .compact
             .and_then(|section| section.auto)
             .unwrap_or(true),
+        nudge: user.nudge.unwrap_or(true),
         context_windows: user.context_window,
         prices: user.prices,
         parallel_subagents,

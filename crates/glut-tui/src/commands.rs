@@ -97,7 +97,7 @@ const fn command(
 }
 
 /// Every command, grouped by topic in [`Topic::ALL`]'s order, the most used first inside a topic.
-pub const COMMANDS: [Command; 54] = [
+pub const COMMANDS: [Command; 55] = [
     command(Topic::Session, "clear", "", "start a new session"),
     command(
         Topic::Session,
@@ -369,6 +369,12 @@ pub const COMMANDS: [Command; 54] = [
         "motion",
         "full|calm|off",
         "how much the screen moves; calm and off hold Glimm still (macOS Reduce motion counts as off)",
+    ),
+    command(
+        Topic::Settings,
+        "nudge",
+        "on|off",
+        "whether Glut asks the model once to go on when it ends with its task list open or announcing a next step",
     ),
     command(
         Topic::Settings,

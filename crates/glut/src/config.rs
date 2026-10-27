@@ -367,6 +367,12 @@ pub struct RunConfig {
     pub mcp_behind_code: bool,
     /// Whether the run offers `todo_write`, its task list (Glut 2, D). On by default.
     pub todos: bool,
+    /// The task list a turn before left (T73): the run starts with it and the model is shown it, so "go on" goes on
+    /// with the same list. Empty: none, or all done.
+    pub todo_list: Vec<crate::planning::TodoItem>,
+    /// Whether the run asks its model once to go on when it ends with items open or with an announcement (T73).
+    /// On by default; off for a loop's round and a plan's run, whose ends are their own.
+    pub nudge: bool,
     /// The mode a run in Plan mode switches to once the owner approves its plan (`exit_plan`, Glut 2, D).
     pub build_mode: crate::permissions::Mode,
     /// Where the work folder's snapshots go before a run changes it (Glut 2, D, G11; `~/.glut/snapshots`), for `glut
@@ -469,6 +475,8 @@ impl RunConfig {
             codemode: true,
             mcp_behind_code: true,
             todos: true,
+            todo_list: Vec::new(),
+            nudge: true,
             build_mode: crate::permissions::Mode::Default,
             snapshots: None,
             journal: None,

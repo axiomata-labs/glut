@@ -365,6 +365,7 @@ pub async fn build(
         config.skill_dirs = dirs;
     }
     config.compaction.auto = built.compact_auto;
+    config.nudge = built.nudge;
     config.hooks = built.hooks.clone();
     config.sandbox = Some(built.sandbox.clone());
     config.refusals = built.refusals;
@@ -761,6 +762,10 @@ fn web_search() -> glut::tools::search::WebSearch {
 pub struct Before {
     pub session: String,
     pub conversation: Vec<Message>,
+    /// The task list the turn before left (T73).
+    pub todos: Vec<glut::planning::TodoItem>,
+    /// Whether the turn may ask its model once to go on (T73: `/nudge`, else the settings).
+    pub nudge: bool,
 }
 
 /// Runs one turn in the background: `prompt` after `conversation` on `engine`, every step to the screen, the end as
@@ -777,6 +782,8 @@ pub fn turn(
     let Before {
         session: session_id,
         conversation,
+        todos,
+        nudge,
     } = before;
     let kept = conversation.clone();
     let host = Arc::clone(&parts.host);
@@ -793,6 +800,9 @@ pub fn turn(
         };
         config.pane_tools = parts.pane_link.split();
         config.loop_tool = parts.loop_link.on();
+        // A loop's round ends as its loop says, never asked to go on (T73).
+        config.nudge = nudge && parts.loop_link.left().is_none();
+        config.todo_list = todos;
         // A loop's round stops at what its loop may still spend, not only once it is over.
         if let Some(left) = parts.loop_link.left() {
             let budget = &mut config.budget;

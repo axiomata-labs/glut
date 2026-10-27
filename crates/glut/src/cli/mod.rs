@@ -788,6 +788,7 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
     config.hooks = built.hooks;
     config.sandbox = Some(built.sandbox.clone());
     config.refusals = built.refusals;
+    config.nudge = built.nudge;
     config.parallel_subagents = built.parallel_subagents;
     if let Some(window) = context_window {
         if window < crate::config::MIN_CONTEXT_WINDOW {

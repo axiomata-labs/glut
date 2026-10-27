@@ -1,7 +1,7 @@
 //! The commands' manual pages in French (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 54] = [
+pub const PAGES: [(&str, &str); 55] = [
     (
         "clear",
         "Commencer une nouvelle session vide dans ce dossier.\n\
@@ -579,6 +579,19 @@ pub const PAGES: [(&str, &str); 54] = [
          \n\
          /motion seul montre le choix actuel. « Réduire les animations » de macOS et le mode lecteur tiennent l’écran \
          immobile quoi que tu choisisses. Gardé dans `~/.glut/prefs.json`.",
+    ),
+    (
+        "nudge",
+        "Si Glut demande une fois au modèle de continuer au lieu de s'arrêter.\n\
+         \n\
+         /nudge on — quand un tour s'arrête avec des points de la liste de tâches ouverts, ou sur des mots qui \
+         annoncent une étape (« ensuite je… », deux-points à la fin), Glut envoie au modèle une ligne à lui : \
+         continuer ou dire pourquoi il s'arrête ; le fil le montre discrètement\n\
+         /nudge off — un tour s'arrête là où le modèle l'arrête\n\
+         \n\
+         Une fois par tour, jamais en mode plan, après une question qui t'est posée, dans un tour de boucle ou \
+         l'exécution d'un plan. /nudge seul montre le choix actuel. Gardé dans `~/.glut/prefs.json` ; `\"nudge\": \
+         false` dans `~/.glut/settings.json` le coupe pour chaque exécution.",
     ),
     (
         "reader",

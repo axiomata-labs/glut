@@ -538,6 +538,15 @@ impl Transcript {
                 ),
                 Tone::Quiet,
             ),
+            // Glut spoke to the model in its own words (T73): a quiet line, so the owner knows why it went on.
+            Event::Nudged { kind, .. } if depth == 0 => self.note(
+                match kind {
+                    glut::NudgeKind::Reminder => tr!(nudged_reminder),
+                    glut::NudgeKind::OpenItems => tr!(nudged_open),
+                    glut::NudgeKind::Announced => tr!(nudged_announced),
+                },
+                Tone::Quiet,
+            ),
             Event::Error { message } if depth == 0 => self.note(message.clone(), Tone::Fault),
             Event::ModeChanged { mode, .. } => self.note(tr!(mode_now, mode = mode), Tone::Fine),
             // A subagent's step goes to its tile; one with no tile to go to (none runs) stands indented here.

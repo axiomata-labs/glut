@@ -1574,6 +1574,8 @@ pub struct BuiltGate {
     pub notify: settings::NotifySection,
     /// The owner's `loop` section (TUI T60a): where a loop ends by itself.
     pub loops: settings::LoopSection,
+    /// Whether runs ask their model once to go on (T73).
+    pub nudge: bool,
 }
 
 impl BuiltGate {
@@ -1656,6 +1658,7 @@ pub fn build_gate(
         guide_warn_bytes: loaded.guide_warn_bytes,
         notify: loaded.notify,
         loops: loaded.loops,
+        nudge: loaded.nudge,
     })
 }
 
@@ -2371,6 +2374,7 @@ mod tests {
             guide_warn_bytes: u64::from(crate::config::DEFAULT_GUIDE_WARN_KB) * 1024,
             notify: settings::NotifySection::default(),
             loops: settings::LoopSection::default(),
+            nudge: true,
         };
         let off = built(true, true, false).notes();
         assert_eq!(off.len(), 3, "{off:?}");

@@ -52,6 +52,18 @@ pub enum SkillHow {
     Loaded,
 }
 
+/// Why Glut spoke to the model in its own words (T73).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NudgeKind {
+    /// Its task list had items open and did not change for a while.
+    Reminder,
+    /// It ended with items of its list open.
+    OpenItems,
+    /// It ended announcing a next step.
+    Announced,
+}
+
 /// One step of a run.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
@@ -191,6 +203,11 @@ pub enum Event {
         turn: u32,
         id: String,
         hidden: Vec<String>,
+    },
+    /// Glut reminded the model of its task list, or asked it once to go on instead of ending (T73).
+    Nudged {
+        turn: u32,
+        kind: NudgeKind,
     },
     /// The owner's message sent while the run worked joined the conversation before this turn's model call (T10).
     Steered {

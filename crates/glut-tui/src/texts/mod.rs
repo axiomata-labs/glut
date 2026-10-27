@@ -576,6 +576,12 @@ glut::catalog! {
         images_now: &'static str,
         /// `/reader` alone: `{reader}` on or off.
         reader_now: &'static str,
+        /// `/nudge` alone: `{nudge}` on or off.
+        nudge_now: &'static str,
+        /// `/nudge on` (T73).
+        nudge_on: &'static str,
+        /// `/nudge off` (T73).
+        nudge_off: &'static str,
         /// `/thinking` with a word it does not take.
         thinking_unknown: &'static str,
         /// A command that is none: `{name}`.
@@ -1364,6 +1370,12 @@ glut::catalog! {
         agent_starting: &'static str,
         /// The conversation compacted by the model's side: `{before}` and `{after}` thousands of tokens.
         compacted_tokens: &'static str,
+        /// Glut reminded the model of its task list (T73).
+        nudged_reminder: &'static str,
+        /// Glut asked the model to go on: its list has items open (T73).
+        nudged_open: &'static str,
+        /// Glut asked the model to take the step it announced (T73).
+        nudged_announced: &'static str,
         /// The permission mode changed: `{mode}` its name, as written.
         mode_now: &'static str,
         /// Over a model's thinking while it streams.

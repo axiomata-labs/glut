@@ -2174,6 +2174,8 @@ impl Panes {
                 }
             } else if looping.next.is_some_and(|next| next <= now) {
                 let (task, fresh) = (looping.asked.task.clone(), looping.asked.fresh);
+                // Its limits stand before its turn starts and reads them.
+                looping.round_starts();
                 // A fresh round's new conversation counts its cost from nothing.
                 app.loop_round(&task, fresh && looping.rounds > 0);
                 // A task that starts nothing (a skill not there, a list opened) would never fail on its own.

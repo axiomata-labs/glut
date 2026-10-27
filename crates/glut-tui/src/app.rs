@@ -1220,6 +1220,13 @@ impl App {
         }
     }
 
+    /// Whether Glut asks the model once to go on (T73): what `/nudge` kept, else the owner's settings.
+    fn nudges(&self) -> bool {
+        Prefs::load(&self.parts.home)
+            .nudge
+            .unwrap_or(self.parts.config.nudge)
+    }
+
     /// A quiet line in the stream that stays, where a toast would pass: what happened to a pane (T36a).
     pub fn tell(&mut self, text: impl Into<String>) {
         self.transcript.note(text.into(), Tone::Quiet);
@@ -1331,6 +1338,8 @@ impl App {
             session::Before {
                 session: self.session.id.clone(),
                 conversation: std::mem::take(&mut self.conversation),
+                todos: self.todos.clone(),
+                nudge: self.nudges(),
             },
             session::TurnInput::Message(prompt, images),
             cancel,
@@ -1360,6 +1369,8 @@ impl App {
             session::Before {
                 session: self.session.id.clone(),
                 conversation: std::mem::take(&mut self.conversation),
+                todos: self.todos.clone(),
+                nudge: self.nudges(),
             },
             session::TurnInput::Resume(run),
             cancel,
@@ -3341,6 +3352,17 @@ impl App {
                     }
                 }
                 None => self.tell(tr!(images_now, images = crate::pictures::drawing().label())),
+            },
+            "nudge" => match rest {
+                "on" | "off" => match prefs::set_nudge(&self.parts.home, rest == "on") {
+                    Ok(()) if rest == "on" => self.say(tr!(nudge_on)),
+                    Ok(()) => self.say(tr!(nudge_off)),
+                    Err(reason) => self.transcript.note(reason, Tone::Fault),
+                },
+                _ => self.tell(tr!(
+                    nudge_now,
+                    nudge = if self.nudges() { "on" } else { "off" }
+                )),
             },
             "reader" => match rest {
                 "on" => self.set_reader(true),
@@ -10748,6 +10770,10 @@ pub(crate) mod tests {
         );
         typed(&mut app, "/loop rounds 20");
         typed(&mut app, "/loop budget 2.5");
+        typed(&mut app, "/nudge off");
+        assert!(!app.nudges(), "kept, and the next turn is not asked on");
+        typed(&mut app, "/nudge on");
+        assert!(app.nudges());
         typed(&mut app, "/loop tokens 2M");
         assert_eq!(
             Prefs::load(&app.parts.home).loop_max_tokens,

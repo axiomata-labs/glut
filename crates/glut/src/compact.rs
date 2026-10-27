@@ -132,7 +132,14 @@ fn cut(messages: &[Message], keep_tokens: u64) -> Option<Cut> {
         .iter()
         .take_while(|m| m.role == Role::System)
         .count();
-    let task = messages.iter().rposition(|m| m.role == Role::User)?;
+    // Glut's own words to the model (T73) are no task: the owner's message before them is.
+    let task = messages.iter().rposition(|m| {
+        m.role == Role::User
+            && !m
+                .content
+                .as_deref()
+                .is_some_and(|text| text.starts_with(crate::planning::MARK))
+    })?;
     let steps: Vec<usize> = (task + 1..messages.len())
         .filter(|&at| messages[at].role == Role::Assistant)
         .collect();

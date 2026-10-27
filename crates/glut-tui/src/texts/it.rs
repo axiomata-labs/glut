@@ -220,6 +220,11 @@ pub const TEXTS: Texts = Texts {
             "quanto si muove lo schermo; calm e off tengono fermo Glimm (in macOS «Riduci movimento» conta come off)",
         ),
         (
+            "nudge",
+            "se Glut chiede una volta al modello di continuare quando finisce con la lista aperta o annunciando un \
+             passo",
+        ),
+        (
             "reader",
             "per uno screen reader: tasti a parole, uno schermo semplice, niente che si muove, una riga a ogni \
              cambio di stato",
@@ -645,6 +650,10 @@ pub const TEXTS: Texts = Texts {
     images_set: "immagini: {images}",
     images_now: "immagini: {images} — /images inline, blocks o off",
     reader_now: "screen reader: {reader} — /reader on o off",
+    nudge_now: "chiedere al modello di continuare: {nudge} — /nudge on o off",
+    nudge_on: "Glut chiede una volta al modello di continuare quando finisce con la lista aperta o annunciando un \
+              passo",
+    nudge_off: "un turno finisce dove il modello lo finisce",
     thinking_unknown: "/thinking {word}: off, folded o open",
     no_command: "nessun comando /{name} — /help li elenca",
     model_locked: "il modello di questa sessione è fissato dal programma che l’ha avviata — niente cambio qui",
@@ -1635,6 +1644,9 @@ pub const TEXTS: Texts = Texts {
     model_plan: "piano",
     agent_starting: "avvio…",
     compacted_tokens: "conversazione compattata: {before}k → {after}k token",
+    nudged_reminder: "Glut ha ricordato al modello la sua lista di compiti",
+    nudged_open: "Glut ha chiesto al modello di continuare: la sua lista ha ancora punti aperti",
+    nudged_announced: "Glut ha chiesto al modello di fare il passo annunciato",
     mode_now: "ora in modalità {mode}",
     thinking_live: "sta pensando…",
     thought: "ragionamento",

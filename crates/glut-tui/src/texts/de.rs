@@ -220,6 +220,11 @@ pub const TEXTS: Texts = Texts {
              zählt als off)",
         ),
         (
+            "nudge",
+            "ob Glut das Modell einmal weitermachen lässt, wenn es mit offener Aufgabenliste oder mit einer \
+             Ankündigung endet",
+        ),
+        (
             "reader",
             "für einen Bildschirmleser: Tasten in Worten, ein schlichter Bildschirm, nichts bewegt sich, eine Zeile \
              bei jedem Wechsel des Zustands",
@@ -627,6 +632,9 @@ pub const TEXTS: Texts = Texts {
     images_set: "Bilder: {images}",
     images_now: "Bilder: {images} — /images inline, blocks oder off",
     reader_now: "Bildschirmleser: {reader} — /reader on oder off",
+    nudge_now: "Modell weitermachen lassen: {nudge} — /nudge on oder off",
+    nudge_on: "Glut lässt das Modell einmal weitermachen, wenn es mit offener Liste oder einer Ankündigung endet",
+    nudge_off: "ein Turn endet, wo das Modell ihn beendet",
     thinking_unknown: "/thinking {word}: off, folded oder open",
     no_command: "kein Befehl /{name} — /help listet sie",
     model_locked: "das Modell dieser Session wird vom Programm gesetzt, das sie gestartet hat — hier kein Wechsel",
@@ -1622,6 +1630,9 @@ pub const TEXTS: Texts = Texts {
     model_plan: "Abo",
     agent_starting: "startet…",
     compacted_tokens: "Gespräch kompaktiert: {before}k → {after}k Token",
+    nudged_reminder: "Glut hat das Modell an seine Aufgabenliste erinnert",
+    nudged_open: "Glut hat das Modell weitermachen lassen: seine Liste hat noch offene Punkte",
+    nudged_announced: "Glut hat das Modell den angekündigten Schritt machen lassen",
     mode_now: "jetzt im Modus {mode}",
     thinking_live: "denkt…",
     thought: "gedacht",

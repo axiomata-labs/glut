@@ -1,7 +1,7 @@
 //! The commands' manual pages in Chinese (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 54] = [
+pub const PAGES: [(&str, &str); 55] = [
     (
         "clear",
         "在此文件夹中开始一个新的空会话。\n\
@@ -497,6 +497,16 @@ pub const PAGES: [(&str, &str); 54] = [
          /motion off — 同 calm\n\
          \n\
          单独的 /motion 显示当前的选择。无论你如何选择，macOS 的“减弱动态效果”和阅读器模式都会让屏幕保持静止。保存在 `~/.glut/prefs.json` 中。",
+    ),
+    (
+        "nudge",
+        "Glut 是否让模型继续一次，而不是就此结束。\n\
+         \n\
+         /nudge on — 当一个回合在任务清单仍有未完成项、或以宣布下一步的话（“接下来…”、结尾的冒号）结束时，Glut 给模型发一行自己的话：继续，或说明为何停下；记录中会低调显示\n\
+         /nudge off — 回合在模型结束的地方结束\n\
+         \n\
+         每个回合一次，绝不在 plan 模式、向你提问之后、循环的一轮或计划的运行中。单独 /nudge 显示当前选择。保存在 `~/.glut/prefs.json`；`~/.glut/settings.json` 中的 \
+         `\"nudge\": false` 对每次运行关闭它。",
     ),
     (
         "reader",

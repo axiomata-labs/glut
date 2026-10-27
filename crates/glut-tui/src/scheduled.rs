@@ -886,6 +886,8 @@ async fn attempt(home: &Path, plan: &Plan, cancel: glut::Cancel) -> Attempt {
         }
     }
     parts.config.timeout = Duration::from_secs(u64::from(plan.max_minutes) * 60);
+    // A plan's run ends as its budget and its task say: nobody to ask it on (T73).
+    parts.config.nudge = false;
     parts.config.budget = glut::Budget {
         max_usd: Some(plan.max_usd),
         // A subscription's use has no price, nor has a model without known prices: its tokens end the run then.
@@ -919,6 +921,8 @@ async fn attempt(home: &Path, plan: &Plan, cancel: glut::Cancel) -> Attempt {
         session::Before {
             session: kept.id.clone(),
             conversation: Vec::new(),
+            todos: Vec::new(),
+            nudge: false,
         },
         session::TurnInput::Message(prompt, Vec::new()),
         cancel,

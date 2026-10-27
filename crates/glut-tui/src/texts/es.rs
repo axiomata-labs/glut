@@ -217,6 +217,10 @@ pub const TEXTS: Texts = Texts {
              como off)",
         ),
         (
+            "nudge",
+            "si Glut pide una vez al modelo que siga cuando termina con su lista abierta o anunciando un paso",
+        ),
+        (
             "reader",
             "para un lector de pantalla: teclas en palabras, una pantalla sencilla, nada que se mueva, una línea en \
              cada cambio de estado",
@@ -631,6 +635,9 @@ pub const TEXTS: Texts = Texts {
     images_set: "imágenes: {images}",
     images_now: "imágenes: {images} — /images inline, blocks u off",
     reader_now: "lector de pantalla: {reader} — /reader on u off",
+    nudge_now: "pedir al modelo que siga: {nudge} — /nudge on u off",
+    nudge_on: "Glut pide una vez al modelo que siga cuando termina con su lista abierta o anunciando un paso",
+    nudge_off: "un turno termina donde el modelo lo termina",
     thinking_unknown: "/thinking {word}: off, folded u open",
     no_command: "no hay comando /{name} — /help los lista",
     model_locked: "el modelo de esta sesión lo fija el programa que la inició — aquí no se cambia",
@@ -1616,6 +1623,9 @@ pub const TEXTS: Texts = Texts {
     model_plan: "plan",
     agent_starting: "iniciando…",
     compacted_tokens: "conversación compactada: {before}k → {after}k tokens",
+    nudged_reminder: "Glut recordó al modelo su lista de tareas",
+    nudged_open: "Glut pidió al modelo que siguiera: su lista aún tiene puntos abiertos",
+    nudged_announced: "Glut pidió al modelo que diera el paso que anunció",
     mode_now: "ahora en modo {mode}",
     thinking_live: "pensando…",
     thought: "pensamiento",

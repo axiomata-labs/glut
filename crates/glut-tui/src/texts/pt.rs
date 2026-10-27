@@ -215,6 +215,11 @@ pub const TEXTS: Texts = Texts {
             "o quanto a tela se move; calm e off mantêm o Glimm parado (o “Reduzir movimento” do macOS conta como off)",
         ),
         (
+            "nudge",
+            "se o Glut pede uma vez ao modelo que continue quando ele termina com a lista aberta ou anunciando um \
+             passo",
+        ),
+        (
             "reader",
             "para um leitor de tela: teclas em palavras, uma tela simples, nada se movendo, uma linha a cada \
              mudança de estado",
@@ -626,6 +631,9 @@ pub const TEXTS: Texts = Texts {
     images_set: "imagens: {images}",
     images_now: "imagens: {images} — /images inline, blocks ou off",
     reader_now: "leitor de tela: {reader} — /reader on ou off",
+    nudge_now: "pedir ao modelo que continue: {nudge} — /nudge on ou off",
+    nudge_on: "O Glut pede uma vez ao modelo que continue quando ele termina com a lista aberta ou anunciando um passo",
+    nudge_off: "um turno termina onde o modelo o termina",
     thinking_unknown: "/thinking {word}: off, folded ou open",
     no_command: "não há comando /{name} — /help lista todos",
     model_locked: "o modelo desta sessão é definido pelo programa que a iniciou — sem troca aqui",
@@ -1605,6 +1613,9 @@ pub const TEXTS: Texts = Texts {
     model_plan: "plano",
     agent_starting: "iniciando…",
     compacted_tokens: "conversa compactada: {before}k → {after}k tokens",
+    nudged_reminder: "O Glut lembrou o modelo da sua lista de tarefas",
+    nudged_open: "O Glut pediu ao modelo que continuasse: a lista ainda tem itens abertos",
+    nudged_announced: "O Glut pediu ao modelo que desse o passo que anunciou",
     mode_now: "agora no modo {mode}",
     thinking_live: "pensando…",
     thought: "pensamento",

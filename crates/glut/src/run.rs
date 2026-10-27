@@ -13,7 +13,7 @@ use crate::codemode;
 use crate::compact::{self, COMPACTION_FAILED, KEEP_RECENT_TOKENS};
 use crate::config::{Budget, MIN_CONTEXT_WINDOW, RunConfig};
 use crate::error::HarnessError;
-use crate::event::{EVENT_RESULT_CHARS, Event, EventSink, FinishReason};
+use crate::event::{EVENT_RESULT_CHARS, Event, EventSink, FinishReason, NudgeKind};
 use crate::hooks::{self, HookEvent, HookOutcome};
 use crate::journal::{self, Journal, Line, Recorded};
 use crate::model::{ChatModel, Message, Role, ToolCall, ToolSpec, Usage};
@@ -30,6 +30,8 @@ use crate::tools::{StopFlag, Toolbox, glut_files};
 /// model gone wrong, not a plan. The rest are answered with an error, so every call still gets its reply (the API
 /// wants one per call id) and the model learns to ask for fewer at once.
 pub const MAX_CALLS_PER_TURN: usize = 16;
+/// Tool calls without `todo_write` while its list has items open before Glut reminds the model of it (T73).
+const REMIND_EVERY: u32 = 8;
 
 /// A way for the caller to call a run off from elsewhere (a Stop button, a closing pane). Cheap to clone; every clone
 /// cancels the same run.
@@ -355,7 +357,12 @@ async fn run_inner<M: ChatModel>(
         },
         offer,
         kept: codemode::Kept::default(),
-        todos: Vec::new(),
+        // A turn before's list goes on (T73) — at depth 0 only: a subagent has a task of its own.
+        todos: if depth == 0 && planning::open(&config.todo_list) {
+            config.todo_list.clone()
+        } else {
+            Vec::new()
+        },
         snapshots: SnapshotState::Unopened,
         diagnostics: None,
         chain: None,
@@ -374,6 +381,8 @@ async fn run_inner<M: ChatModel>(
         sibling,
         read_at: HashMap::new(),
         paid_usd: 0.0,
+        since_todo: 0,
+        nudged: false,
     };
     let mut resumed_calls = Vec::new();
     match opening {
@@ -551,7 +560,13 @@ fn opening_messages(
 ) -> Vec<Message> {
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let system = if depth == 0 {
-        system_prompt(&config.cwd, &today, model, config.instructions.as_deref())
+        system_prompt(
+            &config.cwd,
+            &today,
+            model,
+            config.instructions.as_deref(),
+            config.todos,
+        )
     } else {
         // A named agent's own text follows the subagent's frame (T37a); a plain subagent has none (D5).
         let frame = subagent_prompt(&config.cwd, &today);
@@ -584,7 +599,21 @@ fn opening_messages(
         message.forget_reasoning();
         message
     }));
-    let mut asked = Message::user(prompt);
+    // The list a turn before left, shown where the model reads the owner's words (T73) — only where the conversation
+    // no longer holds it (a new session's first turn, a compaction): a list shown at every turn would pile up.
+    let held = messages.iter().any(|message| {
+        message
+            .tool_calls
+            .iter()
+            .any(|call| call.function.name == planning::TODO)
+    });
+    let carried = (depth == 0 && config.todos && !held)
+        .then(|| planning::carried(&config.todo_list))
+        .flatten();
+    let mut asked = Message::user(match carried {
+        Some(list) => format!("{prompt}\n\n{list}"),
+        None => prompt.to_owned(),
+    });
     // The owner's images go with the owner's prompt — a subagent's prompt is its parent's words alone.
     if depth == 0 {
         asked.images.clone_from(&config.prompt_images);
@@ -708,6 +737,10 @@ struct Loop<'a, M: ChatModel> {
     read_at: HashMap<PathBuf, u64>,
     /// What its subagents on models of their own cost beyond their tokens at this run's prices (T37a).
     paid_usd: f64,
+    /// Tool calls answered since the last `todo_write` (T73): the reminder's count.
+    since_todo: u32,
+    /// Whether the run already asked its model to go on (T73): once per run.
+    nudged: bool,
 }
 
 /// What a run knows of its model's context window (#111, K2).
@@ -1065,6 +1098,18 @@ impl<M: ChatModel> Loop<'_, M> {
             let ended = if calls.is_empty() && self.steering_waits() {
                 // The owner wrote while the answer came: the run goes on with what they wrote, and the Stop hooks
                 // wait for the answer that ends it.
+                Ok(())
+            } else if calls.is_empty()
+                && let Some((kind, text)) = self.nudge()
+            {
+                // Asked once to go on (T73), before the Stop hooks: they judge the end that stands, not this one.
+                self.nudged = true;
+                sink.emit(Event::Nudged {
+                    turn: self.turns,
+                    kind,
+                });
+                self.messages.push(Message::user(text));
+                self.flush_journal(sink);
                 Ok(())
             } else if calls.is_empty() {
                 match self.stop_hooks(stop_hook_active, sink).await {
@@ -1734,6 +1779,8 @@ impl<M: ChatModel> Loop<'_, M> {
             .remove(&call.id)
             .filter(|_| !output.starts_with("error: "))
             .unwrap_or_default();
+        // Glut's reminder of the task list joins the conversation, not the result the owner sees (T73).
+        let output = self.reminded(&call.function.name, output, sink);
         let message = self.with_images(Message::tool(call.id, output), images);
         self.messages.push(message);
         // #112, R3: the call that reached a limit still has its answer above — the conversation stays whole for the
@@ -1989,7 +2036,67 @@ impl<M: ChatModel> Loop<'_, M> {
             ok,
             &output,
         ));
+        let output = self.reminded(&call.function.name, output, sink);
         self.messages.push(Message::tool(call.id, output));
+    }
+
+    /// `output` with Glut's reminder of the task list after it (T73), when the list has items open and
+    /// [`REMIND_EVERY`] calls passed without `todo_write` — at the end, so the cached conversation stays as it was.
+    fn reminded(&mut self, name: &str, output: String, sink: &mut dyn EventSink) -> String {
+        // Only Glut speaks as `[glut]` (the prompt tells the model to follow such lines): a file, a page or a server
+        // writing one is quoted, never obeyed.
+        let output = planning::unforged(output);
+        if name == planning::TODO {
+            self.since_todo = 0;
+            return output;
+        }
+        self.since_todo += 1;
+        if !self.config.todos || self.since_todo < REMIND_EVERY || !planning::open(&self.todos) {
+            return output;
+        }
+        self.since_todo = 0;
+        let note = planning::reminder(&self.todos, REMIND_EVERY);
+        sink.emit(Event::Nudged {
+            turn: self.turns,
+            kind: NudgeKind::Reminder,
+        });
+        format!("{output}\n\n{note}")
+    }
+
+    /// Glut's one question when the model ends its run (T73): its list has items open, or its last words announce
+    /// a next step — `None` when it is done as it says, asked once already, in plan mode, asking the owner, or off.
+    fn nudge(&self) -> Option<(NudgeKind, String)> {
+        if !self.config.nudge || self.nudged || self.depth > 0 {
+            return None;
+        }
+        // No step left to take it in — the limit, the budget or the time: the answer stands as it is.
+        if self.turns + 1 >= self.config.max_turns
+            || self.config.budget.spent(&self.usage).is_some()
+            || Instant::now() >= self.deadline
+        {
+            return None;
+        }
+        if self
+            .tools
+            .gate()
+            .is_some_and(|gate| gate.mode() == Mode::Plan)
+        {
+            return None;
+        }
+        let said = self.answer.as_deref().unwrap_or_default().trim_end();
+        // A question to the owner ends the turn as it should — "Shall I? (y/n)" too.
+        let last = said.lines().last().unwrap_or_default();
+        if last.contains('?') || last.contains('？') {
+            return None;
+        }
+        if self.config.todos && planning::open(&self.todos) {
+            return Some((
+                NudgeKind::OpenItems,
+                planning::open_items_nudge(&self.todos),
+            ));
+        }
+        planning::announces(said)
+            .then(|| (NudgeKind::Announced, planning::ANNOUNCED_NUDGE.to_owned()))
     }
 
     /// What the call answers: a subagent for `task` (HS8, D2 — only this step differs from an ordinary call),
@@ -4630,6 +4737,164 @@ mod tests {
             events
                 .iter()
                 .any(|e| matches!(e, Event::Todo { items, .. } if items.len() == 2))
+        );
+    }
+
+    fn nudges(events: &[Event]) -> Vec<NudgeKind> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                Event::Nudged { kind, .. } => Some(*kind),
+                _ => None,
+            })
+            .collect()
+    }
+
+    const OPEN_LIST: &str =
+        r#"{"items":[{"text":"read","status":"done"},{"text":"fix","status":"in_progress"}]}"#;
+
+    #[tokio::test]
+    async fn a_run_ending_with_its_list_open_is_asked_once_to_go_on() {
+        let model = Script::new(vec![
+            Ok(calls(&[("c1", crate::planning::TODO, OPEN_LIST)])),
+            Ok(text("done")),
+            Ok(text("stopping: the fix needs the owner")),
+        ]);
+        let mut events = Vec::new();
+        let outcome = run(
+            &RunConfig::new("/w"),
+            &model,
+            &toolbox(),
+            "go",
+            &mut events,
+            &Cancel::new(),
+        )
+        .await;
+        assert_eq!(outcome.reason, FinishReason::Answered);
+        assert_eq!(nudges(&events), [NudgeKind::OpenItems], "once, not again");
+        let asked = model.seen.lock().unwrap()[2]
+            .last()
+            .and_then(|message| message.content.clone())
+            .unwrap_or_default();
+        assert!(
+            asked.starts_with("[glut]") && asked.contains("▸ fix"),
+            "{asked}"
+        );
+
+        // Off, a question to the owner, or plan mode: the run ends where the model ends it.
+        let quiet = RunConfig {
+            nudge: false,
+            ..RunConfig::new("/w")
+        };
+        let model = Script::new(vec![
+            Ok(calls(&[("c1", crate::planning::TODO, OPEN_LIST)])),
+            Ok(text("done")),
+        ]);
+        let mut events = Vec::new();
+        run(
+            &quiet,
+            &model,
+            &toolbox(),
+            "go",
+            &mut events,
+            &Cancel::new(),
+        )
+        .await;
+        assert!(nudges(&events).is_empty());
+        let model = Script::new(vec![
+            Ok(calls(&[("c1", crate::planning::TODO, OPEN_LIST)])),
+            Ok(text("Shall I fix it the other way?")),
+        ]);
+        let mut events = Vec::new();
+        let outcome = run(
+            &RunConfig::new("/w"),
+            &model,
+            &toolbox(),
+            "go",
+            &mut events,
+            &Cancel::new(),
+        )
+        .await;
+        assert!(nudges(&events).is_empty() && outcome.reason == FinishReason::Answered);
+    }
+
+    #[tokio::test]
+    async fn a_run_ending_with_an_announcement_is_asked_to_take_the_step() {
+        let model = Script::new(vec![Ok(text("Now the tests:")), Ok(text("the tests pass"))]);
+        let mut events = Vec::new();
+        let outcome = run(
+            &RunConfig::new("/w"),
+            &model,
+            &toolbox(),
+            "go",
+            &mut events,
+            &Cancel::new(),
+        )
+        .await;
+        assert_eq!(nudges(&events), [NudgeKind::Announced]);
+        assert_eq!(outcome.answer.as_deref(), Some("the tests pass"));
+        assert!(crate::planning::announces("Weiter mit den CLI-Tests:"));
+        assert!(crate::planning::announces(
+            "Done.\nNext, I'll add the README"
+        ));
+        assert!(!crate::planning::announces(
+            "Done: all three commands pass."
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_list_left_open_is_carried_and_reminded_of_after_eight_calls() {
+        let echoes: Vec<(&str, &str, &str)> =
+            (0..9).map(|_| ("e", "echo", r#"{"text":"x"}"#)).collect();
+        let mut replies = vec![Ok(calls(&echoes))];
+        replies.push(Ok(calls(&[(
+            "t",
+            crate::planning::TODO,
+            r#"{"items":[{"text":"fix","status":"done"}]}"#,
+        )])));
+        replies.push(Ok(text("all done")));
+        let model = Script::new(replies);
+        let config = RunConfig {
+            todo_list: vec![crate::planning::TodoItem {
+                text: "fix".into(),
+                status: crate::planning::TodoStatus::InProgress,
+            }],
+            ..RunConfig::new("/w")
+        };
+        let mut events = Vec::new();
+        let outcome = run(
+            &config,
+            &model,
+            &toolbox(),
+            "go on",
+            &mut events,
+            &Cancel::new(),
+        )
+        .await;
+        assert_eq!(outcome.reason, FinishReason::Answered);
+        let seen = model.seen.lock().unwrap();
+        let prompt = seen[0].last().unwrap().content.clone().unwrap_or_default();
+        assert!(
+            prompt.starts_with("go on\n\n[glut] Your task list from before (0 of 1 done)"),
+            "{prompt}"
+        );
+        let answers: Vec<String> = seen[1]
+            .iter()
+            .filter(|m| m.role == Role::Tool)
+            .filter_map(|m| m.content.clone())
+            .collect();
+        assert_eq!(
+            answers
+                .iter()
+                .filter(|a| a.contains("[glut] Your task list has not changed"))
+                .count(),
+            1
+        );
+        assert!(answers[7].contains("[glut]"), "at the eighth call");
+        assert_eq!(
+            nudges(&events),
+            [NudgeKind::Reminder],
+            "all done: no question at the end"
         );
     }
 

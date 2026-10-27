@@ -393,14 +393,8 @@ impl Loop {
         self.next.is_none()
     }
 
-    /// The round under way began, with the session's cost and tokens then.
-    pub fn round_began(&mut self, cost: Option<f64>, used: u64) {
-        self.next = None;
-        self.cost_from = cost;
-        self.used_from = used;
-        self.last = None;
-        // An `end_loop` of a turn between rounds (the owner's, in the shown pane) ends no round.
-        self.link.take_ended();
+    /// A round is about to start: what it may still spend is set before its turn reads it.
+    pub fn round_starts(&self) {
         self.link.set_left(Some(Left {
             tokens: self
                 .limits
@@ -408,6 +402,16 @@ impl Loop {
                 .map(|max| max.saturating_sub(self.used)),
             usd: (self.limits.max_usd - self.spent.unwrap_or(0.0)).max(0.0),
         }));
+    }
+
+    /// The round under way began, with the session's cost and tokens then — after a fresh round's `/clear`.
+    pub fn round_began(&mut self, cost: Option<f64>, used: u64) {
+        self.next = None;
+        self.cost_from = cost;
+        self.used_from = used;
+        self.last = None;
+        // An `end_loop` of a turn between rounds (the owner's, in the shown pane) ends no round.
+        self.link.take_ended();
     }
 
     /// The round under way ended, with the session's cost and tokens now: whether and why the loop ends, else when
@@ -806,6 +810,7 @@ mod tests {
         looped.round_began(None, 100);
         assert_eq!(looped.round_ended(None, 700, now), None);
         assert_eq!(looped.spent_shown(), tr!(loop_tokens_used, n = "600"));
+        looped.round_starts();
         looped.round_began(None, 0);
         assert_eq!(
             looped.link.left(),

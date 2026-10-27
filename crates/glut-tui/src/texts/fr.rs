@@ -220,6 +220,11 @@ pub const TEXTS: Texts = Texts {
              compte comme off)",
         ),
         (
+            "nudge",
+            "si Glut demande une fois au modèle de continuer quand il s'arrête avec sa liste ouverte ou en annonçant \
+             une étape",
+        ),
+        (
             "reader",
             "pour un lecteur d’écran : touches en mots, un écran sobre, rien ne bouge, une ligne à chaque \
              changement d’état",
@@ -643,6 +648,10 @@ pub const TEXTS: Texts = Texts {
     images_set: "images : {images}",
     images_now: "images : {images} — /images inline, blocks ou off",
     reader_now: "lecteur d’écran : {reader} — /reader on ou off",
+    nudge_now: "demander au modèle de continuer : {nudge} — /nudge on ou off",
+    nudge_on: "Glut demande une fois au modèle de continuer quand il s'arrête avec sa liste ouverte ou en annonçant \
+              une étape",
+    nudge_off: "un tour s'arrête là où le modèle l'arrête",
     thinking_unknown: "/thinking {word} : off, folded ou open",
     no_command: "pas de commande /{name} — /help les liste",
     model_locked: "le modèle de cette session est fixé par le programme qui l’a lancée — pas de changement ici",
@@ -1641,6 +1650,9 @@ pub const TEXTS: Texts = Texts {
     model_plan: "abonnement",
     agent_starting: "démarrage…",
     compacted_tokens: "conversation compactée : {before}k → {after}k tokens",
+    nudged_reminder: "Glut a rappelé au modèle sa liste de tâches",
+    nudged_open: "Glut a demandé au modèle de continuer : sa liste a encore des points ouverts",
+    nudged_announced: "Glut a demandé au modèle de faire l'étape annoncée",
     mode_now: "désormais en mode {mode}",
     thinking_live: "réfléchit…",
     thought: "réflexion",

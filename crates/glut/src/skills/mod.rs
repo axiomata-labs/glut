@@ -953,7 +953,13 @@ mod tests {
         skill
             .start_run(&cwd, &mut config, &mut model, &mut gate)
             .unwrap();
-        let prompt = system_prompt(&cwd, "2026-10-13", "m", config.instructions.as_deref());
+        let prompt = system_prompt(
+            &cwd,
+            "2026-10-13",
+            "m",
+            config.instructions.as_deref(),
+            true,
+        );
         assert!(prompt.ends_with("Do the thing."), "{prompt}");
     }
 
