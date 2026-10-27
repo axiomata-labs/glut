@@ -21,6 +21,11 @@ pub const LONGEST: Duration = Duration::from_secs(24 * 3600);
 pub const DEFAULT_ROUNDS: u32 = 50;
 /// The most a loop's session may cost in USD, unless `/loop budget` or `loop.maxUsd` say otherwise.
 pub const DEFAULT_MAX_USD: f64 = 5.0;
+/// The most tokens a loop on a subscription may use, unless `/loop tokens` or `loop.maxTokens` say otherwise (PV4):
+/// a plan's use has no price, its limits are counted in what it processes.
+pub const DEFAULT_MAX_TOKENS: u64 = 5_000_000;
+/// The most a loop's token budget may say.
+pub const MOST_TOKENS: u64 = glut::permissions::settings::MAX_LOOP_TOKENS;
 /// The commands a round may run: those that hand the model work. Any other one — `/quit`, `/loop`, `/close` — is the
 /// owner's to give, never a loop's to repeat.
 pub const COMMANDS: [&str; 3] = ["skill", "compact", "init"];
@@ -57,6 +62,8 @@ pub enum Command {
     Rounds(Option<u32>),
     /// `/loop budget [usd]`: the most a loop may cost kept, or said.
     Budget(Option<f64>),
+    /// `/loop tokens [n]`: the most tokens a loop on a subscription may use kept, or said.
+    Tokens(Option<u64>),
 }
 
 /// `/loop`'s words.
@@ -96,6 +103,13 @@ pub fn parse(rest: &str) -> Result<Command, String> {
                 .filter(|usd| usable_usd(*usd))
                 .map(|usd| Command::Budget(Some(usd)))
                 .ok_or_else(|| tr!(loop_budget_bad).to_owned());
+        }
+        "tokens" if after.is_empty() => return Ok(Command::Tokens(None)),
+        "tokens" => {
+            return count(after)
+                .filter(|n| usable_tokens(*n))
+                .map(|n| Command::Tokens(Some(n)))
+                .ok_or_else(|| tr!(loop_tokens_bad).to_owned());
         }
         _ => {}
     }
@@ -163,6 +177,43 @@ fn usable_usd(usd: f64) -> bool {
     usd.is_finite() && usd > 0.0 && usd <= MOST_USD
 }
 
+/// Whether `tokens` can be a loop's token budget.
+fn usable_tokens(tokens: u64) -> bool {
+    (1..=MOST_TOKENS).contains(&tokens)
+}
+
+/// A count of tokens as written: `500000`, `500k`, `5M`, `1.5m`.
+pub fn count(word: &str) -> Option<u64> {
+    let word = word.trim();
+    let (number, by) = match word.char_indices().last()? {
+        (at, 'k' | 'K') => (&word[..at], 1_000.0),
+        (at, 'm' | 'M') => (&word[..at], 1_000_000.0),
+        _ => (word, 1.0),
+    };
+    let value = number.parse::<f64>().ok()? * by;
+    (value.is_finite() && value >= 1.0 && value <= MOST_TOKENS as f64).then(|| value.round() as u64)
+}
+
+/// A count of tokens as the owner reads it: `5M`, `1.5M`, `500k`.
+pub fn tokens_shown(tokens: u64) -> String {
+    let trimmed = |value: f64| {
+        let text = format!("{value:.1}");
+        text.strip_suffix(".0").map_or(text.clone(), str::to_owned)
+    };
+    if tokens >= 1_000_000 {
+        format!("{}M", trimmed(tokens as f64 / 1e6))
+    } else if tokens >= 1_000 {
+        format!("{}k", trimmed(tokens as f64 / 1e3))
+    } else {
+        tokens.to_string()
+    }
+}
+
+/// What `usage` counts against a token budget, as `glut::Budget` counts it.
+pub fn tokens_of(usage: &glut::Usage) -> u64 {
+    usage.budgeted_tokens()
+}
+
 /// An interval as written: `30s`, `5m`, `2h`, `1h30m` — from [`SHORTEST`] to [`LONGEST`].
 pub fn interval(word: &str) -> Option<Duration> {
     let mut secs: u64 = 0;
@@ -209,18 +260,22 @@ pub fn shown(every: Duration) -> String {
     text
 }
 
-/// Where a loop ends by itself: what `/loop rounds` and `/loop budget` kept, else the owner's `loop` in
-/// `~/.glut/settings.json`, else the defaults.
+/// Where a loop ends by itself: what `/loop rounds`, `/loop budget` and `/loop tokens` kept, else the owner's `loop`
+/// in `~/.glut/settings.json`, else the defaults.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Limits {
     pub rounds: u32,
     pub max_usd: f64,
+    /// The most tokens it may use: only on a subscription (PV4), whose use has no price.
+    pub max_tokens: Option<u64>,
 }
 
 impl Limits {
+    /// The limits of a loop; `plan`: it runs on a subscription, and its tokens count too.
     pub fn of(
         prefs: &crate::prefs::Prefs,
         settings: glut::permissions::settings::LoopSection,
+        plan: bool,
     ) -> Self {
         // The prefs file may be edited by hand: a value `/loop` would refuse counts as none.
         let rounds = |n: &u32| (1..=glut::permissions::settings::MAX_LOOP_ROUNDS).contains(n);
@@ -235,6 +290,13 @@ impl Limits {
                 .filter(|usd| usable_usd(*usd))
                 .or(settings.max_usd.filter(|usd| usable_usd(*usd)))
                 .unwrap_or(DEFAULT_MAX_USD),
+            max_tokens: plan.then(|| {
+                prefs
+                    .loop_max_tokens
+                    .filter(|n| usable_tokens(*n))
+                    .or(settings.max_tokens.filter(|n| usable_tokens(*n)))
+                    .unwrap_or(DEFAULT_MAX_TOKENS)
+            }),
         }
     }
 }
@@ -252,6 +314,8 @@ pub enum Ended {
     Rounds(u32),
     /// Its session spent its budget.
     Budget(f64),
+    /// Its rounds used the tokens they may, on a subscription.
+    Tokens(u64),
 }
 
 impl Ended {
@@ -270,6 +334,7 @@ impl Ended {
             Ended::Failed(how) => tr!(loop_why_failed, reason = how),
             Ended::Rounds(n) => tr!(loop_why_rounds, n = n),
             Ended::Budget(max) => tr!(loop_why_budget, max = glut::lang::usd(*max, 2)),
+            Ended::Tokens(max) => tr!(loop_why_tokens, max = tokens_shown(*max)),
         }
     }
 
@@ -288,10 +353,14 @@ pub struct Loop {
     pub rounds: u32,
     /// What its rounds cost so far, where the prices are known; `None`: nothing counted yet.
     pub spent: Option<f64>,
+    /// The tokens its rounds used so far.
+    pub used: u64,
     /// When the next round starts; `None` while one runs.
     pub next: Option<Instant>,
     /// What the session's cost was as the round under way started.
     pub cost_from: Option<f64>,
+    /// What the session's tokens were as the round under way started.
+    pub used_from: u64,
     /// How the round's last turn ended, with its answer; `None` while it runs or when it started none.
     pub last: Option<(glut::FinishReason, String)>,
     /// What the agent's `end_loop` says.
@@ -309,8 +378,10 @@ impl Loop {
             limits,
             rounds: 0,
             spent: None,
+            used: 0,
             next: Some(Instant::now()),
             cost_from: None,
+            used_from: 0,
             last: None,
             link,
             began: Instant::now(),
@@ -322,25 +393,43 @@ impl Loop {
         self.next.is_none()
     }
 
-    /// The round under way began, with the session's cost then.
-    pub fn round_began(&mut self, cost: Option<f64>) {
+    /// The round under way began, with the session's cost and tokens then.
+    pub fn round_began(&mut self, cost: Option<f64>, used: u64) {
         self.next = None;
         self.cost_from = cost;
+        self.used_from = used;
         self.last = None;
         // An `end_loop` of a turn between rounds (the owner's, in the shown pane) ends no round.
         self.link.take_ended();
+        self.link.set_left(Some(Left {
+            tokens: self
+                .limits
+                .max_tokens
+                .map(|max| max.saturating_sub(self.used)),
+            usd: (self.limits.max_usd - self.spent.unwrap_or(0.0)).max(0.0),
+        }));
     }
 
-    /// The round under way ended, with the session's cost now: whether and why the loop ends, else when the next
-    /// round starts.
-    pub fn round_ended(&mut self, cost: Option<f64>, now: Instant) -> Option<Ended> {
+    /// The round under way ended, with the session's cost and tokens now: whether and why the loop ends, else when
+    /// the next round starts.
+    pub fn round_ended(&mut self, cost: Option<f64>, used: u64, now: Instant) -> Option<Ended> {
         self.rounds += 1;
+        self.used = self
+            .used
+            .saturating_add(used.saturating_sub(self.used_from));
+        // A turn the owner sends between rounds is no round's: it spends without the loop's limits.
+        self.link.set_left(None);
         if let Some(cost) = cost {
             let spent = (cost - self.cost_from.unwrap_or(0.0)).max(0.0);
             self.spent = Some(self.spent.unwrap_or(0.0) + spent);
         }
         let ended = match self.last.take() {
             Some((glut::FinishReason::Cancelled, _)) => Some(Ended::Stopped),
+            // The round's run stopped at what was left: the loop's limit, said as such.
+            Some((glut::FinishReason::Budget, _)) => Some(match self.limits.max_tokens {
+                Some(max) if self.used >= max => Ended::Tokens(max),
+                _ => Ended::Budget(self.limits.max_usd),
+            }),
             Some((reason, _)) if reason != glut::FinishReason::Answered => {
                 Some(Ended::Failed(crate::app::reason(reason).to_owned()))
             }
@@ -352,6 +441,12 @@ impl Loop {
             self.spent
                 .filter(|spent| *spent >= self.limits.max_usd)
                 .map(|_| Ended::Budget(self.limits.max_usd))
+        })
+        .or_else(|| {
+            self.limits
+                .max_tokens
+                .filter(|max| self.used >= *max)
+                .map(Ended::Tokens)
         });
         if ended.is_some() {
             self.link.stop();
@@ -359,6 +454,15 @@ impl Loop {
             self.next = Some(now + self.asked.every);
         }
         ended
+    }
+
+    /// What its rounds used, as the owner reads it: the tokens on a subscription, else the money where it counts.
+    pub fn spent_shown(&self) -> String {
+        match (self.limits.max_tokens, self.spent) {
+            (Some(_), _) => tr!(loop_tokens_used, n = tokens_shown(self.used)),
+            (None, Some(spent)) => glut::lang::usd(spent, 2),
+            (None, None) => "—".to_owned(),
+        }
     }
 
     /// The loop as `/loop` lists it.
@@ -372,9 +476,7 @@ impl Loop {
                 ))
             ),
         };
-        let cost = self
-            .spent
-            .map_or_else(|| "—".to_owned(), |spent| glut::lang::usd(spent, 2));
+        let cost = self.spent_shown();
         tr!(
             loop_line,
             name = name,
@@ -403,6 +505,17 @@ struct LinkState {
     rounds: u32,
     /// The model ended the loop, with why.
     ended: Option<String>,
+    /// What the round under way may still spend: its turn's run stops there, not only the next round.
+    left: Option<Left>,
+}
+
+/// What a round may still spend of its loop's limits.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Left {
+    /// Tokens, on a subscription.
+    pub tokens: Option<u64>,
+    /// Money, counted where the prices are known.
+    pub usd: f64,
 }
 
 impl Link {
@@ -419,6 +532,7 @@ impl Link {
             task: asked.task.clone(),
             rounds: limits.rounds,
             ended: None,
+            left: None,
         };
     }
 
@@ -427,6 +541,16 @@ impl Link {
         let mut state = self.lock();
         state.on = false;
         state.ended = None;
+        state.left = None;
+    }
+
+    /// What the round under way may still spend; `None` between rounds and without a loop.
+    pub fn left(&self) -> Option<Left> {
+        self.lock().left
+    }
+
+    fn set_left(&self, left: Option<Left>) {
+        self.lock().left = left;
     }
 
     /// Whether `end_loop` is offered: the session runs a loop.
@@ -595,13 +719,20 @@ mod tests {
         let settings = glut::permissions::settings::LoopSection {
             rounds: Some(9),
             max_usd: None,
+            max_tokens: Some(0),
         };
         assert_eq!(
-            Limits::of(&prefs, settings),
+            Limits::of(&prefs, settings, false),
             Limits {
                 rounds: 9,
-                max_usd: DEFAULT_MAX_USD
+                max_usd: DEFAULT_MAX_USD,
+                max_tokens: None,
             }
+        );
+        assert_eq!(
+            Limits::of(&prefs, settings, true).max_tokens,
+            Some(DEFAULT_MAX_TOKENS),
+            "only on a subscription, and a count loop would refuse is none"
         );
         assert!(parse("budget 5000").is_err());
         assert!(
@@ -627,18 +758,19 @@ mod tests {
         let limits = Limits {
             rounds: 2,
             max_usd: 1.0,
+            max_tokens: None,
         };
         let mut looped = Loop::new(asked(60), limits, Arc::clone(&link));
         assert!(link.on() && !looped.running());
-        looped.round_began(None);
+        looped.round_began(None, 0);
         assert!(looped.running());
         looped.last = Some((glut::FinishReason::Answered, "green".into()));
         let now = Instant::now();
-        assert_eq!(looped.round_ended(None, now), None);
+        assert_eq!(looped.round_ended(None, 0, now), None);
         assert_eq!(looped.next, Some(now + Duration::from_secs(60)));
         assert_eq!(looped.spent, None, "nothing counted without prices");
-        looped.round_began(None);
-        assert_eq!(looped.round_ended(None, now), Some(Ended::Rounds(2)));
+        looped.round_began(None, 0);
+        assert_eq!(looped.round_ended(None, 0, now), Some(Ended::Rounds(2)));
         assert!(!link.on(), "the tool goes with the loop");
 
         // The budget counts what each round cost, from its start.
@@ -648,14 +780,75 @@ mod tests {
             Limits {
                 rounds: 50,
                 max_usd: 1.0,
+                max_tokens: None,
             },
             link,
         );
-        looped.round_began(Some(0.2));
-        assert_eq!(looped.round_ended(Some(0.8), now), None);
-        looped.round_began(Some(0.8));
-        assert_eq!(looped.round_ended(Some(1.3), now), Some(Ended::Budget(1.0)));
+        looped.round_began(Some(0.2), 0);
+        assert_eq!(looped.round_ended(Some(0.8), 0, now), None);
+        looped.round_began(Some(0.8), 0);
+        assert_eq!(
+            looped.round_ended(Some(1.3), 0, now),
+            Some(Ended::Budget(1.0))
+        );
         assert!((looped.spent.unwrap() - 1.1).abs() < 1e-9);
+
+        // On a subscription its tokens count, each round's from its start.
+        let mut looped = Loop::new(
+            asked(60),
+            Limits {
+                rounds: 50,
+                max_usd: 1.0,
+                max_tokens: Some(1_000),
+            },
+            Arc::new(Link::default()),
+        );
+        looped.round_began(None, 100);
+        assert_eq!(looped.round_ended(None, 700, now), None);
+        assert_eq!(looped.spent_shown(), tr!(loop_tokens_used, n = "600"));
+        looped.round_began(None, 0);
+        assert_eq!(
+            looped.link.left(),
+            Some(Left {
+                tokens: Some(400),
+                usd: 1.0
+            }),
+            "a round's run stops at what is left"
+        );
+        // Its run stopped there: the loop ends on its tokens, not as failed.
+        looped.last = Some((glut::FinishReason::Budget, String::new()));
+        assert_eq!(
+            looped.round_ended(None, 400, now),
+            Some(Ended::Tokens(1_000))
+        );
+        assert_eq!(looped.link.left(), None, "nothing left between rounds");
+    }
+
+    #[test]
+    fn a_count_of_tokens_reads_as_written_and_shows_short() {
+        assert_eq!(count("500000"), Some(500_000));
+        assert_eq!(count("500k"), Some(500_000));
+        assert_eq!(count("1.5M"), Some(1_500_000));
+        assert_eq!(count("5m"), Some(5_000_000));
+        for odd in ["", "0", "-5k", "k", "2000M", "nan", "5 M"] {
+            assert_eq!(count(odd), None, "{odd}");
+        }
+        assert_eq!(
+            parse("tokens 2M").unwrap(),
+            Command::Tokens(Some(2_000_000))
+        );
+        assert_eq!(parse("tokens").unwrap(), Command::Tokens(None));
+        assert!(parse("tokens lots").is_err());
+        assert_eq!(tokens_shown(5_000_000), "5M");
+        assert_eq!(tokens_shown(1_500_000), "1.5M");
+        assert_eq!(tokens_shown(600), "600");
+        assert_eq!(tokens_shown(42_000), "42k");
+        let usage = glut::Usage {
+            input_tokens: 1_000,
+            cached_input_tokens: 800,
+            output_tokens: 50,
+        };
+        assert_eq!(tokens_of(&usage), 250, "cache reads do not count");
     }
 
     #[test]
@@ -664,24 +857,25 @@ mod tests {
         let limits = Limits {
             rounds: 50,
             max_usd: 5.0,
+            max_tokens: None,
         };
         let mut looped = Loop::new(asked(60), limits, Arc::new(Link::default()));
-        looped.round_began(None);
+        looped.round_began(None, 0);
         looped.last = Some((glut::FinishReason::Failed, String::new()));
         assert!(matches!(
-            looped.round_ended(None, now),
+            looped.round_ended(None, 0, now),
             Some(Ended::Failed(_))
         ));
 
         let mut looped = Loop::new(asked(60), limits, Arc::new(Link::default()));
-        looped.round_began(None);
+        looped.round_began(None, 0);
         looped.last = Some((glut::FinishReason::Cancelled, String::new()));
-        assert_eq!(looped.round_ended(None, now), Some(Ended::Stopped));
+        assert_eq!(looped.round_ended(None, 0, now), Some(Ended::Stopped));
 
         let link = Arc::new(Link::default());
         let tool = EndLoop::new(Arc::clone(&link));
         let mut looped = Loop::new(asked(60), limits, Arc::clone(&link));
-        looped.round_began(None);
+        looped.round_began(None, 0);
         assert!(tool.spec().description.contains("at most 50 rounds"));
         let runtime = tokio::runtime::Builder::new_current_thread()
             .build()
@@ -697,7 +891,7 @@ mod tests {
             .unwrap();
         looped.last = Some((glut::FinishReason::Answered, "done".into()));
         assert_eq!(
-            looped.round_ended(None, now),
+            looped.round_ended(None, 0, now),
             Some(Ended::Goal("all green".into()))
         );
         assert!(

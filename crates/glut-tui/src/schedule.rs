@@ -29,6 +29,8 @@ const LONGEST_EVERY: u32 = 7 * 24 * 60;
 /// What a run may cost and take when the plan says nothing (the grill's word, 2026-10-26).
 pub const DEFAULT_MAX_USD: f64 = 1.0;
 pub const DEFAULT_MAX_MINUTES: u32 = 30;
+/// The most tokens a run on a subscription may use when the plan says nothing (PV4): its use has no price.
+pub const DEFAULT_MAX_TOKENS: u64 = 1_000_000;
 /// The most a plan's budget and time limit may be: what a mistyped number must not reach.
 const MOST_USD: f64 = 1000.0;
 const MOST_MINUTES: u32 = 24 * 60;
@@ -76,6 +78,9 @@ pub struct Plan {
     pub folders: Vec<String>,
     pub max_usd: f64,
     pub max_minutes: u32,
+    /// The most tokens a run may use, counted on a subscription only (PV4); `None`: [`DEFAULT_MAX_TOKENS`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u64>,
     #[serde(default)]
     pub paused: bool,
     /// The `PATH` its commands find programs on: the one it was made with, as launchd gives a job almost none.
@@ -194,6 +199,12 @@ impl Plan {
         }
         if !usable_minutes(self.max_minutes) {
             return Err(tr!(schedule_minutes_bad).to_owned());
+        }
+        if self
+            .max_tokens
+            .is_some_and(|tokens| !(1..=crate::looping::MOST_TOKENS).contains(&tokens))
+        {
+            return Err(tr!(schedule_tokens_bad).to_owned());
         }
         if !self.folder.is_absolute() {
             return Err(tr!(schedule_folder_gone, folder = self.folder.display()));
@@ -875,6 +886,7 @@ pub(crate) fn sample(name: &str) -> Plan {
         folders: Vec::new(),
         max_usd: DEFAULT_MAX_USD,
         max_minutes: DEFAULT_MAX_MINUTES,
+        max_tokens: None,
         paused: false,
         path: String::new(),
         changed: Utc::now(),
@@ -901,6 +913,7 @@ mod tests {
             folders: Vec::new(),
             max_usd: DEFAULT_MAX_USD,
             max_minutes: DEFAULT_MAX_MINUTES,
+            max_tokens: None,
             paused: false,
             path: "/usr/bin:/bin".to_owned(),
             changed: Utc.with_ymd_and_hms(2026, 10, 26, 8, 0, 0).unwrap(),

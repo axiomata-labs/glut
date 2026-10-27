@@ -79,6 +79,10 @@ pub struct Prefs {
     /// The most a loop's session may cost in USD (T60a, `/loop budget`); `None`: `loop.maxUsd` of the settings, else 5.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loop_max_usd: Option<f64>,
+    /// The most tokens a loop on a subscription may use (PV4, `/loop tokens`); `None`: `loop.maxTokens` of the
+    /// settings, else 5 M.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loop_max_tokens: Option<u64>,
     /// Whether tiles show at the window's top right (T69, `/notify tiles`); `None`: they do.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tiles: Option<bool>,
@@ -319,6 +323,17 @@ pub fn set_runs_seen(home: &Path, at: chrono::DateTime<chrono::Utc>) -> Result<(
 pub fn set_loop_max_usd(home: &Path, usd: f64) -> Result<(), String> {
     let mut prefs = Prefs::read(home)?;
     prefs.loop_max_usd = Some(usd);
+    prefs.save(home)
+}
+
+/// Keeps the most tokens a loop on a subscription may use (`/loop tokens`, PV4).
+///
+/// # Errors
+///
+/// A message when the file cannot be read (it is not written over) or written.
+pub fn set_loop_max_tokens(home: &Path, tokens: u64) -> Result<(), String> {
+    let mut prefs = Prefs::read(home)?;
+    prefs.loop_max_tokens = Some(tokens);
     prefs.save(home)
 }
 

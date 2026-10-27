@@ -1165,6 +1165,18 @@ impl App {
                 Ok(()) => self.say(tr!(loop_budget_set, usd = glut::lang::usd(usd, 2))),
                 Err(reason) => self.transcript.note(reason, Tone::Fault),
             },
+            Ok(Command::Tokens(None)) => self.tell(tr!(
+                loop_tokens_now,
+                n = crate::looping::tokens_shown(
+                    crate::looping::Limits::of(&Prefs::load(&home), self.parts.loops, true)
+                        .max_tokens
+                        .unwrap_or_default()
+                )
+            )),
+            Ok(Command::Tokens(Some(n))) => match prefs::set_loop_max_tokens(&home, n) {
+                Ok(()) => self.say(tr!(loop_tokens_set, n = crate::looping::tokens_shown(n))),
+                Err(reason) => self.transcript.note(reason, Tone::Fault),
+            },
             Ok(Command::Start(asked)) => {
                 self.pane_request = Some(crate::panes::Request::LoopStart(asked));
             }
@@ -1175,9 +1187,14 @@ impl App {
         }
     }
 
-    /// Where a loop ends by itself (T60a): what `/loop rounds` and `/loop budget` kept, else the owner's settings.
+    /// Where a loop ends by itself (T60a): what `/loop rounds`, `/loop budget` and `/loop tokens` kept, else the
+    /// owner's settings — its tokens counted on a subscription (PV4).
     pub fn loop_limits(&self) -> crate::looping::Limits {
-        crate::looping::Limits::of(&Prefs::load(&self.parts.home), self.parts.loops)
+        crate::looping::Limits::of(
+            &Prefs::load(&self.parts.home),
+            self.parts.loops,
+            self.engine.plan.is_some(),
+        )
     }
 
     /// One round of the loop this session runs (T60a): its task as the owner wrote it — a message, or a command that
@@ -4025,12 +4042,7 @@ impl App {
         // A budget holds per run, and a turn is one: what the turn under way (or the last) spent counts against it.
         let budget = &config.budget;
         let turn = self.meter.turns.last();
-        let spent_tokens = turn.map_or(0, |turn| {
-            turn.usage
-                .input_tokens
-                .saturating_sub(turn.usage.cached_input_tokens)
-                + turn.usage.output_tokens
-        });
+        let spent_tokens = turn.map_or(0, |turn| turn.usage.budgeted_tokens());
         let budget = match (budget.max_tokens, budget.max_usd) {
             (Some(max), _) => Some(tr!(
                 budget_tokens_left,
@@ -4057,7 +4069,14 @@ impl App {
             budget,
             usage: self.usage,
             cost: self.cost,
-            plan: self.engine.plan,
+            plan: match (self.engine.signed_in, self.engine.plan) {
+                (true, _) => Some(tr!(
+                    meter_plan,
+                    page = glut::subscription::chatgpt::USAGE_PAGE
+                )),
+                (false, Some(known)) => Some(tr!(meter_plan_named, name = known.name)),
+                (false, None) => None,
+            },
         }
     }
 
@@ -4779,6 +4798,9 @@ impl App {
                 if only.is_some_and(|only| id != only) {
                     continue;
                 }
+                // A subscription's models cost no money per call (PV4): "plan" where a price would stand.
+                let plan = glut::providers::catalog::known(&entry.kind)
+                    .is_some_and(|known| known.plan != glut::providers::catalog::Plan::None);
                 match models::cached(&self.parts.home, id, entry.root().trim_end_matches('/')) {
                     Some(list) => items.extend(list.models.iter().map(|model| {
                         let label = crate::transcript::clean(&model.id).to_string();
@@ -4787,7 +4809,7 @@ impl App {
                                 Some(_) => label,
                                 None => format!("{} · {label}", crate::transcript::clean(id)),
                             },
-                            detail: model_detail(model),
+                            detail: model_detail(model, plan),
                             pick: if own {
                                 Pick::OwnModel {
                                     provider: id.clone(),
@@ -5341,6 +5363,7 @@ impl App {
                         let signed = crate::login::standings(&home)
                             .into_iter()
                             .any(|standing| standing.id == id && standing.who.is_some());
+                        // A key's sign-in has no sign-out: ⏎ signs in again for a new key.
                         if signed {
                             // A sign-out revokes at the provider: asked once more, never on one stray ⏎.
                             let items = vec![
@@ -6068,7 +6091,7 @@ impl App {
         let anthropic = matches!(*self.engine.model, glut::Model::Anthropic(_));
         let hour = self.cache_mode == CacheMode::Hour && anthropic;
         // A plan has no call that only renews its cache (PV4): nothing to keep warm, no countdown to show.
-        if self.cache_seen && !self.engine.plan {
+        if self.cache_seen && !self.engine.signed_in {
             let life = if hour {
                 crate::warm::HOUR
             } else {
@@ -6082,7 +6105,7 @@ impl App {
             // Only Anthropic lets the hour be asked for: elsewhere it is kept by reading, as with `ping`.
             CacheMode::Hour => !anthropic,
             CacheMode::Off => false,
-        } && !self.engine.plan;
+        } && !self.engine.signed_in;
         // Only after an answered turn: a call that failed or was stopped may have cached nothing. A ping is a paid
         // call outside a turn: the host's budget has its word first, as for `/compact` — and before every ping.
         let may_spend = self.parts.host.may_spend().is_ok();
@@ -7194,9 +7217,11 @@ impl App {
         let items: Vec<Item> = crate::login::standings(&self.parts.home)
             .into_iter()
             .map(|standing| {
-                let detail = match &standing.who {
-                    Some(who) => tr!(login_state_in, who = crate::transcript::clean(who)),
-                    None => tr!(login_state_out).to_owned(),
+                let detail = match (&standing.who, standing.key) {
+                    (_, Some(true)) => tr!(login_state_key).to_owned(),
+                    (_, Some(false)) => tr!(login_state_no_key).to_owned(),
+                    (Some(who), None) => tr!(login_state_in, who = crate::transcript::clean(who)),
+                    (None, None) => tr!(login_state_out).to_owned(),
                 };
                 Item::plain(standing.id.clone(), detail, Pick::Login(standing.id))
             })
@@ -7423,13 +7448,15 @@ fn editor_picker(current: Option<String>) -> Picker {
     Picker::new(title, items, current.map(Pick::Editor).as_ref())
 }
 
-/// A model's window, price and whether it reasons, for the picker.
-fn model_detail(model: &models::ModelInfo) -> String {
+/// A model's window, price (or "plan", on a subscription) and whether it reasons, for the picker.
+fn model_detail(model: &models::ModelInfo, plan: bool) -> String {
     let mut parts = Vec::new();
     if let Some(window) = model.context_window {
         parts.push(format!("{}k", window / 1024));
     }
-    if let Some(prices) = model.prices {
+    if plan {
+        parts.push(tr!(model_plan).to_owned());
+    } else if let Some(prices) = model.prices {
         parts.push(format!(
             "{}/{}",
             glut::lang::usd(prices.input_per_m, 2),
@@ -10444,7 +10471,8 @@ pub(crate) mod tests {
             app.loop_limits(),
             crate::looping::Limits {
                 rounds: crate::looping::DEFAULT_ROUNDS,
-                max_usd: crate::looping::DEFAULT_MAX_USD
+                max_usd: crate::looping::DEFAULT_MAX_USD,
+                max_tokens: None,
             }
         );
         typed(&mut app, "/loop 5m as reviewer look at the diff");
@@ -10468,11 +10496,18 @@ pub(crate) mod tests {
         );
         typed(&mut app, "/loop rounds 20");
         typed(&mut app, "/loop budget 2.5");
+        typed(&mut app, "/loop tokens 2M");
+        assert_eq!(
+            Prefs::load(&app.parts.home).loop_max_tokens,
+            Some(2_000_000),
+            "kept, counted only on a subscription"
+        );
         assert_eq!(
             app.loop_limits(),
             crate::looping::Limits {
                 rounds: 20,
-                max_usd: 2.5
+                max_usd: 2.5,
+                max_tokens: None,
             }
         );
         assert!(app.pane_request.is_none());

@@ -342,6 +342,15 @@ pub struct Usage {
     pub output_tokens: u64,
 }
 
+impl Usage {
+    /// What a token budget counts of this usage: input less what the prompt cache read, plus output.
+    pub fn budgeted_tokens(&self) -> u64 {
+        self.input_tokens
+            .saturating_sub(self.cached_input_tokens)
+            .saturating_add(self.output_tokens)
+    }
+}
+
 impl std::ops::AddAssign for Usage {
     fn add_assign(&mut self, other: Usage) {
         self.input_tokens += other.input_tokens;

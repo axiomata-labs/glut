@@ -1262,6 +1262,8 @@ glut::catalog! {
         setup_no_provider: &'static str,
         /// The setup's question for a key: `{provider}`.
         setup_key: &'static str,
+        /// The setup's question for a key a sign-in may hand out instead (OpenRouter): `{provider}`.
+        setup_key_or_sign_in: &'static str,
         /// The setup without a key given.
         setup_no_key: &'static str,
         /// Where the key was kept: `{place}`.
@@ -1356,6 +1358,8 @@ glut::catalog! {
         cli_headings: &'static [&'static str],
         /// Beside a model that reasons, in the model list.
         model_reasons: &'static str,
+        /// Where a model's price stands in the picker, for a subscription's model (PV4).
+        model_plan: &'static str,
         /// A subagent's tile before its first step.
         agent_starting: &'static str,
         /// The conversation compacted by the model's side: `{before}` and `{after}` thousands of tokens.
@@ -1648,6 +1652,20 @@ glut::catalog! {
         loop_why_rounds: &'static str,
         /// Why a loop ended: its budget `{max}` is spent.
         loop_why_budget: &'static str,
+        /// `/loop tokens` with no count from 1 to 1000M.
+        loop_tokens_bad: &'static str,
+        /// `/loop tokens` alone: `{n}` the most tokens a loop on a subscription may use now.
+        loop_tokens_now: &'static str,
+        /// `/loop tokens` kept `{n}`.
+        loop_tokens_set: &'static str,
+        /// Why a loop ended: its `{max}` tokens are used, on a subscription.
+        loop_why_tokens: &'static str,
+        /// What a loop on a subscription used: `{n}` tokens.
+        loop_tokens_used: &'static str,
+        /// A loop starts on a subscription: `{name}` the plan, `{max}` the tokens it may use.
+        loop_on_plan: &'static str,
+        /// A loop or a plan's run starts on a plan whose terms allow interactive use only: `{name}`.
+        plan_interactive_only: &'static str,
         /// `/loop` with no loop running.
         loop_none: &'static str,
         /// `/loop stop` alone while several loops run.
@@ -1700,6 +1718,8 @@ glut::catalog! {
         schedule_usd_bad: &'static str,
         /// `--max-minutes` out of its range.
         schedule_minutes_bad: &'static str,
+        /// `--max-tokens` with no count from 1 to 1000M.
+        schedule_tokens_bad: &'static str,
         /// A plan's folder that is not there.
         schedule_folder_gone: &'static str,
         /// launchd refused a plan's agent.
@@ -1736,6 +1756,8 @@ glut::catalog! {
         schedule_shown_folders: &'static str,
         /// Where a plan's run ends.
         schedule_shown_limits: &'static str,
+        /// A plan on a subscription: `{name}` the plan, `{n}` the tokens a run may use.
+        schedule_shown_tokens: &'static str,
         /// Whose rules count beside a plan's.
         schedule_shown_owner_rules: &'static str,
         /// When launchd runs a plan.
@@ -1822,6 +1844,16 @@ glut::catalog! {
         login_state_in: &'static str,
         /// A subscription not signed in.
         login_state_out: &'static str,
+        /// `/login`: a key's sign-in whose key is kept.
+        login_state_key: &'static str,
+        /// `/login`: a key's sign-in with no key kept.
+        login_state_no_key: &'static str,
+        /// OpenRouter's sign-in begun: `{host}`, `{address}`.
+        login_key_at: &'static str,
+        /// OpenRouter's key kept: `{id}`, `{place}` the store.
+        login_key_kept: &'static str,
+        /// A key's sign-in replaced a key kept before: `{id}`.
+        login_key_replaced: &'static str,
         /// The question before a sign-out: `{id}`.
         login_sign_out_title: &'static str,
         /// The sign-out's yes.
@@ -1846,10 +1878,12 @@ glut::catalog! {
         login_out_unconfirmed: &'static str,
         /// An address pasted back with no sign-in waiting: `{id}`.
         login_no_waiting: &'static str,
-        /// The footer's word where money would stand: the session runs on a ChatGPT plan.
+        /// The footer's word where money would stand: the session runs on a subscription, `{name}`.
         plan_footer: &'static str,
         /// The meter's line where the price would stand: `{page}` ChatGPT's usage page.
         meter_plan: &'static str,
+        /// The meter's line for a coding plan where the price would stand: `{name}` the subscription.
+        meter_plan_named: &'static str,
         /// The program a plan would start lies where its commands write.
         schedule_program_writable: &'static str,
         /// A plan's run whose PATH reaches where its commands write.

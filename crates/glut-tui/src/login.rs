@@ -1,5 +1,6 @@
 //! `/login` (`docs/plans/glut-providers.md`, PV4): the subscriptions the owner may sign in to — today the ChatGPT
-//! plan — with how each stands; Enter signs in, or out. The sign-in goes as an MCP server's does (T56): the address
+//! plan — with how each stands, and the providers whose key a sign-in hands out (OpenRouter, PV4b); Enter signs in,
+//! or out. The sign-in goes as an MCP server's does (T56): the address
 //! shown first, the browser opened only on the owner's ⏎, over SSH the address the browser ended on pasted back
 //! (`/login chatgpt <address>`).
 
@@ -18,18 +19,20 @@ pub fn waiting_key(id: &str) -> String {
     format!("provider:{id}")
 }
 
-/// One subscription as `/login` lists it: its provider id, and who is signed in, if anyone.
+/// One sign-in as `/login` lists it: its provider id, and how it stands.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Standing {
     /// The provider's id.
     pub id: String,
-    /// The account signed in (its email, else its id); `None` while nobody is.
+    /// The account signed in (its email, else its id); `None` while nobody is, or for a key's sign-in.
     pub who: Option<String>,
+    /// For a provider whose key a sign-in hands out: whether one is kept; `None` for a subscription.
+    pub key: Option<bool>,
 }
 
-/// Every subscription of `home`, with who is signed in.
+/// Every sign-in of `home`: the subscriptions with who is signed in, then the keys' with whether one is kept.
 pub fn standings(home: &Path) -> Vec<Standing> {
-    glut::providers::subscriptions(home)
+    let plans = glut::providers::subscriptions(home)
         .into_iter()
         .map(|(id, account)| {
             let who = glut::subscription::load(home, &account)
@@ -37,9 +40,16 @@ pub fn standings(home: &Path) -> Vec<Standing> {
                 .flatten()
                 .filter(glut::subscription::Record::signed_in)
                 .map(|record| record.email.unwrap_or(record.subject));
-            Standing { id, who }
-        })
-        .collect()
+            Standing { id, who, key: None }
+        });
+    let keys = glut::providers::key_sign_ins(home)
+        .into_iter()
+        .map(|(id, kept)| Standing {
+            id,
+            who: None,
+            key: Some(kept),
+        });
+    plans.chain(keys).collect()
 }
 
 fn note(reports: &mpsc::UnboundedSender<Report>, text: String, tone: Tone) {
@@ -50,6 +60,9 @@ fn note(reports: &mpsc::UnboundedSender<Report>, text: String, tone: Tone) {
 /// browser opened on the owner's word, the tokens kept once it came back.
 pub fn sign_in(parts: &Arc<Parts>, id: String, reports: mpsc::UnboundedSender<Report>) {
     let home = parts.home.clone();
+    if glut::providers::gives_key_by_sign_in(&home, &id) {
+        return sign_in_for_key(home, id, reports);
+    }
     tokio::spawn(async move {
         let failed = |reason: String| tr!(login_failed, id = id, reason = reason);
         let account = match glut::providers::signing(&home, &id) {
@@ -73,26 +86,9 @@ pub fn sign_in(parts: &Arc<Parts>, id: String, reports: mpsc::UnboundedSender<Re
             ),
             Tone::Heed,
         );
-        if glut::oauth::can_open() {
-            let _ = reports.send(Report::Mcp(Step::Open {
-                address: sign_in.address().to_owned(),
-            }));
-        } else {
-            note(&reports, tr!(login_paste_back, id = id), Tone::Quiet);
-        }
-        let waiting = waiting_key(&id);
-        let number = crate::mcp::next_sign_in();
-        let (paste, pasted) = oneshot::channel();
-        let _ = reports.send(Report::Mcp(Step::Waiting {
-            name: waiting.clone(),
-            id: number,
-            paste,
-        }));
-        let finished = sign_in.finish(async { pasted.await.ok() }).await;
-        let _ = reports.send(Report::Mcp(Step::Ended {
-            name: waiting,
-            id: number,
-        }));
+        let address = sign_in.address().to_owned();
+        let finished =
+            wait_for_browser(&reports, &id, &address, |pasted| sign_in.finish(pasted)).await;
         let record = match finished {
             Ok(record) => record,
             Err(failure) => return note(&reports, failed(failure.to_string()), Tone::Fault),
@@ -120,6 +116,84 @@ pub fn sign_in(parts: &Arc<Parts>, id: String, reports: mpsc::UnboundedSender<Re
             );
         }
     });
+}
+
+/// Signs in to OpenRouter beside the screen (PV4b): the address shown, the browser opened on the owner's word, the
+/// key it hands out kept like one typed — never shown.
+fn sign_in_for_key(home: std::path::PathBuf, id: String, reports: mpsc::UnboundedSender<Report>) {
+    use glut::providers::openrouter;
+    tokio::spawn(async move {
+        let failed = |reason: String| tr!(login_failed, id = id, reason = reason);
+        if let Err(reason) = glut::providers::check_key_sign_in(&home, &id) {
+            return note(&reports, failed(reason), Tone::Fault);
+        }
+        let sign_in = match openrouter::begin(openrouter::Server::openrouter()).await {
+            Ok(sign_in) => sign_in,
+            Err(reason) => return note(&reports, failed(reason), Tone::Fault),
+        };
+        note(
+            &reports,
+            tr!(
+                login_key_at,
+                host = sign_in.host(),
+                address = sign_in.address()
+            ),
+            Tone::Heed,
+        );
+        let address = sign_in.address().to_owned();
+        let finished =
+            wait_for_browser(&reports, &id, &address, |pasted| sign_in.finish(pasted)).await;
+        let kept = finished.and_then(|key| glut::providers::keep_signed_key(&home, &id, &key));
+        match kept {
+            Ok((place, replaced)) => {
+                note(
+                    &reports,
+                    tr!(login_key_kept, id = id, place = place),
+                    Tone::Fine,
+                );
+                if replaced {
+                    note(&reports, tr!(login_key_replaced, id = id), Tone::Heed);
+                }
+            }
+            Err(reason) => note(&reports, failed(reason), Tone::Fault),
+        }
+    });
+}
+
+/// The browser opened on the owner's word (over SSH: the address pasted back with `/login <id> <address>`), and the
+/// sign-in finished with what came back.
+async fn wait_for_browser<T, F>(
+    reports: &mpsc::UnboundedSender<Report>,
+    id: &str,
+    address: &str,
+    finish: impl FnOnce(
+        std::pin::Pin<Box<dyn std::future::Future<Output = Option<String>> + Send>>,
+    ) -> F,
+) -> T
+where
+    F: std::future::Future<Output = T>,
+{
+    if glut::oauth::can_open() {
+        let _ = reports.send(Report::Mcp(Step::Open {
+            address: address.to_owned(),
+        }));
+    } else {
+        note(reports, tr!(login_paste_back, id = id), Tone::Quiet);
+    }
+    let waiting = waiting_key(id);
+    let number = crate::mcp::next_sign_in();
+    let (paste, pasted) = oneshot::channel();
+    let _ = reports.send(Report::Mcp(Step::Waiting {
+        name: waiting.clone(),
+        id: number,
+        paste,
+    }));
+    let finished = finish(Box::pin(async { pasted.await.ok() })).await;
+    let _ = reports.send(Report::Mcp(Step::Ended {
+        name: waiting,
+        id: number,
+    }));
+    finished
 }
 
 /// Signs out of subscription `id` beside the screen: revoked at its provider, its tokens gone here.

@@ -28,6 +28,19 @@ pub enum SignIn {
     ChatGpt,
 }
 
+/// What a provider's use costs (PV4): money per token, or a subscription's allowance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Plan {
+    /// Paid per token (or free).
+    #[default]
+    None,
+    /// A subscription's allowance: no price per call, its limits instead.
+    Subscription,
+    /// A subscription whose terms allow interactive use only (Alibaba's coding plan): a loop or a plan on it is the
+    /// owner's decision, said where it starts.
+    InteractiveOnly,
+}
+
 /// One provider of the catalog.
 #[derive(Debug, Clone, Copy)]
 pub struct Known {
@@ -47,6 +60,8 @@ pub struct Known {
     pub described_by: Option<&'static str>,
     /// Providers of one account whose key is one: a key stored for one of them serves the others at the same host.
     pub key_group: Option<&'static str>,
+    /// Whether its use is a subscription's (PV4).
+    pub plan: Plan,
 }
 
 /// The kind of an endpoint the owner names by its root, not by the catalog.
@@ -61,7 +76,7 @@ pub const CATALOG: &[Known] = &[
         "OpenRouter",
         "https://openrouter.ai/api/v1",
         "OPENROUTER_API_KEY",
-        "hundreds of models, one key",
+        "hundreds of models, one key — or sign in: glut providers login openrouter",
     ),
     Known {
         protocol: Protocol::Responses,
@@ -75,7 +90,7 @@ pub const CATALOG: &[Known] = &[
     },
     Known {
         id: "chatgpt",
-        name: "ChatGPT plan",
+        name: "ChatGPT",
         protocol: Protocol::Responses,
         root: "https://api.openai.com/v1",
         sign_in: SignIn::ChatGpt,
@@ -83,6 +98,7 @@ pub const CATALOG: &[Known] = &[
         note: "your ChatGPT Plus or Pro plan, signed in in the browser: glut providers login chatgpt",
         described_by: None,
         key_group: None,
+        plan: Plan::Subscription,
     },
     Known {
         protocol: Protocol::AnthropicMessages,
@@ -157,13 +173,17 @@ pub const CATALOG: &[Known] = &[
         "MOONSHOT_API_KEY",
         "pay-as-you-go key",
     ),
-    key(
-        "kimi-code",
-        "Kimi Code",
-        "https://api.kimi.com/coding/v1",
-        "KIMI_API_KEY",
-        "coding plan key (Kimi membership)",
-    ),
+    Known {
+        plan: Plan::Subscription,
+        // Kimi's international endpoint (`api.kimi.com` is mainland China's), read 2026-10-27.
+        ..key(
+            "kimi-code",
+            "Kimi Code",
+            "https://api.kimi.ai/coding/v1",
+            "KIMI_API_KEY",
+            "coding plan key (Kimi membership)",
+        )
+    },
     key(
         "zai",
         "Z.ai (GLM API)",
@@ -171,13 +191,16 @@ pub const CATALOG: &[Known] = &[
         "ZAI_API_KEY",
         "pay-as-you-go key",
     ),
-    key(
-        "zai-coding",
-        "Z.ai GLM Coding Plan",
-        "https://api.z.ai/api/coding/paas/v4",
-        "ZAI_CODING_API_KEY",
-        "coding plan key",
-    ),
+    Known {
+        plan: Plan::Subscription,
+        ..key(
+            "zai-coding",
+            "Z.ai GLM Coding",
+            "https://api.z.ai/api/coding/paas/v4",
+            "ZAI_CODING_API_KEY",
+            "coding plan key",
+        )
+    },
     key(
         "minimax",
         "MiniMax",
@@ -192,6 +215,18 @@ pub const CATALOG: &[Known] = &[
         "DASHSCOPE_API_KEY",
         "API key",
     ),
+    Known {
+        plan: Plan::InteractiveOnly,
+        // Alibaba's terms (read 2026-10-27): "Do not use the plan's API key for automated scripts, application
+        // backends, or other non-interactive scenarios."
+        ..key(
+            "qwen-coding",
+            "Alibaba Coding",
+            "https://coding-intl.dashscope.aliyuncs.com/v1",
+            "DASHSCOPE_CODING_API_KEY",
+            "coding plan key (sk-sp-…); interactive use only",
+        )
+    },
     key(
         "ollama-cloud",
         "Ollama Cloud",
@@ -250,6 +285,7 @@ const fn key(
         note,
         described_by: None,
         key_group: None,
+        plan: Plan::None,
     }
 }
 
@@ -279,6 +315,7 @@ const fn local(
         note,
         described_by: None,
         key_group: None,
+        plan: Plan::None,
     }
 }
 

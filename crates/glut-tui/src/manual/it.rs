@@ -152,6 +152,8 @@ pub const PAGES: [(&str, &str); 54] = [
          /login — gli abbonamenti, ciascuno con il suo stato; ⏎ accede o esce\n\
          /login <provider> — accede subito a quello, come /login chatgpt\n\
          /login <provider> <address> — via SSH: l'indirizzo su cui si è fermato il browser, incollato di nuovo\n\
+         /login openrouter — OpenRouter dà a Glut una chiave sua, conservata come una digitata; limitala o cancellala \
+         su openrouter.ai/settings/keys\n\
          \n\
          Prima viene mostrato l'indirizzo; ⏎ lo apre nel tuo browser. Glut conserva l'accesso nel portachiavi (o in \
          `~/.glut/credentials.json`) e lo rinnova da solo; uscire lo revoca presso OpenAI.\n\
@@ -349,6 +351,8 @@ pub const PAGES: [(&str, &str); 54] = [
          /loop stop [name] — termina quel ciclo, o l’unico\n\
          /loop rounds [n] — il massimo di giri di un ciclo; da solo mostra il limite attuale\n\
          /loop budget [usd] — il massimo che un ciclo può costare; da solo mostra il limite attuale\n\
+         /loop tokens [n] — il massimo di token che un ciclo su un abbonamento può usare (5M, 500k); da solo mostra \
+         il limite attuale\n\
          \n\
          I giri non si sovrappongono mai: l’intervallo è contato dalla fine di un giro, come 30s, 5m, 2h o 1h30m (da \
          10s a 24h). Un giro prosegue con la conversazione del giro precedente; con fresh ogni giro ne comincia una \
@@ -391,6 +395,7 @@ pub const PAGES: [(&str, &str); 54] = [
          - `--folder <path>` una cartella accanto alla sua; ripetibile\n\
          - `--max-usd 1`, `--max-minutes 30` il massimo che un’esecuzione può costare e durare: 1 $ e 30 min se non \
          nominati\n\
+         - `--max-tokens 1M` su un abbonamento, il massimo di token che un’esecuzione può usare: 1M se non indicato\n\
          - `--replace` le regole e le cartelle date prendono il posto di quelle del piano invece di aggiungersi\n\
          - `--cwd <path>`, `--provider <id>`, `--model <id>` la sua cartella (altrimenti questa), provider e modello, \
          fissati alla creazione\n\

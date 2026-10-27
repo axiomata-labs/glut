@@ -233,10 +233,7 @@ impl Budget {
     /// What is left of the budget after `usage`: a subagent's, which counts from nothing, may spend only what its
     /// parent has not.
     pub fn less(&self, usage: &crate::model::Usage) -> Budget {
-        let tokens = usage
-            .input_tokens
-            .saturating_sub(usage.cached_input_tokens)
-            .saturating_add(usage.output_tokens);
+        let tokens = usage.budgeted_tokens();
         Budget {
             max_tokens: self.max_tokens.map(|max| max.saturating_sub(tokens)),
             max_usd: match (self.max_usd, self.cost_usd(usage)) {
@@ -262,10 +259,7 @@ impl Budget {
     /// Why `usage`, which cost `cost` (`None`: not known), is past the budget — for subagents side by side, whose
     /// money is added up at each one's own prices (TUI T37a).
     pub fn spent_costing(&self, usage: &crate::model::Usage, cost: Option<f64>) -> Option<String> {
-        let tokens = usage
-            .input_tokens
-            .saturating_sub(usage.cached_input_tokens)
-            .saturating_add(usage.output_tokens);
+        let tokens = usage.budgeted_tokens();
         if let Some(max) = self.max_tokens
             && tokens >= max
         {

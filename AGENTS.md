@@ -89,7 +89,9 @@ cargo run --release --bin glut   # the TUI in the current folder, on the default
   the bearer at every call — never put it in `ModelEndpoint::api_key` beyond fetching a model list. Its refresh
   token rotates: renew only under `Lock::take` after reading the store again, or two windows sign each other out.
   The ID token is verified in full (`chatgpt::verify`); Glut never borrows another tool's client or tokens, and never
-  drives another harness for a subscription (owner, PV4 Q3).
+  drives another harness for a subscription (owner, PV4 Q3). OpenRouter's sign-in (PV4b) hands out a plain key:
+  keep it through `providers::keep_signed_key`, which refuses an entry whose root left OpenRouter's host. A loop or a
+  plan's run on a plan (`catalog::Plan`) counts tokens, since its use has no price.
 - **Secrets are masked where a result enters the conversation, and go back only into a file that holds them**
   (T58, `crates/glut/src/masks.rs`): `perform_after` masks before the result event, the hooks, the store and the
   model — a new path of tool text into the conversation must go through it too. `Loop::unmasked` puts a placeholder's

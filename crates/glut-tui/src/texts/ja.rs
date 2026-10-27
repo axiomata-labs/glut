@@ -70,7 +70,7 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "login",
-            "キーの代わりにサブスクリプション（ChatGPT プラン）でサインインします。/login だけで状態つきの一覧を表示し、⏎ でサインイン／サインアウト",
+            "キーを渡す代わりにサインインします — ChatGPT プラン、または専用のキーを得る OpenRouter。/login だけで状態つきの一覧を表示し、⏎ でサインイン／サインアウト",
         ),
         ("effort", "モデルがどれだけ考えるか、または /effort <level>"),
         ("context", "ウィンドウの埋まり具合; /context 64k で設定"),
@@ -134,7 +134,7 @@ pub const TEXTS: Texts = Texts {
         (
             "loop",
             "タスクを専用のバックグラウンドエージェントで繰り返し実行する、間隔はラウンド終了から数える — /loop 10m テストを実行; /loop だけで一覧、/loop stop [name] \
-             で一つ終了、/loop rounds|budget で終わる条件を設定",
+             で一つ終了、/loop rounds|budget|tokens で終わる条件を設定",
         ),
         (
             "schedule",
@@ -936,6 +936,7 @@ pub const TEXTS: Texts = Texts {
     setup_pick_provider: "Glut にはまだモデルのプロバイダーがありません。番号で選ぶか、Enter で中止:",
     setup_no_provider: "プロバイダーが選ばれていません — `glut` を再実行すると設定を始めます",
     setup_key: "{provider} のキー（表示されません）:",
+    setup_key_or_sign_in: "{provider} のキー（表示されません）— 代わりにブラウザーでサインインするなら ⏎ だけ：",
     setup_no_key: "キーが入力されていません — `glut` を再実行すると設定を始めます",
     setup_key_kept: "キーは {place} にあります。",
     setup_provider_done: "完了 — {provider} があなたのプロバイダーです。後から /model と /provider で変更できます。",
@@ -1001,12 +1002,14 @@ pub const TEXTS: Texts = Texts {
     setup_provider_prompt: "プロバイダー:",
     cli: &[
         (
-            "Signs in to a subscription in the browser — your ChatGPT Plus or Pro plan: glut providers login chatgpt",
-            "ブラウザーでサブスクリプションにサインインします — ChatGPT Plus または Pro プラン：glut providers login chatgpt",
+            "Signs in in the browser — your ChatGPT Plus or Pro plan (glut providers login chatgpt), or OpenRouter for \
+             a key without copying it (glut providers login openrouter)",
+            "ブラウザーでサインインします — ChatGPT Plus または Pro プラン (glut providers login chatgpt)、またはコピー不要でキーを得る OpenRouter (glut \
+             providers login openrouter)",
         ),
         (
-            "The provider; one of the catalog's subscriptions is added on the way",
-            "プロバイダー。カタログのサブスクリプションはその場で追加されます",
+            "The provider; one of the catalog's that sign in is added on the way",
+            "プロバイダー。サインインするカタログのプロバイダーはその場で追加されます",
         ),
         (
             "Signs out of a subscription: the sign-in revoked at its provider and forgotten here",
@@ -1081,6 +1084,10 @@ pub const TEXTS: Texts = Texts {
         (
             "The most minutes a run may take; 30 otherwise",
             "1 回の実行にかけてよい最長の分数。指定しなければ 30",
+        ),
+        (
+            "The most tokens a run on a subscription may use (500k, 1M); 1M otherwise",
+            "サブスクリプション上の実行が使ってよい最大 token 数 (500k, 1M)。省略時は 1M",
         ),
         (
             "The task: a message, or /skill <name> [what for]",
@@ -1496,6 +1503,7 @@ pub const TEXTS: Texts = Texts {
     ],
     cli_headings: &["使い方:", "オプション", "引数", "コマンド"],
     model_reasons: "推論",
+    model_plan: "プラン",
     agent_starting: "起動中…",
     compacted_tokens: "会話を圧縮しました: {before}k → {after}k Token",
     mode_now: "{mode} モードになりました",
@@ -1648,6 +1656,13 @@ pub const TEXTS: Texts = Texts {
     loop_why_failed: "ラウンドが回答なしで終わりました（{reason}）",
     loop_why_rounds: "{n} ラウンド実行しました",
     loop_why_budget: "予算 {max} を使い切りました",
+    loop_tokens_bad: "/loop tokens には 1 から 1000M までの数を指定します（例: 500k、5M）",
+    loop_tokens_now: "サブスクリプション上のループは、ラウンドの合計が {n} token に達すると終わります — /loop tokens <n> で変更できます",
+    loop_tokens_set: "これから始めるサブスクリプション上のループは、ラウンドの合計が {n} token に達すると終わります",
+    loop_why_tokens: "{max} token を使い切りました",
+    loop_tokens_used: "{n} token",
+    loop_on_plan: "{name} プランで動くため、ラウンドが {max} token を使うと終わります — /loop tokens <n> で変更できます",
+    plan_interactive_only: "{name} プランの規約は対話的な利用のみを認めています — 無人で動かすかどうかはあなたの判断です",
     loop_none: "実行中のループはありません — /loop <interval> <task> で開始します",
     loop_which: "複数のループが実行中です：/loop stop <name>",
     loop_unknown: "ループ {name} はありません — /loop で一覧",
@@ -1674,6 +1689,7 @@ pub const TEXTS: Texts = Texts {
     schedule_rule_bad: "{rule} はルールではありません：{reason}",
     schedule_usd_bad: "--max-usd には 0 より大きく 1000 以下の USD の金額を指定します（例：2.5）",
     schedule_minutes_bad: "--max-minutes には 1〜1440 を指定します",
+    schedule_tokens_bad: "--max-tokens には 1 から 1000M までの数を指定します（例: 500k、1M）",
     schedule_folder_gone: "フォルダー {folder} がありません",
     schedule_launchd_failed: "launchd がプラン {name} を受け付けませんでした：{reason}",
     schedule_unknown: "プラン {name} はありません — glut schedule list で一覧できます",
@@ -1692,6 +1708,7 @@ pub const TEXTS: Texts = Texts {
     schedule_shown_deny: "拒否：{rules}",
     schedule_shown_folders: "自分のフォルダーの隣のフォルダー：{folders}",
     schedule_shown_limits: "1 回の実行は {usd} かかった時点か {minutes} 分後に終わります",
+    schedule_shown_tokens: "{name} プランでは、実行は {n} token を使うと終わります — --max-tokens <n> で変更できます",
     schedule_shown_owner_rules: "あなたの ~/.glut/settings.json のルールも有効です。プロジェクトのルールは使いません",
     schedule_shown_logged_in: "ログイン中だけ実行されます。スリープ中に逃した時刻は復帰時に 1 回だけ実行されます",
     schedule_shown_paused: "一時停止中 — glut schedule resume {name} で再開します",
@@ -1736,6 +1753,11 @@ pub const TEXTS: Texts = Texts {
     login_title: "サブスクリプション",
     login_state_in: "{who} としてサインイン中 — ⏎ でサインアウト",
     login_state_out: "未サインイン — ⏎ でサインイン",
+    login_state_key: "専用のキーが保存されています — ⏎ で再サインインして新しいキーを得ます",
+    login_state_no_key: "まだキーがありません — ⏎ でサインインすると OpenRouter が Glut にキーを発行します",
+    login_key_at: "{host} で OpenRouter にサインインしてください。Glut 専用のキーが発行されます：{address}",
+    login_key_kept: "{id}: 専用のキーを {place} に保存しました — /provider {id} で使えます",
+    login_key_replaced: "{id} の以前のキーは、OpenRouter で削除するまで有効なままです：openrouter.ai/settings/keys",
     login_sign_out_title: "{id} からサインアウトしますか？",
     login_sign_out_yes: "サインアウト — OpenAI 側でも取り消し",
     login_sign_out_no: "サインインしたままにする",
@@ -1749,8 +1771,9 @@ pub const TEXTS: Texts = Texts {
     login_out_revoked: "{id} はサインアウトしました。OpenAI 側でもサインインを取り消しました。",
     login_out_unconfirmed: "{id} はここではサインアウトしましたが、OpenAI は取り消しを確認していません（{reason}）：ChatGPT の設定で Glut の接続を解除してください。",
     login_no_waiting: "{id} のサインインはアドレスを待っていません — /login {id} で始めます",
-    plan_footer: "ChatGPT プラン",
+    plan_footer: "{name} プラン",
     meter_plan: "ChatGPT プラン：呼び出しごとの料金なし — 利用の管理は {page}",
+    meter_plan_named: "{name} プラン：呼び出しごとの料金なし — プランの上限が適用されます",
     schedule_program_writable: "{program} はプランのコマンドが書き込める場所にあります。実行が次回用に別のプログラムを仕込めてしまいます — 別の場所にインストールした Glut \
                                 を使ってください（cargo install）",
     schedule_path_writable: "PATH がコマンドの書き込めるフォルダーに届いています — glut schedule add <name> で安全な PATH で作り直せます",

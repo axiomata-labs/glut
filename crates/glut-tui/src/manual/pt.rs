@@ -150,6 +150,8 @@ pub const PAGES: [(&str, &str); 54] = [
          /login — as assinaturas, cada uma com seu estado; ⏎ entra ou sai\n\
          /login <provider> — entra nela na hora, como /login chatgpt\n\
          /login <provider> <address> — via SSH: o endereço em que o navegador terminou, colado de volta\n\
+         /login openrouter — o OpenRouter dá ao Glut uma chave própria, guardada como uma digitada; limite-a ou \
+         apague-a em openrouter.ai/settings/keys\n\
          \n\
          O endereço é mostrado primeiro; ⏎ o abre no seu navegador. O Glut guarda o login no Keychain (ou em \
          `~/.glut/credentials.json`) e o renova sozinho; sair o revoga na OpenAI.\n\
@@ -347,6 +349,8 @@ pub const PAGES: [(&str, &str); 54] = [
          /loop stop [name] — encerra esse loop, ou o único\n\
          /loop rounds [n] — o máximo de rodadas de um loop; sozinho mostra o limite atual\n\
          /loop budget [usd] — o máximo que um loop pode custar; sozinho mostra o limite atual\n\
+         /loop tokens [n] — o máximo de tokens que um loop numa assinatura pode usar (5M, 500k); sozinho mostra o \
+         limite atual\n\
          \n\
          As rodadas nunca se sobrepõem: o intervalo é contado a partir do fim de uma rodada, como 30s, 5m, 2h ou 1h30m \
          (de 10s a 24h). Uma rodada continua com a conversa da rodada anterior; com fresh cada rodada começa uma nova. \
@@ -387,6 +391,7 @@ pub const PAGES: [(&str, &str); 54] = [
          - `--folder <path>` uma pasta ao lado da dele; repetível\n\
          - `--max-usd 1`, `--max-minutes 30` o máximo que uma execução pode custar e durar: US$ 1 e 30 min se não for \
          nomeado\n\
+         - `--max-tokens 1M` numa assinatura, o máximo de tokens que uma execução pode usar: 1M se não for dado\n\
          - `--replace` as regras e pastas dadas tomam o lugar das do plano, em vez de se juntarem a elas\n\
          - `--cwd <path>`, `--provider <id>`, `--model <id>` a pasta dele (esta, se não), o provedor e o modelo, \
          fixados quando é criado\n\

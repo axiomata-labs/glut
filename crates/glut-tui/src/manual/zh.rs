@@ -129,6 +129,7 @@ pub const PAGES: [(&str, &str); 54] = [
          /login — 订阅列表及各自状态；⏎ 登录或退出\n\
          /login <provider> — 立即登录该订阅，例如 /login chatgpt\n\
          /login <provider> <address> — 通过 SSH：把浏览器最终停留的地址粘贴回来\n\
+         /login openrouter — OpenRouter 给 Glut 一个专用密钥，像手动输入的一样保存；可在 openrouter.ai/settings/keys 限额或删除\n\
          \n\
          先显示地址；⏎ 在你的浏览器中打开它。Glut 把登录保存在钥匙串（或 `~/.glut/credentials.json`）中并自动续期；退出登录会在 OpenAI 撤销它。\n\
          \n\
@@ -307,6 +308,7 @@ pub const PAGES: [(&str, &str); 54] = [
          /loop stop [name] — 结束该循环，或唯一的那个\n\
          /loop rounds [n] — 循环的最多轮数；单独使用则显示当前的限制\n\
          /loop budget [usd] — 循环最多可花费的金额；单独使用则显示当前的限制\n\
+         /loop tokens [n] — 订阅上的循环最多可用的 token 数 (5M, 500k)；单独使用则显示当前的限制\n\
          \n\
          各轮绝不重叠：间隔从一轮结束时算起，写作 30s、5m、2h 或 1h30m（从 10s 到 24h）。一轮会接续上一轮的对话；使用 fresh 时，每一轮都开始新的对话。任务是一条消息，或 /skill \
          <name> [用途]、/compact 或 /init — 不能是其他命令。\n\
@@ -340,6 +342,7 @@ pub const PAGES: [(&str, &str); 54] = [
          - `--allow <rule>`、`--deny <rule>` Claude Code 格式的规则，例如 `Bash(cargo test:*)`；可重复\n\
          - `--folder <path>` 它自己旁边的文件夹；可重复\n\
          - `--max-usd 1`、`--max-minutes 30` 一次运行最多可花费和占用的量：除非指定，否则为 1 $ 和 30 分钟\n\
+         - `--max-tokens 1M` 在订阅上一次运行最多可用的 token 数：除非指定，否则为 1M\n\
          - `--replace` 给出的规则和文件夹取代计划原有的，而不是并入其中\n\
          - `--cwd <path>`、`--provider <id>`、`--model <id>` 它的文件夹（否则为当前这个）、提供商和模型，创建时即固定\n\
          \n\

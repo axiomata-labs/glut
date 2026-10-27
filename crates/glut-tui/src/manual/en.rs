@@ -144,6 +144,8 @@ pub const PAGES: [(&str, &str); 54] = [
          /login — the subscriptions, each with how it stands; ⏎ signs in, or out\n\
          /login <provider> — signs in to that one at once, as /login chatgpt\n\
          /login <provider> <address> — over SSH: the address the browser ended on, pasted back\n\
+         /login openrouter — OpenRouter hands Glut a key of its own, kept like one typed; limit or delete it at \
+         openrouter.ai/settings/keys\n\
          \n\
          The address is shown first; ⏎ opens it in your browser. Glut keeps the sign-in in the Keychain (or \
          `~/.glut/credentials.json`) and renews it by itself; signing out revokes it at OpenAI.\n\
@@ -337,6 +339,7 @@ pub const PAGES: [(&str, &str); 54] = [
          /loop stop [name] — ends that loop, or the only one\n\
          /loop rounds [n] — the most rounds of a loop; alone it shows the limit now\n\
          /loop budget [usd] — the most a loop may cost; alone it shows the limit now\n\
+         /loop tokens [n] — the most tokens a loop on a subscription may use (5M, 500k); alone it shows the limit now\n\
          \n\
          Rounds never overlap: the interval is counted from a round's end, as 30s, 5m, 2h or 1h30m (from 10s to 24h). \
          A round goes on with the conversation of the round before; with fresh each round starts a new one. The task \
@@ -374,6 +377,7 @@ pub const PAGES: [(&str, &str); 54] = [
          - `--allow <rule>`, `--deny <rule>` rules in Claude Code's form, such as `Bash(cargo test:*)`; repeatable\n\
          - `--folder <path>` a folder beside its own; repeatable\n\
          - `--max-usd 1`, `--max-minutes 30` the most a run may cost and take: 1 $ and 30 min unless named\n\
+         - `--max-tokens 1M` on a subscription, the most tokens a run may use: 1M unless named\n\
          - `--replace` the rules and folders given take the place of the plan's instead of joining them\n\
          - `--cwd <path>`, `--provider <id>`, `--model <id>` its folder (this one otherwise), provider and model, \
          fixed when it is made\n\

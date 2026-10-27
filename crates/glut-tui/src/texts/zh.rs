@@ -60,7 +60,7 @@ pub const TEXTS: Texts = Texts {
         ("provider", "切换提供商，或 /provider <id>"),
         (
             "login",
-            "用订阅（你的 ChatGPT 套餐）代替密钥登录；单独 /login 列出各订阅及其状态，⏎ 登录或退出",
+            "登录而不是提供密钥 — 你的 ChatGPT 套餐，或获得专用密钥的 OpenRouter；单独 /login 列出各项及其状态，⏎ 登录或退出",
         ),
         ("effort", "模型思考的深度，或 /effort <level>"),
         ("context", "窗口用了多少；/context 64k 设置它"),
@@ -103,7 +103,7 @@ pub const TEXTS: Texts = Texts {
         (
             "loop",
             "在专属的后台代理中反复执行一项任务，间隔从每轮结束时算起 — /loop 10m 运行测试；单独 /loop 列出它们，\
-             /loop stop [name] 结束一个，/loop rounds|budget 设定何时结束",
+             /loop stop [name] 结束一个，/loop rounds|budget|tokens 设定何时结束",
         ),
         (
             "schedule",
@@ -861,6 +861,7 @@ pub const TEXTS: Texts = Texts {
     setup_pick_provider: "Glut 还没有模型提供商。选择一个（输入编号），或按 Enter 停止：",
     setup_no_provider: "未选择提供商 — 再次运行 `glut` 重新开始设置",
     setup_key: "{provider} 的密钥（不显示）：",
+    setup_key_or_sign_in: "{provider} 的密钥（不显示）— 或只按 ⏎ 改为在浏览器中登录：",
     setup_no_key: "未提供密钥 — 再次运行 `glut` 重新开始设置",
     setup_key_kept: "密钥保存在 {place}。",
     setup_provider_done: "完成 — {provider} 是你的提供商；之后可用 /model 和 /provider 更改。",
@@ -926,12 +927,14 @@ pub const TEXTS: Texts = Texts {
     setup_provider_prompt: "提供商：",
     cli: &[
         (
-            "Signs in to a subscription in the browser — your ChatGPT Plus or Pro plan: glut providers login chatgpt",
-            "在浏览器中登录订阅 — 你的 ChatGPT Plus 或 Pro 套餐：glut providers login chatgpt",
+            "Signs in in the browser — your ChatGPT Plus or Pro plan (glut providers login chatgpt), or OpenRouter for \
+             a key without copying it (glut providers login openrouter)",
+            "在浏览器中登录 — 你的 ChatGPT Plus 或 Pro 套餐 (glut providers login chatgpt)，或无需复制即可获得密钥的 OpenRouter (glut providers \
+             login openrouter)",
         ),
         (
-            "The provider; one of the catalog's subscriptions is added on the way",
-            "提供方；目录中的订阅会顺带添加",
+            "The provider; one of the catalog's that sign in is added on the way",
+            "提供方；目录中需要登录的提供方会顺带添加",
         ),
         (
             "Signs out of a subscription: the sign-in revoked at its provider and forgotten here",
@@ -1000,6 +1003,10 @@ pub const TEXTS: Texts = Texts {
         (
             "The most minutes a run may take; 30 otherwise",
             "一次运行最多可用的分钟数；否则为 30",
+        ),
+        (
+            "The most tokens a run on a subscription may use (500k, 1M); 1M otherwise",
+            "订阅上的一次运行最多可用的 token 数 (500k, 1M)；否则为 1M",
         ),
         (
             "The task: a message, or /skill <name> [what for]",
@@ -1404,6 +1411,7 @@ pub const TEXTS: Texts = Texts {
     ],
     cli_headings: &["用法：", "选项", "参数", "命令"],
     model_reasons: "推理",
+    model_plan: "套餐",
     agent_starting: "启动中…",
     compacted_tokens: "已压缩对话：{before}k → {after}k Token",
     mode_now: "现在处于 {mode} 模式",
@@ -1555,6 +1563,13 @@ pub const TEXTS: Texts = Texts {
     loop_why_failed: "有一轮没有以回答结束（{reason}）",
     loop_why_rounds: "已运行 {n} 轮",
     loop_why_budget: "预算 {max} 已用完",
+    loop_tokens_bad: "/loop tokens 需要 1 到 1000M 之间的数量，例如 500k 或 5M",
+    loop_tokens_now: "订阅上的循环在其各轮合计用掉 {n} 个 token 后结束 — /loop tokens <n> 可更改",
+    loop_tokens_set: "从现在起启动的订阅上的循环在其各轮合计用掉 {n} 个 token 后结束",
+    loop_why_tokens: "其 {max} 个 token 已用完",
+    loop_tokens_used: "{n} 个 token",
+    loop_on_plan: "它运行在 {name} 套餐上，因此各轮用掉 {max} 个 token 后结束 — /loop tokens <n> 可更改",
+    plan_interactive_only: "{name} 套餐的条款只允许交互式使用 — 无人值守地运行是你的决定",
     loop_none: "没有正在运行的循环 — /loop <interval> <task> 可启动一个",
     loop_which: "有多个循环在运行：/loop stop <name>",
     loop_unknown: "没有循环 {name} — /loop 列出它们",
@@ -1581,6 +1596,7 @@ pub const TEXTS: Texts = Texts {
     schedule_rule_bad: "{rule} 不是规则：{reason}",
     schedule_usd_bad: "--max-usd 接受大于 0 且不超过 1000 的美元金额，例如 2.5",
     schedule_minutes_bad: "--max-minutes 接受 1 到 1440",
+    schedule_tokens_bad: "--max-tokens 需要 1 到 1000M 之间的数量，例如 500k 或 1M",
     schedule_folder_gone: "其文件夹 {folder} 不存在",
     schedule_launchd_failed: "launchd 未接受计划 {name}：{reason}",
     schedule_unknown: "没有计划 {name} — glut schedule list 会列出它们",
@@ -1599,6 +1615,7 @@ pub const TEXTS: Texts = Texts {
     schedule_shown_deny: "拒绝：{rules}",
     schedule_shown_folders: "其文件夹之外的文件夹：{folders}",
     schedule_shown_limits: "一次运行在花费 {usd} 或 {minutes} 分钟后结束",
+    schedule_shown_tokens: "在 {name} 套餐上，一次运行用掉 {n} 个 token 后结束 — --max-tokens <n> 可更改",
     schedule_shown_owner_rules: "你的 ~/.glut/settings.json 中的规则同样生效，项目的规则从不生效",
     schedule_shown_logged_in: "仅在你登录时运行；睡眠时错过的时间会在唤醒时补跑一次",
     schedule_shown_paused: "已暂停 — glut schedule resume {name} 可恢复",
@@ -1643,6 +1660,11 @@ pub const TEXTS: Texts = Texts {
     login_title: "订阅",
     login_state_in: "已以 {who} 登录 — ⏎ 退出登录",
     login_state_out: "未登录 — ⏎ 登录",
+    login_state_key: "已保存专用密钥 — ⏎ 重新登录以获得新密钥",
+    login_state_no_key: "尚无密钥 — ⏎ 登录后 OpenRouter 会给 Glut 一个",
+    login_key_at: "在 {host} 登录 OpenRouter；它会给 Glut 一个专用密钥：{address}",
+    login_key_kept: "{id}：专用密钥已保存在 {place} — /provider {id} 会使用它",
+    login_key_replaced: "{id} 之前的密钥在 OpenRouter 上仍然有效，直到你在那里删除它：openrouter.ai/settings/keys",
     login_sign_out_title: "退出 {id} 的登录？",
     login_sign_out_yes: "退出登录 — 在 OpenAI 撤销",
     login_sign_out_no: "保持登录",
@@ -1656,8 +1678,9 @@ pub const TEXTS: Texts = Texts {
     login_out_revoked: "{id} 已退出登录；登录已在 OpenAI 撤销。",
     login_out_unconfirmed: "{id} 已在本机退出登录，但 OpenAI 未确认撤销（{reason}）：请在 ChatGPT 设置中断开 Glut。",
     login_no_waiting: "没有等待地址的 {id} 登录 — /login {id} 可开始一个",
-    plan_footer: "ChatGPT 套餐",
+    plan_footer: "{name} 套餐",
     meter_plan: "ChatGPT 套餐：每次调用无价格 — 在 {page} 管理用量",
+    meter_plan_named: "{name} 套餐：每次调用无价格 — 适用其上限",
     schedule_program_writable: "{program} 位于计划的命令可写入的位置：一次运行可能给下一次留下自己的程序 — 请使用安装在别处的 Glut（cargo install）",
     schedule_path_writable: "其 PATH 指向其命令可写入的文件夹 — glut schedule add <name> 会用安全的 PATH 重新创建它",
     schedule_auto_unsandboxed: "auto 只在沙箱之后运行，而这里沙箱已关闭",

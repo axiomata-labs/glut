@@ -154,6 +154,8 @@ pub const PAGES: [(&str, &str); 54] = [
          /login — die Abos, jedes mit seinem Stand; ⏎ meldet an oder ab\n\
          /login <provider> — meldet sich sofort bei diesem an, etwa /login chatgpt\n\
          /login <provider> <address> — über SSH: die Adresse, auf der der Browser endete, zurück eingefügt\n\
+         /login openrouter — OpenRouter gibt Glut einen eigenen Key, gehalten wie ein getippter; begrenzen oder \
+         löschen unter openrouter.ai/settings/keys\n\
          \n\
          Die Adresse wird zuerst gezeigt; ⏎ öffnet sie in deinem Browser. Glut bewahrt die Anmeldung in der Keychain \
          auf (oder in `~/.glut/credentials.json`) und erneuert sie selbst; Abmelden widerruft sie bei OpenAI.\n\
@@ -354,6 +356,8 @@ pub const PAGES: [(&str, &str); 54] = [
          /loop stop [name] — beendet diese Schleife, oder die einzige\n\
          /loop rounds [n] — die höchste Rundenzahl einer Schleife; allein zeigt es die jetzige Grenze\n\
          /loop budget [usd] — das Meiste, was eine Schleife kosten darf; allein zeigt es die jetzige Grenze\n\
+         /loop tokens [n] — die meisten Tokens, die eine Schleife auf einem Abo verbrauchen darf (5M, 500k); allein \
+         zeigt es die jetzige Grenze\n\
          \n\
          Runden überlappen sich nie: Das Intervall wird ab dem Ende einer Runde gezählt, als 30s, 5m, 2h oder 1h30m \
          (von 10s bis 24h). Eine Runde macht mit dem Gespräch der Runde davor weiter; mit fresh beginnt jede Runde ein \
@@ -396,6 +400,7 @@ pub const PAGES: [(&str, &str); 54] = [
          - `--folder <path>` ein Ordner neben seinem eigenen; wiederholbar\n\
          - `--max-usd 1`, `--max-minutes 30` das Meiste, was ein Lauf kosten und dauern darf: 1 $ und 30 min, wenn \
          nichts genannt ist\n\
+         - `--max-tokens 1M` auf einem Abo die meisten Tokens, die ein Lauf verbrauchen darf: 1M, wenn nicht genannt\n\
          - `--replace` die genannten Regeln und Ordner ersetzen die des Plans, statt zu ihnen hinzuzukommen\n\
          - `--cwd <path>`, `--provider <id>`, `--model <id>` sein Ordner (sonst dieser), Provider und Modell, \
          festgelegt, wenn er gemacht wird\n\

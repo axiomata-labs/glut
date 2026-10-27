@@ -45,6 +45,7 @@ pub const TEXTS: Texts = Texts {
     key_signed_in: "conectado",
     catalog_sign_in: "login",
     plan_sign_in_at: "Entre com seu plano do ChatGPT em {host}:",
+    key_sign_in_at: "Entre no OpenRouter em {host}; ele dá ao Glut uma chave própria:",
     plan_signed_in: "{id} está conectado como {who}.",
     not_a_sign_in: "{id} usa uma chave, não um login (glut providers add {id})",
     plan_out_nothing: "{id} não estava conectado.",
@@ -59,6 +60,8 @@ pub const TEXTS: Texts = Texts {
     catalog_custom_note: "qualquer outro endpoint, com --root",
     keyless_only_custom: "--keyless é só para openai-compatible; o catálogo sabe se seus providers precisam de chave",
     key_kept: "A chave de {id} está em {place}.",
+    key_replaced: "A chave que {id} tinha antes continua válida no OpenRouter até você apagá-la lá: \
+                   openrouter.ai/settings/keys",
     key_shared: "{id} usa a chave que o outro provider da sua conta guarda, a menos que tenha a sua própria.",
     the_default: " (padrão)",
     provider_added: "Provider {id} adicionado{default}. glut providers test {id} faz uma chamada mínima.",

@@ -130,6 +130,7 @@ pub const PAGES: [(&str, &str); 54] = [
          /login — サブスクリプションの一覧と各状態。⏎ でサインインまたはサインアウト\n\
          /login <provider> — すぐにサインインします（例：/login chatgpt）\n\
          /login <provider> <address> — SSH 経由：ブラウザーが最後に表示したアドレスを貼り戻します\n\
+         /login openrouter — OpenRouter が Glut 専用のキーを発行し、入力したキーと同じように保存します。上限や削除は openrouter.ai/settings/keys で\n\
          \n\
          まずアドレスが表示され、⏎ でブラウザーが開きます。Glut はサインインをキーチェーン（または `~/.glut/credentials.json`）に保存し、自動で更新します。サインアウトすると OpenAI \
          側でも取り消されます。\n\
@@ -310,6 +311,7 @@ pub const PAGES: [(&str, &str); 54] = [
          /loop stop [name] — そのループ、または唯一のループを終了します\n\
          /loop rounds [n] — ループの最大ラウンド数; 単独では現在の上限を表示\n\
          /loop budget [usd] — ループにかけてよい最大額; 単独では現在の上限を表示\n\
+         /loop tokens [n] — サブスクリプション上のループが使ってよい最大 token 数 (5M, 500k); 単独では現在の上限を表示\n\
          \n\
          ラウンドは重なりません: 間隔はラウンドの終了から数え、30s、5m、2h、1h30m のように書きます（10s から 24h まで）。ラウンドは前のラウンドの会話を引き継ぎ、fresh \
          を付けると毎ラウンドが新しい会話で始まります。タスクはメッセージ、または /skill <name> [what for]、/compact、/init で、ほかのコマンドは使えません。\n\
@@ -344,6 +346,7 @@ pub const PAGES: [(&str, &str); 54] = [
          - `--allow <rule>`、`--deny <rule>` Claude Code 形式のルール、たとえば `Bash(cargo test:*)`; 繰り返し指定可\n\
          - `--folder <path>` 横に置く専用のフォルダー; 繰り返し指定可\n\
          - `--max-usd 1`、`--max-minutes 30` 一回の実行にかけてよい最大額と時間: 指定がなければ 1 $ と 30 分\n\
+         - `--max-tokens 1M` サブスクリプション上で一回の実行が使ってよい最大 token 数: 指定がなければ 1M\n\
          - `--replace` 指定したルールとフォルダーが、プランのものに加わらずに置き換わります\n\
          - `--cwd <path>`、`--provider <id>`、`--model <id>` そのフォルダー（なければこのフォルダー）、プロバイダー、モデル; 作成時に固定されます\n\
          \n\

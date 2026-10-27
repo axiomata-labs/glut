@@ -4,6 +4,7 @@
 
 pub mod catalog;
 pub mod models;
+pub mod openrouter;
 pub mod secrets;
 
 use std::collections::BTreeMap;
@@ -567,6 +568,120 @@ pub fn signing(home: &Path, id: &str) -> Result<String, String> {
     Ok(account(id, entry))
 }
 
+/// The catalog's providers whose key a sign-in in the browser hands Glut (PV4b): the key is then a key like any.
+pub const KEY_SIGN_INS: [&str; 1] = ["openrouter"];
+
+/// Whether provider `id` gets its key by a sign-in: the catalog's, not added yet or added as the catalog has it.
+pub fn gives_key_by_sign_in(home: &Path, id: &str) -> bool {
+    let providers = Providers::load(home).unwrap_or_default();
+    match providers.providers.get(id) {
+        Some(entry) => KEY_SIGN_INS.contains(&entry.kind.as_str()),
+        None => KEY_SIGN_INS.contains(&id),
+    }
+}
+
+/// The providers whose key a sign-in hands out (PV4b), each with whether a key is kept for it — those of
+/// `providers.json` and the catalog's not added yet.
+pub fn key_sign_ins(home: &Path) -> Vec<(String, bool)> {
+    let providers = Providers::load(home).unwrap_or_default();
+    let store = providers.store(home).ok();
+    let kept = |account: &str| {
+        store
+            .as_ref()
+            .and_then(|store| store.get(account).ok().flatten())
+            .is_some_and(|key| !key.trim().is_empty())
+    };
+    let mut found: Vec<(String, bool)> = providers
+        .providers
+        .iter()
+        .filter(|(_, entry)| KEY_SIGN_INS.contains(&entry.kind.as_str()))
+        .map(|(id, entry)| (id.clone(), kept(&account(id, entry))))
+        .collect();
+    for known in catalog::CATALOG
+        .iter()
+        .filter(|known| KEY_SIGN_INS.contains(&known.id))
+    {
+        if !providers.providers.contains_key(known.id) {
+            found.push((
+                known.id.to_owned(),
+                kept(&format!("{}@{}", known.id, host(known.root))),
+            ));
+        }
+    }
+    found
+}
+
+/// Keeps `key`, which provider `id`'s sign-in handed out (PV4b), under its account — the catalog's provider added
+/// first where it is not there yet. Returns where it is kept, and whether it took the place of a key kept before.
+///
+/// # Errors
+///
+/// A message when the provider gets no key by a sign-in, its root names another host than the one that issued the
+/// key, or the file or the store cannot be written.
+pub fn keep_signed_key(home: &Path, id: &str, key: &str) -> Result<(String, bool), String> {
+    check_key_sign_in(home, id)?;
+    let mut providers = Providers::load(home).map_err(|err| err.to_string())?;
+    if !providers.providers.contains_key(id) {
+        let known = catalog::known(id)
+            .filter(|known| KEY_SIGN_INS.contains(&known.id))
+            .ok_or_else(|| format!("no provider {id} that signs in for a key"))?;
+        let first = providers.providers.is_empty();
+        providers.providers.insert(
+            id.to_owned(),
+            Entry {
+                kind: known.id.to_owned(),
+                root: None,
+                model: None,
+                key_env: None,
+                key: None,
+                windows: BTreeMap::default(),
+            },
+        );
+        if first || providers.default.is_none() {
+            providers.default = Some(id.to_owned());
+        }
+        providers.save(home).map_err(|err| err.to_string())?;
+    }
+    let entry = &providers.providers[id];
+    let store = providers.store(home).map_err(|err| err.to_string())?;
+    let account = account(id, entry);
+    let replaced = store
+        .get(&account)
+        .map_err(|err| err.to_string())?
+        .is_some_and(|old| !old.trim().is_empty() && old != key);
+    store.set(&account, key).map_err(|err| err.to_string())?;
+    Ok((store.place(), replaced))
+}
+
+/// Whether provider `id` may get its key by a sign-in: the catalog's not added yet, or an entry still pointing to the
+/// host that issues the key, over https — asked before the browser opens, so no key is made in the owner's account
+/// that Glut would then refuse.
+///
+/// # Errors
+///
+/// Why not, for the owner to read.
+pub fn check_key_sign_in(home: &Path, id: &str) -> Result<(), String> {
+    let providers = Providers::load(home).map_err(|err| err.to_string())?;
+    let Some(entry) = providers.providers.get(id) else {
+        return catalog::known(id)
+            .filter(|known| KEY_SIGN_INS.contains(&known.id))
+            .map(|_| ())
+            .ok_or_else(|| format!("no provider {id} that signs in for a key"));
+    };
+    let known = catalog::known(&entry.kind)
+        .filter(|known| KEY_SIGN_INS.contains(&known.id))
+        .ok_or_else(|| format!("{id} takes a key, not a sign-in (glut providers add {id})"))?;
+    // The key was issued for the catalog's host: an entry moved elsewhere, or to plain http, would carry it there.
+    if host(entry.root()) != host(known.root) || !entry.root().starts_with("https://") {
+        return Err(format!(
+            "{id} points to {}, not {}: its key is not for there",
+            entry.root(),
+            known.root
+        ));
+    }
+    Ok(())
+}
+
 /// The providers the owner may sign in to (PV4): those of `providers.json` that do, and the catalog's not added yet —
 /// each with its account.
 pub fn subscriptions(home: &Path) -> Vec<(String, String)> {
@@ -882,6 +997,47 @@ mod tests {
         let found = resolve(&list, &store, None, None, |_| None).unwrap();
         assert_eq!(found.endpoint.base_url, "https://elsewhere.example/v1");
         assert_eq!(found.endpoint.api_key.as_deref(), Some("sk-2"));
+    }
+
+    #[test]
+    fn a_key_a_sign_in_handed_out_is_kept_under_the_catalogs_host_only() {
+        let home = std::env::temp_dir().join(format!(
+            "glut-signed-key-{}-{}",
+            std::process::id(),
+            crate::oauth::random_text().unwrap()
+        ));
+        std::fs::create_dir_all(&home).unwrap();
+        let file = Providers {
+            credential_store: StoreChoice::File,
+            ..Providers::default()
+        };
+        file.save(&home).unwrap();
+        assert!(gives_key_by_sign_in(&home, "openrouter"));
+        assert!(!gives_key_by_sign_in(&home, "chatgpt"));
+        assert!(!keep_signed_key(&home, "openrouter", "sk-or-1").unwrap().1);
+        assert!(
+            keep_signed_key(&home, "openrouter", "sk-or-3").unwrap().1,
+            "a key replaced is said"
+        );
+        let list = Providers::load(&home).unwrap();
+        assert_eq!(
+            list.default.as_deref(),
+            Some("openrouter"),
+            "the first provider"
+        );
+        let store = list.store(&home).unwrap();
+        assert_eq!(
+            store.get("openrouter@openrouter.ai").unwrap().as_deref(),
+            Some("sk-or-3")
+        );
+        assert!(keep_signed_key(&home, "anthropic", "sk").is_err());
+        let mut moved = list.clone();
+        moved.providers.get_mut("openrouter").unwrap().root =
+            Some("https://elsewhere.example/v1".into());
+        moved.save(&home).unwrap();
+        let refused = keep_signed_key(&home, "openrouter", "sk-or-2").unwrap_err();
+        assert!(refused.contains("elsewhere.example"), "{refused}");
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]

@@ -668,6 +668,7 @@ pub const TEXTS: Texts = Texts {
     setup_pick_provider: "Glut has no model provider yet. Pick one (the number), or Enter to stop:",
     setup_no_provider: "no provider chosen — `glut` again starts the setup",
     setup_key: "Key for {provider} (not shown):",
+    setup_key_or_sign_in: "Key for {provider} (not shown) — or ⏎ alone to sign in in the browser instead:",
     setup_no_key: "no key given — `glut` again starts the setup",
     setup_key_kept: "The key is in {place}.",
     setup_provider_done: "Done — {provider} is your provider; /model and /provider change it later.",
@@ -734,6 +735,7 @@ pub const TEXTS: Texts = Texts {
     cli: &[],
     cli_headings: &["Usage:", "Options", "Arguments", "Commands"],
     model_reasons: "reasons",
+    model_plan: "plan",
     agent_starting: "starting…",
     compacted_tokens: "compacted the conversation: {before}k → {after}k tokens",
     mode_now: "now in {mode} mode",
@@ -893,6 +895,16 @@ pub const TEXTS: Texts = Texts {
     loop_why_failed: "a round did not end answered ({reason})",
     loop_why_rounds: "{n} rounds ran",
     loop_why_budget: "its budget of {max} is spent",
+    loop_tokens_bad: "/loop tokens takes a count from 1 to 1000M, such as 500k or 5M",
+    loop_tokens_now: "a loop on a subscription ends once its rounds used {n} tokens together — /loop tokens <n> \
+                      changes it",
+    loop_tokens_set: "a loop on a subscription started from now on ends once its rounds used {n} tokens together",
+    loop_why_tokens: "its {max} tokens are used",
+    loop_tokens_used: "{n} tokens",
+    loop_on_plan: "it runs on the {name} plan, so it ends once its rounds used {max} tokens — /loop tokens <n> changes \
+                   it",
+    plan_interactive_only: "the terms of the {name} plan allow interactive use only — running it unattended is your \
+                            decision",
     loop_none: "no loop runs — /loop <interval> <task> starts one",
     loop_which: "several loops run: /loop stop <name>",
     loop_unknown: "no loop {name} — /loop lists them",
@@ -921,6 +933,7 @@ pub const TEXTS: Texts = Texts {
     schedule_rule_bad: "{rule} is no rule: {reason}",
     schedule_usd_bad: "--max-usd takes an amount in USD above 0 and up to 1000, such as 2.5",
     schedule_minutes_bad: "--max-minutes takes 1 to 1440",
+    schedule_tokens_bad: "--max-tokens takes a count from 1 to 1000M, such as 500k or 1M",
     schedule_folder_gone: "its folder {folder} is not there",
     schedule_launchd_failed: "launchd did not take plan {name}: {reason}",
     schedule_unknown: "there is no plan {name} — glut schedule list shows them",
@@ -939,6 +952,7 @@ pub const TEXTS: Texts = Texts {
     schedule_shown_deny: "refused: {rules}",
     schedule_shown_folders: "folders beside its own: {folders}",
     schedule_shown_limits: "a run ends once it has cost {usd} or after {minutes} min",
+    schedule_shown_tokens: "on the {name} plan a run ends once it used {n} tokens — --max-tokens <n> changes it",
     schedule_shown_owner_rules: "the rules of your ~/.glut/settings.json count beside these, never the project's",
     schedule_shown_logged_in: "it runs only while you are logged in; a time missed asleep is made up once on waking",
     schedule_shown_paused: "paused — glut schedule resume {name} lets it run",
@@ -983,6 +997,12 @@ pub const TEXTS: Texts = Texts {
     login_title: "Subscriptions",
     login_state_in: "signed in as {who} — ⏎ signs out",
     login_state_out: "not signed in — ⏎ signs in",
+    login_state_key: "a key of its own is kept — ⏎ signs in again for a new one",
+    login_state_no_key: "no key yet — ⏎ signs in, and OpenRouter hands Glut one",
+    login_key_at: "Sign in to OpenRouter at {host}; it hands Glut a key of its own: {address}",
+    login_key_kept: "{id}: a key of its own is kept in {place} — /provider {id} uses it",
+    login_key_replaced: "The key {id} had before stays valid at OpenRouter until you delete it there: \
+                         openrouter.ai/settings/keys",
     login_sign_out_title: "Sign out of {id}?",
     login_sign_out_yes: "Sign out — revoked at OpenAI",
     login_sign_out_no: "Stay signed in",
@@ -998,8 +1018,9 @@ pub const TEXTS: Texts = Texts {
     login_out_unconfirmed: "{id} is signed out here, but OpenAI did not confirm the revocation ({reason}): disconnect \
                             Glut in ChatGPT's settings.",
     login_no_waiting: "no sign-in of {id} waits for an address — /login {id} begins one",
-    plan_footer: "ChatGPT plan",
+    plan_footer: "{name} plan",
     meter_plan: "ChatGPT plan: no price per call — manage usage at {page}",
+    meter_plan_named: "{name} plan: no price per call — its limits hold",
     schedule_program_writable: "{program} lies where the plan's commands write: a run could leave the next one a \
                                 program of its own — start a Glut installed elsewhere (cargo install)",
     schedule_path_writable: "its PATH reaches a folder its commands write — glut schedule add <name> makes it again \

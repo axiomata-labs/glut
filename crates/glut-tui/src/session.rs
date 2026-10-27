@@ -220,8 +220,11 @@ pub struct Engine {
     pub window: Option<(u32, &'static str)>,
     /// Whether the model sees images, as the provider's list says (T45); `None`: unknown.
     pub images: Option<bool>,
-    /// Whether it runs on a signed-in subscription (PV4): the meter says "plan" where it says money.
-    pub plan: bool,
+    /// The subscription it runs on (PV4: a sign-in or a coding plan): the footer and the meter say "plan" where they
+    /// say money, and a loop counts tokens.
+    pub plan: Option<&'static providers::catalog::Known>,
+    /// Whether it runs on a sign-in (PV4): its token renews itself, it has no call that only warms its cache.
+    pub signed_in: bool,
 }
 
 impl Engine {
@@ -519,7 +522,8 @@ pub async fn build(
                 .or(window),
             endpoint,
             images: None,
-            plan: false,
+            plan: None,
+            signed_in: false,
         },
     };
     Ok((parts, engine))
@@ -597,7 +601,14 @@ pub async fn engine(
     let (mut endpoint, protocol) =
         providers::route(resolved.endpoint, resolved.protocol, models.as_ref())?;
     endpoint.effort = effort.unwrap_or(parts.owner_effort);
-    let plan = credential.is_some();
+    let signed_in = credential.is_some();
+    let plan = list
+        .providers
+        .get(&resolved.id)
+        .and_then(|entry| providers::catalog::known(&entry.kind))
+        .filter(|known| known.plan != providers::catalog::Plan::None);
+    // A plan's use costs no money per call: a list's prices for its model would show, and limit, money never spent.
+    let prices = prices.filter(|_| plan.is_none());
     let model =
         Model::signed(endpoint.clone(), protocol, credential).map_err(|err| err.to_string())?;
     Ok((
@@ -609,6 +620,7 @@ pub async fn engine(
             window,
             images: listed.as_ref().and_then(|info| info.images),
             plan,
+            signed_in,
         },
         notes,
     ))
@@ -779,6 +791,15 @@ pub fn turn(
         };
         config.pane_tools = parts.pane_link.split();
         config.loop_tool = parts.loop_link.on();
+        // A loop's round stops at what its loop may still spend, not only once it is over.
+        if let Some(left) = parts.loop_link.left() {
+            let budget = &mut config.budget;
+            if let Some(tokens) = left.tokens {
+                budget.max_tokens = Some(budget.max_tokens.map_or(tokens, |max| max.min(tokens)));
+            }
+            budget.max_usd = Some(budget.max_usd.map_or(left.usd, |max| max.min(left.usd)));
+            budget.prices = budget.prices.or(engine.prices);
+        }
         // The whole texts of long results stay with the session (T54): a later turn reads them on, `/export full`
         // writes them out. A host that keeps them elsewhere (an Axiomata chat) has set its own folder already.
         if config.results.is_none() {
@@ -1322,7 +1343,8 @@ pub fn for_tests() -> (Parts, Engine) {
         prices: None,
         window: Some((32_768, "settings.json")),
         images: None,
-        plan: false,
+        plan: None,
+        signed_in: false,
     };
     (parts, engine)
 }

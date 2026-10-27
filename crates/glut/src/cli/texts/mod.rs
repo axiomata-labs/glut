@@ -88,6 +88,8 @@ crate::catalog! {
         catalog_sign_in: &'static str,
         /// Above the sign-in's address: `{host}`.
         plan_sign_in_at: &'static str,
+        /// Above OpenRouter's sign-in address: `{host}`.
+        key_sign_in_at: &'static str,
         /// A sign-in done: `{id}`, `{who}` the account.
         plan_signed_in: &'static str,
         /// `login`/`logout` on a provider with a key: `{id}`.
@@ -114,6 +116,8 @@ crate::catalog! {
         keyless_only_custom: &'static str,
         /// A key stored: `{id}`, `{place}`.
         key_kept: &'static str,
+        /// A key's sign-in replaced a key kept before: `{id}`.
+        key_replaced: &'static str,
         /// No key typed where the account keeps one: `{id}`.
         key_shared: &'static str,
         /// After the name of the provider added, when it is the default.

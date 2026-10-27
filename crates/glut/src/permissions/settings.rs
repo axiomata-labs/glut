@@ -123,10 +123,16 @@ pub struct LoopSection {
     /// The most a loop's session may cost in USD, counted where its model's prices are known.
     #[serde(default, rename = "maxUsd")]
     pub max_usd: Option<f64>,
+    /// The most tokens a loop on a subscription may use (PV4): input less cache reads, plus output.
+    #[serde(default, rename = "maxTokens")]
+    pub max_tokens: Option<u64>,
 }
 
 /// The most rounds `loop.rounds` may say.
 pub const MAX_LOOP_ROUNDS: u32 = 1000;
+
+/// The most tokens `loop.maxTokens` may say.
+pub const MAX_LOOP_TOKENS: u64 = 1_000_000_000;
 
 /// The `notify` section (TUI T53): the second source after what `/notify` kept.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -606,6 +612,15 @@ pub fn load(home: &Path, project: &Path, trusted: bool) -> Result<Loaded, Harnes
             reason: format!("loop.maxUsd is {usd}, a positive amount in USD"),
         });
     }
+    if let Some(tokens) = loops
+        .max_tokens
+        .filter(|tokens| !(1..=MAX_LOOP_TOKENS).contains(tokens))
+    {
+        return Err(HarnessError::Settings {
+            path: owners.display().to_string(),
+            reason: format!("loop.maxTokens is {tokens}, from 1 to {MAX_LOOP_TOKENS}"),
+        });
+    }
     let ceiling = user.mode.unwrap_or_default().looseness();
     let owner = &user.sandbox;
     let mut sandbox = SandboxSettings {
@@ -993,7 +1008,7 @@ mod tests {
         );
         write(
             &home.join(".glut/settings.json"),
-            r#"{"loop": {"rounds": 20, "maxUsd": 2.5}}"#,
+            r#"{"loop": {"rounds": 20, "maxUsd": 2.5, "maxTokens": 2000000}}"#,
         );
         write(
             &project.join(".glut/settings.json"),
@@ -1003,13 +1018,15 @@ mod tests {
             load(&home, &project, true).unwrap().loops,
             LoopSection {
                 rounds: Some(20),
-                max_usd: Some(2.5)
+                max_usd: Some(2.5),
+                max_tokens: Some(2_000_000)
             }
         );
         for odd in [
             r#"{"loop": {"rounds": 0}}"#.to_owned(),
             format!(r#"{{"loop": {{"rounds": {}}}}}"#, MAX_LOOP_ROUNDS + 1),
             r#"{"loop": {"maxUsd": -1}}"#.to_owned(),
+            r#"{"loop": {"maxTokens": 0}}"#.to_owned(),
             r#"{"loop": {"round": 3}}"#.to_owned(),
         ] {
             write(&home.join(".glut/settings.json"), &odd);

@@ -51,12 +51,23 @@ pub async fn first_provider(home: &Path) -> Result<bool, String> {
         list = Providers::load(home).map_err(|err| err.to_string())?;
     }
     if known.sign_in == SignIn::Key {
-        let key = secret(&format!("{} ", tr!(setup_key, provider = known.name)))?;
-        if key.is_empty() {
+        // OpenRouter hands Glut a key at a sign-in in the browser (PV4b): an empty answer takes that way.
+        let browser = providers::KEY_SIGN_INS.contains(&known.id);
+        let asked = if browser {
+            tr!(setup_key_or_sign_in, provider = known.name)
+        } else {
+            tr!(setup_key, provider = known.name)
+        };
+        let key = secret(&format!("{asked} "))?;
+        if key.is_empty() && browser {
+            glut::cli::providers::login(home, known.id, true).await?;
+            list = Providers::load(home).map_err(|err| err.to_string())?;
+        } else if key.is_empty() {
             return Err(tr!(setup_no_key).into());
+        } else {
+            store.set(&account, &key).map_err(|err| err.to_string())?;
+            println!("{}", tr!(setup_key_kept, place = store.place()));
         }
-        store.set(&account, &key).map_err(|err| err.to_string())?;
-        println!("{}", tr!(setup_key_kept, place = store.place()));
     }
     list.providers.insert(known.id.to_owned(), entry.clone());
     entry.model = Some(choose_model(home, &list, store.as_ref(), known.id, known.name).await?);

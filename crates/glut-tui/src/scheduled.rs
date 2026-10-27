@@ -104,6 +104,9 @@ pub struct AddArgs {
     /// The most minutes a run may take; 30 otherwise.
     #[arg(long)]
     max_minutes: Option<u32>,
+    /// The most tokens a run on a subscription may use (500k, 1M); 1M otherwise.
+    #[arg(long, value_parser = tokens_arg)]
+    max_tokens: Option<u64>,
     /// The rules and folders given take the place of the plan's, instead of joining them.
     #[arg(long)]
     replace: bool,
@@ -398,6 +401,7 @@ fn plan_of(home: &Path, args: AddArgs, here: &Path, kept: Option<&Plan>) -> Resu
         .max_minutes
         .or(kept.map(|plan| plan.max_minutes))
         .unwrap_or(schedule::DEFAULT_MAX_MINUTES);
+    let max_tokens = args.max_tokens.or(kept.and_then(|plan| plan.max_tokens));
     let plan = Plan {
         name: args.name,
         task,
@@ -410,6 +414,7 @@ fn plan_of(home: &Path, args: AddArgs, here: &Path, kept: Option<&Plan>) -> Resu
         folders: given_or_kept(args.folder, kept.map(|plan| &plan.folders)),
         max_usd,
         max_minutes,
+        max_tokens,
         paused: kept.is_some_and(|plan| plan.paused),
         path: std::env::var("PATH").unwrap_or_default(),
         changed: Utc::now(),
@@ -422,6 +427,19 @@ fn plan_of(home: &Path, args: AddArgs, here: &Path, kept: Option<&Plan>) -> Resu
             .map_err(|reason| format!("--folder {reason}"))?;
     }
     Ok(plan)
+}
+
+/// `--max-tokens` as written: `500000`, `500k`, `1M`.
+fn tokens_arg(word: &str) -> Result<u64, String> {
+    crate::looping::count(word).ok_or_else(|| tr!(schedule_tokens_bad).to_owned())
+}
+
+/// The subscription a plan's provider is, if it is one (PV4): its runs count tokens.
+fn subscription(home: &Path, provider: &str) -> Option<&'static glut::providers::catalog::Known> {
+    let list = glut::providers::Providers::load(home).ok()?;
+    let entry = list.providers.get(provider)?;
+    glut::providers::catalog::known(&entry.kind)
+        .filter(|known| known.plan != glut::providers::catalog::Plan::None)
 }
 
 /// The provider and model a plan runs on: the ones given, else the plan's, else the default provider and its model
@@ -491,6 +509,19 @@ fn shown(home: &Path, plan: &Plan, changed: bool) -> String {
         usd = glut::lang::usd(plan.max_usd, 2),
         minutes = plan.max_minutes
     ));
+    if let Some(known) = subscription(home, &plan.provider) {
+        lines.push(tr!(
+            schedule_shown_tokens,
+            name = known.name,
+            n = crate::looping::tokens_shown(
+                plan.max_tokens.unwrap_or(schedule::DEFAULT_MAX_TOKENS)
+            )
+        ));
+        // Its terms allow interactive use only: the owner's decision, said where the plan is made (PV4 Q8).
+        if known.plan == glut::providers::catalog::Plan::InteractiveOnly {
+            lines.push(tr!(plan_interactive_only, name = known.name));
+        }
+    }
     lines.push(tr!(schedule_shown_owner_rules).to_owned());
     lines.push(tr!(schedule_shown_logged_in).to_owned());
     if plan.paused {
@@ -857,6 +888,9 @@ async fn attempt(home: &Path, plan: &Plan, cancel: glut::Cancel) -> Attempt {
     parts.config.timeout = Duration::from_secs(u64::from(plan.max_minutes) * 60);
     parts.config.budget = glut::Budget {
         max_usd: Some(plan.max_usd),
+        // A subscription's use has no price, nor has a model without known prices: its tokens end the run then.
+        max_tokens: (engine.plan.is_some() || engine.prices.is_none())
+            .then(|| plan.max_tokens.unwrap_or(schedule::DEFAULT_MAX_TOKENS)),
         prices: engine.prices,
         ..glut::Budget::default()
     };
@@ -1144,7 +1178,15 @@ mod tests {
         // Changed: a new time, the days, the task, the rules kept.
         add_here(
             &home,
-            add_args(&["tests", "--at", "08:30", "--max-usd", "2"]),
+            add_args(&[
+                "tests",
+                "--at",
+                "08:30",
+                "--max-usd",
+                "2",
+                "--max-tokens",
+                "500k",
+            ]),
             &seen,
         )
         .unwrap();
@@ -1166,6 +1208,8 @@ mod tests {
             ("run the tests", 2.0)
         );
         assert_eq!(changed.allow, plan.allow);
+        assert_eq!((plan.max_tokens, changed.max_tokens), (None, Some(500_000)));
+        assert!(tokens_arg("lots").is_err() && tokens_arg("0").is_err());
         assert!(add_here(&home, add_args(&["tests", "--days", "sa"]), &seen).is_ok());
         assert!(
             add_here(
@@ -1393,6 +1437,7 @@ mod tests {
             folders: Vec::new(),
             max_usd: 1.0,
             max_minutes: 30,
+            max_tokens: None,
             paused: false,
             path: String::new(),
             changed: Utc::now(),

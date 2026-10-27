@@ -168,8 +168,8 @@ pub const COMMANDS: [Command; 54] = [
         Topic::Model,
         "login",
         "[provider]",
-        "sign in to a subscription — your ChatGPT plan — instead of a key; /login alone lists them with how each \
-         stands, ⏎ signs in or out",
+        "sign in instead of giving a key — your ChatGPT plan, or OpenRouter for a key of its own; /login alone lists \
+         them with how each stands, ⏎ signs in or out",
     ),
     command(
         Topic::Model,
@@ -279,7 +279,8 @@ pub const COMMANDS: [Command; 54] = [
         "loop",
         "<interval> [fresh] [as <role>] [notify] <task>",
         "run a task again and again in a background agent of its own, the interval counted from a round's end — /loop \
-         10m run the tests; /loop alone lists them, /loop stop [name] ends one, /loop rounds|budget set where one ends",
+         10m run the tests; /loop alone lists them, /loop stop [name] ends one, /loop rounds|budget|tokens set where \
+         one ends",
     ),
     command(
         Topic::Panes,

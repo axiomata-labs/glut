@@ -156,6 +156,8 @@ pub const PAGES: [(&str, &str); 54] = [
          /login — les abonnements, chacun avec son état ; ⏎ connecte ou déconnecte\n\
          /login <provider> — s'y connecte tout de suite, comme /login chatgpt\n\
          /login <provider> <address> — via SSH : l'adresse sur laquelle le navigateur s'est arrêté, recollée\n\
+         /login openrouter — OpenRouter donne à Glut une clé à lui, gardée comme une clé tapée ; limite-la ou \
+         supprime-la sur openrouter.ai/settings/keys\n\
          \n\
          L'adresse est d'abord affichée ; ⏎ l'ouvre dans ton navigateur. Glut garde la connexion dans le trousseau \
          (ou `~/.glut/credentials.json`) et la renouvelle tout seul ; la déconnexion la révoque chez OpenAI.\n\
@@ -353,6 +355,8 @@ pub const PAGES: [(&str, &str); 54] = [
          /loop stop [name] — termine cette boucle, ou la seule\n\
          /loop rounds [n] — le plus de tours d’une boucle ; seul, montre la limite actuelle\n\
          /loop budget [usd] — le plus qu’une boucle peut coûter ; seul, montre la limite actuelle\n\
+         /loop tokens [n] — le plus de tokens qu’une boucle sur un abonnement peut utiliser (5M, 500k) ; seul, montre \
+         la limite actuelle\n\
          \n\
          Les tours ne se chevauchent jamais : l’intervalle est compté depuis la fin d’un tour, comme 30s, 5m, 2h ou \
          1h30m (de 10s à 24h). Un tour poursuit la conversation du tour précédent ; avec fresh, chaque tour en \
@@ -395,6 +399,8 @@ pub const PAGES: [(&str, &str); 54] = [
          - `--folder <path>` un dossier à côté du sien ; répétable\n\
          - `--max-usd 1`, `--max-minutes 30` le plus qu’une exécution peut coûter et durer : 1 $ et 30 min s’ils ne \
          sont pas nommés\n\
+         - `--max-tokens 1M` sur un abonnement, le plus de tokens qu’une exécution peut utiliser : 1M s’il n’est pas \
+         donné\n\
          - `--replace` les règles et dossiers donnés prennent la place de ceux du plan au lieu de s’y ajouter\n\
          - `--cwd <path>`, `--provider <id>`, `--model <id>` son dossier (celui-ci sinon), son fournisseur et son \
          modèle, fixés à la création\n\

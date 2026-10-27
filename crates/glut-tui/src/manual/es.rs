@@ -153,6 +153,8 @@ pub const PAGES: [(&str, &str); 54] = [
          /login — las suscripciones, cada una con su estado; ⏎ inicia o cierra la sesión\n\
          /login <provider> — inicia sesión en esa al momento, como /login chatgpt\n\
          /login <provider> <address> — por SSH: la dirección en la que terminó el navegador, pegada de vuelta\n\
+         /login openrouter — OpenRouter le da a Glut una clave propia, guardada como una escrita; limítala o bórrala \
+         en openrouter.ai/settings/keys\n\
          \n\
          Primero se muestra la dirección; ⏎ la abre en tu navegador. Glut guarda la sesión en el llavero (o en \
          `~/.glut/credentials.json`) y la renueva solo; cerrar sesión la revoca en OpenAI.\n\
@@ -349,6 +351,8 @@ pub const PAGES: [(&str, &str); 54] = [
          /loop stop [name] — termina ese bucle, o el único\n\
          /loop rounds [n] — las rondas máximas de un bucle; solo, muestra el límite actual\n\
          /loop budget [usd] — lo máximo que puede costar un bucle; solo, muestra el límite actual\n\
+         /loop tokens [n] — el máximo de tokens que puede usar un bucle en una suscripción (5M, 500k); solo, muestra \
+         el límite actual\n\
          \n\
          Las rondas nunca se solapan: el intervalo se cuenta desde el fin de una ronda, como 30s, 5m, 2h o 1h30m (de \
          10s a 24h). Una ronda sigue con la conversación de la ronda anterior; con fresh cada ronda empieza una nueva. \
@@ -389,6 +393,7 @@ pub const PAGES: [(&str, &str); 54] = [
          - `--folder <path>` una carpeta junto a la suya; repetible\n\
          - `--max-usd 1`, `--max-minutes 30` lo máximo que una ejecución puede costar y durar: 1 $ y 30 min si no se \
          nombran\n\
+         - `--max-tokens 1M` en una suscripción, el máximo de tokens que puede usar una ejecución: 1M si no se indica\n\
          - `--replace` las reglas y carpetas dadas ocupan el lugar de las del plan en lugar de sumarse a ellas\n\
          - `--cwd <path>`, `--provider <id>`, `--model <id>` su carpeta (esta si no), su proveedor y su modelo, \
          fijados al crearlo\n\

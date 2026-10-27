@@ -475,6 +475,7 @@ mod tests {
             folders: Vec::new(),
             max_usd: 1.0,
             max_minutes: 30,
+            max_tokens: None,
             paused: false,
             path: String::new(),
             changed: Utc.with_ymd_and_hms(2026, 10, 27, 6, 0, 0).unwrap(),

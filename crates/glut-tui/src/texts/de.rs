@@ -72,8 +72,8 @@ pub const TEXTS: Texts = Texts {
         ("provider", "den Provider wechseln, oder /provider <id>"),
         (
             "login",
-            "dich mit einem Abo anmelden — deinem ChatGPT-Abo — statt mit einem Schlüssel; /login allein listet sie \
-             mit ihrem Stand, ⏎ meldet an oder ab",
+            "dich anmelden statt einen Schlüssel zu geben — mit deinem ChatGPT-Abo oder bei OpenRouter für einen \
+             eigenen Key; /login allein listet sie mit ihrem Stand, ⏎ meldet an oder ab",
         ),
         (
             "effort",
@@ -149,7 +149,7 @@ pub const TEXTS: Texts = Texts {
             "loop",
             "eine Aufgabe immer wieder in einem eigenen Hintergrund-Agenten ausführen, das Intervall ab dem Ende einer \
              Runde — /loop 10m führe die Tests aus; /loop allein listet sie, /loop stop [name] beendet eine, /loop \
-             rounds|budget legen fest, wo eine endet",
+             rounds|budget|tokens legen fest, wo eine endet",
         ),
         (
             "schedule",
@@ -1000,6 +1000,8 @@ pub const TEXTS: Texts = Texts {
     setup_pick_provider: "Glut hat noch keinen Modell-Provider. Wähle einen (die Nummer), oder Enter zum Abbrechen:",
     setup_no_provider: "kein Provider gewählt — `glut` startet die Einrichtung erneut",
     setup_key: "Schlüssel für {provider} (wird nicht angezeigt):",
+    setup_key_or_sign_in: "Schlüssel für {provider} (wird nicht angezeigt) — oder nur ⏎, um dich stattdessen im \
+                           Browser anzumelden:",
     setup_no_key: "kein Schlüssel angegeben — `glut` startet die Einrichtung erneut",
     setup_key_kept: "Der Schlüssel liegt in {place}.",
     setup_provider_done: "Fertig — {provider} ist dein Provider; /model und /provider ändern das später.",
@@ -1067,13 +1069,14 @@ pub const TEXTS: Texts = Texts {
     setup_provider_prompt: "Provider:",
     cli: &[
         (
-            "Signs in to a subscription in the browser — your ChatGPT Plus or Pro plan: glut providers login chatgpt",
-            "Meldet dich im Browser bei einem Abo an — deinem ChatGPT-Plus- oder -Pro-Abo: glut providers login \
-             chatgpt",
+            "Signs in in the browser — your ChatGPT Plus or Pro plan (glut providers login chatgpt), or OpenRouter for \
+             a key without copying it (glut providers login openrouter)",
+            "Meldet dich im Browser an — mit deinem ChatGPT-Plus- oder -Pro-Abo (glut providers login chatgpt) oder \
+             bei OpenRouter für einen Key, ohne ihn zu kopieren (glut providers login openrouter)",
         ),
         (
-            "The provider; one of the catalog's subscriptions is added on the way",
-            "Der Provider; ein Abo aus dem Katalog wird dabei hinzugefügt",
+            "The provider; one of the catalog's that sign in is added on the way",
+            "Der Provider; einer aus dem Katalog, der sich anmeldet, wird dabei hinzugefügt",
         ),
         (
             "Signs out of a subscription: the sign-in revoked at its provider and forgotten here",
@@ -1150,6 +1153,10 @@ pub const TEXTS: Texts = Texts {
         (
             "The most minutes a run may take; 30 otherwise",
             "Die meisten Minuten, die ein Lauf dauern darf; sonst 30",
+        ),
+        (
+            "The most tokens a run on a subscription may use (500k, 1M); 1M otherwise",
+            "Die meisten Tokens, die ein Lauf auf einem Abo verbrauchen darf (500k, 1M); sonst 1M",
         ),
         (
             "The task: a message, or /skill <name> [what for]",
@@ -1599,6 +1606,7 @@ pub const TEXTS: Texts = Texts {
     ],
     cli_headings: &["Verwendung:", "Optionen", "Argumente", "Befehle"],
     model_reasons: "denkt",
+    model_plan: "Abo",
     agent_starting: "startet…",
     compacted_tokens: "Gespräch kompaktiert: {before}k → {after}k Token",
     mode_now: "jetzt im Modus {mode}",
@@ -1759,6 +1767,17 @@ pub const TEXTS: Texts = Texts {
     loop_why_failed: "eine Runde endete ohne Antwort ({reason})",
     loop_why_rounds: "{n} Runden gelaufen",
     loop_why_budget: "ihr Budget von {max} ist verbraucht",
+    loop_tokens_bad: "/loop tokens nimmt eine Anzahl von 1 bis 1000M, etwa 500k oder 5M",
+    loop_tokens_now: "eine Schleife auf einem Abo endet, sobald ihre Runden zusammen {n} Tokens verbraucht haben — \
+                      /loop tokens <n> ändert das",
+    loop_tokens_set: "eine ab jetzt gestartete Schleife auf einem Abo endet, sobald ihre Runden zusammen {n} Tokens \
+                      verbraucht haben",
+    loop_why_tokens: "ihre {max} Tokens sind verbraucht",
+    loop_tokens_used: "{n} Tokens",
+    loop_on_plan: "sie läuft auf dem {name}-Abo und endet daher, sobald ihre Runden {max} Tokens verbraucht haben — \
+                   /loop tokens <n> ändert das",
+    plan_interactive_only: "die Bedingungen des {name}-Abos erlauben nur interaktive Nutzung — es unbeaufsichtigt \
+                            laufen zu lassen, ist deine Entscheidung",
     loop_none: "keine Schleife läuft — /loop <interval> <task> startet eine",
     loop_which: "mehrere Schleifen laufen: /loop stop <name>",
     loop_unknown: "keine Schleife {name} — /loop listet sie",
@@ -1787,6 +1806,7 @@ pub const TEXTS: Texts = Texts {
     schedule_rule_bad: "{rule} ist keine Regel: {reason}",
     schedule_usd_bad: "--max-usd nimmt einen Betrag in USD über 0 und bis 1000, etwa 2.5",
     schedule_minutes_bad: "--max-minutes nimmt 1 bis 1440",
+    schedule_tokens_bad: "--max-tokens nimmt eine Anzahl von 1 bis 1000M, etwa 500k oder 1M",
     schedule_folder_gone: "sein Ordner {folder} ist nicht da",
     schedule_launchd_failed: "launchd hat Plan {name} nicht angenommen: {reason}",
     schedule_unknown: "es gibt keinen Plan {name} — glut schedule list zeigt sie",
@@ -1805,6 +1825,8 @@ pub const TEXTS: Texts = Texts {
     schedule_shown_deny: "abgelehnt: {rules}",
     schedule_shown_folders: "Ordner neben dem eigenen: {folders}",
     schedule_shown_limits: "ein Lauf endet, sobald er {usd} gekostet hat, oder nach {minutes} min",
+    schedule_shown_tokens: "auf dem {name}-Abo endet ein Lauf, sobald er {n} Tokens verbraucht hat — --max-tokens <n> \
+                            ändert das",
     schedule_shown_owner_rules: "die Regeln deiner ~/.glut/settings.json gelten daneben, nie die des Projekts",
     schedule_shown_logged_in: "er läuft nur, solange du angemeldet bist; ein verschlafener Termin wird beim Aufwachen \
                                einmal nachgeholt",
@@ -1853,6 +1875,12 @@ pub const TEXTS: Texts = Texts {
     login_title: "Abos",
     login_state_in: "angemeldet als {who} — ⏎ meldet ab",
     login_state_out: "nicht angemeldet — ⏎ meldet an",
+    login_state_key: "ein eigener Key ist hinterlegt — ⏎ meldet erneut an für einen neuen",
+    login_state_no_key: "noch kein Key — ⏎ meldet an, und OpenRouter gibt Glut einen",
+    login_key_at: "Melde dich bei OpenRouter auf {host} an; es gibt Glut einen eigenen Key: {address}",
+    login_key_kept: "{id}: ein eigener Key liegt in {place} — /provider {id} nutzt ihn",
+    login_key_replaced: "Der Key, den {id} vorher hatte, bleibt bei OpenRouter gültig, bis du ihn dort löschst: \
+                         openrouter.ai/settings/keys",
     login_sign_out_title: "Von {id} abmelden?",
     login_sign_out_yes: "Abmelden — bei OpenAI widerrufen",
     login_sign_out_no: "Angemeldet bleiben",
@@ -1869,8 +1897,9 @@ pub const TEXTS: Texts = Texts {
     login_out_unconfirmed: "{id} ist hier abgemeldet, aber OpenAI hat den Widerruf nicht bestätigt ({reason}): trenne \
                             Glut in den ChatGPT-Einstellungen.",
     login_no_waiting: "keine Anmeldung von {id} wartet auf eine Adresse — /login {id} beginnt eine",
-    plan_footer: "ChatGPT-Abo",
+    plan_footer: "{name}-Abo",
     meter_plan: "ChatGPT-Abo: kein Preis pro Aufruf — Nutzung verwalten unter {page}",
+    meter_plan_named: "{name}-Abo: kein Preis pro Aufruf — seine Grenzen gelten",
     schedule_program_writable: "{program} liegt dort, wo die Befehle des Plans schreiben: ein Lauf könnte dem nächsten \
                                 ein eigenes Programm hinterlassen — starte ein anderswo installiertes Glut (cargo \
                                 install)",

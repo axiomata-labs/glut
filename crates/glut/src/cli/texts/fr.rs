@@ -47,6 +47,7 @@ pub const TEXTS: Texts = Texts {
     key_signed_in: "connecté",
     catalog_sign_in: "connexion",
     plan_sign_in_at: "Connecte-toi avec ton abonnement ChatGPT sur {host} :",
+    key_sign_in_at: "Connecte-toi à OpenRouter sur {host} ; il donne à Glut une clé à lui :",
     plan_signed_in: "{id} est connecté en tant que {who}.",
     not_a_sign_in: "{id} prend une clé, pas une connexion (glut providers add {id})",
     plan_out_nothing: "{id} n'était pas connecté.",
@@ -62,6 +63,8 @@ pub const TEXTS: Texts = Texts {
     keyless_only_custom: "--keyless ne vaut que pour openai-compatible ; le catalogue sait si ses fournisseurs ont \
                           besoin d’une clé",
     key_kept: "La clé de {id} est dans {place}.",
+    key_replaced: "La clé que {id} avait avant reste valable chez OpenRouter jusqu'à ce que tu la supprimes : \
+                   openrouter.ai/settings/keys",
     key_shared: "{id} prend la clé que garde l’autre fournisseur de son compte, sauf s’il a la sienne.",
     the_default: " (par défaut)",
     provider_added: "Fournisseur {id} ajouté{default}. glut providers test {id} fait un tout petit appel.",

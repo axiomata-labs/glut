@@ -45,6 +45,7 @@ pub const TEXTS: Texts = Texts {
     key_signed_in: "signed in",
     catalog_sign_in: "sign-in",
     plan_sign_in_at: "Sign in with your ChatGPT plan at {host}:",
+    key_sign_in_at: "Sign in to OpenRouter at {host}; it hands Glut a key of its own:",
     plan_signed_in: "{id} is signed in as {who}.",
     not_a_sign_in: "{id} takes a key, not a sign-in (glut providers add {id})",
     plan_out_nothing: "{id} was not signed in.",
@@ -59,6 +60,8 @@ pub const TEXTS: Texts = Texts {
     catalog_custom_note: "any other endpoint, with --root",
     keyless_only_custom: "--keyless is only for openai-compatible; the catalog knows whether its providers need a key",
     key_kept: "The key of {id} is in {place}.",
+    key_replaced: "The key {id} had before stays valid at OpenRouter until you delete it there: \
+                   openrouter.ai/settings/keys",
     key_shared: "{id} takes the key its account's other provider keeps, unless it has its own.",
     the_default: " (the default)",
     provider_added: "Provider {id} added{default}. glut providers test {id} makes one tiny call.",

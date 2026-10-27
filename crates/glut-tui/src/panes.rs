@@ -1765,11 +1765,35 @@ impl Panes {
                 ),
                 None => tr!(background_waits, name = name),
             };
-            // Without prices only the rounds end it: said, not found out.
-            let said = if looping.is_some() && app.engine.prices.is_none() {
-                tr!(clause_join, first = said, second = tr!(loop_uncounted))
-            } else {
-                said
+            // On a subscription its tokens end it; without prices only the rounds do: said, not found out.
+            let said = match (&looping, app.engine.plan) {
+                (Some(looping), Some(known)) => {
+                    let said = tr!(
+                        clause_join,
+                        first = said,
+                        second = tr!(
+                            loop_on_plan,
+                            name = known.name,
+                            max = crate::looping::tokens_shown(
+                                looping.limits.max_tokens.unwrap_or_default()
+                            )
+                        )
+                    );
+                    // Its terms allow interactive use only: the owner's decision, said (PV4 Q8).
+                    if known.plan == glut::providers::catalog::Plan::InteractiveOnly {
+                        tr!(
+                            clause_join,
+                            first = said,
+                            second = tr!(plan_interactive_only, name = known.name)
+                        )
+                    } else {
+                        said
+                    }
+                }
+                (Some(_), None) if app.engine.prices.is_none() => {
+                    tr!(clause_join, first = said, second = tr!(loop_uncounted))
+                }
+                _ => said,
             };
             self.list.push(Pane {
                 looping,
@@ -2143,7 +2167,9 @@ impl Panes {
                 continue;
             }
             if looping.running() {
-                if let Some(why) = looping.round_ended(app.cost, now) {
+                if let Some(why) =
+                    looping.round_ended(app.cost, crate::looping::tokens_of(&app.usage), now)
+                {
                     ended.push((at, why));
                 }
             } else if looping.next.is_some_and(|next| next <= now) {
@@ -2159,7 +2185,7 @@ impl Panes {
                     ));
                     continue;
                 }
-                looping.round_began(app.cost);
+                looping.round_began(app.cost, crate::looping::tokens_of(&app.usage));
             }
         }
         for (at, why) in ended {
@@ -2231,9 +2257,7 @@ impl Panes {
                 self.notifier.push(Some(name.clone()), &occasion);
             }
         }
-        let cost = looping
-            .spent
-            .map_or_else(|| "—".to_owned(), |spent| glut::lang::usd(spent, 2));
+        let cost = looping.spent_shown();
         self.active().tell(tr!(
             loop_ended,
             name = name,

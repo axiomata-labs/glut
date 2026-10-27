@@ -71,8 +71,8 @@ pub const TEXTS: Texts = Texts {
         ("provider", "cambiar de proveedor, o /provider <id>"),
         (
             "login",
-            "iniciar sesión con una suscripción — tu plan de ChatGPT — en lugar de una clave; /login solo las lista \
-             con su estado, ⏎ inicia o cierra la sesión",
+            "iniciar sesión en lugar de dar una clave — tu plan de ChatGPT, u OpenRouter para una clave propia; /login \
+             solo las lista con su estado, ⏎ inicia o cierra la sesión",
         ),
         ("effort", "cuánto piensa el modelo, o /effort <level>"),
         (
@@ -147,7 +147,7 @@ pub const TEXTS: Texts = Texts {
             "loop",
             "ejecutar una tarea una y otra vez en un agente en segundo plano propio, el intervalo contado desde el fin \
              de una ronda — /loop 10m ejecuta los tests; /loop solo los lista, /loop stop [name] termina uno, /loop \
-             rounds|budget fijan dónde termina uno",
+             rounds|budget|tokens fijan dónde termina uno",
         ),
         (
             "schedule",
@@ -1000,6 +1000,8 @@ pub const TEXTS: Texts = Texts {
     setup_pick_provider: "Glut aún no tiene proveedor de modelos. Elige uno (el número), o Intro para salir:",
     setup_no_provider: "no se eligió proveedor — `glut` vuelve a iniciar la configuración",
     setup_key: "Clave para {provider} (no se muestra):",
+    setup_key_or_sign_in: "Clave para {provider} (no se muestra) — o solo ⏎ para iniciar sesión en el navegador en su \
+                           lugar:",
     setup_no_key: "no se dio ninguna clave — `glut` vuelve a iniciar la configuración",
     setup_key_kept: "La clave está en {place}.",
     setup_provider_done: "Listo — {provider} es tu proveedor; /model y /provider lo cambian después.",
@@ -1065,13 +1067,14 @@ pub const TEXTS: Texts = Texts {
     setup_provider_prompt: "Proveedor:",
     cli: &[
         (
-            "Signs in to a subscription in the browser — your ChatGPT Plus or Pro plan: glut providers login chatgpt",
-            "Inicia sesión en una suscripción en el navegador — tu plan ChatGPT Plus o Pro: glut providers login \
-             chatgpt",
+            "Signs in in the browser — your ChatGPT Plus or Pro plan (glut providers login chatgpt), or OpenRouter for \
+             a key without copying it (glut providers login openrouter)",
+            "Inicia sesión en el navegador — tu plan ChatGPT Plus o Pro (glut providers login chatgpt), u OpenRouter \
+             para una clave sin copiarla (glut providers login openrouter)",
         ),
         (
-            "The provider; one of the catalog's subscriptions is added on the way",
-            "El proveedor; una suscripción del catálogo se añade de paso",
+            "The provider; one of the catalog's that sign in is added on the way",
+            "El proveedor; uno del catálogo que inicia sesión se añade de paso",
         ),
         (
             "Signs out of a subscription: the sign-in revoked at its provider and forgotten here",
@@ -1148,6 +1151,10 @@ pub const TEXTS: Texts = Texts {
         (
             "The most minutes a run may take; 30 otherwise",
             "Los minutos máximos que puede durar una ejecución; 30 si no",
+        ),
+        (
+            "The most tokens a run on a subscription may use (500k, 1M); 1M otherwise",
+            "El máximo de tokens que puede usar una ejecución en una suscripción (500k, 1M); si no, 1M",
         ),
         (
             "The task: a message, or /skill <name> [what for]",
@@ -1593,6 +1600,7 @@ pub const TEXTS: Texts = Texts {
     ],
     cli_headings: &["Uso:", "Opciones", "Argumentos", "Comandos"],
     model_reasons: "razona",
+    model_plan: "plan",
     agent_starting: "iniciando…",
     compacted_tokens: "conversación compactada: {before}k → {after}k tokens",
     mode_now: "ahora en modo {mode}",
@@ -1753,6 +1761,17 @@ pub const TEXTS: Texts = Texts {
     loop_why_failed: "una ronda no terminó con respuesta ({reason})",
     loop_why_rounds: "{n} rondas hechas",
     loop_why_budget: "su presupuesto de {max} está agotado",
+    loop_tokens_bad: "/loop tokens toma una cantidad de 1 a 1000M, como 500k o 5M",
+    loop_tokens_now: "un bucle en una suscripción termina en cuanto sus rondas usaron {n} tokens juntas — /loop tokens \
+                      <n> lo cambia",
+    loop_tokens_set: "un bucle en una suscripción iniciado desde ahora termina en cuanto sus rondas usaron {n} tokens \
+                      juntas",
+    loop_why_tokens: "sus {max} tokens están usados",
+    loop_tokens_used: "{n} tokens",
+    loop_on_plan: "corre en la suscripción {name}, así que termina en cuanto sus rondas usaron {max} tokens — /loop \
+                   tokens <n> lo cambia",
+    plan_interactive_only: "las condiciones de la suscripción {name} solo permiten uso interactivo — ejecutarlo sin \
+                            supervisión es tu decisión",
     loop_none: "no corre ningún bucle — /loop <interval> <task> inicia uno",
     loop_which: "corren varios bucles: /loop stop <name>",
     loop_unknown: "no hay bucle {name} — /loop los lista",
@@ -1781,6 +1800,7 @@ pub const TEXTS: Texts = Texts {
     schedule_rule_bad: "{rule} no es una regla: {reason}",
     schedule_usd_bad: "--max-usd toma un importe en USD mayor que 0 y hasta 1000, como 2.5",
     schedule_minutes_bad: "--max-minutes toma de 1 a 1440",
+    schedule_tokens_bad: "--max-tokens toma una cantidad de 1 a 1000M, como 500k o 1M",
     schedule_folder_gone: "su carpeta {folder} no existe",
     schedule_launchd_failed: "launchd no aceptó el plan {name}: {reason}",
     schedule_unknown: "no hay ningún plan {name} — glut schedule list los muestra",
@@ -1799,6 +1819,8 @@ pub const TEXTS: Texts = Texts {
     schedule_shown_deny: "rechazado: {rules}",
     schedule_shown_folders: "carpetas junto a la suya: {folders}",
     schedule_shown_limits: "una ejecución termina en cuanto ha costado {usd} o tras {minutes} min",
+    schedule_shown_tokens: "en la suscripción {name} una ejecución termina en cuanto usó {n} tokens — --max-tokens <n> \
+                            lo cambia",
     schedule_shown_owner_rules: "las reglas de tu ~/.glut/settings.json cuentan además, nunca las del proyecto",
     schedule_shown_logged_in: "solo se ejecuta mientras tienes la sesión iniciada; una hora perdida en reposo se \
                                recupera una vez al despertar",
@@ -1846,6 +1868,12 @@ pub const TEXTS: Texts = Texts {
     login_title: "Suscripciones",
     login_state_in: "sesión iniciada como {who} — ⏎ la cierra",
     login_state_out: "sin sesión — ⏎ la inicia",
+    login_state_key: "hay una clave propia guardada — ⏎ inicia sesión otra vez para una nueva",
+    login_state_no_key: "aún sin clave — ⏎ inicia sesión y OpenRouter le da una a Glut",
+    login_key_at: "Inicia sesión en OpenRouter en {host}; le da a Glut una clave propia: {address}",
+    login_key_kept: "{id}: una clave propia está guardada en {place} — /provider {id} la usa",
+    login_key_replaced: "La clave que {id} tenía antes sigue válida en OpenRouter hasta que la borres allí: \
+                         openrouter.ai/settings/keys",
     login_sign_out_title: "¿Cerrar la sesión de {id}?",
     login_sign_out_yes: "Cerrar sesión — revocada en OpenAI",
     login_sign_out_no: "Mantener la sesión",
@@ -1862,8 +1890,9 @@ pub const TEXTS: Texts = Texts {
     login_out_unconfirmed: "{id} cerró sesión aquí, pero OpenAI no confirmó la revocación ({reason}): desconecta Glut \
                             en los ajustes de ChatGPT.",
     login_no_waiting: "ningún inicio de sesión de {id} espera una dirección — /login {id} inicia uno",
-    plan_footer: "plan de ChatGPT",
+    plan_footer: "plan de {name}",
     meter_plan: "plan de ChatGPT: sin precio por llamada — gestiona el uso en {page}",
+    meter_plan_named: "plan de {name}: sin precio por llamada — rigen sus límites",
     schedule_program_writable: "{program} está donde escriben los comandos del plan: una ejecución podría dejar a la \
                                 siguiente un programa propio — inicia un Glut instalado en otro sitio (cargo install)",
     schedule_path_writable: "su PATH llega a una carpeta donde escriben sus comandos — glut schedule add <name> lo \

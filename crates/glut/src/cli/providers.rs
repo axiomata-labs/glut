@@ -55,9 +55,10 @@ pub enum ProvidersCommand {
     Remove { id: String },
     /// Makes a provider the one runs take without --provider.
     Default { id: String },
-    /// Signs in to a subscription in the browser — your ChatGPT Plus or Pro plan: glut providers login chatgpt.
+    /// Signs in in the browser — your ChatGPT Plus or Pro plan (glut providers login chatgpt), or OpenRouter for a
+    /// key without copying it (glut providers login openrouter).
     Login {
-        /// The provider; one of the catalog's subscriptions is added on the way.
+        /// The provider; one of the catalog's that sign in is added on the way.
         id: String,
     },
     /// Signs out of a subscription: the sign-in revoked at its provider and forgotten here.
@@ -431,64 +432,22 @@ async fn test(home: &Path, id: Option<&str>, model: Option<&str>) -> Result<(), 
     Ok(())
 }
 
-/// `glut providers login <id>`: the browser's sign-in, opened on the owner's Enter, the tokens kept in the store —
-/// also Glut's first start in the terminal, where the owner picked a subscription.
+/// `glut providers login <id>`: the browser's sign-in, opened on the owner's Enter, the tokens — or OpenRouter's key —
+/// kept in the store; also Glut's first start in the terminal, where the owner picked a sign-in.
 ///
 /// # Errors
 ///
 /// Why there is no sign-in, for the owner to read.
 pub async fn login(home: &Path, id: &str, setup: bool) -> Result<(), String> {
     use crate::subscription::chatgpt;
+    if providers::gives_key_by_sign_in(home, id) {
+        return login_for_key(home, id, setup).await;
+    }
     let account = providers::signing(home, id)?;
     let kept = crate::subscription::load(home, &account).map_err(|err| err.to_string())?;
     let sign_in = chatgpt::begin(home, kept, chatgpt::Server::openai()).await?;
-    println!("{}", say!(plan_sign_in_at, host = sign_in.host()));
-    println!("{}", sign_in.address());
-    let local = crate::oauth::can_open();
-    println!(
-        "{}",
-        if local {
-            say!(mcp_enter_opens)
-        } else {
-            say!(mcp_open_yourself)
-        }
-    );
-    // As `glut mcp login` reads it: on a thread of its own, an empty line opens the browser (the owner's word), any
-    // other is the address pasted back. The first start reads one line and no more: its next question is the
-    // terminal's, and a thread still reading would take the owner's answer.
-    let (send, received) = tokio::sync::oneshot::channel::<String>();
-    if setup {
-        let address = sign_in.address().to_owned();
-        let line = tokio::task::spawn_blocking(|| {
-            let mut line = String::new();
-            std::io::stdin().read_line(&mut line).map(|_| line)
-        })
-        .await
-        .map_err(|err| err.to_string())?
-        .map_err(|err| err.to_string())?;
-        let line = line.trim().to_owned();
-        if !line.is_empty() {
-            let _ = send.send(line.chars().take(MAX_KEY_BYTES as usize).collect());
-        } else if local && crate::oauth::open_in_browser(&address) {
-            println!("{}", say!(mcp_browser_opened));
-        }
-    } else if std::io::stdin().is_terminal() {
-        let address = sign_in.address().to_owned();
-        std::thread::spawn(move || {
-            let mut lines = std::io::stdin().lock().lines();
-            while let Some(Ok(line)) = lines.next() {
-                let line = line.trim();
-                if !line.is_empty() {
-                    let _ = send.send(line.chars().take(MAX_KEY_BYTES as usize).collect());
-                    return;
-                }
-                if local && crate::oauth::open_in_browser(&address) {
-                    println!("{}", say!(mcp_browser_opened));
-                }
-            }
-        });
-    }
-    let pasted = async { received.await.ok() };
+    let heading = say!(plan_sign_in_at, host = sign_in.host());
+    let pasted = await_browser(heading, sign_in.address(), setup).await?;
     let record = sign_in
         .finish(pasted)
         .await
@@ -510,6 +469,76 @@ pub async fn login(home: &Path, id: &str, setup: bool) -> Result<(), String> {
             who = crate::permissions::printable(&who)
         )
     );
+    Ok(())
+}
+
+/// The sign-in's address said, and the browser awaited: an empty line opens it (the owner's word), any other is the
+/// address pasted back (over SSH). As `glut mcp login` reads it, on a thread of its own; the first start reads one
+/// line and no more: its next question is the terminal's, and a thread still reading would take the owner's answer.
+async fn await_browser(
+    heading: String,
+    address: &str,
+    setup: bool,
+) -> Result<impl std::future::Future<Output = Option<String>> + use<>, String> {
+    println!("{heading}");
+    println!("{address}");
+    let local = crate::oauth::can_open();
+    println!(
+        "{}",
+        if local {
+            say!(mcp_enter_opens)
+        } else {
+            say!(mcp_open_yourself)
+        }
+    );
+    let (send, received) = tokio::sync::oneshot::channel::<String>();
+    if setup {
+        let line = tokio::task::spawn_blocking(|| {
+            let mut line = String::new();
+            std::io::stdin().read_line(&mut line).map(|_| line)
+        })
+        .await
+        .map_err(|err| err.to_string())?
+        .map_err(|err| err.to_string())?;
+        let line = line.trim().to_owned();
+        if !line.is_empty() {
+            let _ = send.send(line.chars().take(MAX_KEY_BYTES as usize).collect());
+        } else if local && crate::oauth::open_in_browser(address) {
+            println!("{}", say!(mcp_browser_opened));
+        }
+    } else if std::io::stdin().is_terminal() {
+        let address = address.to_owned();
+        std::thread::spawn(move || {
+            let mut lines = std::io::stdin().lock().lines();
+            while let Some(Ok(line)) = lines.next() {
+                let line = line.trim();
+                if !line.is_empty() {
+                    let _ = send.send(line.chars().take(MAX_KEY_BYTES as usize).collect());
+                    return;
+                }
+                if local && crate::oauth::open_in_browser(&address) {
+                    println!("{}", say!(mcp_browser_opened));
+                }
+            }
+        });
+    }
+    Ok(async { received.await.ok() })
+}
+
+/// `glut providers login openrouter` (PV4b): signed in in the browser, the key OpenRouter hands out kept like one
+/// typed — never shown.
+async fn login_for_key(home: &Path, id: &str, setup: bool) -> Result<(), String> {
+    use crate::providers::openrouter;
+    providers::check_key_sign_in(home, id)?;
+    let sign_in = openrouter::begin(openrouter::Server::openrouter()).await?;
+    let heading = say!(key_sign_in_at, host = sign_in.host());
+    let pasted = await_browser(heading, sign_in.address(), setup).await?;
+    let key = sign_in.finish(pasted).await?;
+    let (place, replaced) = providers::keep_signed_key(home, id, &key)?;
+    println!("{}", say!(key_kept, id = id, place = place));
+    if replaced {
+        println!("{}", say!(key_replaced, id = id));
+    }
     Ok(())
 }
 
