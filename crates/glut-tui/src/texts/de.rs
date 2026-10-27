@@ -394,8 +394,8 @@ pub const TEXTS: Texts = Texts {
     hint_working: "Glut arbeitet · ⏎ lenkt · ⇥ reiht für danach ein · ⌥↑ holt zurück · ⎋ hält an",
     hint_usual: "⏎ senden · ⇧⏎ neue Zeile · ⇧⇥ Modus · ⌃K Tasten · @ Datei · !cmd · ⌃F Suche · ⌃C beenden",
     hint_other_asks: "fragt — ⌃P antwortet",
-    hint_chord: "⌃X, dann: 2 teilen · 0 schließen · { } Breite · H verbergen · B Hintergrund · A Agenten · E Editor · \
-                 ↑ lesen · ⇥ Seitenleiste",
+    hint_chord: "⌃X, dann: 2 teilen · 0 schließen · { } Breite · H verbergen · B Hintergrund · A Agenten · R Läufe · E \
+                 Editor · ↑ lesen · ⇥ Seitenleiste",
     chord_unknown: "⌃X {key} gibt es nicht — ⌃K zeigt die Tasten",
     in_background: "Im Hintergrund",
     background_keys: "/peek <name> liest einen · /show <name> holt ihn nach vorn · /send <name> …",

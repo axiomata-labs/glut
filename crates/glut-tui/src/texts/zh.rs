@@ -290,7 +290,7 @@ pub const TEXTS: Texts = Texts {
     hint_working: "Glut 工作中 · ⏎ 引导 · ⇥ 排队稍后发送 · ⌥↑ 取回 · ⎋ 停止",
     hint_usual: "⏎ 发送 · ⇧⏎ 换行 · ⇧⇥ 模式 · ⌃K 按键 · @ 文件 · !cmd · ⌃F 搜索 · ⌃C 退出",
     hint_other_asks: "在询问 — ⌃P 回答",
-    hint_chord: "⌃X 之后：2 分屏 · 0 关闭 · { } 宽度 · H 隐藏 · B 后台 · A 代理 · E 编辑器 · ↑ 阅读 · ⇥ 侧栏",
+    hint_chord: "⌃X 之后：2 分屏 · 0 关闭 · { } 宽度 · H 隐藏 · B 后台 · A 代理 · R 运行 · E 编辑器 · ↑ 阅读 · ⇥ 侧栏",
     chord_unknown: "⌃X {key} 没有作用 — ⌃K 列出按键",
     in_background: "后台",
     background_keys: "/peek <name> 阅读其一 · /show <name> 调到前台 · /send <name> …",

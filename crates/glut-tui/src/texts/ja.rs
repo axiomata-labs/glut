@@ -348,7 +348,7 @@ pub const TEXTS: Texts = Texts {
     hint_working: "Glut が作業中 · ⏎ で軌道修正 · ⇥ で後に回す · ⌥↑ で取り戻す · ⎋ で止める",
     hint_usual: "⏎ 送信 · ⇧⏎ 改行 · ⇧⇥ モード · ⌃K キー · @ ファイル · !cmd · ⌃F 検索 · ⌃C 終了",
     hint_other_asks: "確認待ち — ⌃P で答える",
-    hint_chord: "⌃X の次に: 2 分割 · 0 閉じる · { } 幅 · H 隠す · B バックグラウンド · A エージェント · E エディタ · ↑ 読む · ⇥ パネル",
+    hint_chord: "⌃X の次に: 2 分割 · 0 閉じる · { } 幅 · H 隠す · B バックグラウンド · A エージェント · R 実行 · E エディタ · ↑ 読む · ⇥ パネル",
     chord_unknown: "⌃X {key} は何もしません — ⌃K でキー一覧",
     in_background: "バックグラウンド",
     background_keys: "/peek <name> で読む · /show <name> で前に出す · /send <name> …",

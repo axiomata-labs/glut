@@ -396,8 +396,8 @@ pub const TEXTS: Texts = Texts {
     hint_working: "Glut lavora · ⏎ lo guida · ⇥ mette in coda · ⌥↑ riprende · ⎋ ferma",
     hint_usual: "⏎ invia · ⇧⏎ nuova riga · ⇧⇥ modalità · ⌃K tasti · @ file · !cmd · ⌃F cerca · ⌃C esci",
     hint_other_asks: "chiede — ⌃P risponde",
-    hint_chord: "⌃X e poi: 2 dividi · 0 chiudi · { } larghezza · H nascondi · B sfondo · A agenti · E editor · ↑ \
-                 leggi · ⇥ pannello",
+    hint_chord: "⌃X e poi: 2 dividi · 0 chiudi · { } larghezza · H nascondi · B sfondo · A agenti · R esecuzioni · E \
+                 editor · ↑ leggi · ⇥ pannello",
     chord_unknown: "⌃X {key} non fa nulla — ⌃K elenca i tasti",
     in_background: "In background",
     background_keys: "/peek <name> ne legge uno · /show <name> lo porta in primo piano · /send <name> …",

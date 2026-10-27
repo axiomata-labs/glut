@@ -89,8 +89,8 @@ pub const TEXTS: Texts = Texts {
     hint_working: "Glut works · ⏎ steers it · ⇥ queues for after · ⌥↑ takes back · ⎋ stops",
     hint_usual: "⏎ send · ⇧⏎ new line · ⇧⇥ mode · ⌃K keys · @ file · !cmd · ⌃F search · ⌃C quit",
     hint_other_asks: "asks — ⌃P answers",
-    hint_chord: "⌃X then: 2 split · 0 close · { } width · H hide · B background · A agents · E editor · ↑ read · ⇥ \
-                 panel",
+    hint_chord: "⌃X then: 2 split · 0 close · { } width · H hide · B background · A agents · R runs · E editor · ↑ \
+                 read · ⇥ panel",
     chord_unknown: "⌃X {key} does nothing — ⌃K lists the keys",
     in_background: "In the background",
     background_keys: "/peek <name> reads one · /show <name> brings it forward · /send <name> …",

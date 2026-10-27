@@ -383,8 +383,8 @@ pub const TEXTS: Texts = Texts {
     hint_working: "Glut trabaja · ⏎ lo guía · ⇥ pone en cola · ⌥↑ recupera · ⎋ detiene",
     hint_usual: "⏎ enviar · ⇧⏎ línea nueva · ⇧⇥ modo · ⌃K teclas · @ archivo · !cmd · ⌃F buscar · ⌃C salir",
     hint_other_asks: "pregunta — ⌃P responde",
-    hint_chord: "⌃X y luego: 2 dividir · 0 cerrar · { } ancho · H ocultar · B segundo plano · A agentes · E editor · \
-                 ↑ leer · ⇥ panel",
+    hint_chord: "⌃X y luego: 2 dividir · 0 cerrar · { } ancho · H ocultar · B segundo plano · A agentes · R \
+                 ejecuciones · E editor · ↑ leer · ⇥ panel",
     chord_unknown: "⌃X {key} no hace nada — ⌃K muestra las teclas",
     in_background: "En segundo plano",
     background_keys: "/peek <name> lee uno · /show <name> lo trae al frente · /send <name> …",

@@ -397,8 +397,8 @@ pub const TEXTS: Texts = Texts {
     hint_working: "Glut travaille · ⏎ l’oriente · ⇥ met en attente · ⌥↑ reprend · ⎋ arrête",
     hint_usual: "⏎ envoyer · ⇧⏎ nouvelle ligne · ⇧⇥ mode · ⌃K touches · @ fichier · !cmd · ⌃F recherche · ⌃C quitter",
     hint_other_asks: "demande — ⌃P répond",
-    hint_chord: "⌃X puis : 2 diviser · 0 fermer · { } largeur · H masquer · B arrière-plan · A agents · E éditeur · ↑ \
-                 lire · ⇥ panneau",
+    hint_chord: "⌃X puis : 2 diviser · 0 fermer · { } largeur · H masquer · B arrière-plan · A agents · R exécutions · \
+                 E éditeur · ↑ lire · ⇥ panneau",
     chord_unknown: "⌃X {key} ne fait rien — ⌃K liste les touches",
     in_background: "En arrière-plan",
     background_keys: "/peek <name> en lit un · /show <name> le ramène au premier plan · /send <name> …",

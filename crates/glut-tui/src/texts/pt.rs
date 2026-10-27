@@ -382,8 +382,8 @@ pub const TEXTS: Texts = Texts {
     hint_working: "o Glut trabalha · ⏎ orienta · ⇥ põe na fila · ⌥↑ pega de volta · ⎋ para",
     hint_usual: "⏎ enviar · ⇧⏎ nova linha · ⇧⇥ modo · ⌃K teclas · @ arquivo · !cmd · ⌃F busca · ⌃C sair",
     hint_other_asks: "pergunta — ⌃P responde",
-    hint_chord: "⌃X e depois: 2 dividir · 0 fechar · { } largura · H ocultar · B segundo plano · A agentes · E editor \
-                 · ↑ ler · ⇥ painel",
+    hint_chord: "⌃X e depois: 2 dividir · 0 fechar · { } largura · H ocultar · B segundo plano · A agentes · R \
+                 execuções · E editor · ↑ ler · ⇥ painel",
     chord_unknown: "⌃X {key} não faz nada — ⌃K mostra as teclas",
     in_background: "Em segundo plano",
     background_keys: "/peek <name> lê um · /show <name> traz para a frente · /send <name> …",
