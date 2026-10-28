@@ -2387,13 +2387,13 @@ mod tests {
     #[test]
     fn an_owners_command_is_coloured_in_its_mark_and_line_and_a_bang_before_a_space_is_not() {
         let palette = crate::theme::c();
-        // A command for Glut to see and one for the owner alone: both stand out in the theme's colour.
+        // A command for Glut to see and one for the owner alone: both stand out in the theme's warning colour.
         for text in ["!ls -la", "!!git status"] {
             let mut app = app();
             typed(&mut app, text);
             let (mark, line) = input_colors(&mut app);
-            assert_eq!(mark, Some(palette.owner), "{text}: the mark");
-            assert_eq!(line, Some(palette.owner), "{text}: the line");
+            assert_eq!(mark, Some(palette.fault), "{text}: the mark");
+            assert_eq!(line, Some(palette.fault), "{text}: the line");
         }
         // `! glut` with a space after the bang is no command: its mark is the one a message gets and its line keeps
         // the ordinary colour.
@@ -2405,6 +2405,6 @@ mod tests {
             Some(palette.glow),
             "the mark is a message's, not a command's"
         );
-        assert_ne!(line, Some(palette.owner), "the line stays as it was");
+        assert_ne!(line, Some(palette.fault), "the line stays as it was");
     }
 }

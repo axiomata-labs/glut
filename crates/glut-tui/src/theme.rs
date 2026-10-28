@@ -490,10 +490,10 @@ pub fn glow() -> Style {
     Style::default().fg(c().glow)
 }
 
-/// What the owner runs themselves: a `!`/`!!` command line in the input, its own colour from the theme — one that
-/// would run in the owner's terminal, not a message for Glut.
+/// What the owner runs themselves: a `!`/`!!` command line in the input, in the theme's warning colour — it runs
+/// straight in the owner's terminal, whatever it does, so it must never pass for a message (T78).
 pub fn shell() -> Style {
-    Style::default().fg(c().owner)
+    Style::default().fg(c().fault)
 }
 
 pub fn fault() -> Style {
