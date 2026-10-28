@@ -72,6 +72,9 @@ pub fn guess(term_program: Option<&str>, term: Option<&str>) -> (Separators, Opt
         Some("WezTerm")
     } else if term.contains("kitty") {
         Some("kitty")
+    } else if program == "axiomata" {
+        // Axiomata's panes draw with the official JetBrains Mono Nerd Font Mono, the same one Ghostty is set up with.
+        Some("Axiomata")
     } else {
         None
     };
@@ -335,6 +338,10 @@ mod tests {
         );
         assert_eq!(guess(Some("WezTerm"), None).0, Separators::Powerline);
         assert_eq!(guess(None, Some("xterm-kitty")).0, Separators::Powerline);
+        assert_eq!(
+            guess(Some("Axiomata"), Some("xterm-256color")),
+            (Separators::Powerline, Some("Axiomata"))
+        );
         assert_eq!(
             guess(Some("Apple_Terminal"), Some("xterm-256color")),
             (Separators::Plain, None)
