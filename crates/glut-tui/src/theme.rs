@@ -490,6 +490,12 @@ pub fn glow() -> Style {
     Style::default().fg(c().glow)
 }
 
+/// What the owner runs themselves: a `!`/`!!` command line in the input, its own colour from the theme — one that
+/// would run in the owner's terminal, not a message for Glut.
+pub fn shell() -> Style {
+    Style::default().fg(c().owner)
+}
+
 pub fn fault() -> Style {
     Style::default().fg(c().fault)
 }

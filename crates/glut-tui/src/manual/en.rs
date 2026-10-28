@@ -34,14 +34,16 @@ pub const PAGES: [(&str, &str); 57] = [
     ),
     (
         "btw",
-        "Ask a side question without disturbing the conversation: the answer comes in a card and never becomes part of \
-         the session.\n\
+        "Ask a side question without disturbing the conversation: the answer comes in a window above the input and \
+         never becomes part of the session.\n\
          \n\
          /btw <question> — asks about this pane's session, even while its turn goes on\n\
          /btw <name> <question> — asks about another pane or a background agent, by its number or name\n\
+         /btw — opens the last answer again\n\
          \n\
          The model answers from the conversation as it stands and runs no tool: if it would need to look something up, \
-         ask it as a message instead. Its cost counts in the session's cost. ⎋ closes the card, PgUp PgDn scroll it.\n\
+         ask it as a message instead. Its cost counts in the session's cost. ⎋ closes the window, PgUp PgDn scroll \
+         it.\n\
          \n\
          /btw reviewer how far are you?",
     ),

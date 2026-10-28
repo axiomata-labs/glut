@@ -59,15 +59,6 @@ pub enum Kind {
     /// An image (T46): the owner's under their message, `read_file`'s under its call — drawn as `/images` says,
     /// its line under it.
     Picture(glut::images::Image),
-    /// A side question (T57) and its answer, left when its card closed: one folded line, a click opens it. Never part
-    /// of any conversation.
-    Side {
-        /// The pane or background agent asked; `None`: this pane's session.
-        about: Option<String>,
-        question: String,
-        answer: String,
-        unfolded: bool,
-    },
     /// The model's thinking (T8), shown as the owner chose: hidden, a folded line, or open.
     Thinking {
         text: String,
@@ -100,7 +91,6 @@ impl Kind {
             }
             Kind::Agent(agent) => agent.task.clone(),
             Kind::Picture(image) => image.label(),
-            Kind::Side { answer, .. } => answer.clone(),
         }
     }
 }
@@ -365,26 +355,6 @@ impl Transcript {
 
     pub fn push(&mut self, kind: Kind) {
         self.blocks.push(Block::new(kind));
-    }
-
-    /// A block that comes from beside the turn (a side question's line, T57): in front of a text or a thought still
-    /// streaming, so their next pieces still find them last. Returns where it went: blocks from there moved on by one.
-    pub fn put_aside(&mut self, kind: Kind) -> usize {
-        let streaming = self.blocks.last().is_some_and(|block| {
-            matches!(
-                block.kind,
-                Kind::Answer {
-                    streaming: true,
-                    ..
-                } | Kind::Thinking {
-                    streaming: true,
-                    ..
-                }
-            )
-        });
-        let at = self.blocks.len() - usize::from(streaming);
-        self.blocks.insert(at, Block::new(kind));
-        at
     }
 
     pub fn note(&mut self, text: impl Into<String>, tone: Tone) {
@@ -809,7 +779,6 @@ impl Transcript {
             match &mut block.kind {
                 Kind::Tool { unfolded, .. } => *unfolded = !*unfolded,
                 Kind::Thinking { flipped, .. } => *flipped = !*flipped,
-                Kind::Side { unfolded, .. } => *unfolded = !*unfolded,
                 _ => return,
             }
             block.touch();
@@ -1038,34 +1007,6 @@ fn render(kind: &Kind, width: u16, thinking: Thinking, frame: usize) -> Vec<Line
             }
         }
         Kind::Agent(agent) => tile(agent, width, &mut lines),
-        Kind::Side {
-            about,
-            question,
-            answer,
-            unfolded,
-        } => {
-            lines.push(Line::default());
-            let head = match about {
-                Some(about) => format!("btw · {} · ", clean(about)),
-                None => "btw · ".to_owned(),
-            };
-            let room = width.saturating_sub(head.width() + 2).max(8);
-            lines.push(Line::from(vec![
-                Span::styled(if *unfolded { "▾ " } else { "▸ " }, theme::quiet()),
-                Span::styled(head, theme::quiet()),
-                Span::styled(
-                    cut(&clean(question).replace('\n', " "), room),
-                    Style::default().fg(theme::c().owner),
-                ),
-            ]));
-            if *unfolded {
-                for row in crate::markdown::render(answer, width.saturating_sub(2)) {
-                    let mut row = row;
-                    row.spans.insert(0, Span::raw("  "));
-                    lines.push(row);
-                }
-            }
-        }
         Kind::Picture(image) => {
             // Half the stream wide at most, ten rows high, its proportions kept; inline drawing (T46b) stands on
             // the same cells.

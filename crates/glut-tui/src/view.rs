@@ -280,9 +280,11 @@ fn draw_in(frame: &mut Frame, app: &mut App, area: Rect, chrome: &Chrome) {
             inner.max(glimm) + 2
         });
     let waiting = waiting_lines(app, usize::from(area.width));
-    let [header, stream, ask, queue, input, keys] = Layout::vertical([
+    let (side_lines, side_height) = side_rows(app, area);
+    let [header, stream, side, ask, queue, input, keys] = Layout::vertical([
         Constraint::Length(if chrome.alone() { 1 } else { 0 }),
         Constraint::Min(1),
+        Constraint::Length(side_height),
         Constraint::Length(ask_height),
         Constraint::Length(waiting.len() as u16),
         Constraint::Length(input_height),
@@ -358,10 +360,11 @@ fn draw_in(frame: &mut Frame, app: &mut App, area: Rect, chrome: &Chrome) {
         .name(&cwd)
         .map(|name| crate::transcript::clean(name).replace('\n', " "));
     draw_keys(frame, app, keys, branch, chrome);
-    // The card takes the wheel only where it was drawn this frame.
+    // The window takes the wheel only where it was drawn whole this frame.
     if let Some(side) = &mut app.side {
         side.area = Rect::default();
     }
+    draw_side(frame, app, side, side_lines);
     if app.picker.is_some() {
         draw_picker(frame, app, stream);
     } else if app.help.is_some() {
@@ -377,23 +380,25 @@ fn draw_in(frame: &mut Frame, app: &mut App, area: Rect, chrome: &Chrome) {
     } else if app.picture_view.is_some() {
         draw_picture(frame, app, stream);
     } else {
-        draw_side(frame, app, stream);
         draw_suggestions(frame, app, stream);
         draw_paths(frame, app, stream);
     }
 }
 
-/// A side question's card (T57) over the stream's lower part: the question, the thinking, the answer as it streams,
-/// framed in the glow while it comes. The stream above reads on; the keys go to the input but Esc and the pages.
-fn draw_side(frame: &mut Frame, app: &mut App, area: Rect) {
+/// The side answer's window (T79) between the stream and the input: its rows and its height — one row while a list
+/// or a view stands over the stream, else as many as the answer needs, a third of the screen at most.
+fn side_rows(app: &mut App, area: Rect) -> (Vec<Line<'static>>, u16) {
+    if app.side.is_none() || area.width < 20 || area.height < 12 {
+        return (Vec::new(), 0);
+    }
+    if side_folded(app) {
+        return (Vec::new(), 1);
+    }
     let thinking = app.transcript.thinking;
     let tick = app.frame;
     let Some(side) = &mut app.side else {
-        return;
+        return (Vec::new(), 0);
     };
-    if area.width < 20 || area.height < 6 {
-        return;
-    }
     // Inside the frame, a cell short of its right side as the stream is.
     let width = area.width.saturating_sub(3).max(8);
     let mut lines: Vec<Line<'static>> = side
@@ -410,30 +415,70 @@ fn draw_side(frame: &mut Frame, app: &mut App, area: Rect) {
     if lines.first().is_some_and(|line| line.width() == 0) {
         lines.remove(0);
     }
-    let most = (area.height * 3 / 5).max(5);
-    let height = (u16::try_from(lines.len())
+    let most = (area.height / 3).max(5);
+    let height = u16::try_from(lines.len())
         .unwrap_or(u16::MAX)
-        .saturating_add(2))
-    .clamp(5, most);
-    let place = Rect {
-        x: area.x,
-        y: area.y + area.height - height,
-        width: area.width,
-        height,
+        .saturating_add(2)
+        .clamp(5, most);
+    (lines, height)
+}
+
+/// Whether something stands over the stream that the side answer's window makes room for, folded to one row: a
+/// picker, a sheet, a view, the commands' or the paths' list (T79).
+fn side_folded(app: &App) -> bool {
+    app.picker.is_some()
+        || app.help.is_some()
+        || app.keys_sheet.is_some()
+        || app.review.open
+        || app.plan_view.is_some()
+        || app.agent_view.is_some()
+        || app.picture_view.is_some()
+        || app.paths.is_some()
+        || !app.suggestions().is_empty()
+}
+
+/// A side question's window (T57, T79) in its own rows above the input: the question, the thinking, the answer as it
+/// streams, framed in the glow while it comes — or, folded, one row naming it. The keys go to the input but Esc and
+/// the pages.
+fn draw_side(frame: &mut Frame, app: &mut App, place: Rect, lines: Vec<Line<'static>>) {
+    let Some(side) = &mut app.side else {
+        return;
     };
+    if place.height == 0 {
+        return;
+    }
     let style = if side.state == crate::btw::State::Asking {
         theme::glow()
     } else {
         theme::quiet()
     };
-    let title = match &side.about {
-        Some(about) => format!(
-            " btw · {} ",
-            crate::transcript::cut(
-                &crate::transcript::clean(about),
-                usize::from(area.width / 2)
-            )
-        ),
+    let about = side.about.as_deref().map(|about| {
+        crate::transcript::cut(
+            &crate::transcript::clean(about),
+            usize::from(place.width / 2),
+        )
+    });
+    if place.height == 1 {
+        let head = match &about {
+            Some(about) => format!("btw · {about} · "),
+            None => "btw · ".to_owned(),
+        };
+        let room = usize::from(place.width).saturating_sub(head.width() + 1);
+        let question = crate::transcript::cut(
+            &crate::transcript::clean(&side.question).replace('\n', " "),
+            room,
+        );
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(head, style),
+                Span::styled(question, theme::quiet()),
+            ])),
+            place,
+        );
+        return;
+    }
+    let title = match &about {
+        Some(about) => format!(" btw · {about} "),
         None => " btw ".to_owned(),
     };
     let block = Block::default()
@@ -1134,11 +1179,14 @@ fn draw_input(
     }
     let visible = usize::from(text.height);
     let first = cursor.0.saturating_sub(visible.saturating_sub(1));
-    // A line that runs as the owner's command says so before Enter: `!` for Glut to see, `‼` for the owner alone.
+    // A line that runs as the owner's command says so before Enter: `!` for Glut to see, `‼` for the owner alone —
+    // and its mark and its whole line in a colour of their own from the theme, so a shell command about to run is
+    // told apart from a message while it is still being typed (`! glut` is not one and stays plain).
     let command = crate::app::owners_command(&app.input.text());
+    let in_command = command.is_some();
     let first_mark = match command {
-        Some((true, _)) => Span::styled("‼ ", theme::glow().add_modifier(Modifier::BOLD)),
-        Some((false, _)) => Span::styled("! ", theme::glow().add_modifier(Modifier::BOLD)),
+        Some((true, _)) => Span::styled("‼ ", theme::shell().add_modifier(Modifier::BOLD)),
+        Some((false, _)) => Span::styled("! ", theme::shell().add_modifier(Modifier::BOLD)),
         None => Span::styled("› ", theme::glow()),
     };
     app.input_spot = Some((text, first, width));
@@ -1197,6 +1245,13 @@ fn draw_input(
         })
         .collect();
     let mut lines = lines;
+    // The line's own text takes that colour too — its mark and every row of it, so a command about to run in the
+    // owner's terminal is seen at once among ordinary messages.
+    if in_command {
+        for line in &mut lines {
+            line.style = theme::shell();
+        }
+    }
     // What a typed command still takes, faint after the cursor: its arguments, or the rest of the word begun.
     if rows.len() == 1
         && app.input.at_end()
@@ -2253,5 +2308,103 @@ mod tests {
         assert_eq!(tokens(840), "840");
         assert_eq!(tokens(12_345), "12.3k");
         assert_eq!(tokens(1_250_000), "1.2M");
+    }
+
+    /// A session that talks to nothing, as the tests draw it.
+    fn app() -> crate::app::App {
+        let (parts, engine) = crate::session::for_tests();
+        let (send, _receive) = tokio::sync::mpsc::unbounded_channel();
+        crate::app::App::new(std::sync::Arc::new(parts), engine, send)
+    }
+
+    /// The input's mark and its text, their colours as [`draw`] paints them: the mark first, then the line's own.
+    fn input_colors(
+        app: &mut crate::app::App,
+    ) -> (Option<ratatui::style::Color>, Option<ratatui::style::Color>) {
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|frame| super::draw(frame, app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let (spot, ..) = app.input_spot.expect("the input was drawn");
+        let color = |x: u16| buffer[(x, spot.y)].style().fg;
+        (color(spot.x), color(spot.x + 2))
+    }
+
+    /// A key the terminal sent, as the app takes it.
+    fn typed(app: &mut crate::app::App, text: &str) {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        for c in text.chars() {
+            app.on_terminal(crossterm::event::Event::Key(KeyEvent::new(
+                KeyCode::Char(c),
+                KeyModifiers::NONE,
+            )));
+        }
+    }
+
+    /// T79: a side answer has rows of its own between the stream and the input — the stream gives them up, nothing
+    /// is drawn over it — and folds to one row while a list stands over the stream.
+    #[tokio::test]
+    async fn a_side_answer_takes_rows_above_the_input_and_folds_under_a_list() {
+        let mut app = app();
+        let draw = |app: &mut crate::app::App| {
+            let mut terminal =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 30)).unwrap();
+            terminal.draw(|frame| super::draw(frame, app)).unwrap();
+        };
+        draw(&mut app);
+        let (input, ..) = app.input_spot.expect("the input was drawn");
+        let fake = |_| crate::btw::Call::idle();
+        let mut side = crate::btw::Side::new(
+            Some("reviewer".into()),
+            "what did you find?".into(),
+            None,
+            fake,
+        );
+        side.take(crate::btw::Came::Text("Two bugs.".into()));
+        app.side = Some(side);
+        draw(&mut app);
+        let area = app.side.as_ref().unwrap().area;
+        let (moved, ..) = app.input_spot.unwrap();
+        assert_eq!(moved, input, "the input stays where it was");
+        assert!(
+            area.height >= 5 && area.height <= 10,
+            "{area:?}: a third of 30 rows at most"
+        );
+        assert_eq!(
+            area.y + area.height + 1,
+            input.y,
+            "right above the input's rule"
+        );
+        // A list over the stream: the window is one row, and takes no wheel.
+        app.picker = Some(crate::picker::Picker::new("list", Vec::new(), None));
+        draw(&mut app);
+        assert_eq!(
+            app.side.as_ref().unwrap().area,
+            ratatui::layout::Rect::default()
+        );
+    }
+
+    #[test]
+    fn an_owners_command_is_coloured_in_its_mark_and_line_and_a_bang_before_a_space_is_not() {
+        let palette = crate::theme::c();
+        // A command for Glut to see and one for the owner alone: both stand out in the theme's colour.
+        for text in ["!ls -la", "!!git status"] {
+            let mut app = app();
+            typed(&mut app, text);
+            let (mark, line) = input_colors(&mut app);
+            assert_eq!(mark, Some(palette.owner), "{text}: the mark");
+            assert_eq!(line, Some(palette.owner), "{text}: the line");
+        }
+        // `! glut` with a space after the bang is no command: its mark is the one a message gets and its line keeps
+        // the ordinary colour.
+        let mut app = app();
+        typed(&mut app, "! glut");
+        let (mark, line) = input_colors(&mut app);
+        assert_eq!(
+            mark,
+            Some(palette.glow),
+            "the mark is a message's, not a command's"
+        );
+        assert_ne!(line, Some(palette.owner), "the line stays as it was");
     }
 }

@@ -36,15 +36,16 @@ pub const PAGES: [(&str, &str); 57] = [
     ),
     (
         "btw",
-        "Haz una pregunta al margen sin molestar a la conversación: la respuesta llega en una tarjeta y nunca pasa a \
-         formar parte de la sesión.\n\
+        "Haz una pregunta al margen sin molestar a la conversación: la respuesta llega en una ventana sobre la \
+         entrada y nunca pasa a formar parte de la sesión.\n\
          \n\
          /btw <question> — pregunta sobre la sesión de este pane, incluso mientras su turno sigue\n\
          /btw <name> <question> — pregunta sobre otro pane o un agente en segundo plano, por su número o su nombre\n\
+         /btw — vuelve a abrir la última respuesta\n\
          \n\
          El modelo responde con la conversación tal como está y no ejecuta ninguna herramienta: si necesitara \
          consultar algo, hazle la pregunta como mensaje. Su coste cuenta en el coste de la sesión. ⎋ cierra la \
-         tarjeta, PgUp PgDn la desplazan.\n\
+         ventana, PgUp PgDn la desplazan.\n\
          \n\
          /btw reviewer ¿cómo vas?",
     ),

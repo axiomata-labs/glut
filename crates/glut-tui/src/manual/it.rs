@@ -36,14 +36,15 @@ pub const PAGES: [(&str, &str); 57] = [
     ),
     (
         "btw",
-        "Fai una domanda a margine senza disturbare la conversazione: la risposta arriva in una scheda e non diventa \
-         mai parte della sessione.\n\
+        "Fai una domanda a margine senza disturbare la conversazione: la risposta arriva in una finestra sopra \
+         l’input e non diventa mai parte della sessione.\n\
          \n\
          /btw <question> — chiede della sessione di questo pane, anche mentre il suo turno prosegue\n\
          /btw <name> <question> — chiede di un altro pane o di un agente in background, per numero o nome\n\
+         /btw — riapre l’ultima risposta\n\
          \n\
          Il modello risponde da ciò che la conversazione contiene ora e non esegue alcuno strumento: se dovesse \
-         cercare qualcosa, chiedilo come messaggio. Il suo costo conta nel costo della sessione. ⎋ chiude la scheda, \
+         cercare qualcosa, chiedilo come messaggio. Il suo costo conta nel costo della sessione. ⎋ chiude la finestra, \
          PgUp PgDn la scorrono.\n\
          \n\
          /btw reviewer a che punto sei?",

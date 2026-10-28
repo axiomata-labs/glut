@@ -35,7 +35,7 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "btw",
-            "顺便一问：答案显示在卡片中，从不进入对话；正在进行的一轮继续 — /btw reviewer 进展如何？",
+            "顺便一问：答案显示在输入框上方的窗口中，从不进入对话；正在进行的一轮继续 — /btw reviewer 进展如何？",
         ),
         (
             "projects",

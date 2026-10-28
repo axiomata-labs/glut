@@ -115,8 +115,8 @@ pub const COMMANDS: [Command; 57] = [
         Topic::Session,
         "btw",
         "[name] <question>",
-        "a side question, answered in a card and never part of the conversation; the turn under way goes on — \
-         /btw reviewer how far?",
+        "a side question, answered in a window above the input and never part of the conversation; the turn under \
+         way goes on — /btw reviewer how far?",
     ),
     command(
         Topic::Session,

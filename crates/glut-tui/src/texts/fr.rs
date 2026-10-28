@@ -39,8 +39,8 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "btw",
-            "une question en aparté, répondue dans une carte et jamais dans la conversation ; le tour en cours \
-             continue — /btw reviewer où en es-tu ?",
+            "une question en aparté, répondue dans une fenêtre au-dessus de la saisie et jamais dans la conversation \
+             ; le tour en cours continue — /btw reviewer où en es-tu ?",
         ),
         (
             "projects",

@@ -214,6 +214,14 @@ pub struct Answered {
 /// A side question on its way: dropping it ends its call.
 pub struct Call(tokio::task::JoinHandle<()>);
 
+impl Call {
+    /// A call that asks nothing, for the screen's tests.
+    #[cfg(test)]
+    pub(crate) fn idle() -> Self {
+        Call(tokio::spawn(async {}))
+    }
+}
+
 impl Drop for Call {
     fn drop(&mut self) {
         self.0.abort();
@@ -373,29 +381,6 @@ impl Side {
     /// Whether nothing of the answer came yet: the card says it waits.
     pub fn waiting(&self) -> bool {
         self.state == State::Asking && self.stream.blocks.len() == 1
-    }
-
-    /// The folded line the card leaves in the stream when it closes: only an answer, or what the model wanted.
-    pub fn kept(&self) -> Option<Kind> {
-        let answer = match self.state {
-            State::Answered if self.answer().trim().is_empty() => return None,
-            State::Answered => self.answer(),
-            State::WantedTools => {
-                let answer = self.answer();
-                if answer.is_empty() {
-                    tr!(btw_wanted_tools).to_owned()
-                } else {
-                    format!("{answer}\n\n{}", tr!(btw_wanted_tools))
-                }
-            }
-            State::Asking | State::Failed => return None,
-        };
-        Some(Kind::Side {
-            about: self.about.clone(),
-            question: self.question.clone(),
-            answer,
-            unfolded: false,
-        })
     }
 
     /// Rolls the card by `rows` (up when negative); at its end it follows the answer again.
@@ -564,7 +549,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_card_streams_settles_and_leaves_a_line_only_for_an_answer() {
+    async fn the_card_streams_and_settles() {
         let fake = |_| Call(tokio::spawn(async {}));
         let mut side = Side::new(
             Some("reviewer".into()),
@@ -573,7 +558,6 @@ mod tests {
             fake,
         );
         assert!(side.waiting());
-        assert!(side.kept().is_none(), "nothing yet");
         side.take(Came::Thinking("hm".into()));
         side.take(Came::Text("Two ".into()));
         side.take(Came::Text("bugs.".into()));
@@ -592,13 +576,6 @@ mod tests {
         assert_eq!(side.state, State::Answered);
         assert_eq!(side.answer(), "Two bugs.", "streamed once, not twice");
         assert_eq!(side.take(done), None, "a late end counts nothing");
-        match side.kept() {
-            Some(Kind::Side { about, answer, .. }) => {
-                assert_eq!(about.as_deref(), Some("reviewer"));
-                assert_eq!(answer, "Two bugs.");
-            }
-            other => panic!("{other:?}"),
-        }
         let mut quiet = Side::new(None, "q".into(), None, fake);
         quiet.take(Came::Done(Ok(Answered {
             usage,
@@ -610,7 +587,6 @@ mod tests {
         let mut failed = Side::new(None, "q".into(), None, fake);
         failed.take(Came::Done(Err("refused".into())));
         assert_eq!(failed.state, State::Failed);
-        assert!(failed.kept().is_none());
     }
 
     #[tokio::test]

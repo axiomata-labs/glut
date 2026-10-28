@@ -38,8 +38,8 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "btw",
-            "una domanda a margine, con la risposta in una scheda e mai nella conversazione; il turno in corso \
-             prosegue — /btw reviewer a che punto sei?",
+            "una domanda a margine, con la risposta in una finestra sopra l’input e mai nella conversazione; il \
+             turno in corso prosegue — /btw reviewer a che punto sei?",
         ),
         (
             "projects",

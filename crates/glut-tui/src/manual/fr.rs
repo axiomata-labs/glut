@@ -35,15 +35,16 @@ pub const PAGES: [(&str, &str); 57] = [
     ),
     (
         "btw",
-        "Poser une question en aparté sans déranger la conversation : la réponse vient dans une carte et ne fait \
-         jamais partie de la session.\n\
+        "Poser une question en aparté sans déranger la conversation : la réponse vient dans une fenêtre au-dessus de \
+         la saisie et ne fait jamais partie de la session.\n\
          \n\
          /btw <question> — interroge la session de ce pane, même pendant que son tour continue\n\
          /btw <name> <question> — interroge un autre pane ou un agent en arrière-plan, par son numéro ou son nom\n\
+         /btw — rouvre la dernière réponse\n\
          \n\
          Le modèle répond d’après la conversation telle qu’elle est et n’utilise aucun outil : s’il devait chercher \
          quelque chose, pose-lui plutôt la question comme un message. Son coût compte dans le coût de la session. ⎋ \
-         ferme la carte, PgUp PgDn la font défiler.\n\
+         ferme la fenêtre, PgUp PgDn la font défiler.\n\
          \n\
          /btw reviewer où en es-tu ?",
     ),

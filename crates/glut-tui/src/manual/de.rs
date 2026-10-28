@@ -36,16 +36,17 @@ pub const PAGES: [(&str, &str); 57] = [
     ),
     (
         "btw",
-        "Eine Nebenfrage stellen, ohne das Gespräch zu stören: Die Antwort kommt in einer Karte und wird nie Teil der \
-         Session.\n\
+        "Eine Nebenfrage stellen, ohne das Gespräch zu stören: Die Antwort kommt in einem Fenster über der \
+         Eingabe und wird nie Teil der Session.\n\
          \n\
          /btw <question> — fragt zur Session dieses Panes, auch während sein Turn läuft\n\
          /btw <name> <question> — fragt zu einem anderen Pane oder einem Hintergrund-Agenten, über seine Nummer oder \
          seinen Namen\n\
+         /btw — öffnet die letzte Antwort noch einmal\n\
          \n\
          Das Modell antwortet aus dem Gespräch, wie es gerade steht, und führt kein Werkzeug aus: Muss es etwas \
          nachschlagen, stell die Frage stattdessen als Nachricht. Die Kosten zählen zu den Kosten der Session. ⎋ \
-         schließt die Karte, PgUp PgDn blättern darin.\n\
+         schließt das Fenster, PgUp PgDn blättern darin.\n\
          \n\
          /btw reviewer wie weit bist du?",
     ),

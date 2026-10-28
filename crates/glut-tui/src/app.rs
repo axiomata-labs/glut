@@ -222,6 +222,8 @@ pub struct App {
     side_tools: Option<Vec<glut::ToolSpec>>,
     /// The card of the side question asked last (T57, `/btw`).
     pub side: Option<crate::btw::Side>,
+    /// The answer of a closed card, which `/btw` alone opens again (T79).
+    pub last_side: Option<crate::btw::Side>,
     /// Where the gate's question was drawn last: no tile stands over it (T69).
     pub ask_area: ratatui::layout::Rect,
     /// Where the input's text was drawn last, its first row shown and the width it was laid out at; `None` while a
@@ -554,6 +556,7 @@ impl App {
             lent: None,
             side_tools: None,
             side: None,
+            last_side: None,
             ask_area: ratatui::layout::Rect::default(),
             input_spot: None,
             input_press: None,
@@ -721,6 +724,7 @@ impl App {
         self.forget_masks();
         // A side question was about the session that goes (T57).
         self.side = None;
+        self.last_side = None;
         // What waited for the other session is not this one's.
         self.queue.clear();
         self.forget_models();
@@ -3238,6 +3242,7 @@ impl App {
                 self.forget_warm();
                 self.forget_masks();
                 self.side = None;
+                self.last_side = None;
                 self.selection = None;
                 self.search = None;
                 self.pending.clear();
@@ -4576,6 +4581,7 @@ impl App {
         if conversation {
             self.forget_warm();
             self.side = None;
+            self.last_side = None;
         }
         if self.working() {
             return self.transcript.note(tr!(rewind_waits), Tone::Quiet);
@@ -5707,7 +5713,15 @@ impl App {
     fn btw_command(&mut self, rest: &str) {
         let rest = rest.trim();
         if rest.is_empty() {
-            return self.tell(tr!(btw_usage));
+            // The last answer again (T79), scrolled to its start.
+            return match self.last_side.take() {
+                Some(mut side) => {
+                    side.scroll = 0;
+                    side.follow = false;
+                    self.side = Some(side);
+                }
+                None => self.tell(tr!(btw_usage)),
+            };
         }
         let (to, question) = match rest.split_once(char::is_whitespace) {
             Some((first, question)) => (Some(first.to_owned()), question.trim().to_owned()),
@@ -5755,23 +5769,13 @@ impl App {
         }
     }
 
-    /// Closes the side question's card, its call ended; an answer leaves its folded line in the stream.
+    /// Closes the side question's card; nothing of it stays in the stream (T79).
     fn close_side(&mut self) {
-        let Some(kind) = self.side.take().and_then(|side| side.kept()) else {
-            return;
-        };
-        let at = self.transcript.put_aside(kind);
-        // The views that name a block by its place follow the ones that moved on; a selection's lines moved under it.
-        self.selection = None;
-        if let Some(reading) = &mut self.reading
-            && reading.block >= at
+        // An answer still coming is called off with its card; one that came is kept for `/btw` alone (T79).
+        if let Some(side) = self.side.take()
+            && side.state != crate::btw::State::Asking
         {
-            reading.block += 1;
-        }
-        if let Some(view) = &mut self.agent_view
-            && view.path.first().is_some_and(|first| *first >= at)
-        {
-            view.path[0] += 1;
+            self.last_side = Some(side);
         }
     }
 
@@ -9917,20 +9921,18 @@ pub(crate) mod tests {
         app.on_terminal(key(KeyCode::Esc, KeyModifiers::NONE));
         assert!(app.side.is_none());
         assert!(app.working(), "the turn was not stopped");
-        match &app.transcript.blocks.last().unwrap().kind {
-            crate::transcript::Kind::Side {
-                about,
-                question,
-                answer,
-                unfolded,
-            } => {
-                assert_eq!(about, &None);
-                assert_eq!(question, "what did you read?");
-                assert_eq!(answer, "Two bugs.");
-                assert!(!unfolded);
-            }
-            other => panic!("{other:?}"),
-        }
+        assert_eq!(
+            app.transcript.blocks.len(),
+            blocks,
+            "nothing of it stays in the chat (T79)"
+        );
+        // `/btw` alone opens the last answer again.
+        app.input.take();
+        typed(&mut app, "/btw");
+        assert_eq!(
+            app.side.as_ref().map(crate::btw::Side::answer).as_deref(),
+            Some("Two bugs.")
+        );
         assert!(
             app.lent
                 .as_ref()
