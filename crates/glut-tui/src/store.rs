@@ -44,6 +44,9 @@ pub struct Session {
     /// The session this one was forked from (T14, TUI4b): the sessions are a tree.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,
+    /// The task list as the last turn left it (T81): a session opened again goes on with it, as a next turn does.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub todos: Vec<glut::planning::TodoItem>,
 }
 
 /// Where and when a kept session worked, without what it said (T44).
@@ -95,6 +98,7 @@ impl Session {
             conversation: Vec::new(),
             marks: Vec::new(),
             parent: None,
+            todos: Vec::new(),
         }
     }
 

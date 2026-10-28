@@ -757,6 +757,7 @@ pub const TEXTS: Texts = Texts {
     compacted_tokens: "compacted the conversation: {before}k → {after}k tokens",
     nudged_reminder: "Glut reminded the model of its task list",
     nudged_no_list: "Glut asked the model to write a task list",
+    nudged_pressed: "Glut asked the model in a message of its own to update its task list",
     nudged_open: "Glut asked the model to go on: its list still has items open",
     nudged_announced: "Glut asked the model to take the step it announced",
     nudged_repeated: "Glut did not run the same calls a second time: the model sent its last step again",

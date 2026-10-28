@@ -513,6 +513,7 @@ impl Transcript {
                 match kind {
                     glut::NudgeKind::Reminder => tr!(nudged_reminder),
                     glut::NudgeKind::NoList => tr!(nudged_no_list),
+                    glut::NudgeKind::Pressed => tr!(nudged_pressed),
                     glut::NudgeKind::OpenItems => tr!(nudged_open),
                     glut::NudgeKind::Announced => tr!(nudged_announced),
                     glut::NudgeKind::Repeated => tr!(nudged_repeated),

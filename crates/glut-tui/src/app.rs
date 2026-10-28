@@ -705,6 +705,7 @@ impl App {
     /// Keeps the session as it stands now; a failure is said, the session goes on.
     fn keep(&mut self) {
         self.session.conversation.clone_from(&self.conversation);
+        self.session.todos.clone_from(&self.todos);
         self.session.provider.clone_from(&self.engine.provider);
         self.engine.model_name().clone_into(&mut self.session.model);
         self.session.cost = self.cost;
@@ -749,7 +750,9 @@ impl App {
         };
         self.transcript.note(said, Tone::Fine);
         self.conversation.clone_from(&session.conversation);
-        self.clear_todos();
+        // Its task list comes back with it (T81): the Plan tab shows it, and the next turn goes on with it.
+        self.todos.clone_from(&session.todos);
+        self.parts.host.todos(&self.todos);
         self.forget_views();
         self.cost = session.cost;
         self.usage = Usage::default();
@@ -11420,6 +11423,40 @@ pub(crate) mod tests {
             [2, 0],
             "the list, then its end"
         );
+    }
+
+    /// T81: the task list is kept with the session and comes back when it is opened again — in the Plan tab, at
+    /// the host, and in the file (an older file without it opens with none).
+    #[test]
+    fn a_session_opened_again_brings_its_task_list_back() {
+        let (mut app, _reports, host) = hosted();
+        let todo = |text: &str| glut::planning::TodoItem {
+            text: text.into(),
+            status: glut::planning::TodoStatus::Pending,
+        };
+        app.on_report(Report::Event(Event::Todo {
+            turn: 1,
+            items: vec![todo("read"), todo("fix")],
+        }));
+        app.keep();
+        let kept: crate::store::Session =
+            serde_json::from_str(&serde_json::to_string(&app.session).unwrap()).unwrap();
+        assert_eq!(kept.todos, app.todos, "written and read back");
+        typed(&mut app, "/clear");
+        assert!(app.todos.is_empty());
+        app.open(kept);
+        assert_eq!(app.todos, [todo("read"), todo("fix")]);
+        assert_eq!(
+            *host.todos.lock().unwrap(),
+            [2, 0, 2],
+            "the list, its end, the list again"
+        );
+
+        let mut older = serde_json::to_value(&app.session).unwrap();
+        older.as_object_mut().unwrap().remove("todos");
+        let older: crate::store::Session = serde_json::from_value(older).unwrap();
+        app.open(older);
+        assert!(app.todos.is_empty());
     }
 
     #[tokio::test]

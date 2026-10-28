@@ -68,12 +68,24 @@ fn only_reads(call: &ToolCall) -> bool {
     }
 }
 
-/// Tool calls without `todo_write` while its list has items open before Glut reminds the model of it (T73).
-const REMIND_EVERY: u32 = 8;
+/// Steps without `todo_write` while its list has items open before Glut reminds the model of it (T73), and again
+/// before it presses in a message of its own (T81): steps, not calls — a model that bundles its calls is not reminded
+/// more often for it.
+const REMIND_AFTER_STEPS: u32 = 6;
 
 /// Tool calls a run makes without writing any task list before Glut asks its model for one, once (T80): a short
 /// answer of a read or two is left alone, a longer piece of work gets its list before the work, not after it.
 const ASK_FOR_LIST_AFTER: u32 = 5;
+
+/// How far Glut went to have the model keep its task list since its last `todo_write` (T81).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Pressing {
+    None,
+    /// Reminded by a note on a result, in this step.
+    Reminded(u32),
+    /// Pressed in a message of its own: quiet from here.
+    Pressed,
+}
 
 /// A way for the caller to call a run off from elsewhere (a Stop button, a closing pane). Cheap to clone; every clone
 /// cancels the same run.
@@ -424,6 +436,8 @@ async fn run_inner<M: ChatModel>(
         read_at: HashMap::new(),
         paid_usd: 0.0,
         since_todo: 0,
+        todo_step: 0,
+        pressing: Pressing::None,
         reminded_at: 0,
         list_settled: false,
         updating_todos: false,
@@ -481,6 +495,8 @@ async fn run_inner<M: ChatModel>(
             run.journaled = messages.len();
             run.messages = messages;
             run.turns = recorded.turns;
+            // The reminder counts from here (T81): the steps before the crash are not this run's to count again.
+            run.todo_step = recorded.turns;
             run.usage = recorded.usage;
             run.journal = Some(journal);
             resumed_calls = recorded.open_calls;
@@ -787,8 +803,13 @@ struct Loop<'a, M: ChatModel> {
     read_at: HashMap<PathBuf, u64>,
     /// What its subagents on models of their own cost beyond their tokens at this run's prices (T37a).
     paid_usd: f64,
-    /// Tool calls answered since the last `todo_write` (T73): the reminder's count.
+    /// Tool calls answered since the last `todo_write` (T80): the count before the request for a list.
     since_todo: u32,
+    /// The step of the last `todo_write`, 0 before any (T81): the reminder's count is in steps from it.
+    todo_step: u32,
+    /// How far Glut went to have the list kept since its last `todo_write` (T81): reminded once by a note on a
+    /// result, then pressed once in a message of its own, then quiet for the rest of the run.
+    pressing: Pressing,
     /// The step Glut last reminded the model of its list in, and whether the step under way sends `todo_write`
     /// itself: one reminder a step at most, none to a step that updates the list anyway (MiMo, a reminder thrice in
     /// one batch of sixteen calls, sent the same batch again and again).
@@ -1151,6 +1172,7 @@ impl<M: ChatModel> Loop<'_, M> {
                 sink.emit(Event::Error { message: why });
                 return FinishReason::Budget;
             }
+            self.press_for_list(sink);
             self.turns += 1;
             self.take_steering(sink);
             if let Err(ending) = self.compact_if_full(sink).await {
@@ -2157,7 +2179,7 @@ impl<M: ChatModel> Loop<'_, M> {
     }
 
     /// `output` with Glut's word on the task list after it — at the end, so the cached conversation stays as it was:
-    /// the reading hint (T73b), the reminder when the list has items open and [`REMIND_EVERY`] calls passed without
+    /// the reading hint (T73b), the reminder when the list has items open and [`REMIND_AFTER_STEPS`] steps passed without
     /// `todo_write` (T73), or the request for a list when the run wrote none (T80, [`Self::asked_for_list`]).
     fn reminded(&mut self, name: &str, output: String, sink: &mut dyn EventSink) -> String {
         // Only Glut speaks as `[glut]` (the prompt tells the model to follow such lines): a file, a page or a server
@@ -2174,6 +2196,8 @@ impl<M: ChatModel> Loop<'_, M> {
         }
         if name == planning::TODO {
             self.since_todo = 0;
+            self.todo_step = self.turns;
+            self.pressing = Pressing::None;
             self.list_settled = true;
             return output;
         }
@@ -2188,12 +2212,13 @@ impl<M: ChatModel> Loop<'_, M> {
         if !planning::open(&self.todos) {
             return self.asked_for_list(output, sink);
         }
-        if self.since_todo < REMIND_EVERY {
+        let steps = self.turns.saturating_sub(self.todo_step);
+        if self.pressing != Pressing::None || steps < REMIND_AFTER_STEPS || self.in_plan_mode() {
             return output;
         }
-        self.since_todo = 0;
+        self.pressing = Pressing::Reminded(self.turns);
         self.reminded_at = self.turns;
-        let note = planning::reminder(&self.todos, REMIND_EVERY);
+        let note = planning::reminder(&self.todos, steps);
         sink.emit(Event::Nudged {
             turn: self.turns,
             kind: NudgeKind::Reminder,
@@ -2201,16 +2226,47 @@ impl<M: ChatModel> Loop<'_, M> {
         format!("{output}\n\n{note}")
     }
 
+    /// Whether the run is in Plan mode now: it reads and plans, its plan goes to the owner by `exit_plan`.
+    fn in_plan_mode(&self) -> bool {
+        self.tools
+            .gate()
+            .is_some_and(|gate| gate.mode() == Mode::Plan)
+    }
+
+    /// Glut's second word on a list left unchanged (T81): when [`REMIND_AFTER_STEPS`] more steps passed after the
+    /// reminder without `todo_write`, a message of its own before the next model call — a weaker model reads a note
+    /// at the end of a tool's output as output and passes over it. Once; after it Glut is quiet for the run, and the
+    /// end still asks about items left open.
+    fn press_for_list(&mut self, sink: &mut dyn EventSink) {
+        let Pressing::Reminded(at) = self.pressing else {
+            return;
+        };
+        // Only right behind a step's results: never after the end's question or a Stop hook's word, which speak
+        // already, and never in Plan mode, whose plan goes to the owner by `exit_plan`.
+        let behind_results = self.messages.last().is_some_and(|m| m.role == Role::Tool);
+        if !self.config.remind
+            || !behind_results
+            || self.in_plan_mode()
+            || !planning::open(&self.todos)
+            || self.turns.saturating_sub(at) < REMIND_AFTER_STEPS
+        {
+            return;
+        }
+        self.pressing = Pressing::Pressed;
+        sink.emit(Event::Nudged {
+            turn: self.turns,
+            kind: NudgeKind::Pressed,
+        });
+        self.messages
+            .push(Message::user(planning::press(&self.todos)));
+    }
+
     /// `output` with Glut's request for a task list after it (T80): once a run, when [`ASK_FOR_LIST_AFTER`] calls
     /// passed and the run wrote none — not in a subagent, whose narrow task nobody watches, nor in Plan mode, whose
     /// plan goes to the owner by `exit_plan`. A list left from a turn before with nothing open counts as none.
     fn asked_for_list(&mut self, output: String, sink: &mut dyn EventSink) -> String {
-        let planning_mode = self
-            .tools
-            .gate()
-            .is_some_and(|gate| gate.mode() == Mode::Plan);
         // Plan mode's reading is no work without a list: the count starts when the plan is approved.
-        if planning_mode {
+        if self.in_plan_mode() {
             self.since_todo = 0;
             return output;
         }
@@ -5006,8 +5062,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_list_left_open_is_carried_and_reminded_of_after_eight_calls() {
-        // Sixteen calls in one reply: one reminder, at the eighth, never a second in the same step.
+    async fn a_list_left_open_is_carried_and_sixteen_calls_in_one_step_bring_no_reminder() {
+        // T81: the reminder counts steps, not calls — a model that bundles its calls is not reminded for it.
         let echoes: Vec<(&str, &str, &str)> =
             (0..16).map(|_| ("e", "echo", r#"{"text":"x"}"#)).collect();
         let mut replies = vec![Ok(calls(&echoes))];
@@ -5018,16 +5074,9 @@ mod tests {
         )])));
         replies.push(Ok(text("all done")));
         let model = Script::new(replies);
-        let config = RunConfig {
-            todo_list: vec![crate::planning::TodoItem {
-                text: "fix".into(),
-                status: crate::planning::TodoStatus::InProgress,
-            }],
-            ..RunConfig::new("/w")
-        };
         let mut events = Vec::new();
         let outcome = run(
-            &config,
+            &open_list(),
             &model,
             &toolbox(),
             "go on",
@@ -5042,23 +5091,109 @@ mod tests {
             prompt.starts_with("go on\n\n[glut] Your task list from before (0 of 1 done)"),
             "{prompt}"
         );
-        let answers: Vec<String> = seen[1]
+        assert!(
+            nudges(&events).is_empty(),
+            "all done: no question at the end"
+        );
+    }
+
+    /// A run that goes on with the list item "fix" in progress.
+    fn open_list() -> RunConfig {
+        RunConfig {
+            todo_list: vec![crate::planning::TodoItem {
+                text: "fix".into(),
+                status: crate::planning::TodoStatus::InProgress,
+            }],
+            ..RunConfig::new("/w")
+        }
+    }
+
+    /// T81: a list left unchanged is reminded of after six steps, by the item in progress; unheeded, six steps later
+    /// Glut presses in a message of its own, once — then it is quiet, and only the end asks about the open item.
+    #[tokio::test]
+    async fn an_unchanged_list_is_reminded_of_then_pressed_for_then_left_alone() {
+        let mut replies = echoes(20);
+        replies.push(Ok(text("stopped")));
+        let model = Script::new(replies);
+        let mut events = Vec::new();
+        run(
+            &open_list(),
+            &model,
+            &toolbox(),
+            "go on",
+            &mut events,
+            &Cancel::new(),
+        )
+        .await;
+        assert_eq!(
+            nudges(&events),
+            [
+                NudgeKind::Reminder,
+                NudgeKind::Pressed,
+                NudgeKind::OpenItems
+            ]
+        );
+        let seen = model.seen.lock().unwrap();
+        let answers: Vec<String> = seen[6]
             .iter()
             .filter(|m| m.role == Role::Tool)
             .filter_map(|m| m.content.clone())
             .collect();
-        assert_eq!(
-            answers
+        let reminded: Vec<usize> = answers
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| {
+                a.contains("[glut] Your task list has not changed for 6 steps. Is \"fix\" done?")
+            })
+            .map(|(at, _)| at)
+            .collect();
+        assert_eq!(reminded, [5], "at the sixth step's result");
+        // The press: a message of its own after the twelfth step's result, before the thirteenth call.
+        let pressed = |at: usize| {
+            seen[at]
                 .iter()
-                .filter(|a| a.contains("[glut] Your task list has not changed"))
-                .count(),
-            1
-        );
-        assert!(answers[7].contains("[glut]"), "at the eighth call");
+                .filter(|m| m.role == Role::User)
+                .filter_map(|m| m.content.clone())
+                .filter(|text| text.starts_with("[glut] Call todo_write now"))
+                .count()
+        };
+        assert_eq!(pressed(11), 0);
+        assert_eq!(pressed(12), 1);
+        // Right behind the twelfth step's results, the last message the thirteenth call sees.
+        let last = seen[12].last().unwrap();
+        assert_eq!(last.role, Role::User);
+        assert_eq!(seen[12][seen[12].len() - 2].role, Role::Tool);
+        assert_eq!(pressed(20), 1, "once");
+    }
+
+    /// T81: a list the model keeps after the reminder starts the count anew — reminded again only six steps on.
+    #[tokio::test]
+    async fn a_list_kept_after_the_reminder_starts_the_count_anew() {
+        let mut replies = echoes(6);
+        replies.pop();
+        replies.push(Ok(calls(&[(
+            "t",
+            crate::planning::TODO,
+            r#"{"items":[{"text":"fix","status":"in_progress"},{"text":"test","status":"pending"}]}"#,
+        )])));
+        replies.extend(echoes(5));
+        // The answer after the end's question: the run ends there.
+        replies.push(Ok(text("still open")));
+        let model = Script::new(replies);
+        let mut events = Vec::new();
+        run(
+            &open_list(),
+            &model,
+            &toolbox(),
+            "go on",
+            &mut events,
+            &Cancel::new(),
+        )
+        .await;
         assert_eq!(
             nudges(&events),
-            [NudgeKind::Reminder],
-            "all done: no question at the end"
+            [NudgeKind::Reminder, NudgeKind::OpenItems],
+            "five steps after the list: no second word yet"
         );
     }
 

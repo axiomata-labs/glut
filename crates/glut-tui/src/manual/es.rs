@@ -604,12 +604,14 @@ pub const PAGES: [(&str, &str); 57] = [
          \n\
          /nudge on — cuando un turno termina con puntos de la lista de tareas abiertos, o con palabras que anuncian un \
          paso («a continuación…», dos puntos al final), Glut envía al modelo una línea propia: seguir o decir por qué \
-         para; el historial lo muestra discretamente. Si la lista no cambia mientras trabaja, Glut le recuerda; si en \
+         para; el historial lo muestra discretamente. Si la lista no cambia mientras trabaja, Glut le recuerda, y si \
+         eso no cambia nada, una vez con un mensaje propio; si en \
          una ejecución no ha escrito ninguna, le pide una, una vez por turno\n\
          /nudge off — un turno termina donde el modelo lo termina: sin recordatorio de la lista ni petición de una\n\
          \n\
          La pregunta del final viene una vez por turno, nunca en modo plan, tras una pregunta a ti, en una ronda de un \
-         bucle o en la ejecución de un plan; el recordatorio y la petición siguen la misma elección. /nudge solo \
+         bucle o en la ejecución de un plan; el recordatorio y la petición siguen la misma elección, pero en la \
+         ejecución de un plan Glut siempre recuerda. /nudge solo \
          muestra la elección actual. Guardado en `~/.glut/prefs.json`; `\"nudge\": false` en `~/.glut/settings.json` \
          lo apaga para cada ejecución.",
     ),

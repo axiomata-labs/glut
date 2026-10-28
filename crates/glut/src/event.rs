@@ -68,6 +68,8 @@ pub enum NudgeKind {
     Reading,
     /// It worked for a while without writing a task list at all (T80).
     NoList,
+    /// Its list stayed unchanged after the reminder too: Glut asked in a message of its own (T81).
+    Pressed,
 }
 
 /// One step of a run.

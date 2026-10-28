@@ -1545,6 +1545,7 @@ pub const TEXTS: Texts = Texts {
     compacted_tokens: "会話を圧縮しました: {before}k → {after}k Token",
     nudged_reminder: "Glut がモデルにタスクリストを思い出させました",
     nudged_no_list: "Glut がモデルにタスクリストを書くよう頼みました",
+    nudged_pressed: "Glut が独自のメッセージでモデルにタスクリストの更新を求めました",
     nudged_open: "Glut がモデルに続行を求めました：リストにまだ未完了の項目があります",
     nudged_announced: "Glut がモデルに予告したステップの実行を求めました",
     nudged_repeated: "Glut は同じ呼び出しを再実行しませんでした：モデルが直前のステップをもう一度送りました",

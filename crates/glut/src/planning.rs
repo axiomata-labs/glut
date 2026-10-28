@@ -186,11 +186,30 @@ pub(crate) fn carried(items: &[TodoItem]) -> Option<String> {
     })
 }
 
-/// Glut's reminder after `calls` tool calls without `todo_write` (T73).
-pub(crate) fn reminder(items: &[TodoItem], calls: u32) -> String {
+/// Glut's reminder after `steps` steps without `todo_write` (T73): what to mark, by the item in progress (T81).
+pub(crate) fn reminder(items: &[TodoItem], steps: u32) -> String {
+    let ask = match items
+        .iter()
+        .find(|item| item.status == TodoStatus::InProgress)
+    {
+        Some(item) => format!(
+            "Is \"{}\" done? Then mark it done and the next item in_progress with todo_write.",
+            item.text
+        ),
+        None => "Mark the item you are on in_progress with todo_write.".to_owned(),
+    };
     format!(
-        "[glut] Your task list has not changed for {calls} tool calls. If your work moved on, update it now with \
-         todo_write; the owner watches it live. Still open:{}",
+        "[glut] Your task list has not changed for {steps} steps. {ask} If you did several items at once, mark them \
+         together. The owner follows the list live. Still open:{}",
+        open_lines(items)
+    )
+}
+
+/// Glut's message of its own when the reminder went unheeded (T81): the list first, before anything else.
+pub(crate) fn press(items: &[TodoItem]) -> String {
+    format!(
+        "[glut] Call todo_write now, before any other tool: mark what is done and the item you are on in_progress. \
+         Your list still shows open:{}",
         open_lines(items)
     )
 }

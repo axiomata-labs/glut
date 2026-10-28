@@ -34,7 +34,8 @@ their result.
 /// The task list's part of [`WORKING`], only where `todo_write` is offered.
 const WORKING_TODOS: &str = "
 - For work of three steps or more, write the task list with todo_write first. Keep it current: mark an item \
-in_progress when you start it and done the moment it is done — the owner watches the list live.";
+in_progress when you start it and done the moment it is done — the owner watches the list live. Make the items \
+the steps you will really take one after another; what you do in one go, mark done together once it is.";
 
 /// The system prompt for a run in `cwd` on `date` with `model`, with the caller's instructions, if any, after it;
 /// `todos`: `todo_write` is offered, and the guide says how to keep its list.

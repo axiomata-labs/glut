@@ -1674,6 +1674,7 @@ pub const TEXTS: Texts = Texts {
     compacted_tokens: "conversation compactée : {before}k → {after}k tokens",
     nudged_reminder: "Glut a rappelé au modèle sa liste de tâches",
     nudged_no_list: "Glut a demandé au modèle d'écrire une liste de tâches",
+    nudged_pressed: "Glut a demandé au modèle, dans un message à part, de mettre à jour sa liste de tâches",
     nudged_open: "Glut a demandé au modèle de continuer : sa liste a encore des points ouverts",
     nudged_announced: "Glut a demandé au modèle de faire l'étape annoncée",
     nudged_repeated: "Glut n'a pas relancé les mêmes appels : le modèle a renvoyé sa dernière étape",
