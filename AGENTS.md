@@ -3,6 +3,12 @@
 Guidance for coding agents working in this repository — Claude Code reads it through `CLAUDE.md`. Short and
 pointer-heavy: it is loaded on every turn.
 
+
+**Worktrees** (owner, 2026-10-28): every worktree lives under `~/Worktrees/axiomata-glut/<name>/`, never under
+`~/Documents` (iCloud syncs it and chokes on `target/`; it also evicts files, so builds and tests stall) and not under
+`~/.axiomata` or `~/.claude`. Put the checkout one level down with a link `Axiomata-Foundation` → the real repository
+beside it (Glut's path dependency is `../Axiomata-Foundation`), and remove the worktree with its folder once its branch
+is merged.
 ## What this is
 
 **Glut**, an agent harness: a lean tool-calling loop over an OpenAI-compatible model API (OpenRouter, Ollama), with
