@@ -1667,6 +1667,7 @@ pub const TEXTS: Texts = Texts {
     agent_starting: "avvio…",
     compacted_tokens: "conversazione compattata: {before}k → {after}k token",
     nudged_reminder: "Glut ha ricordato al modello la sua lista di compiti",
+    nudged_no_list: "Glut ha chiesto al modello di scrivere una lista di compiti",
     nudged_open: "Glut ha chiesto al modello di continuare: la sua lista ha ancora punti aperti",
     nudged_announced: "Glut ha chiesto al modello di fare il passo annunciato",
     nudged_repeated: "Glut non ha rieseguito le stesse chiamate: il modello ha rimandato il suo ultimo passo",

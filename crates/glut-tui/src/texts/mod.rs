@@ -1396,6 +1396,8 @@ glut::catalog! {
         compacted_tokens: &'static str,
         /// Glut reminded the model of its task list (T73).
         nudged_reminder: &'static str,
+        /// Glut asked the model to write a task list it worked without (T80).
+        nudged_no_list: &'static str,
         /// Glut asked the model to go on: its list has items open (T73).
         nudged_open: &'static str,
         /// Glut asked the model to take the step it announced (T73).

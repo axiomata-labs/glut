@@ -71,6 +71,10 @@ fn only_reads(call: &ToolCall) -> bool {
 /// Tool calls without `todo_write` while its list has items open before Glut reminds the model of it (T73).
 const REMIND_EVERY: u32 = 8;
 
+/// Tool calls a run makes without writing any task list before Glut asks its model for one, once (T80): a short
+/// answer of a read or two is left alone, a longer piece of work gets its list before the work, not after it.
+const ASK_FOR_LIST_AFTER: u32 = 5;
+
 /// A way for the caller to call a run off from elsewhere (a Stop button, a closing pane). Cheap to clone; every clone
 /// cancels the same run.
 #[derive(Clone, Default)]
@@ -421,6 +425,7 @@ async fn run_inner<M: ChatModel>(
         paid_usd: 0.0,
         since_todo: 0,
         reminded_at: 0,
+        list_settled: false,
         updating_todos: false,
         nudged: false,
         last_batch: None,
@@ -789,6 +794,8 @@ struct Loop<'a, M: ChatModel> {
     /// one batch of sixteen calls, sent the same batch again and again).
     reminded_at: u32,
     updating_todos: bool,
+    /// Whether the run wrote its task list, or was asked for one already (T80): it is asked once at most.
+    list_settled: bool,
     /// Whether the run already asked its model to go on (T73): once per run.
     nudged: bool,
     /// The last step's calls, by tool and arguments (T73b): the same set again is not run.
@@ -2149,8 +2156,9 @@ impl<M: ChatModel> Loop<'_, M> {
         self.messages.push(Message::tool(call.id, output));
     }
 
-    /// `output` with Glut's reminder of the task list after it (T73), when the list has items open and
-    /// [`REMIND_EVERY`] calls passed without `todo_write` — at the end, so the cached conversation stays as it was.
+    /// `output` with Glut's word on the task list after it — at the end, so the cached conversation stays as it was:
+    /// the reading hint (T73b), the reminder when the list has items open and [`REMIND_EVERY`] calls passed without
+    /// `todo_write` (T73), or the request for a list when the run wrote none (T80, [`Self::asked_for_list`]).
     fn reminded(&mut self, name: &str, output: String, sink: &mut dyn EventSink) -> String {
         // Only Glut speaks as `[glut]` (the prompt tells the model to follow such lines): a file, a page or a server
         // writing one is quoted, never obeyed.
@@ -2166,15 +2174,21 @@ impl<M: ChatModel> Loop<'_, M> {
         }
         if name == planning::TODO {
             self.since_todo = 0;
+            self.list_settled = true;
             return output;
         }
         self.since_todo += 1;
         if !self.config.todos
-            || self.since_todo < REMIND_EVERY
+            || !self.config.remind
             || self.updating_todos
             || self.reminded_at == self.turns
-            || !planning::open(&self.todos)
         {
+            return output;
+        }
+        if !planning::open(&self.todos) {
+            return self.asked_for_list(output, sink);
+        }
+        if self.since_todo < REMIND_EVERY {
             return output;
         }
         self.since_todo = 0;
@@ -2185,6 +2199,31 @@ impl<M: ChatModel> Loop<'_, M> {
             kind: NudgeKind::Reminder,
         });
         format!("{output}\n\n{note}")
+    }
+
+    /// `output` with Glut's request for a task list after it (T80): once a run, when [`ASK_FOR_LIST_AFTER`] calls
+    /// passed and the run wrote none — not in a subagent, whose narrow task nobody watches, nor in Plan mode, whose
+    /// plan goes to the owner by `exit_plan`. A list left from a turn before with nothing open counts as none.
+    fn asked_for_list(&mut self, output: String, sink: &mut dyn EventSink) -> String {
+        let planning_mode = self
+            .tools
+            .gate()
+            .is_some_and(|gate| gate.mode() == Mode::Plan);
+        // Plan mode's reading is no work without a list: the count starts when the plan is approved.
+        if planning_mode {
+            self.since_todo = 0;
+            return output;
+        }
+        if self.list_settled || self.depth > 0 || self.since_todo < ASK_FOR_LIST_AFTER {
+            return output;
+        }
+        self.list_settled = true;
+        self.reminded_at = self.turns;
+        sink.emit(Event::Nudged {
+            turn: self.turns,
+            kind: NudgeKind::NoList,
+        });
+        format!("{output}\n\n{}", planning::no_list(self.since_todo))
     }
 
     /// Glut's one question when the model ends its run (T73): its list has items open, or its last words announce
@@ -5040,7 +5079,11 @@ mod tests {
         let model = Script::new(replies);
         let mut events = Vec::new();
         run(
-            &RunConfig::new("/w"),
+            // Only the nudge under test: no request for a task list beside it (T80).
+            &RunConfig {
+                remind: false,
+                ..RunConfig::new("/w")
+            },
             &model,
             &toolbox(),
             "go",
@@ -5099,6 +5142,170 @@ mod tests {
         assert_eq!(outcome.reason, FinishReason::Failed, "once, not again");
     }
 
+    /// `count` steps of one echo each and an answer: a run's calls without a task list.
+    fn echoes(count: usize) -> Vec<Result<Reply, HarnessError>> {
+        let mut replies: Vec<Result<Reply, HarnessError>> = (0..count)
+            .map(|at| {
+                let id = format!("e{at}");
+                let arguments = format!(r#"{{"text":"{at}"}}"#);
+                Ok(calls(&[(id.as_str(), "echo", arguments.as_str())]))
+            })
+            .collect();
+        replies.push(Ok(text("done")));
+        replies
+    }
+
+    /// T80: a run that works on without any task list is asked for one once, at its fifth call — a short one and one
+    /// with `/nudge off` are not.
+    #[tokio::test]
+    async fn a_run_without_a_task_list_is_asked_for_one_once() {
+        let model = Script::new(echoes(12));
+        let mut events = Vec::new();
+        run(
+            &RunConfig::new("/w"),
+            &model,
+            &toolbox(),
+            "go",
+            &mut events,
+            &Cancel::new(),
+        )
+        .await;
+        assert_eq!(nudges(&events), [NudgeKind::NoList]);
+        let answers = tool_answers(&model);
+        let asked: Vec<usize> = answers
+            .iter()
+            .enumerate()
+            .filter(|(_, answer)| {
+                answer.contains("[glut] You made 5 tool calls without a task list")
+            })
+            .map(|(at, _)| at)
+            .collect();
+        assert_eq!(asked, [4], "at the fifth call, and once");
+
+        // Four calls are a short piece of work: left alone.
+        let model = Script::new(echoes(4));
+        let mut events = Vec::new();
+        run(
+            &RunConfig::new("/w"),
+            &model,
+            &toolbox(),
+            "go",
+            &mut events,
+            &Cancel::new(),
+        )
+        .await;
+        assert!(nudges(&events).is_empty());
+
+        // The owner's `/nudge off` switches it off.
+        let model = Script::new(echoes(12));
+        let mut events = Vec::new();
+        let config = RunConfig {
+            remind: false,
+            ..RunConfig::new("/w")
+        };
+        run(
+            &config,
+            &model,
+            &toolbox(),
+            "go",
+            &mut events,
+            &Cancel::new(),
+        )
+        .await;
+        assert!(nudges(&events).is_empty());
+    }
+
+    /// T80: a list left from a turn before with nothing open is no list for this run's work; a step that writes
+    /// the list among its calls is not asked; Plan mode and a subagent are never asked.
+    #[tokio::test]
+    async fn a_list_all_done_before_counts_as_none_and_plan_mode_is_not_asked() {
+        let config = RunConfig {
+            todo_list: vec![crate::planning::TodoItem {
+                text: "old".into(),
+                status: crate::planning::TodoStatus::Done,
+            }],
+            ..RunConfig::new("/w")
+        };
+        let model = Script::new(echoes(6));
+        let mut events = Vec::new();
+        run(
+            &config,
+            &model,
+            &toolbox(),
+            "go",
+            &mut events,
+            &Cancel::new(),
+        )
+        .await;
+        assert_eq!(nudges(&events), [NudgeKind::NoList]);
+
+        let list = r#"{"items":[{"text":"a","status":"in_progress"}]}"#;
+        let step = [
+            ("a", "echo", r#"{"text":"1"}"#),
+            ("b", "echo", r#"{"text":"2"}"#),
+            ("c", "echo", r#"{"text":"3"}"#),
+            ("d", "echo", r#"{"text":"4"}"#),
+            ("e", "echo", r#"{"text":"5"}"#),
+            ("t", crate::planning::TODO, list),
+        ];
+        let model = Script::new(vec![Ok(calls(&step)), Ok(text("done"))]);
+        let mut events = Vec::new();
+        run(
+            &RunConfig::new("/w"),
+            &model,
+            &toolbox(),
+            "go",
+            &mut events,
+            &Cancel::new(),
+        )
+        .await;
+        assert!(
+            !nudges(&events).contains(&NudgeKind::NoList),
+            "the step writes its list itself"
+        );
+
+        use crate::permissions::{Gate, Mode, RuleSet};
+        let mut tools = toolbox();
+        tools.set_gate(Arc::new(Gate::new(
+            RuleSet::default(),
+            Mode::Plan,
+            Arc::new(Yes),
+        )));
+        let model = Script::new(echoes(8));
+        let mut events = Vec::new();
+        let config = RunConfig {
+            nudge: false,
+            ..RunConfig::new("/w")
+        };
+        run(&config, &model, &tools, "go", &mut events, &Cancel::new()).await;
+        assert!(
+            !nudges(&events).contains(&NudgeKind::NoList),
+            "Plan mode's plan goes by exit_plan"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_run_that_wrote_its_list_is_not_asked_for_one() {
+        let list = r#"{"items":[{"text":"a","status":"done"}]}"#;
+        let mut replies = vec![Ok(calls(&[("t", crate::planning::TODO, list)]))];
+        replies.extend(echoes(12));
+        let model = Script::new(replies);
+        let mut events = Vec::new();
+        run(
+            &RunConfig::new("/w"),
+            &model,
+            &toolbox(),
+            "go",
+            &mut events,
+            &Cancel::new(),
+        )
+        .await;
+        assert!(
+            nudges(&events).is_empty(),
+            "a list all done is still a list written in this run"
+        );
+    }
+
     #[tokio::test]
     async fn a_step_sent_again_exactly_is_not_run_again() {
         let batch = [
@@ -5117,7 +5324,11 @@ mod tests {
         ]);
         let mut events = Vec::new();
         let outcome = run(
-            &RunConfig::new("/w"),
+            // Only the nudge under test: no request for a task list beside it (T80).
+            &RunConfig {
+                remind: false,
+                ..RunConfig::new("/w")
+            },
             &model,
             &toolbox(),
             "go",

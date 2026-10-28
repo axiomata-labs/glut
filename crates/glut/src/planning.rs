@@ -195,6 +195,14 @@ pub(crate) fn reminder(items: &[TodoItem], calls: u32) -> String {
     )
 }
 
+/// Glut's request for a task list when the model works without one (T80).
+pub(crate) fn no_list(calls: u32) -> String {
+    format!(
+        "[glut] You made {calls} tool calls without a task list. If this work takes three steps or more, write the \
+         list now with todo_write and keep it current; the owner follows it. If you are nearly done, finish."
+    )
+}
+
 /// Glut's one question when a run ends with items open (T73).
 pub(crate) fn open_items_nudge(items: &[TodoItem]) -> String {
     format!(

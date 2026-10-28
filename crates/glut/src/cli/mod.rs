@@ -789,6 +789,7 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
     config.sandbox = Some(built.sandbox.clone());
     config.refusals = built.refusals;
     config.nudge = built.nudge;
+    config.remind = built.nudge;
     // The owner's `maxTurns` (T73b) where `--max-turns` named none.
     if max_turns.is_none()
         && let Some(turns) = built.max_turns

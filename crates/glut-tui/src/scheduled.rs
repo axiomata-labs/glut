@@ -923,6 +923,8 @@ async fn attempt(home: &Path, plan: &Plan, cancel: glut::Cancel) -> Attempt {
             conversation: Vec::new(),
             todos: Vec::new(),
             nudge: false,
+            // Nobody watches a plan's run: the list keeps it on course all the more (T80).
+            remind: true,
             steps: parts.config.max_turns,
             rules: Vec::new(),
         },

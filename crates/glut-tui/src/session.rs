@@ -366,6 +366,7 @@ pub async fn build(
     }
     config.compaction.auto = built.compact_auto;
     config.nudge = built.nudge;
+    config.remind = built.nudge;
     if let Some(turns) = built.max_turns {
         config.max_turns = turns;
     }
@@ -769,6 +770,8 @@ pub struct Before {
     pub todos: Vec<glut::planning::TodoItem>,
     /// Whether the turn may ask its model once to go on (T73: `/nudge`, else the settings).
     pub nudge: bool,
+    /// Whether the turn reminds its model of its task list (T80): `/nudge` too, but on where nobody watches.
+    pub remind: bool,
     /// The most steps the turn takes (T73b: `/maxsteps`, else `maxTurns`, else 100).
     pub steps: u32,
     /// The owner's rules for the session (T73b, `/rule`).
@@ -791,6 +794,7 @@ pub fn turn(
         conversation,
         todos,
         nudge,
+        remind,
         steps,
         rules,
     } = before;
@@ -811,6 +815,7 @@ pub fn turn(
         config.loop_tool = parts.loop_link.on();
         // A loop's round ends as its loop says, never asked to go on (T73).
         config.nudge = nudge && parts.loop_link.left().is_none();
+        config.remind = remind;
         config.todo_list = todos;
         config.max_turns = steps;
         // A loop's round stops at what its loop may still spend, not only once it is over.

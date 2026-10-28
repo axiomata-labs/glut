@@ -1636,6 +1636,7 @@ pub const TEXTS: Texts = Texts {
     agent_starting: "iniciando…",
     compacted_tokens: "conversa compactada: {before}k → {after}k tokens",
     nudged_reminder: "O Glut lembrou o modelo da sua lista de tarefas",
+    nudged_no_list: "O Glut pediu ao modelo que escrevesse uma lista de tarefas",
     nudged_open: "O Glut pediu ao modelo que continuasse: a lista ainda tem itens abertos",
     nudged_announced: "O Glut pediu ao modelo que desse o passo que anunciou",
     nudged_repeated: "O Glut não executou de novo as mesmas chamadas: o modelo reenviou seu último passo",

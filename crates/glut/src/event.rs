@@ -66,6 +66,8 @@ pub enum NudgeKind {
     Repeated,
     /// It only read for many steps in a row (T73b).
     Reading,
+    /// It worked for a while without writing a task list at all (T80).
+    NoList,
 }
 
 /// One step of a run.

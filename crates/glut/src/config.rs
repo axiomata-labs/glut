@@ -376,6 +376,9 @@ pub struct RunConfig {
     /// Whether the run asks its model once to go on when it ends with items open or with an announcement (T73).
     /// On by default; off for a loop's round and a plan's run, whose ends are their own.
     pub nudge: bool,
+    /// Whether the run reminds its model of its task list while it works (T73, T80): a list left unchanged, or none
+    /// written at all. The owner's `nudge` switch, but on in a loop's round and a plan's run, which work unwatched.
+    pub remind: bool,
     /// The mode a run in Plan mode switches to once the owner approves its plan (`exit_plan`, Glut 2, D).
     pub build_mode: crate::permissions::Mode,
     /// Where the work folder's snapshots go before a run changes it (Glut 2, D, G11; `~/.glut/snapshots`), for `glut
@@ -480,6 +483,7 @@ impl RunConfig {
             todos: true,
             todo_list: Vec::new(),
             nudge: true,
+            remind: true,
             build_mode: crate::permissions::Mode::Default,
             snapshots: None,
             journal: None,

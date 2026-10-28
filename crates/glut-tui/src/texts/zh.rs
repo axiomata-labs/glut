@@ -1451,6 +1451,7 @@ pub const TEXTS: Texts = Texts {
     agent_starting: "启动中…",
     compacted_tokens: "已压缩对话：{before}k → {after}k Token",
     nudged_reminder: "Glut 提醒了模型它的任务清单",
+    nudged_no_list: "Glut 请模型写一份任务清单",
     nudged_open: "Glut 让模型继续：它的清单仍有未完成项",
     nudged_announced: "Glut 让模型执行它宣布的那一步",
     nudged_repeated: "Glut 没有再次执行相同的调用：模型又发送了它的上一步",
