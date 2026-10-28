@@ -899,12 +899,23 @@ impl Panes {
                     cache,
                     working: app.working_since.map(|since| since.elapsed()),
                     looping: pane.looping.as_ref().map(|looping| {
-                        format!(
+                        let mut line = format!(
                             "↻ {} {}/{}",
                             crate::looping::shown(looping.asked.every),
                             looping.rounds,
                             looping.limits.rounds
-                        )
+                        );
+                        // On a subscription its tokens are what it spends: the card says how far it got.
+                        if let Some(max) = looping.limits.max_tokens {
+                            let used = format!(
+                                "{}/{}",
+                                crate::looping::tokens_shown(looping.used),
+                                crate::looping::tokens_shown(max)
+                            );
+                            line.push_str(" · ");
+                            line.push_str(&tr!(loop_tokens_used, n = used));
+                        }
+                        line
                     }),
                     looped: pane.app.loop_ended.clone(),
                 }
@@ -4281,6 +4292,16 @@ mod tests {
         assert_eq!(
             panes.list[0].app.background[0].looping.as_deref(),
             Some("↻ 1m 1/50")
+        );
+        // On a subscription the card says its tokens too.
+        let looping = panes.list[1].looping.as_mut().unwrap();
+        looping.limits.max_tokens = Some(200_000);
+        looping.used = 12_000;
+        panes.sync();
+        let card = panes.list[0].app.background[0].looping.clone().unwrap();
+        assert!(
+            card.starts_with("↻ 1m 1/50 · ") && card.contains("12k/200k"),
+            "{card}"
         );
         // Not before its time; at it, the second round — the conversation goes on.
         panes.step_loops(due - Duration::from_secs(1));

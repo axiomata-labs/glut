@@ -5580,24 +5580,7 @@ impl App {
                         }
                     }
                     Some(Pick::Skill(name)) => self.input.insert_text(&format!("/skill {name} ")),
-                    Some(Pick::Login(id)) => {
-                        let home = self.parts.home.clone();
-                        let signed = crate::login::standings(&home)
-                            .into_iter()
-                            .any(|standing| standing.id == id && standing.who.is_some());
-                        // A key's sign-in has no sign-out: ⏎ signs in again for a new key.
-                        if signed {
-                            // A sign-out revokes at the provider: asked once more, never on one stray ⏎.
-                            let items = vec![
-                                Item::plain(tr!(login_sign_out_yes), "", Pick::Logout(id.clone())),
-                                Item::plain(tr!(login_sign_out_no), "", Pick::Shown),
-                            ];
-                            self.picker =
-                                Some(Picker::new(tr!(login_sign_out_title, id = id), items, None));
-                        } else {
-                            crate::login::sign_in(&self.parts, id, self.reports.clone());
-                        }
-                    }
+                    Some(Pick::Login(id)) => self.login(id),
                     Some(Pick::Logout(id)) => {
                         crate::login::sign_out(&self.parts, id, self.reports.clone())
                     }
@@ -7516,6 +7499,25 @@ impl App {
     /// `/login [provider] [address]` (PV4): the subscriptions with how each stands, Enter signing in or out; with a
     /// provider, its sign-in at once; with an address after it, the one the browser ended on, pasted back to the
     /// sign-in that waits (over SSH).
+    /// A subscription chosen, from the list or as `/login <id>`: signed in, it asks whether to sign out — a second
+    /// sign-in would only wait for a browser and then report a failure the sign-in it has does not suffer; else it signs
+    /// in. A key's sign-in has no sign-out: it signs in again for a new key.
+    fn login(&mut self, id: String) {
+        let signed = crate::login::standings(&self.parts.home)
+            .into_iter()
+            .any(|standing| standing.id == id && standing.who.is_some());
+        if signed {
+            // A sign-out revokes at the provider: asked once more, never on one stray ⏎.
+            let items = vec![
+                Item::plain(tr!(login_sign_out_yes), "", Pick::Logout(id.clone())),
+                Item::plain(tr!(login_sign_out_no), "", Pick::Shown),
+            ];
+            self.picker = Some(Picker::new(tr!(login_sign_out_title, id = id), items, None));
+        } else {
+            crate::login::sign_in(&self.parts, id, self.reports.clone());
+        }
+    }
+
     fn login_command(&mut self, rest: &str) {
         let (id, more) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
         if !more.trim().is_empty() {
@@ -7529,7 +7531,7 @@ impl App {
             };
         }
         if !id.is_empty() {
-            return crate::login::sign_in(&self.parts, id.to_owned(), self.reports.clone());
+            return self.login(id.to_owned());
         }
         let items: Vec<Item> = crate::login::standings(&self.parts.home)
             .into_iter()

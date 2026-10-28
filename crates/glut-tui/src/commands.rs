@@ -180,7 +180,7 @@ pub const COMMANDS: [Command; 57] = [
     command(
         Topic::Model,
         "context",
-        "[tokens]",
+        "[size]",
         "how full the window is; /context 64k sets it",
     ),
     command(
@@ -277,7 +277,7 @@ pub const COMMANDS: [Command; 57] = [
     command(
         Topic::Panes,
         "loop",
-        "<interval> [fresh] [as <role>] [notify] <task>",
+        "<interval>|stop|rounds|budget|tokens [fresh] [as <role>] [notify] <task>",
         "run a task again and again in a background agent of its own, the interval counted from a round's end — /loop \
          10m run the tests; /loop alone lists them, /loop stop [name] ends one, /loop rounds|budget|tokens set where \
          one ends",
@@ -681,7 +681,7 @@ pub enum Source {
 
 /// The catalog's words for something to be given, never one to complete to: `[name]`, `[path]`, `[n]` …
 const PLACEHOLDERS: [&str; 13] = [
-    "name", "id", "path", "n", "level", "code", "text", "tokens", "command", "branch", "question",
+    "name", "id", "path", "n", "level", "code", "text", "size", "command", "branch", "question",
     "role", "provider",
 ];
 
@@ -776,6 +776,26 @@ fn free_lead(slot: &str) -> bool {
     first.starts_with('<') || first.split('|').any(|word| PLACEHOLDERS.contains(&word))
 }
 
+/// `/loop`'s words that are commands of their own, and what each takes: after one, the task's places no longer apply.
+const LOOP_WORDS: [(&str, &str); 4] = [
+    ("stop", "[name]"),
+    ("rounds", "[n]"),
+    ("budget", "[n]"),
+    ("tokens", "[n]"),
+];
+
+/// The arguments `command` takes after `typed`, and the words they meet: a `/loop` word of its own (`stop`, `tokens`
+/// …) has its own place instead of the task's.
+fn form<'a, 'b>(command: &Command, typed: &'a [&'b str]) -> (&'static str, &'a [&'b str]) {
+    if command.name == "loop"
+        && let Some((first, rest)) = typed.split_first()
+        && let Some((_, args)) = LOOP_WORDS.iter().find(|(word, _)| word == first)
+    {
+        return (args, rest);
+    }
+    (command.args, typed)
+}
+
 /// The places still open after the words typed, as far as the words tell: each word fills the first place from here on
 /// that names it, else the next one as its value; a place led by the word goes on with its rest (`as` → `<role>`).
 fn open_slots<'a>(args: &'a str, typed: &[&str]) -> Vec<&'a str> {
@@ -816,7 +836,8 @@ pub fn offer(text: &str, values: impl Fn(Source) -> Vec<String>, empty_too: bool
     if start.is_empty() && !empty_too {
         return None;
     }
-    let open = open_slots(command.args, &before);
+    let (args, given) = form(command, &before);
+    let open = open_slots(args, given);
     let mut words: Vec<String> = Vec::new();
     for slot in &open {
         words.extend(
@@ -866,7 +887,8 @@ pub fn ghost(text: &str, values: impl Fn(Source) -> Vec<String>) -> Option<Strin
     }
     if rest.is_empty() || rest.ends_with(' ') {
         let typed: Vec<&str> = rest.split_whitespace().collect();
-        let open = open_slots(command.args, &typed);
+        let (args, given) = form(command, &typed);
+        let open = open_slots(args, given);
         return (!open.is_empty()).then(|| open.join(" "));
     }
     let (start, word) = completion(text, values)?;
@@ -1091,6 +1113,27 @@ mod tests {
     }
 
     #[test]
+    fn loop_offers_its_own_words_and_after_one_shows_what_that_takes() {
+        assert_eq!(
+            ghost("/loop ", known).as_deref(),
+            Some("<interval>|stop|rounds|budget|tokens [fresh] [as <role>] [notify] <task>")
+        );
+        assert_eq!(ghost("/loop to", known).as_deref(), Some("kens"));
+        assert_eq!(ghost("/loop tokens ", known).as_deref(), Some("[n]"));
+        assert_eq!(ghost("/loop stop ", known).as_deref(), Some("[name]"));
+        assert_eq!(
+            ghost("/loop 10m ", known).as_deref(),
+            Some("[fresh] [as <role>] [notify] <task>")
+        );
+        let offered = offer("/loop ", known, true).unwrap().words;
+        assert_eq!(offered, ["stop", "rounds", "budget", "tokens"]);
+        assert_eq!(
+            offer("/loop stop ", known, true).unwrap().words,
+            ["critic", "coder"]
+        );
+    }
+
+    #[test]
     fn a_typed_command_shows_what_it_takes_and_tab_completes_a_fixed_word() {
         let whole = |start: &str, word: &str| Some((start.to_owned(), word.to_owned()));
         assert_eq!(ghost("/motion ", known).as_deref(), Some("full|calm|off"));
@@ -1132,6 +1175,7 @@ mod tests {
                 "as",
                 "asks",
                 "blocks",
+                "budget",
                 "calm",
                 "clean",
                 "clickable",
@@ -1161,10 +1205,13 @@ mod tests {
                 "read",
                 "remove",
                 "resume",
+                "rounds",
                 "run",
                 "session",
+                "stop",
                 "system",
                 "tiles",
+                "tokens",
                 "tree",
                 "write",
             ]
