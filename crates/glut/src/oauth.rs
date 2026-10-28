@@ -284,11 +284,20 @@ pub(crate) fn now() -> i64 {
 ///
 /// Why there are none.
 pub(crate) fn random_text() -> Result<String, String> {
-    let mut bytes = [0u8; RANDOM_BYTES];
+    Ok(base64url(&random_bytes::<RANDOM_BYTES>()?))
+}
+
+/// `N` bytes from the system's random source.
+///
+/// # Errors
+///
+/// Why there are none.
+pub(crate) fn random_bytes<const N: usize>() -> Result<[u8; N], String> {
+    let mut bytes = [0u8; N];
     std::fs::File::open("/dev/urandom")
         .and_then(|mut source| source.read_exact(&mut bytes))
         .map_err(|error| format!("no random bytes for the sign-in: {error}"))?;
-    Ok(base64url(&bytes))
+    Ok(bytes)
 }
 
 /// PKCE's S256 challenge of `verifier` (RFC 7636 §4.2).

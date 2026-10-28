@@ -103,7 +103,9 @@ impl From<TokenError> for Failure {
     }
 }
 
-/// This host's id towards OpenAI: the one kept in `~/.glut`, else a new random one kept from now on.
+/// This host's id towards OpenAI: the one kept in `~/.glut`, else a new one kept from now on. OpenAI takes only a
+/// URN (`urn:uuid:` with a UUIDv4, a JWK thumbprint, `did:key:`) and refuses the authorization otherwise
+/// (`invalid_authorize_request` on `ext_agent_host_id`): a kept id of another shape is made anew.
 ///
 /// # Errors
 ///
@@ -111,22 +113,42 @@ impl From<TokenError> for Failure {
 fn host_id(home: &std::path::Path) -> Result<String, String> {
     let dir = home.join(".glut");
     let path = dir.join(HOST_ID_FILE);
-    if let Ok(kept) = std::fs::read_to_string(&path) {
-        let kept = kept.trim();
-        if !kept.is_empty()
-            && kept.len() <= 128
-            && kept
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || "-_".contains(c))
-        {
-            return Ok(kept.to_owned());
-        }
+    if let Ok(kept) = std::fs::read_to_string(&path)
+        && is_host_id(kept.trim())
+    {
+        return Ok(kept.trim().to_owned());
     }
-    let made = oauth::random_text()?;
+    let made = uuid_urn(oauth::random_bytes::<16>()?);
     crate::providers::make_private_dir(&dir)
         .and_then(|()| crate::providers::write_replacing(&dir, &path, made.as_bytes(), 0o600))
         .map_err(|err| format!("{}: {err}", path.display()))?;
     Ok(made)
+}
+
+/// `urn:uuid:` and the hyphenated form of a version-4 UUID made of `bytes` (RFC 9562 §5.4).
+fn uuid_urn(mut bytes: [u8; 16]) -> String {
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+    format!(
+        "urn:uuid:{}-{}-{}-{}-{}",
+        &hex[..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..]
+    )
+}
+
+/// Whether `id` is a host id of the shape Glut makes: `urn:uuid:` and a hyphenated UUID.
+fn is_host_id(id: &str) -> bool {
+    id.strip_prefix("urn:uuid:").is_some_and(|uuid| {
+        uuid.len() == 36
+            && uuid.char_indices().all(|(at, c)| match at {
+                8 | 13 | 18 | 23 => c == '-',
+                _ => c.is_ascii_hexdigit(),
+            })
+    })
 }
 
 /// A sign-in begun: the listener waits on 127.0.0.1 for the browser to come back with the code.
@@ -157,7 +179,7 @@ pub async fn begin(
 ) -> Result<SignIn, String> {
     let callback = Callback::bind(0, CALLBACK).await?;
     let host_id = match kept.as_ref().map(|record| record.host_id.clone()) {
-        Some(id) if !id.is_empty() => id,
+        Some(id) if is_host_id(&id) => id,
         _ => host_id(home)?,
     };
     let client = kept
@@ -863,6 +885,33 @@ mod tests {
                 .await
                 .is_err()
         );
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn the_host_id_is_a_uuid_urn_and_an_old_one_of_another_shape_is_made_anew() {
+        let id = uuid_urn([0xff; 16]);
+        assert_eq!(id, "urn:uuid:ffffffff-ffff-4fff-bfff-ffffffffffff");
+        assert!(is_host_id(&id));
+        for refused in [
+            "WuaZ4ioagEZvu6iq1V7D0dKNKYw4QYaNuOQCvFq4Tpk",
+            "urn:uuid:",
+            "h1",
+            "",
+        ] {
+            assert!(!is_host_id(refused), "{refused}");
+        }
+        let home = std::env::temp_dir().join(format!("glut-host-id-{}", std::process::id()));
+        std::fs::create_dir_all(home.join(".glut")).unwrap();
+        std::fs::write(
+            home.join(".glut").join(HOST_ID_FILE),
+            "WuaZ4ioagEZvu6iq1V7D0dKNKYw4QYaNuOQCvFq4Tpk",
+        )
+        .unwrap();
+        let made = host_id(&home).unwrap();
+        assert!(is_host_id(&made), "{made}");
+        assert_eq!(host_id_of(&home), made, "kept in place of the old one");
+        assert_eq!(host_id(&home).unwrap(), made, "and reused");
         let _ = std::fs::remove_dir_all(home);
     }
 
