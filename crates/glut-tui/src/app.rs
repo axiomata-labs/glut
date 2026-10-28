@@ -693,6 +693,12 @@ impl App {
         self.open(session);
     }
 
+    /// Empties the task list, and tells the host: a list it shows elsewhere must not outlive the conversation.
+    fn clear_todos(&mut self) {
+        self.todos.clear();
+        self.parts.host.todos(&[]);
+    }
+
     /// Keeps the session as it stands now; a failure is said, the session goes on.
     fn keep(&mut self) {
         self.session.conversation.clone_from(&self.conversation);
@@ -739,7 +745,7 @@ impl App {
         };
         self.transcript.note(said, Tone::Fine);
         self.conversation.clone_from(&session.conversation);
-        self.todos.clear();
+        self.clear_todos();
         self.forget_views();
         self.cost = session.cost;
         self.usage = Usage::default();
@@ -1619,6 +1625,7 @@ impl App {
                 }
                 if let Event::Todo { items, .. } = &event {
                     self.todos.clone_from(items);
+                    self.parts.host.todos(items);
                     // The first plan opens the panel, unless the owner closed it once.
                     if self.panel.is_none() {
                         self.panel = Some(true);
@@ -3237,7 +3244,7 @@ impl App {
                 self.queue.clear();
                 self.forget_models();
                 self.conversation.clear();
-                self.todos.clear();
+                self.clear_todos();
                 self.forget_views();
                 self.last_turn = None;
                 // A new session counts from nothing.
@@ -4612,7 +4619,7 @@ impl App {
         self.search = None;
         self.queue.clear();
         self.forget_models();
-        self.todos.clear();
+        self.clear_todos();
         self.forget_views();
         self.last_turn = None;
         self.context_used = 0;
@@ -11337,6 +11344,7 @@ pub(crate) mod tests {
     #[derive(Default)]
     struct Keeping {
         kept: std::sync::Mutex<Vec<usize>>,
+        todos: std::sync::Mutex<Vec<usize>>,
     }
 
     impl crate::host::Host for Keeping {
@@ -11350,6 +11358,10 @@ pub(crate) mod tests {
 
         fn kept(&self, conversation: &[Message]) {
             self.kept.lock().unwrap().push(conversation.len());
+        }
+
+        fn todos(&self, items: &[glut::planning::TodoItem]) {
+            self.todos.lock().unwrap().push(items.len());
         }
     }
 
@@ -11381,6 +11393,26 @@ pub(crate) mod tests {
         assert!(
             !app.parts.home.join(".glut").join("sessions").exists(),
             "a hosted session is not kept under ~/.glut"
+        );
+    }
+
+    #[test]
+    fn the_host_hears_of_the_task_list_and_of_its_end_by_clear() {
+        let (mut app, _reports, host) = hosted();
+        let todo = |text: &str| glut::planning::TodoItem {
+            text: text.into(),
+            status: glut::planning::TodoStatus::Pending,
+        };
+        app.on_report(Report::Event(Event::Todo {
+            turn: 1,
+            items: vec![todo("read"), todo("fix")],
+        }));
+        typed(&mut app, "/clear");
+        assert!(app.todos.is_empty());
+        assert_eq!(
+            *host.todos.lock().unwrap(),
+            [2, 0],
+            "the list, then its end"
         );
     }
 

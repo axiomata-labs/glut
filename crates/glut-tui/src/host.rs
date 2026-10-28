@@ -236,6 +236,12 @@ pub trait Host: Send + Sync + 'static {
         let _ = event;
     }
 
+    /// The task list the screen shows changed: a `todo` of the run, or emptied by `/clear`, another session or a
+    /// rewind — which say nothing as an [`Event`].
+    fn todos(&self, items: &[glut::planning::TodoItem]) {
+        let _ = items;
+    }
+
     /// The session's state changed.
     fn state(&self, state: State) {
         let _ = state;
