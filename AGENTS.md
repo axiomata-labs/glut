@@ -41,6 +41,7 @@ cargo test                       # live tests are #[ignore]d (tests/live.rs: GLU
 cargo run --bin glut -- run --base-url https://openrouter.ai/api --model <id> "prompt"   # key in GLUT_API_KEY
 cargo run --bin glut -- providers add openrouter --model <id>   # once: a provider, its key in the Keychain
 cargo run --release --bin glut   # the TUI in the current folder, on the default provider
+scripts/install.sh               # glut for every terminal: ~/.cargo/bin, linked once into /usr/local/bin (asks, sudo)
 ```
 
 ## Traps worth knowing before you touch things
