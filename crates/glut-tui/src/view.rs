@@ -1113,10 +1113,24 @@ fn draw_input(
 ) {
     let [rule, text] = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(area);
     app.input_spot = None;
+    // A line that runs as the owner's command says so before Enter: `!` for Glut to see, `‼` for the owner alone —
+    // its rule, its mark and its whole line in the theme's warning colour, so a shell command about to run is told
+    // apart from a message while it is still being typed (`! glut` is not one and stays plain). A secret, a sign-in
+    // or the search in the input's place hides the line, and the warning with it.
+    let command = if app.secret.is_none() && app.opening.is_none() && app.search.is_none() {
+        crate::app::owners_command(&app.input.text())
+    } else {
+        None
+    };
+    let in_command = command.is_some();
     frame.render_widget(
         Paragraph::new(Span::styled(
             "─".repeat(usize::from(area.width)),
-            theme::quiet(),
+            if in_command {
+                theme::shell()
+            } else {
+                theme::quiet()
+            },
         )),
         rule,
     );
@@ -1179,11 +1193,6 @@ fn draw_input(
     }
     let visible = usize::from(text.height);
     let first = cursor.0.saturating_sub(visible.saturating_sub(1));
-    // A line that runs as the owner's command says so before Enter: `!` for Glut to see, `‼` for the owner alone —
-    // and its mark and its whole line in a colour of their own from the theme, so a shell command about to run is
-    // told apart from a message while it is still being typed (`! glut` is not one and stays plain).
-    let command = crate::app::owners_command(&app.input.text());
-    let in_command = command.is_some();
     let first_mark = match command {
         Some((true, _)) => Span::styled("‼ ", theme::shell().add_modifier(Modifier::BOLD)),
         Some((false, _)) => Span::styled("! ", theme::shell().add_modifier(Modifier::BOLD)),
@@ -2318,16 +2327,25 @@ mod tests {
     }
 
     /// The input's mark and its text, their colours as [`draw`] paints them: the mark first, then the line's own.
+    /// The colours of the input's mark, its text and the rule above it.
     fn input_colors(
         app: &mut crate::app::App,
-    ) -> (Option<ratatui::style::Color>, Option<ratatui::style::Color>) {
+    ) -> (
+        Option<ratatui::style::Color>,
+        Option<ratatui::style::Color>,
+        Option<ratatui::style::Color>,
+    ) {
         let mut terminal =
             ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
         terminal.draw(|frame| super::draw(frame, app)).unwrap();
         let buffer = terminal.backend().buffer();
         let (spot, ..) = app.input_spot.expect("the input was drawn");
-        let color = |x: u16| buffer[(x, spot.y)].style().fg;
-        (color(spot.x), color(spot.x + 2))
+        let color = |x: u16, y: u16| buffer[(x, y)].style().fg;
+        (
+            color(spot.x, spot.y),
+            color(spot.x + 2, spot.y),
+            color(spot.x, spot.y - 1),
+        )
     }
 
     /// A key the terminal sent, as the app takes it.
@@ -2385,21 +2403,23 @@ mod tests {
     }
 
     #[test]
-    fn an_owners_command_is_coloured_in_its_mark_and_line_and_a_bang_before_a_space_is_not() {
+    fn an_owners_command_is_coloured_in_its_rule_mark_and_line_and_a_bang_before_a_space_is_not() {
         let palette = crate::theme::c();
         // A command for Glut to see and one for the owner alone: both stand out in the theme's warning colour.
         for text in ["!ls -la", "!!git status"] {
             let mut app = app();
             typed(&mut app, text);
-            let (mark, line) = input_colors(&mut app);
+            let (mark, line, rule) = input_colors(&mut app);
             assert_eq!(mark, Some(palette.fault), "{text}: the mark");
             assert_eq!(line, Some(palette.fault), "{text}: the line");
+            assert_eq!(rule, Some(palette.fault), "{text}: the rule above it");
         }
         // `! glut` with a space after the bang is no command: its mark is the one a message gets and its line keeps
         // the ordinary colour.
         let mut app = app();
         typed(&mut app, "! glut");
-        let (mark, line) = input_colors(&mut app);
+        let (mark, line, rule) = input_colors(&mut app);
+        assert_ne!(rule, Some(palette.fault), "the rule stays quiet");
         assert_eq!(
             mark,
             Some(palette.glow),
