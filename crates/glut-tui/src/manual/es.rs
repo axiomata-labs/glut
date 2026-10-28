@@ -599,16 +599,19 @@ pub const PAGES: [(&str, &str); 57] = [
     ),
     (
         "nudge",
-        "Si Glut pide una vez al modelo que siga en lugar de terminar.\n\
+        "Si Glut pide al modelo que siga al final de un turno, que se ciña a su lista de tareas y que escriba una \
+         cuando trabaja sin ninguna.\n\
          \n\
-         /nudge on — cuando un turno termina con puntos de la lista de tareas abiertos, o con palabras que anuncian \
-         un paso («a continuación…», dos puntos al final), Glut envía al modelo una línea propia: seguir o decir por \
-         qué para; el historial lo muestra discretamente\n\
-         /nudge off — un turno termina donde el modelo lo termina\n\
+         /nudge on — cuando un turno termina con puntos de la lista de tareas abiertos, o con palabras que anuncian un \
+         paso («a continuación…», dos puntos al final), Glut envía al modelo una línea propia: seguir o decir por qué \
+         para; el historial lo muestra discretamente. Si la lista no cambia mientras trabaja, Glut le recuerda; si en \
+         una ejecución no ha escrito ninguna, le pide una, una vez por turno\n\
+         /nudge off — un turno termina donde el modelo lo termina: sin recordatorio de la lista ni petición de una\n\
          \n\
-         Una vez por turno, nunca en modo plan, tras una pregunta a ti, en una ronda de un bucle o en la ejecución de \
-         un plan. /nudge solo muestra la elección actual. Guardado en `~/.glut/prefs.json`; `\"nudge\": false` en \
-         `~/.glut/settings.json` lo apaga para cada ejecución.",
+         La pregunta del final viene una vez por turno, nunca en modo plan, tras una pregunta a ti, en una ronda de un \
+         bucle o en la ejecución de un plan; el recordatorio y la petición siguen la misma elección. /nudge solo \
+         muestra la elección actual. Guardado en `~/.glut/prefs.json`; `\"nudge\": false` en `~/.glut/settings.json` \
+         lo apaga para cada ejecución.",
     ),
     (
         "reader",

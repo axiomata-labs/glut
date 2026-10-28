@@ -166,7 +166,7 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "nudge",
-            "当模型在任务清单未完成或宣布下一步时结束，Glut 是否让它继续一次",
+            "Glut 是否让模型在回合结束时继续、在工作时提醒它的任务清单、没有清单时请它写一份",
         ),
         (
             "reader",
@@ -524,8 +524,8 @@ pub const TEXTS: Texts = Texts {
     steps_set: "从现在起一个回合最多 {n} 步",
     steps_bad: "/maxsteps 需要 1 到 {most} 之间的数字",
     nudge_now: "让模型继续：{nudge} — /nudge on 或 off",
-    nudge_on: "当模型在清单未完成或宣布下一步时结束，Glut 会让它继续一次",
-    nudge_off: "回合在模型结束的地方结束",
+    nudge_on: "Glut 在回合结束时让模型继续，工作时提醒它的任务清单，它没有清单时还请它写一份",
+    nudge_off: "回合在模型结束的地方结束 — 不提醒任务清单，也不请求写一份",
     thinking_unknown: "/thinking {word}：off、folded 或 open",
     no_command: "没有命令 /{name} — /help 列出全部",
     model_locked: "本会话的模型由启动它的程序设定 — 此处不能切换",

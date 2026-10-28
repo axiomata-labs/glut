@@ -387,7 +387,8 @@ pub const COMMANDS: [Command; 57] = [
         Topic::Settings,
         "nudge",
         "on|off",
-        "whether Glut asks the model once to go on when it ends with its task list open or announcing a next step",
+        "whether Glut asks the model to go on at a turn's end, to keep to its task list, and to write one when it \
+         works without one",
     ),
     command(
         Topic::Settings,

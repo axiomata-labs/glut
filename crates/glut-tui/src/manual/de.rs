@@ -610,16 +610,19 @@ pub const PAGES: [(&str, &str); 57] = [
     ),
     (
         "nudge",
-        "Ob Glut das Modell einmal weitermachen lässt, statt dass es aufhört.\n\
+        "Ob Glut das Modell weitermachen lässt, an seine Aufgabenliste erinnert und bittet, eine zu schreiben, wenn es \
+         keine hat.\n\
          \n\
          /nudge on — endet ein Turn mit offenen Punkten der Aufgabenliste oder mit Worten, die einen nächsten Schritt \
          ankündigen („als Nächstes…“, ein Doppelpunkt am Ende), schickt Glut dem Modell eine eigene Zeile: \
-         weitermachen oder sagen, warum es aufhört; der Verlauf zeigt das leise\n\
-         /nudge off — ein Turn endet, wo das Modell ihn beendet\n\
+         weitermachen oder sagen, warum es aufhört; der Verlauf zeigt das leise. Bleibt die Liste unverändert, \
+         erinnert Glut daran; hat das Modell in einem Lauf keine geschrieben, bittet Glut um eine, einmal pro Turn\n\
+         /nudge off — ein Turn endet, wo das Modell ihn beendet: keine Erinnerung an die Liste, keine Bitte darum\n\
          \n\
-         Einmal pro Turn, nie im Plan-Modus, nach einer Frage an dich, in einer Runde einer Schleife oder im Lauf \
-         eines Zeitplans. /nudge allein zeigt die jetzige Wahl. Gehalten in `~/.glut/prefs.json`; `\"nudge\": false` \
-         in `~/.glut/settings.json` schaltet es für jeden Lauf ab.",
+         Das Nachfragen am Ende kommt einmal pro Turn, nie im Plan-Modus, nach einer Frage an dich, in einer Runde \
+         einer Schleife oder im Lauf eines Zeitplans; Erinnerung und Bitte folgen derselben Wahl. /nudge allein zeigt \
+         die jetzige Wahl. Gehalten in `~/.glut/prefs.json`; `\"nudge\": false` in `~/.glut/settings.json` schaltet es \
+         für jeden Lauf ab.",
     ),
     (
         "reader",

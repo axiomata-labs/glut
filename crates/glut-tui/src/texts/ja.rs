@@ -205,7 +205,7 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "nudge",
-            "タスクリストが未完了のまま、または次の手順を予告して終わったとき、Glut がモデルに一度続行を求めるかどうか",
+            "ターンの終わりに Glut がモデルに続行を求め、作業中はタスクリストを思い出させ、それがなければ書くように頼むかどうか",
         ),
         (
             "reader",
@@ -595,8 +595,8 @@ pub const TEXTS: Texts = Texts {
     steps_set: "これから 1 ターンは最大 {n} ステップです",
     steps_bad: "/maxsteps には 1 から {most} までの数を指定します",
     nudge_now: "モデルに続行を求める: {nudge} — /nudge on または off",
-    nudge_on: "リストが未完了か手順を予告して終わったとき、Glut はモデルに一度続行を求めます",
-    nudge_off: "ターンはモデルが終えたところで終わります",
+    nudge_on: "Glut はターンの終わりにモデルに続行を求め、作業中はタスクリストを思い出させ、それがなければ書くように頼みます",
+    nudge_off: "ターンはモデルが終えたところで終わります — リストを思い出させることも、書くように頼むこともありません",
     thinking_unknown: "/thinking {word}: off、folded、open",
     no_command: "/{name} というコマンドはありません — /help で一覧",
     model_locked: "このセッションのモデルは起動したプログラムが設定しています — ここでは切り替えられません",

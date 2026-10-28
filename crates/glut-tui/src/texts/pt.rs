@@ -225,8 +225,8 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "nudge",
-            "se o Glut pede uma vez ao modelo que continue quando ele termina com a lista aberta ou anunciando um \
-             passo",
+            "se o Glut pede ao modelo que continue no fim de um turno, lembra-lhe a lista de tarefas e pede-lhe que \
+             escreva uma quando trabalha sem nenhuma",
         ),
         (
             "reader",
@@ -646,8 +646,9 @@ pub const TEXTS: Texts = Texts {
     steps_set: "um turno dá a partir de agora no máximo {n} passos",
     steps_bad: "/maxsteps recebe um número de 1 a {most}",
     nudge_now: "pedir ao modelo que continue: {nudge} — /nudge on ou off",
-    nudge_on: "O Glut pede uma vez ao modelo que continue quando ele termina com a lista aberta ou anunciando um passo",
-    nudge_off: "um turno termina onde o modelo o termina",
+    nudge_on: "O Glut pede ao modelo que continue no fim de um turno, lembra-lhe a lista de tarefas enquanto \
+               trabalha e pede-lhe que escreva uma quando não tem nenhuma",
+    nudge_off: "um turno termina onde o modelo o termina — sem lembrete da lista nem pedido de uma",
     thinking_unknown: "/thinking {word}: off, folded ou open",
     no_command: "não há comando /{name} — /help lista todos",
     model_locked: "o modelo desta sessão é definido pelo programa que a iniciou — sem troca aqui",

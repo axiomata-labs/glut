@@ -230,8 +230,8 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "nudge",
-            "ob Glut das Modell einmal weitermachen lässt, wenn es mit offener Aufgabenliste oder mit einer \
-             Ankündigung endet",
+            "ob Glut das Modell weitermachen lässt, wenn ein Turn endet, es an seine Aufgabenliste erinnert und \
+             bittet, eine zu schreiben, wenn es keine hat",
         ),
         (
             "reader",
@@ -647,8 +647,9 @@ pub const TEXTS: Texts = Texts {
     steps_set: "ein Turn macht ab jetzt höchstens {n} Schritte",
     steps_bad: "/maxsteps nimmt eine Zahl von 1 bis {most}",
     nudge_now: "Modell weitermachen lassen: {nudge} — /nudge on oder off",
-    nudge_on: "Glut lässt das Modell einmal weitermachen, wenn es mit offener Liste oder einer Ankündigung endet",
-    nudge_off: "ein Turn endet, wo das Modell ihn beendet",
+    nudge_on: "Glut lässt das Modell weitermachen, wenn ein Turn endet, erinnert es an seine Aufgabenliste und \
+               bittet es um eine, wenn es keine hat",
+    nudge_off: "ein Turn endet, wo das Modell ihn beendet — keine Erinnerung an die Liste, keine Bitte darum",
     thinking_unknown: "/thinking {word}: off, folded oder open",
     no_command: "kein Befehl /{name} — /help listet sie",
     model_locked: "das Modell dieser Session wird vom Programm gesetzt, das sie gestartet hat — hier kein Wechsel",

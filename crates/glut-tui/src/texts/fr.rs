@@ -230,8 +230,8 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "nudge",
-            "si Glut demande une fois au modèle de continuer quand il s'arrête avec sa liste ouverte ou en annonçant \
-             une étape",
+            "si Glut demande au modèle de continuer à la fin d'un tour, lui rappelle sa liste de tâches et lui \
+             demande d'en écrire une quand il travaille sans",
         ),
         (
             "reader",
@@ -663,9 +663,9 @@ pub const TEXTS: Texts = Texts {
     steps_set: "un tour fait désormais au plus {n} étapes",
     steps_bad: "/maxsteps prend un nombre de 1 à {most}",
     nudge_now: "demander au modèle de continuer : {nudge} — /nudge on ou off",
-    nudge_on: "Glut demande une fois au modèle de continuer quand il s'arrête avec sa liste ouverte ou en annonçant \
-              une étape",
-    nudge_off: "un tour s'arrête là où le modèle l'arrête",
+    nudge_on: "Glut demande au modèle de continuer à la fin d'un tour, lui rappelle sa liste de tâches pendant \
+               qu'il travaille et lui demande d'en écrire une quand il n'en a pas",
+    nudge_off: "un tour s'arrête là où le modèle l'arrête — ni rappel de la liste ni demande d'une",
     thinking_unknown: "/thinking {word} : off, folded ou open",
     no_command: "pas de commande /{name} — /help les liste",
     model_locked: "le modèle de cette session est fixé par le programme qui l’a lancée — pas de changement ici",

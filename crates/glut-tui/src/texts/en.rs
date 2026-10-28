@@ -313,8 +313,9 @@ pub const TEXTS: Texts = Texts {
     steps_set: "a turn takes at most {n} steps from now on",
     steps_bad: "/maxsteps takes a number from 1 to {most}",
     nudge_now: "asking the model to go on: {nudge} — /nudge on or off",
-    nudge_on: "Glut asks the model once to go on when it ends with its list open or announcing a step",
-    nudge_off: "a turn ends where the model ends it",
+    nudge_on: "Glut asks the model to go on at the end of a turn, reminds it of its task list while it works, and \
+               asks it to write one when it has none",
+    nudge_off: "a turn ends where the model ends it — no reminder of the task list and no request for one",
     thinking_unknown: "/thinking {word}: off, folded or open",
     no_command: "no command /{name} — /help lists them",
     model_locked: "this session's model is set by the program that started it — no switch here",
