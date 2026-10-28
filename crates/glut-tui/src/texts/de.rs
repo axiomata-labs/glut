@@ -215,6 +215,11 @@ pub const TEXTS: Texts = Texts {
              durch, /secrets add <name> <regex> verbirgt ein eigenes Format, /secrets remove <name>, /secrets on|off",
         ),
         (
+            "keychain",
+            "der Schlüsselbund für die Befehle, die Glut ausführt — zu außer für die gelisteten Programme, die jedes \
+             Mal fragen; /keychain add|remove <program>, /keychain open|close für diese Session",
+        ),
+        (
             "motion",
             "wie viel sich auf dem Bildschirm bewegt; calm und off halten Glimm still (macOS „Bewegung reduzieren“ \
              zählt als off)",
@@ -1102,6 +1107,36 @@ pub const TEXTS: Texts = Texts {
     ],
     setup_provider_prompt: "Provider:",
     cli: &[
+        (
+            "The Keychain for the commands Glut runs: shut but to the listed programs, which ask for it each time",
+            "Der Schlüsselbund für die Befehle, die Glut ausführt: zu außer für die gelisteten Programme, die jedes \
+             Mal nach ihm fragen",
+        ),
+        (
+            "Shows whether the Keychain is open to the commands Glut runs, and the programs that may ask for it",
+            "Zeigt, ob der Schlüsselbund für die Befehle, die Glut ausführt, offen ist, und die Programme, die nach \
+             ihm fragen dürfen",
+        ),
+        (
+            "Puts a program on the list: its commands may ask for the Keychain, each time",
+            "Setzt ein Programm auf die Liste: seine Befehle dürfen jedes Mal nach dem Schlüsselbund fragen",
+        ),
+        (
+            "A program's name (gh), or git and a sub-command (git push)",
+            "Der Name eines Programms (gh), oder git und ein Unterbefehl (git push)",
+        ),
+        (
+            "Takes a program off the list",
+            "Nimmt ein Programm von der Liste",
+        ),
+        (
+            "Opens the Keychain to every command Glut runs, without asking, kept across sessions",
+            "Öffnet den Schlüsselbund für jeden Befehl, den Glut ausführt, ohne Frage, über Sessions hinweg",
+        ),
+        (
+            "Shuts the Keychain again: only the listed programs may ask for it",
+            "Schließt den Schlüsselbund wieder: nur die gelisteten Programme dürfen nach ihm fragen",
+        ),
         (
             "Changes a provider's key alone — its model, keyEnv and root stay as they are. The key is read without \
              echo and checked with one small call before the old one is replaced",
@@ -1991,4 +2026,22 @@ pub const TEXTS: Texts = Texts {
                             geschrieben hast oder eine ältere Session kann noch einen enthalten",
     export_copied_masked: "Session als Markdown kopiert — die Keys, die Glut gesehen hat, sind verborgen; was du \
                            selbst geschrieben hast, kann noch einen enthalten",
+    keychain_shut: "Schlüsselbund für die Befehle, die Glut ausführt: zu — diese Programme fragen jedes Mal nach ihm: \
+                    {programs}",
+    keychain_open_session: "Schlüsselbund für die Befehle, die Glut ausführt: offen für jeden, bis diese Session \
+                            endet (/keychain close schließt ihn) — gelistet: {programs}",
+    keychain_open_kept: "Schlüsselbund für die Befehle, die Glut ausführt: offen für jeden, gehalten von glut \
+                         keychain open (/keychain close schließt ihn für diese Session) — gelistet: {programs}",
+    keychain_added: "{program} steht auf der Liste: seine Befehle fragen nach dem Schlüsselbund",
+    keychain_listed_already: "{program} steht schon auf der Liste",
+    keychain_removed: "{program} ist von der Liste genommen",
+    keychain_not_listed: "{program} steht nicht auf der Liste",
+    keychain_opened: "der Schlüsselbund ist offen für jeden Befehl, bis diese Session endet — /keychain close \
+                      schließt ihn",
+    keychain_closed: "der Schlüsselbund ist wieder zu; die gelisteten Programme fragen nach ihm",
+    keychain_kept_note: "der Schlüsselbund ist offen für jeden Befehl, den Glut ausführt (glut keychain open) — \
+                         /keychain close schließt ihn für diese Session, glut keychain close für immer",
+    keychain_usage: "/keychain, /keychain add <program>, /keychain remove <program>, /keychain open, /keychain close",
+    ask_keychain: "mit dem Schlüsselbund",
+    keychain_footer: "🔑 offen",
 };

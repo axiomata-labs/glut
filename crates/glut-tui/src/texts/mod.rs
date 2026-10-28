@@ -1986,6 +1986,32 @@ glut::catalog! {
         export_written_masked: &'static str,
         /// Copied as Markdown while keys are masked.
         export_copied_masked: &'static str,
+        /// `/keychain` with the Keychain shut (T74): `{programs}` the listed programs.
+        keychain_shut: &'static str,
+        /// `/keychain` opened for this session: `{programs}`.
+        keychain_open_session: &'static str,
+        /// `/keychain` kept open by `glut keychain open`: `{programs}`.
+        keychain_open_kept: &'static str,
+        /// A program put on the list: `{program}`.
+        keychain_added: &'static str,
+        /// `/keychain add` of a program on the list already: `{program}`.
+        keychain_listed_already: &'static str,
+        /// A program taken off the list: `{program}`.
+        keychain_removed: &'static str,
+        /// `/keychain remove` of a program not on the list: `{program}`.
+        keychain_not_listed: &'static str,
+        /// `/keychain open`: open to every command until the session ends.
+        keychain_opened: &'static str,
+        /// `/keychain close`.
+        keychain_closed: &'static str,
+        /// At the start, while `glut keychain open` keeps the Keychain open.
+        keychain_kept_note: &'static str,
+        /// `/keychain` with words it does not know.
+        keychain_usage: &'static str,
+        /// Beside an ask's tool when the command would run with the Keychain open.
+        ask_keychain: &'static str,
+        /// The footer while the Keychain is open to every command.
+        keychain_footer: &'static str,
     }
 }
 

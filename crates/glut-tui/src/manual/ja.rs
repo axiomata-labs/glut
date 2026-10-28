@@ -1,7 +1,7 @@
 //! The commands' manual pages in Japanese (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 57] = [
+pub const PAGES: [(&str, &str); 58] = [
     (
         "clear",
         "このフォルダーで、空の新しいセッションを始めます。\n\
@@ -496,6 +496,30 @@ pub const PAGES: [(&str, &str); 57] = [
          変更はあなたの次のメッセージでモデルに伝わります。自分の形式と選択は `~/.glut/secrets.json` に保存されます。\n\
          \n\
          マスクはうっかり見せたキーを防ぐものです; サンドボックスとネットワークの Gate が防壁であることは変わりません。",
+    ),
+    (
+        "keychain",
+        "Glut が実行するコマンドからキーチェーンを遠ざけます。\n\
+         \n\
+         /keychain — 開いているかどうかと、それを求めてよいプログラム\n\
+         /keychain add <program> — プログラムをリストに加えます (gh、または git とサブコマンド: git push)\n\
+         /keychain remove <program> — リストから外します\n\
+         /keychain open — このセッションが終わるまで、すべてのコマンドに開きます\n\
+         /keychain close — 再び閉じます\n\
+         \n\
+         キーチェーンの鍵やサインインはサンドボックスのどのファイル規則もすり抜けて届くため、Glut \
+         が実行するコマンドにはキーチェーンが閉じています。リストのプログラムのコマンドはまず尋ね — \
+         どのモードでも、`auto` でも — \
+         あなたが許可するとキーチェーンを開いて実行します。「常に」はあなたのルールになります。誰もいないとき \
+         (プラン、`glut run`) \
+         は、そのようなルールだけがそれを開きます。閉じたキーチェーンでコマンドが失敗すると、Glut \
+         はその出力の下でそう伝えます。\n\
+         \n\
+         コマンドを許可すると、それが起動するものすべてにもキーチェーンが渡ります: git Hook、gh \
+         の拡張、ビルドスクリプトがその中のどの鍵でも読めるようになります。\n\
+         \n\
+         リストは `~/.glut/keychain.json` に保たれます。`glut keychain open` \
+         はセッションをまたいでキーチェーンを開いたままにし、`glut keychain close` は永久に閉じます。",
     ),
     (
         "motion",

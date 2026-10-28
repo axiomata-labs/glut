@@ -75,6 +75,9 @@ pub struct ShellOptions {
     pub direct: Vec<DirectProgram>,
     /// The folders beside the working one (T60c): a sandboxed command writes there as in the working folder.
     pub beside: crate::folders::Folders,
+    /// The Keychain's list and switch (T74), shared with the gate: a sandboxed command gets the Keychain only when
+    /// it is open to all, or the command runs a listed program the gate let through.
+    pub keychain: crate::keychain::Keychain,
 }
 
 /// A program of the caller's own that a run starts directly — no shell, no sandbox, its words as its arguments — when
@@ -110,6 +113,7 @@ impl ShellOptions {
             sandbox: Some(Default::default()),
             direct: Vec::new(),
             beside: Default::default(),
+            keychain: Default::default(),
         }
     }
 }
@@ -206,9 +210,10 @@ fn hook_script(family: Family) -> String {
     )
 }
 
-/// Whether a command runs in the sandbox, and then with the gate its proxy asks about hosts.
+/// Whether a command runs in the sandbox, and then with the gate its proxy asks about hosts and whether it was given
+/// the Keychain (T74: a listed program the gate let through).
 enum Sandboxing {
-    On(Option<Arc<Gate>>),
+    On(Option<Arc<Gate>>, bool),
     /// The escape (`dangerously_disable_sandbox`), already asked for by the gate.
     Off,
 }
@@ -243,6 +248,8 @@ pub(crate) struct Session {
     direct: Vec<DirectProgram>,
     /// The folders beside the working one (T60c).
     beside: crate::folders::Folders,
+    /// The Keychain's list and switch (T74).
+    keychain: crate::keychain::Keychain,
 }
 
 /// What `reader` writes, kept up to [`MAX_FOREGROUND_BYTES`]; the rest is read and dropped, so the program never
@@ -350,6 +357,7 @@ impl Session {
             next_note: AtomicU64::new(1),
             direct: options.direct,
             beside: options.beside,
+            keychain: options.keychain,
         })
     }
 
@@ -417,12 +425,12 @@ impl Session {
         let mut proxy_env = Vec::new();
         // T36c: a pane's role without a `Network` rule keeps its commands offline, as a subagent's narrowing does.
         let role_online = match &sandbox {
-            Sandboxing::On(gate) => gate.as_ref().is_none_or(|gate| gate.role_reaches_network()),
+            Sandboxing::On(gate, _) => gate.as_ref().is_none_or(|gate| gate.role_reaches_network()),
             Sandboxing::Off => true,
         };
-        let sandbox = match sandbox {
-            Sandboxing::On(gate) => self.sandbox(gate).await,
-            Sandboxing::Off => None,
+        let (sandbox, given_keychain) = match sandbox {
+            Sandboxing::On(gate, keychain) => (self.sandbox(gate).await, keychain),
+            Sandboxing::Off => (None, false),
         };
         let mut process = match sandbox {
             // The profile goes in as an argument: nothing on disk for a command to change between two calls.
@@ -437,6 +445,12 @@ impl Session {
                 if !online {
                     policy.proxy_port = None;
                 }
+                policy.keychain = given_keychain || self.keychain.is_open();
+                // The scratch folder holds the profile snapshot every later command sources: a command that wrote
+                // there would run its code inside the next one — one given the Keychain too. Only its own note of
+                // where it ended stays writable.
+                policy.write_denied.push(self.scratch.clone());
+                policy.notes.extend(cwd_file.map(Path::to_path_buf));
                 let profile = policy.profile();
                 let mut process = Command::new(crate::sandbox::SANDBOX_EXEC);
                 process.arg("-p").arg(&profile).arg(&self.shell);
@@ -709,7 +723,9 @@ impl Session {
                 command,
                 &cwd,
                 None,
-                Sandboxing::On(gate),
+                // A hook gets the Keychain only through the owner's switch, never for a listed program: nobody
+                // was asked for it.
+                Sandboxing::On(gate, false),
                 &hook_script(self.family),
             )
             .await;
@@ -1201,7 +1217,8 @@ fn scratch_dir() -> std::io::Result<PathBuf> {
         COUNTER.fetch_add(1, Ordering::Relaxed)
     ));
     std::fs::DirBuilder::new().mode(0o700).create(&dir)?;
-    Ok(dir)
+    // Resolved, as Seatbelt sees it (`/private/var/…`): the sandbox keeps commands from writing it.
+    dir.canonicalize()
 }
 
 fn parse<T: for<'de> Deserialize<'de>>(arguments: Value) -> Result<T, String> {
@@ -1287,11 +1304,19 @@ impl Tool for Bash {
             if args.command.trim().is_empty() {
                 return Err("the command is empty".into());
             }
+            // T74: the gate asked for a listed program (or a rule of the owner's allowed it) before this call ran —
+            // by its own list, so what opens is what it judged. Without a gate nobody judged: it stays shut.
+            let keychain = context
+                .gate
+                .as_ref()
+                .and_then(|gate| gate.keychain_wants(&args.command));
+            let shut_keychain = keychain.is_none() && !self.0.keychain.is_open();
             let sandbox = if args.dangerously_disable_sandbox {
                 Sandboxing::Off
             } else {
-                Sandboxing::On(context.gate)
+                Sandboxing::On(context.gate, keychain.is_some())
             };
+            let sandboxed = matches!(sandbox, Sandboxing::On(..)) && self.0.policy.is_some();
             if args.run_in_background {
                 let id = self.0.start_job(&args.command, sandbox).await?;
                 return Ok(format!(
@@ -1302,20 +1327,34 @@ impl Tool for Bash {
                 .timeout_secs
                 .map_or(DEFAULT_TIMEOUT, Duration::from_secs)
                 .clamp(Duration::from_secs(1), MAX_TIMEOUT);
-            if let Sandboxing::On(gate) = &sandbox
+            if let Sandboxing::On(gate, _) = &sandbox
                 && let Some((program, words)) = self.0.direct_call(&args.command, gate.as_deref())
             {
                 return self.0.run_direct(program, &words, limit, &stop).await;
             }
             // Glut lean, N7: a chain runs with a mark before each part, so its output can be compacted part by part.
             // The gate judged the command as written; the marks change nothing it ran.
-            if let Some(chain) = super::output::chain(&args.command) {
+            let ran = if let Some(chain) = super::output::chain(&args.command) {
                 let mark = self.0.mark();
                 let marked = super::output::marked(&chain, &mark, self.0.family.builtin());
                 let ran = self.0.run(&marked, limit, &stop, sandbox).await;
-                return unmarked(ran, &mark, &chain.parts, &context.report);
+                unmarked(ran, &mark, &chain.parts, &context.report)
+            } else {
+                self.0.run(&args.command, limit, &stop, sandbox).await
+            };
+            // T74: a failure that reads like the shut Keychain gets Glut's note of how the owner opens it.
+            match ran {
+                Err(text) if sandboxed && shut_keychain => {
+                    match crate::keychain::blocked_program(&args.command, &text) {
+                        Some(program) => Err(format!(
+                            "{text}\n{}",
+                            crate::keychain::blocked_note(&program)
+                        )),
+                        None => Err(text),
+                    }
+                }
+                ran => ran,
             }
-            self.0.run(&args.command, limit, &stop, sandbox).await
         })
     }
 }
@@ -1443,6 +1482,7 @@ mod tests {
             sandbox: None,
             direct: Vec::new(),
             beside: Default::default(),
+            keychain: Default::default(),
         };
         let mut tools = Toolbox::new();
         tools.extend(shell_tools(&dir, options).unwrap());
@@ -1453,6 +1493,91 @@ mod tests {
         tools
             .call("bash", &json!({"command": command}).to_string())
             .await
+    }
+
+    #[tokio::test]
+    async fn a_sandboxed_command_finds_the_keychain_shut_with_a_note_and_open_when_the_owner_opened_it()
+     {
+        if !crate::sandbox::available() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!(
+            "glut-shell-keychain-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let keychain = crate::keychain::Keychain::default();
+        let options = ShellOptions {
+            shell: PathBuf::from("/bin/bash"),
+            profile: false,
+            ambient: std::env::vars_os()
+                .filter(|(key, _)| key == "PATH" || key == "HOME" || key == "TMPDIR")
+                .collect(),
+            sandbox: Some(Default::default()),
+            direct: Vec::new(),
+            beside: Default::default(),
+            keychain: keychain.clone(),
+        };
+        let mut tools = Toolbox::new();
+        tools.extend(shell_tools(&dir, options).unwrap());
+        // git's own Keychain helper, asked for a host nobody keeps a key for.
+        let ask =
+            "printf 'protocol=https\\nhost=example.invalid\\n\\n' | git credential-osxkeychain get";
+        let (ok, text) = bash(&tools, ask).await;
+        if text.contains("is not a git command") {
+            return;
+        }
+        assert!(!ok && text.contains("-50"), "{text}");
+        assert!(
+            text.contains("/keychain add git credential-osxkeychain"),
+            "Glut's note names how the owner opens it: {text}"
+        );
+        keychain.set_session_open(true);
+        let (ok, text) = bash(&tools, ask).await;
+        assert!(ok && !text.contains("-50"), "{text}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_sandboxed_command_cannot_plant_code_in_the_scratch_folder_but_its_folder_carries_over()
+     {
+        if !crate::sandbox::available() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!(
+            "glut-shell-scratch-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        let options = ShellOptions {
+            shell: PathBuf::from("/bin/bash"),
+            profile: false,
+            ambient: std::env::vars_os()
+                .filter(|(key, _)| key == "PATH" || key == "HOME" || key == "TMPDIR")
+                .collect(),
+            sandbox: Some(Default::default()),
+            direct: Vec::new(),
+            beside: Default::default(),
+            keychain: Default::default(),
+        };
+        let mut tools = Toolbox::new();
+        tools.extend(shell_tools(&dir, options).unwrap());
+        // The snapshot every later command sources lies beside the note: neither it nor the folder may change.
+        let (_, text) = bash(
+            &tools,
+            "d=$(dirname \"$AXH_CWD_FILE\"); echo 'gh() { :; }' > \"$d/snapshot.sh\" || echo WRITE-REFUSED; \
+             mv \"$d\" \"$d.x\" || echo MOVE-REFUSED; rm -rf \"$d\" || echo REMOVE-REFUSED",
+        )
+        .await;
+        for refused in ["WRITE-REFUSED", "MOVE-REFUSED", "REMOVE-REFUSED"] {
+            assert!(text.contains(refused), "{refused}: {text}");
+        }
+        bash(&tools, "cd sub").await;
+        let (ok, text) = bash(&tools, "pwd").await;
+        assert!(ok && text.trim_end().ends_with("/sub"), "{text}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]
@@ -1704,6 +1829,7 @@ mod tests {
             sandbox: None,
             direct: Vec::new(),
             beside: Default::default(),
+            keychain: Default::default(),
         };
         let mut tools = Toolbox::new();
         tools.extend(shell_tools(&dir, options).unwrap());
@@ -1953,6 +2079,7 @@ mod tests {
             ambient,
             sandbox: Some(Default::default()),
             beside: Default::default(),
+            keychain: Default::default(),
             direct: vec![DirectProgram {
                 name: "axiomata-cli".into(),
                 path: program,
@@ -1994,6 +2121,7 @@ mod tests {
                 ambient: Vec::new(),
                 sandbox: None,
                 beside: Default::default(),
+                keychain: Default::default(),
                 direct: vec![DirectProgram {
                     name: "axiomata-cli".into(),
                     path: PathBuf::from("/bin/echo"),
@@ -2088,6 +2216,7 @@ mod tests {
             sandbox: Some(Default::default()),
             direct: Vec::new(),
             beside: Default::default(),
+            keychain: Default::default(),
         };
         let mut tools = Toolbox::new();
         tools.extend(shell_tools(&dir.join("work"), options).unwrap());

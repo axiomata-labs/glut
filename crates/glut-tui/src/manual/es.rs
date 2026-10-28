@@ -1,7 +1,7 @@
 //! The commands' manual pages in Spanish (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 57] = [
+pub const PAGES: [(&str, &str); 58] = [
     (
         "clear",
         "Empieza una sesión nueva y vacía en esta carpeta.\n\
@@ -561,6 +561,28 @@ pub const PAGES: [(&str, &str); 57] = [
          \n\
          El enmascarado protege contra una clave mostrada por accidente; el sandbox y el Gate de red siguen siendo las \
          barreras.",
+    ),
+    (
+        "keychain",
+        "Mantener el llavero fuera del alcance de los comandos que Glut ejecuta.\n\
+         \n\
+         /keychain — si está abierto, y los programas que pueden pedirlo\n\
+         /keychain add <program> — pone un programa en la lista (gh, o git y un subcomando: git push)\n\
+         /keychain remove <program> — lo quita de la lista\n\
+         /keychain open — lo abre a todo comando, hasta que termine esta sesión\n\
+         /keychain close — lo vuelve a cerrar\n\
+         \n\
+         Una clave o un inicio de sesión del llavero se alcanza más allá de toda regla de archivos del sandbox, así \
+         que un comando que Glut ejecuta encuentra el llavero cerrado. Un comando de un programa de la lista pregunta \
+         primero — en todo modo, también en `auto` — y se ejecuta con el llavero abierto en cuanto lo permites; un \
+         «siempre» lo convierte en una regla tuya. Sin nadie presente (un plan, `glut run`) solo una regla \
+         así lo abre. Cuando un comando falla por el llavero cerrado, Glut lo dice bajo su salida.\n\
+         \n\
+         Permitir un comando da el llavero también a todo lo que inicia: un hook de git, una extensión de gh o un \
+         script de compilación puede leer entonces cualquier clave en él.\n\
+         \n\
+         La lista se guarda en `~/.glut/keychain.json`; `glut keychain open` mantiene el llavero abierto de una \
+         sesión a otra, `glut keychain close` lo cierra para siempre.",
     ),
     (
         "motion",

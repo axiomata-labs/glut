@@ -143,6 +143,8 @@ pub struct Toolbox {
     gate: Option<Arc<Gate>>,
     /// The folders beside the working one (T60c), shared by the file tools, the shell and the gate.
     folders: crate::folders::Folders,
+    /// The Keychain's list and switch (T74), shared by the gate and the shell.
+    keychain: crate::keychain::Keychain,
 }
 
 impl Toolbox {
@@ -153,12 +155,23 @@ impl Toolbox {
     /// Puts every call under `gate` (HS3a).
     pub fn set_gate(&mut self, gate: Arc<Gate>) {
         gate.set_beside(self.folders.clone());
+        gate.set_keychain(self.keychain.clone());
         self.gate = Some(gate);
     }
 
     /// The folders beside the working one (T60c): what is added here, every tool of the box reaches at its next call.
     pub fn folders(&self) -> &crate::folders::Folders {
         &self.folders
+    }
+
+    /// The Keychain's list and switch (T74): what is changed here, the gate and the shell see at their next call.
+    pub fn keychain(&self) -> &crate::keychain::Keychain {
+        &self.keychain
+    }
+
+    /// Puts the Keychain's state under `keychain` — before [`Self::set_gate`] and the shell, which share it.
+    pub fn set_keychain(&mut self, keychain: crate::keychain::Keychain) {
+        self.keychain = keychain;
     }
 
     pub fn gate(&self) -> Option<&Arc<Gate>> {

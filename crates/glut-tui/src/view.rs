@@ -1026,6 +1026,11 @@ fn draw_ask(frame: &mut Frame, app: &App, area: Rect, rows: Vec<String>) {
                         tool = crate::transcript::clean(&open.request.tool)
                     )
                 ),
+            } + &if open.request.keychain {
+                // T74: the command would run with the Keychain open.
+                format!("· 🔑 {} ", tr!(ask_keychain))
+            } else {
+                String::new()
             },
             theme::glow(),
         ));
@@ -1331,6 +1336,10 @@ fn draw_keys(frame: &mut Frame, app: &App, area: Rect, branch: Option<String>, c
     });
     if let (None, Some(role)) = (chrome.number, &role) {
         segments.push(Segment::calm(role.clone(), 0));
+    }
+    // T74: the Keychain open to every command stands beside the mode, in the fault colour, as long as it is.
+    if app.parts.tools.keychain().is_open() {
+        segments.push(Segment::marked(tr!(keychain_footer), theme::c().fault, 0));
     }
     let mut model = format!("{} · {}", app.engine.provider, app.engine.model_name());
     if let Some(effort) = app.engine.endpoint.effort {

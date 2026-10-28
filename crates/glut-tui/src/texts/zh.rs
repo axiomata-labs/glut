@@ -153,6 +153,10 @@ pub const TEXTS: Texts = Texts {
              <name>，/secrets on|off",
         ),
         (
+            "keychain",
+            "Glut 运行的命令的钥匙串 — 除列表中的程序外都关闭，这些程序每次都会请求；/keychain add|remove <program>，/keychain open|close 用于本会话",
+        ),
+        (
             "motion",
             "屏幕的动态程度；calm 和 off 让 Glimm 静止（macOS 的“减弱动态效果”视为 off）",
         ),
@@ -957,6 +961,31 @@ pub const TEXTS: Texts = Texts {
     setup_provider_prompt: "提供商：",
     cli: &[
         (
+            "The Keychain for the commands Glut runs: shut but to the listed programs, which ask for it each time",
+            "Glut 运行的命令的钥匙串：除列表中的程序外都关闭，这些程序每次都会请求它",
+        ),
+        (
+            "Shows whether the Keychain is open to the commands Glut runs, and the programs that may ask for it",
+            "显示钥匙串是否对 Glut 运行的命令开放，以及可以请求它的程序",
+        ),
+        (
+            "Puts a program on the list: its commands may ask for the Keychain, each time",
+            "把一个程序加入列表：它的命令每次都可以请求钥匙串",
+        ),
+        (
+            "A program's name (gh), or git and a sub-command (git push)",
+            "程序的名称（gh），或 git 加子命令（git push）",
+        ),
+        ("Takes a program off the list", "把一个程序从列表中移除"),
+        (
+            "Opens the Keychain to every command Glut runs, without asking, kept across sessions",
+            "对 Glut 运行的每个命令开放钥匙串，不再询问，跨会话保持",
+        ),
+        (
+            "Shuts the Keychain again: only the listed programs may ask for it",
+            "再次关闭钥匙串：只有列表中的程序可以请求它",
+        ),
+        (
             "Changes a provider's key alone — its model, keyEnv and root stay as they are. The key is read without \
              echo and checked with one small call before the old one is replaced",
             "单独更改提供商的密钥 — 其模型、keyEnv 和根地址保持不变。密钥以无回显方式读取，并在替换旧密钥之前用一次小调用检查",
@@ -1753,4 +1782,17 @@ pub const TEXTS: Texts = Texts {
     secrets_removed: "已移除格式 {name}",
     export_written_masked: "已导出到 {path} — Glut 看到的密钥已隐藏；你自己输入的内容或更早的会话仍可能含有密钥",
     export_copied_masked: "已将会话复制为 Markdown — Glut 看到的密钥已隐藏；你自己输入的内容仍可能含有密钥",
+    keychain_shut: "Glut 运行的命令的钥匙串：关闭 — 以下程序每次都会请求它：{programs}",
+    keychain_open_session: "Glut 运行的命令的钥匙串：对所有命令开放，直到本会话结束（/keychain close 关闭它）— 列表：{programs}",
+    keychain_open_kept: "Glut 运行的命令的钥匙串：对所有命令开放，由 glut keychain open 保持（/keychain close 在本会话中关闭它）— 列表：{programs}",
+    keychain_added: "{program} 已在列表中：它的命令会请求钥匙串",
+    keychain_listed_already: "{program} 已经在列表中",
+    keychain_removed: "{program} 已从列表中移除",
+    keychain_not_listed: "{program} 不在列表中",
+    keychain_opened: "钥匙串对所有命令开放，直到本会话结束 — /keychain close 关闭它",
+    keychain_closed: "钥匙串已再次关闭；列表中的程序会请求它",
+    keychain_kept_note: "钥匙串对 Glut 运行的每个命令开放（glut keychain open）— /keychain close 在本会话中关闭它，glut keychain close 永久关闭",
+    keychain_usage: "/keychain, /keychain add <program>, /keychain remove <program>, /keychain open, /keychain close",
+    ask_keychain: "使用钥匙串",
+    keychain_footer: "🔑 开放",
 };

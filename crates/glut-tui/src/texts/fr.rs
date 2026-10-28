@@ -215,6 +215,11 @@ pub const TEXTS: Texts = Texts {
              /secrets add <name> <regex> cache un format à toi, /secrets remove <name>, /secrets on|off",
         ),
         (
+            "keychain",
+            "le trousseau pour les commandes que Glut exécute — fermé sauf aux programmes listés, qui le demandent à \
+             chaque fois ; /keychain add|remove <program>, /keychain open|close pour cette session",
+        ),
+        (
             "motion",
             "à quel point l’écran bouge ; calm et off tiennent Glimm immobile (« Réduire les animations » de macOS \
              compte comme off)",
@@ -1121,6 +1126,36 @@ pub const TEXTS: Texts = Texts {
     setup_provider_prompt: "Fournisseur :",
     cli: &[
         (
+            "The Keychain for the commands Glut runs: shut but to the listed programs, which ask for it each time",
+            "Le trousseau pour les commandes que Glut exécute : fermé sauf aux programmes listés, qui le demandent à \
+             chaque fois",
+        ),
+        (
+            "Shows whether the Keychain is open to the commands Glut runs, and the programs that may ask for it",
+            "Montre si le trousseau est ouvert aux commandes que Glut exécute, et les programmes qui peuvent le \
+             demander",
+        ),
+        (
+            "Puts a program on the list: its commands may ask for the Keychain, each time",
+            "Met un programme sur la liste : ses commandes peuvent demander le trousseau, à chaque fois",
+        ),
+        (
+            "A program's name (gh), or git and a sub-command (git push)",
+            "Le nom d'un programme (gh), ou git et une sous-commande (git push)",
+        ),
+        (
+            "Takes a program off the list",
+            "Retire un programme de la liste",
+        ),
+        (
+            "Opens the Keychain to every command Glut runs, without asking, kept across sessions",
+            "Ouvre le trousseau à toute commande que Glut exécute, sans demander, d'une session à l'autre",
+        ),
+        (
+            "Shuts the Keychain again: only the listed programs may ask for it",
+            "Referme le trousseau : seuls les programmes listés peuvent le demander",
+        ),
+        (
             "Changes a provider's key alone — its model, keyEnv and root stay as they are. The key is read without \
              echo and checked with one small call before the old one is replaced",
             "Changer uniquement la clé d’un fournisseur — son modèle, sa keyEnv et sa racine restent tels qu’ils \
@@ -2010,4 +2045,22 @@ pub const TEXTS: Texts = Texts {
                             ou une session plus ancienne, peut encore en contenir",
     export_copied_masked: "session copiée en Markdown — les clés vues par Glut sont masquées ; ce que tu as tapé \
                            toi-même peut encore en contenir",
+    keychain_shut: "Trousseau pour les commandes que Glut exécute : fermé — ces programmes le demandent à chaque fois \
+                    : {programs}",
+    keychain_open_session: "Trousseau pour les commandes que Glut exécute : ouvert à toutes jusqu'à la fin de cette \
+                            session (/keychain close le ferme) — listés : {programs}",
+    keychain_open_kept: "Trousseau pour les commandes que Glut exécute : ouvert à toutes, gardé par glut keychain \
+                         open (/keychain close le ferme pour cette session) — listés : {programs}",
+    keychain_added: "{program} est sur la liste : ses commandes demandent le trousseau",
+    keychain_listed_already: "{program} est déjà sur la liste",
+    keychain_removed: "{program} est retiré de la liste",
+    keychain_not_listed: "{program} n'est pas sur la liste",
+    keychain_opened: "le trousseau est ouvert à toute commande jusqu'à la fin de cette session — /keychain close le \
+                      ferme",
+    keychain_closed: "le trousseau est de nouveau fermé ; les programmes listés le demandent",
+    keychain_kept_note: "le trousseau est ouvert à toute commande que Glut exécute (glut keychain open) — /keychain \
+                         close le ferme pour cette session, glut keychain close pour de bon",
+    keychain_usage: "/keychain, /keychain add <program>, /keychain remove <program>, /keychain open, /keychain close",
+    ask_keychain: "avec le trousseau",
+    keychain_footer: "🔑 ouvert",
 };

@@ -1,7 +1,7 @@
 //! The commands' manual pages in German (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 57] = [
+pub const PAGES: [(&str, &str); 58] = [
     (
         "clear",
         "Eine neue, leere Session in diesem Ordner beginnen.\n\
@@ -572,6 +572,29 @@ pub const PAGES: [(&str, &str); 57] = [
          \n\
          Die Maskierung schützt vor einem Key, der aus Versehen gezeigt wird; die Sandbox und das Netzwerk-Gate \
          bleiben die Schranken.",
+    ),
+    (
+        "keychain",
+        "Den Schlüsselbund außer Reichweite der Befehle halten, die Glut ausführt.\n\
+         \n\
+         /keychain — ob er offen ist, und die Programme, die nach ihm fragen dürfen\n\
+         /keychain add <program> — setzt ein Programm auf die Liste (gh, oder git und ein Unterbefehl: git push)\n\
+         /keychain remove <program> — nimmt es von der Liste\n\
+         /keychain open — öffnet ihn für jeden Befehl, bis diese Session endet\n\
+         /keychain close — schließt ihn wieder\n\
+         \n\
+         Ein Key oder eine Anmeldung im Schlüsselbund ist an jeder Dateiregel der Sandbox vorbei erreichbar, darum \
+         findet ein Befehl, den Glut ausführt, den Schlüsselbund zu. Ein Befehl eines gelisteten Programms fragt \
+         zuerst — in jedem Modus, auch in `auto` — und läuft mit offenem Schlüsselbund, sobald du es erlaubst; ein \
+         „immer“ macht daraus eine Regel von dir. Ist niemand da (ein Zeitplan, `glut run`), öffnet \
+         ihn nur eine solche Regel. Scheitert ein Befehl am geschlossenen Schlüsselbund, sagt Glut das unter seiner \
+         Ausgabe.\n\
+         \n\
+         Wer einen Befehl erlaubt, gibt den Schlüsselbund auch allem, was er startet: ein git-Hook, eine \
+         gh-Erweiterung oder ein Build-Skript kann dann jeden Key darin lesen.\n\
+         \n\
+         Die Liste bleibt in `~/.glut/keychain.json`; `glut keychain open` hält den Schlüsselbund über Sessions \
+         hinweg offen, `glut keychain close` schließt ihn für immer.",
     ),
     (
         "motion",

@@ -126,4 +126,15 @@ pub const TEXTS: Texts = Texts {
     mcp_removed: "{name} quitado de ~/.glut/mcp.json.",
     mcp_token_elsewhere: "{name} obtiene sus tokens de {host}.",
     mcp_enter_opens: "Pulsa Intro para abrirla en tu navegador — o pega aquí la dirección en la que terminó:",
+    keychain_shut: "Llavero para los comandos que Glut ejecuta: cerrado. Estos programas pueden pedirlo, cada vez:",
+    keychain_open: "Llavero para los comandos que Glut ejecuta: abierto a todos, de una sesión a otra (glut keychain \
+                    close lo cierra). Los programas de la lista:",
+    keychain_added: "{program} está en la lista: sus comandos pueden pedir el llavero.",
+    keychain_listed_already: "{program} ya está en la lista.",
+    keychain_removed: "{program} sale de la lista.",
+    keychain_not_listed: "{program} no está en la lista.",
+    keychain_opened: "El llavero está abierto a todo comando que Glut ejecuta, de una sesión a otra — glut keychain \
+                      close lo vuelve a cerrar.",
+    keychain_closed: "El llavero vuelve a estar cerrado a todo comando que Glut ejecuta; los programas de la lista lo \
+                      piden.",
 };

@@ -442,6 +442,7 @@ mod tests {
             sandbox: None,
             direct: Vec::new(),
             beside: Default::default(),
+            keychain: Default::default(),
         };
         let session = Session::new(&dir, options).unwrap();
         (dir, session)

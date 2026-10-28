@@ -216,6 +216,11 @@ pub const TEXTS: Texts = Texts {
              /secrets add <name> <regex> nasconde un tuo formato, /secrets remove <name>, /secrets on|off",
         ),
         (
+            "keychain",
+            "il portachiavi per i comandi che Glut esegue — chiuso tranne ai programmi in lista, che lo chiedono ogni \
+             volta; /keychain add|remove <program>, /keychain open|close per questa sessione",
+        ),
+        (
             "motion",
             "quanto si muove lo schermo; calm e off tengono fermo Glimm (in macOS «Riduci movimento» conta come off)",
         ),
@@ -1118,6 +1123,35 @@ pub const TEXTS: Texts = Texts {
     setup_provider_prompt: "Provider:",
     cli: &[
         (
+            "The Keychain for the commands Glut runs: shut but to the listed programs, which ask for it each time",
+            "Il portachiavi per i comandi che Glut esegue: chiuso tranne ai programmi in lista, che lo chiedono ogni \
+             volta",
+        ),
+        (
+            "Shows whether the Keychain is open to the commands Glut runs, and the programs that may ask for it",
+            "Mostra se il portachiavi è aperto ai comandi che Glut esegue, e i programmi che possono chiederlo",
+        ),
+        (
+            "Puts a program on the list: its commands may ask for the Keychain, each time",
+            "Mette un programma nella lista: i suoi comandi possono chiedere il portachiavi, ogni volta",
+        ),
+        (
+            "A program's name (gh), or git and a sub-command (git push)",
+            "Il nome di un programma (gh), oppure git e un sottocomando (git push)",
+        ),
+        (
+            "Takes a program off the list",
+            "Toglie un programma dalla lista",
+        ),
+        (
+            "Opens the Keychain to every command Glut runs, without asking, kept across sessions",
+            "Apre il portachiavi a ogni comando che Glut esegue, senza chiedere, da una sessione all'altra",
+        ),
+        (
+            "Shuts the Keychain again: only the listed programs may ask for it",
+            "Richiude il portachiavi: solo i programmi in lista possono chiederlo",
+        ),
+        (
             "Changes a provider's key alone — its model, keyEnv and root stay as they are. The key is read without \
              echo and checked with one small call before the old one is replaced",
             "Cambiare solo la chiave di un provider — il suo modello, la sua keyEnv e la sua root restano come sono. \
@@ -1998,4 +2032,22 @@ pub const TEXTS: Texts = Texts {
                             una sessione precedente, può ancora contenerne",
     export_copied_masked: "sessione copiata come Markdown — le chiavi viste da Glut sono nascoste; ciò che hai \
                            scritto tu può ancora contenerne",
+    keychain_shut: "Portachiavi per i comandi che Glut esegue: chiuso — questi programmi lo chiedono ogni volta: \
+                    {programs}",
+    keychain_open_session: "Portachiavi per i comandi che Glut esegue: aperto a tutti fino alla fine di questa \
+                            sessione (/keychain close lo chiude) — in lista: {programs}",
+    keychain_open_kept: "Portachiavi per i comandi che Glut esegue: aperto a tutti, tenuto da glut keychain open \
+                         (/keychain close lo chiude per questa sessione) — in lista: {programs}",
+    keychain_added: "{program} è nella lista: i suoi comandi chiedono il portachiavi",
+    keychain_listed_already: "{program} è già nella lista",
+    keychain_removed: "{program} è tolto dalla lista",
+    keychain_not_listed: "{program} non è nella lista",
+    keychain_opened: "il portachiavi è aperto a ogni comando fino alla fine di questa sessione — /keychain close lo \
+                      chiude",
+    keychain_closed: "il portachiavi è di nuovo chiuso; i programmi in lista lo chiedono",
+    keychain_kept_note: "il portachiavi è aperto a ogni comando che Glut esegue (glut keychain open) — /keychain \
+                         close lo chiude per questa sessione, glut keychain close per sempre",
+    keychain_usage: "/keychain, /keychain add <program>, /keychain remove <program>, /keychain open, /keychain close",
+    ask_keychain: "con il portachiavi",
+    keychain_footer: "🔑 aperto",
 };

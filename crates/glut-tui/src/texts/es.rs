@@ -212,6 +212,11 @@ pub const TEXTS: Texts = Texts {
              <name> <regex> oculta un formato tuyo, /secrets remove <name>, /secrets on|off",
         ),
         (
+            "keychain",
+            "el llavero para los comandos que Glut ejecuta — cerrado salvo a los programas de la lista, que lo piden \
+             cada vez; /keychain add|remove <program>, /keychain open|close para esta sesión",
+        ),
+        (
             "motion",
             "cuánto se mueve la pantalla; calm y off mantienen quieto a Glimm («Reducir movimiento» de macOS cuenta \
              como off)",
@@ -1101,6 +1106,35 @@ pub const TEXTS: Texts = Texts {
     setup_provider_prompt: "Proveedor:",
     cli: &[
         (
+            "The Keychain for the commands Glut runs: shut but to the listed programs, which ask for it each time",
+            "El llavero para los comandos que Glut ejecuta: cerrado salvo a los programas de la lista, que lo piden \
+             cada vez",
+        ),
+        (
+            "Shows whether the Keychain is open to the commands Glut runs, and the programs that may ask for it",
+            "Muestra si el llavero está abierto a los comandos que Glut ejecuta, y los programas que pueden pedirlo",
+        ),
+        (
+            "Puts a program on the list: its commands may ask for the Keychain, each time",
+            "Pone un programa en la lista: sus comandos pueden pedir el llavero, cada vez",
+        ),
+        (
+            "A program's name (gh), or git and a sub-command (git push)",
+            "El nombre de un programa (gh), o git y un subcomando (git push)",
+        ),
+        (
+            "Takes a program off the list",
+            "Quita un programa de la lista",
+        ),
+        (
+            "Opens the Keychain to every command Glut runs, without asking, kept across sessions",
+            "Abre el llavero a todo comando que Glut ejecuta, sin preguntar, de una sesión a otra",
+        ),
+        (
+            "Shuts the Keychain again: only the listed programs may ask for it",
+            "Vuelve a cerrar el llavero: solo los programas de la lista pueden pedirlo",
+        ),
+        (
             "Changes a provider's key alone — its model, keyEnv and root stay as they are. The key is read without \
              echo and checked with one small call before the old one is replaced",
             "Cambiar solo la clave de un proveedor — su modelo, keyEnv y raíz se quedan como están. La clave se lee \
@@ -1979,4 +2013,21 @@ pub const TEXTS: Texts = Texts {
                             sesión anterior, aún puede contener alguna",
     export_copied_masked: "sesión copiada como Markdown — las claves que vio Glut están ocultas; lo que escribiste tú \
                            aún puede contener alguna",
+    keychain_shut: "Llavero para los comandos que Glut ejecuta: cerrado — estos programas lo piden cada vez: \
+                    {programs}",
+    keychain_open_session: "Llavero para los comandos que Glut ejecuta: abierto a todos hasta que termine esta sesión \
+                            (/keychain close lo cierra) — en la lista: {programs}",
+    keychain_open_kept: "Llavero para los comandos que Glut ejecuta: abierto a todos, mantenido por glut keychain \
+                         open (/keychain close lo cierra para esta sesión) — en la lista: {programs}",
+    keychain_added: "{program} está en la lista: sus comandos piden el llavero",
+    keychain_listed_already: "{program} ya está en la lista",
+    keychain_removed: "{program} sale de la lista",
+    keychain_not_listed: "{program} no está en la lista",
+    keychain_opened: "el llavero está abierto a todo comando hasta que termine esta sesión — /keychain close lo cierra",
+    keychain_closed: "el llavero vuelve a estar cerrado; los programas de la lista lo piden",
+    keychain_kept_note: "el llavero está abierto a todo comando que Glut ejecuta (glut keychain open) — /keychain \
+                         close lo cierra para esta sesión, glut keychain close para siempre",
+    keychain_usage: "/keychain, /keychain add <program>, /keychain remove <program>, /keychain open, /keychain close",
+    ask_keychain: "con el llavero",
+    keychain_footer: "🔑 abierto",
 };

@@ -886,6 +886,9 @@ async fn attempt(home: &Path, plan: &Plan, cancel: glut::Cancel) -> Attempt {
         }
     }
     parts.config.timeout = Duration::from_secs(u64::from(plan.max_minutes) * 60);
+    // T74: a plan runs with its own rights alone — the Keychain the owner keeps open for sessions stays shut to it;
+    // a listed program still gets it through a rule of the plan's.
+    parts.tools.keychain().set_session_open(false);
     // A plan's run ends as its budget and its task say: nobody to ask it on (T73).
     parts.config.nudge = false;
     parts.config.budget = glut::Budget {
@@ -1512,6 +1515,7 @@ mod tests {
             target: "rm -rf build".into(),
             scopes: Vec::new(),
             from: None,
+            keychain: false,
         };
         let never: AnswerFuture<'_> = Box::pin(std::future::pending());
         assert_eq!(host.ask(&request, never).await, Answer::Deny);

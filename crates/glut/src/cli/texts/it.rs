@@ -127,4 +127,15 @@ pub const TEXTS: Texts = Texts {
     mcp_removed: "{name} rimosso da ~/.glut/mcp.json.",
     mcp_token_elsewhere: "{name} riceve i suoi token da {host}.",
     mcp_enter_opens: "Premi Invio per aprirlo nel browser — oppure incolla qui l’indirizzo su cui il browser è finito:",
+    keychain_shut: "Portachiavi per i comandi che Glut esegue: chiuso. Questi programmi possono chiederlo, ogni volta:",
+    keychain_open: "Portachiavi per i comandi che Glut esegue: aperto a tutti, da una sessione all'altra (glut \
+                    keychain close lo chiude). I programmi in lista:",
+    keychain_added: "{program} è nella lista: i suoi comandi possono chiedere il portachiavi.",
+    keychain_listed_already: "{program} è già nella lista.",
+    keychain_removed: "{program} è tolto dalla lista.",
+    keychain_not_listed: "{program} non è nella lista.",
+    keychain_opened: "Il portachiavi è aperto a ogni comando che Glut esegue, da una sessione all'altra — glut \
+                      keychain close lo richiude.",
+    keychain_closed: "Il portachiavi è di nuovo chiuso a ogni comando che Glut esegue; i programmi in lista lo \
+                      chiedono.",
 };

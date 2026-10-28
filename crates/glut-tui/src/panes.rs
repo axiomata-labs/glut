@@ -3246,6 +3246,7 @@ mod tests {
             target: "rm -rf target".into(),
             scopes: Vec::new(),
             from: None,
+            keychain: false,
         };
         panes.on_report(behind, Report::Ask(request, answer));
         panes.sync();

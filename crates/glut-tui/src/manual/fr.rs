@@ -1,7 +1,7 @@
 //! The commands' manual pages in French (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 57] = [
+pub const PAGES: [(&str, &str); 58] = [
     (
         "clear",
         "Commencer une nouvelle session vide dans ce dossier.\n\
@@ -569,6 +569,28 @@ pub const PAGES: [(&str, &str); 57] = [
          sont gardés dans `~/.glut/secrets.json`.\n\
          \n\
          Le masquage protège d’une clé montrée par accident ; la sandbox et le Gate réseau restent les barrières.",
+    ),
+    (
+        "keychain",
+        "Tenir le trousseau hors de portée des commandes que Glut exécute.\n\
+         \n\
+         /keychain — s'il est ouvert, et les programmes qui peuvent le demander\n\
+         /keychain add <program> — met un programme sur la liste (gh, ou git et une sous-commande : git push)\n\
+         /keychain remove <program> — le retire de la liste\n\
+         /keychain open — l'ouvre à toute commande, jusqu'à la fin de cette session\n\
+         /keychain close — le referme\n\
+         \n\
+         Une clé ou une connexion dans le trousseau s'atteint par-delà toutes les règles de fichiers du bac à sable : \
+         une commande que Glut exécute trouve donc le trousseau fermé. Une commande d'un programme listé demande \
+         d'abord — dans tous les modes, `auto` aussi — et s'exécute avec le trousseau ouvert dès que tu l'autorises ; \
+         un « toujours » en fait une règle à toi. Quand personne n'est là (un plan, `glut run`), seule \
+         une telle règle l'ouvre. Quand une commande échoue sur le trousseau fermé, Glut le dit sous sa sortie.\n\
+         \n\
+         Autoriser une commande donne aussi le trousseau à tout ce qu'elle lance : un hook git, une extension gh ou \
+         un script de build peut alors y lire n'importe quelle clé.\n\
+         \n\
+         La liste est gardée dans `~/.glut/keychain.json` ; `glut keychain open` garde le trousseau ouvert d'une \
+         session à l'autre, `glut keychain close` le ferme pour de bon.",
     ),
     (
         "motion",

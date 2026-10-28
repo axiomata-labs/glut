@@ -192,6 +192,11 @@ pub const TEXTS: Texts = Texts {
              remove <name>、/secrets on|off",
         ),
         (
+            "keychain",
+            "Glut が実行するコマンドのキーチェーン — リストのプログラム以外には閉じており、それらは毎回求めます。/keychain add|remove <program>、/keychain \
+             open|close はこのセッション用",
+        ),
+        (
             "motion",
             "画面の動きの量; calm と off では Glimm が止まる（macOS の「視差効果を減らす」は off 扱い）",
         ),
@@ -1029,6 +1034,34 @@ pub const TEXTS: Texts = Texts {
     setup_provider_prompt: "プロバイダー:",
     cli: &[
         (
+            "The Keychain for the commands Glut runs: shut but to the listed programs, which ask for it each time",
+            "Glut が実行するコマンドのキーチェーン: リストのプログラム以外には閉じており、それらは毎回それを求めます",
+        ),
+        (
+            "Shows whether the Keychain is open to the commands Glut runs, and the programs that may ask for it",
+            "キーチェーンが Glut の実行するコマンドに開いているかと、それを求めてよいプログラムを表示します",
+        ),
+        (
+            "Puts a program on the list: its commands may ask for the Keychain, each time",
+            "プログラムをリストに加えます: そのコマンドは毎回キーチェーンを求められます",
+        ),
+        (
+            "A program's name (gh), or git and a sub-command (git push)",
+            "プログラムの名前 (gh)、または git とサブコマンド (git push)",
+        ),
+        (
+            "Takes a program off the list",
+            "プログラムをリストから外します",
+        ),
+        (
+            "Opens the Keychain to every command Glut runs, without asking, kept across sessions",
+            "Glut が実行するすべてのコマンドにキーチェーンを開きます。尋ねず、セッションをまたいで保持します",
+        ),
+        (
+            "Shuts the Keychain again: only the listed programs may ask for it",
+            "キーチェーンを再び閉じます: リストのプログラムだけがそれを求められます",
+        ),
+        (
             "Changes a provider's key alone — its model, keyEnv and root stay as they are. The key is read without \
              echo and checked with one small call before the old one is replaced",
             "プロバイダーのキーだけを変更します — モデル、keyEnv、ルートはそのままです。キーはエコーなしで読み取り、\
@@ -1848,4 +1881,19 @@ pub const TEXTS: Texts = Texts {
     secrets_removed: "形式 {name} を削除しました",
     export_written_masked: "{path} にエクスポートしました — Glut が見たキーは隠されています。自分で入力した内容や以前のセッションにはまだ含まれる可能性があります",
     export_copied_masked: "セッションを Markdown としてコピーしました — Glut が見たキーは隠されています。自分で入力した内容にはまだ含まれる可能性があります",
+    keychain_shut: "Glut が実行するコマンドのキーチェーン: 閉じています — 次のプログラムは毎回それを求めます: {programs}",
+    keychain_open_session: "Glut が実行するコマンドのキーチェーン: このセッションが終わるまですべてに開いています (/keychain close で閉じます) — リスト: {programs}",
+    keychain_open_kept: "Glut が実行するコマンドのキーチェーン: すべてに開いており、glut keychain open で保持されています (/keychain close \
+                         でこのセッションだけ閉じます) — リスト: {programs}",
+    keychain_added: "{program} はリストにあります: そのコマンドはキーチェーンを求めます",
+    keychain_listed_already: "{program} はすでにリストにあります",
+    keychain_removed: "{program} をリストから外しました",
+    keychain_not_listed: "{program} はリストにありません",
+    keychain_opened: "キーチェーンはこのセッションが終わるまですべてのコマンドに開いています — /keychain close で閉じます",
+    keychain_closed: "キーチェーンは再び閉じました。リストのプログラムはそれを求めます",
+    keychain_kept_note: "キーチェーンは Glut が実行するすべてのコマンドに開いています (glut keychain open) — /keychain close でこのセッションだけ、glut \
+                         keychain close で永久に閉じます",
+    keychain_usage: "/keychain, /keychain add <program>, /keychain remove <program>, /keychain open, /keychain close",
+    ask_keychain: "キーチェーン付き",
+    keychain_footer: "🔑 開",
 };

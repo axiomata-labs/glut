@@ -124,4 +124,14 @@ pub const TEXTS: Texts = Texts {
     mcp_removed: "{name} removed from ~/.glut/mcp.json.",
     mcp_token_elsewhere: "{name} gets its tokens from {host}.",
     mcp_enter_opens: "Press Enter to open it in your browser — or paste here the address the browser ended on:",
+    keychain_shut: "Keychain for the commands Glut runs: shut. These programs may ask for it, each time:",
+    keychain_open: "Keychain for the commands Glut runs: open to every one, kept across sessions (glut keychain close \
+                    shuts it). The programs listed:",
+    keychain_added: "{program} is on the list: its commands may ask for the Keychain.",
+    keychain_listed_already: "{program} is on the list already.",
+    keychain_removed: "{program} is off the list.",
+    keychain_not_listed: "{program} is not on the list.",
+    keychain_opened: "The Keychain is open to every command Glut runs, kept across sessions — glut keychain close \
+                      shuts it again.",
+    keychain_closed: "The Keychain is shut to every command Glut runs again; the listed programs ask for it.",
 };

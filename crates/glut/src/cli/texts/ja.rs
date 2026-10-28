@@ -120,4 +120,12 @@ pub const TEXTS: Texts = Texts {
     mcp_removed: "{name} を ~/.glut/mcp.json から削除しました。",
     mcp_token_elsewhere: "{name} は {host} からトークンを受け取ります。",
     mcp_enter_opens: "Enter でブラウザーで開きます — または、ブラウザーが最後に表示したアドレスをここに貼り付けてください:",
+    keychain_shut: "Glut が実行するコマンドのキーチェーン: 閉じています。次のプログラムは毎回それを求められます:",
+    keychain_open: "Glut が実行するコマンドのキーチェーン: すべてに開いており、セッションをまたいで保持されます (glut keychain close で閉じます)。リストのプログラム:",
+    keychain_added: "{program} はリストにあります: そのコマンドはキーチェーンを求められます。",
+    keychain_listed_already: "{program} はすでにリストにあります。",
+    keychain_removed: "{program} をリストから外しました。",
+    keychain_not_listed: "{program} はリストにありません。",
+    keychain_opened: "キーチェーンは Glut が実行するすべてのコマンドに開いており、セッションをまたいで保持されます — glut keychain close で再び閉じます。",
+    keychain_closed: "キーチェーンは Glut が実行するすべてのコマンドに対して再び閉じました。リストのプログラムはそれを求めます。",
 };

@@ -1080,4 +1080,20 @@ pub const TEXTS: Texts = Texts {
                             from before, may still hold one",
     export_copied_masked: "copied the session as Markdown — the keys Glut saw are hidden; what you typed yourself may \
                            still hold one",
+    keychain_shut: "Keychain for the commands Glut runs: shut — these programs ask for it, each time: {programs}",
+    keychain_open_session: "Keychain for the commands Glut runs: open to every one until this session ends (/keychain \
+                            close shuts it) — listed: {programs}",
+    keychain_open_kept: "Keychain for the commands Glut runs: open to every one, kept by glut keychain open \
+                         (/keychain close shuts it for this session) — listed: {programs}",
+    keychain_added: "{program} is on the list: its commands ask for the Keychain",
+    keychain_listed_already: "{program} is on the list already",
+    keychain_removed: "{program} is off the list",
+    keychain_not_listed: "{program} is not on the list",
+    keychain_opened: "the Keychain is open to every command until this session ends — /keychain close shuts it",
+    keychain_closed: "the Keychain is shut again; the listed programs ask for it",
+    keychain_kept_note: "the Keychain is open to every command Glut runs (glut keychain open) — /keychain close shuts \
+                         it for this session, glut keychain close for good",
+    keychain_usage: "/keychain, /keychain add <program>, /keychain remove <program>, /keychain open, /keychain close",
+    ask_keychain: "with the Keychain",
+    keychain_footer: "🔑 open",
 };

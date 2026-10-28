@@ -1,7 +1,7 @@
 //! The commands' manual pages in Italian (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 57] = [
+pub const PAGES: [(&str, &str); 58] = [
     (
         "clear",
         "Inizia una nuova sessione vuota in questa cartella.\n\
@@ -562,6 +562,28 @@ pub const PAGES: [(&str, &str); 57] = [
          conservati in `~/.glut/secrets.json`.\n\
          \n\
          Il mascheramento protegge da una chiave mostrata per caso; la sandbox e il Gate di rete restano le barriere.",
+    ),
+    (
+        "keychain",
+        "Tenere il portachiavi fuori dalla portata dei comandi che Glut esegue.\n\
+         \n\
+         /keychain — se è aperto, e i programmi che possono chiederlo\n\
+         /keychain add <program> — mette un programma nella lista (gh, oppure git e un sottocomando: git push)\n\
+         /keychain remove <program> — lo toglie dalla lista\n\
+         /keychain open — lo apre a ogni comando, fino alla fine di questa sessione\n\
+         /keychain close — lo richiude\n\
+         \n\
+         Una chiave o un accesso nel portachiavi si raggiunge oltre ogni regola sui file della sandbox, perciò un \
+         comando che Glut esegue trova il portachiavi chiuso. Un comando di un programma in lista chiede prima — in \
+         ogni modalità, anche in `auto` — e gira con il portachiavi aperto appena lo permetti; un «sempre» ne fa una \
+         tua regola. Quando non c'è nessuno (un piano, `glut run`) solo una tale regola lo apre. Quando un \
+         comando fallisce sul portachiavi chiuso, Glut lo dice sotto il suo output.\n\
+         \n\
+         Permettere un comando dà il portachiavi anche a tutto ciò che avvia: un hook di git, un'estensione di gh o \
+         uno script di build può allora leggerne qualsiasi chiave.\n\
+         \n\
+         La lista resta in `~/.glut/keychain.json`; `glut keychain open` tiene il portachiavi aperto da una sessione \
+         all'altra, `glut keychain close` lo chiude per sempre.",
     ),
     (
         "motion",

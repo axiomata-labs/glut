@@ -97,7 +97,7 @@ const fn command(
 }
 
 /// Every command, grouped by topic in [`Topic::ALL`]'s order, the most used first inside a topic.
-pub const COMMANDS: [Command; 57] = [
+pub const COMMANDS: [Command; 58] = [
     command(Topic::Session, "clear", "", "start a new session"),
     command(
         Topic::Session,
@@ -363,6 +363,13 @@ pub const COMMANDS: [Command; 57] = [
         "[on|off|allow|add|remove]",
         "the keys hidden from the model in this session; /secrets allow <n> [always] lets one through, \
          /secrets add <name> <regex> hides a format of your own, /secrets remove <name>, /secrets on|off",
+    ),
+    command(
+        Topic::Settings,
+        "keychain",
+        "[add|remove <program>|open|close]",
+        "the Keychain for the commands Glut runs — shut but to the listed programs, which ask each time; /keychain \
+         add|remove <program>, /keychain open|close for this session",
     ),
     command(
         Topic::Settings,
@@ -1180,6 +1187,7 @@ mod tests {
                 "calm",
                 "clean",
                 "clickable",
+                "close",
                 "copy",
                 "folded",
                 "fresh",

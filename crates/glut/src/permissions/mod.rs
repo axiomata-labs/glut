@@ -22,6 +22,7 @@ use serde::Serialize;
 use command::{Analysis, analyze, names_protected};
 
 use crate::folders::Folders;
+use crate::keychain::Keychain;
 
 /// What a tool call would touch, as the tool itself says.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -860,6 +861,8 @@ pub struct AskRequest {
     pub scopes: Vec<String>,
     /// The subagent that asks, by its task as the parent labelled it (TUI T40); `None`: the run itself.
     pub from: Option<String>,
+    /// The command would run with the Keychain open (T74): a listed program, the Keychain shut to every other.
+    pub keychain: bool,
 }
 
 /// The owner's answer.
@@ -1037,6 +1040,9 @@ pub struct Gate {
     role: Mutex<Option<Arc<Narrowing>>>,
     /// The folders beside the working one (T60c), shared with the run's tools ([`crate::Toolbox::set_gate`]).
     beside: Mutex<Folders>,
+    /// The Keychain's list and switch (T74), shared with the run's shell ([`crate::Toolbox::set_gate`]); a gate
+    /// without one keeps it shut and asks for every listed program.
+    keychain: Mutex<Keychain>,
 }
 
 /// One `allowed-tools` list and who declared it: only the calls these rules name are judged as usual, everything
@@ -1060,7 +1066,42 @@ impl Gate {
             narrowings: Vec::new(),
             role: Mutex::new(None),
             beside: Mutex::new(Folders::default()),
+            keychain: Mutex::new(Keychain::default()),
         }
+    }
+
+    /// Asks before a listed program gets the Keychain, by `keychain`'s list and switch (T74).
+    pub fn set_keychain(&self, keychain: Keychain) {
+        *self
+            .keychain
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) = keychain;
+    }
+
+    /// The listed program `command` would run with the Keychain, by this gate's list — what [`Self::judge`] asked
+    /// about, so the shell opens it for exactly that (T74).
+    pub fn keychain_wants(&self, command: &str) -> Option<String> {
+        self.keychain
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .wants(command)
+    }
+
+    /// The listed program a sandboxed command would run with the Keychain, when it is shut: then the command is
+    /// asked in every mode, whatever it is, unless a rule of the owner's allows it.
+    fn wants_keychain(&self, access: &Access) -> Option<String> {
+        let Access::Bash {
+            command,
+            sandboxed: true,
+            ..
+        } = access
+        else {
+            return None;
+        };
+        self.keychain
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .wants(command)
     }
 
     /// Judges commands against `folders` too, the folders beside the working one (T60c).
@@ -1263,6 +1304,7 @@ impl Gate {
             target: target.to_owned(),
             scopes,
             from: subagent().map(|(_, label)| label),
+            keychain: false,
         };
         let _one_at_a_time = self.asking.lock().await;
         self.asker.ask(&request).await
@@ -1344,8 +1386,17 @@ impl Gate {
             .unwrap_or_else(|poison| poison.into_inner())
             .verdict_with(tool, access, true, &self.beside());
         let mode = format!("mode {}", self.mode_name());
+        let keychain = self.wants_keychain(access);
         let (mut verdict, mut reason) = match said {
             Said::Verdict(verdict, why) => (verdict, why),
+            // T74: no reader, no `auto` — the owner's word or a rule of theirs.
+            _ if keychain.is_some() => (
+                Verdict::Ask,
+                format!(
+                    "{} would get the Keychain: asked in every mode",
+                    keychain.as_deref().unwrap_or_default()
+                ),
+            ),
             unsure_or_silent => match self.command_kind(access) {
                 Some(judged) => judged,
                 None => match unsure_or_silent {
@@ -1390,6 +1441,7 @@ impl Gate {
                     target: target.clone(),
                     scopes: scopes.iter().map(|scope| scope.label.clone()).collect(),
                     from: subagent().map(|(_, label)| label),
+                    keychain: keychain.is_some(),
                 };
                 let _one_at_a_time = self.asking.lock().await;
                 let answer = self.asker.ask(&request).await;
@@ -2010,6 +2062,65 @@ mod tests {
             self.0.lock().unwrap().push(request.from.clone());
             Box::pin(async { Answer::Allow })
         }
+    }
+
+    /// Answers yes and keeps whether each ask was for the Keychain.
+    struct KeychainAsks(Mutex<Vec<bool>>);
+
+    impl Asker for KeychainAsks {
+        fn ask<'a>(&'a self, request: &'a AskRequest) -> AnswerFuture<'a> {
+            self.0.lock().unwrap().push(request.keychain);
+            Box::pin(async { Answer::Allow })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_listed_program_is_asked_for_the_keychain_in_every_mode_unless_a_rule_allows_it_or_it_is_open()
+     {
+        let asker = Arc::new(KeychainAsks(Mutex::new(Vec::new())));
+        for mode in [Mode::Default, Mode::AcceptEdits, Mode::Auto] {
+            let gate = Gate::new(RuleSet::default(), mode, asker.clone());
+            // `gh pr list` only reads, and `auto` runs everything sandboxed — the Keychain is asked all the same.
+            assert!(gate.judge("bash", &bash("gh pr list")).await.is_ok());
+            assert_eq!(asker.0.lock().unwrap().pop(), Some(true), "{mode:?}");
+            assert!(gate.judge("bash", &bash("git status")).await.is_ok());
+            assert_eq!(
+                asker.0.lock().unwrap().pop(),
+                None,
+                "{mode:?}: a reader without the Keychain runs"
+            );
+        }
+        // An owner's rule is the owner's word: no ask.
+        let ruled = Gate::new(
+            rules(&["Bash(gh *)"], &[], &[]),
+            Mode::Default,
+            asker.clone(),
+        );
+        assert!(
+            ruled
+                .judge("bash", &bash("gh pr create -t x"))
+                .await
+                .is_ok()
+        );
+        assert!(asker.0.lock().unwrap().is_empty());
+        // Nobody there: refused without a rule.
+        let headless = Gate::new(RuleSet::default(), Mode::DontAsk, asker.clone());
+        assert!(headless.judge("bash", &bash("gh pr list")).await.is_err());
+        // Open to every command (the owner's switch): nothing to ask for, `auto` runs it as any other.
+        let open = Gate::new(RuleSet::default(), Mode::Auto, asker.clone());
+        let keychain = Keychain::default();
+        keychain.set_session_open(true);
+        open.set_keychain(keychain);
+        assert!(open.judge("bash", &bash("gh pr list")).await.is_ok());
+        assert!(asker.0.lock().unwrap().is_empty());
+        // Outside the sandbox the Keychain was never shut: the command is judged as before.
+        let mut unfenced = bash("gh pr list");
+        if let Access::Bash { sandboxed, .. } = &mut unfenced {
+            *sandboxed = false;
+        }
+        let auto = Gate::new(RuleSet::default(), Mode::Auto, asker.clone());
+        assert!(auto.judge("bash", &unfenced).await.is_ok());
+        assert!(asker.0.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

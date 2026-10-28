@@ -1,7 +1,7 @@
 //! The commands' manual pages in English (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 57] = [
+pub const PAGES: [(&str, &str); 58] = [
     (
         "clear",
         "Start a new, empty session in this folder.\n\
@@ -539,6 +539,28 @@ pub const PAGES: [(&str, &str); 57] = [
          `~/.glut/secrets.json`.\n\
          \n\
          Masking guards against a key shown by accident; the sandbox and the network Gate stay the barriers.",
+    ),
+    (
+        "keychain",
+        "Keep the Keychain out of reach of the commands Glut runs.\n\
+         \n\
+         /keychain — whether it is open, and the programs that may ask for it\n\
+         /keychain add <program> — puts a program on the list (gh, or git and a sub-command: git push)\n\
+         /keychain remove <program> — takes it off the list\n\
+         /keychain open — opens it to every command, until this session ends\n\
+         /keychain close — shuts it again\n\
+         \n\
+         A key or a sign-in in the Keychain is reached past every file rule of the sandbox, so a command Glut runs \
+         finds the Keychain shut. A command of a listed program asks first — in every mode, `auto` too — and runs \
+         with it open once you allow it; an \"always\" makes it a rule of yours. With nobody there (a plan, \
+         `glut run`) only such a rule opens it. When a command fails on the shut Keychain, Glut says so under its \
+         output.\n\
+         \n\
+         Allowing a command gives the Keychain to everything it starts as well: a git hook, a gh extension or a build \
+         script can then read any key in it.\n\
+         \n\
+         The list is kept in `~/.glut/keychain.json`; `glut keychain open` keeps the Keychain open across sessions, \
+         `glut keychain close` shuts it for good.",
     ),
     (
         "motion",

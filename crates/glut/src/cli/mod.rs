@@ -15,6 +15,7 @@ use std::sync::Arc;
 #[macro_use]
 mod texts;
 
+pub mod keychain;
 pub mod mcp_servers;
 pub mod models;
 pub mod providers;
@@ -84,6 +85,9 @@ pub enum Command {
     /// The MCP servers: ~/.glut/mcp.json and the project's .mcp.json, signing in to a hosted one and out again.
     #[command(subcommand)]
     Mcp(mcp_servers::McpCommand),
+    /// The Keychain for the commands Glut runs: shut but to the listed programs, which ask for it each time.
+    #[command(subcommand)]
+    Keychain(keychain::KeychainCommand),
 }
 
 /// Writes each event as one JSON line, flushed at once so a reader sees it while the run goes on.
@@ -243,6 +247,7 @@ pub async fn dispatch(command: Command) -> ExitCode {
         Command::Providers(command) => providers::run(command).await,
         Command::Models(command) => models::run(command).await,
         Command::Mcp(command) => mcp_servers::run(command).await,
+        Command::Keychain(command) => keychain::run(command),
     }
 }
 

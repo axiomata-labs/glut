@@ -129,4 +129,16 @@ pub const TEXTS: Texts = Texts {
     mcp_token_elsewhere: "{name} bekommt seine Tokens von {host}.",
     mcp_enter_opens: "Drücke Enter, um sie im Browser zu öffnen — oder füge hier die Adresse ein, auf der der Browser \
                       endete:",
+    keychain_shut: "Schlüsselbund für die Befehle, die Glut ausführt: zu. Diese Programme dürfen ihn erbitten, jedes \
+                    Mal:",
+    keychain_open: "Schlüsselbund für die Befehle, die Glut ausführt: offen für jeden, über Sessions hinweg (glut \
+                    keychain close schließt ihn). Die gelisteten Programme:",
+    keychain_added: "{program} steht auf der Liste: seine Befehle dürfen den Schlüsselbund erbitten.",
+    keychain_listed_already: "{program} steht schon auf der Liste.",
+    keychain_removed: "{program} ist von der Liste genommen.",
+    keychain_not_listed: "{program} steht nicht auf der Liste.",
+    keychain_opened: "Der Schlüsselbund ist offen für jeden Befehl, den Glut ausführt, über Sessions hinweg — glut \
+                      keychain close schließt ihn wieder.",
+    keychain_closed: "Der Schlüsselbund ist wieder zu für jeden Befehl, den Glut ausführt; die gelisteten Programme \
+                      fragen nach ihm.",
 };

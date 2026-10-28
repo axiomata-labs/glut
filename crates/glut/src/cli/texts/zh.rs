@@ -119,4 +119,12 @@ pub const TEXTS: Texts = Texts {
     mcp_removed: "已从 ~/.glut/mcp.json 移除 {name}。",
     mcp_token_elsewhere: "{name} 从 {host} 获取其令牌。",
     mcp_enter_opens: "按回车在浏览器中打开 — 或在此粘贴浏览器最后停留的地址：",
+    keychain_shut: "Glut 运行的命令的钥匙串：关闭。以下程序每次都可以请求它：",
+    keychain_open: "Glut 运行的命令的钥匙串：对所有命令开放，跨会话保持（glut keychain close 关闭它）。列表中的程序：",
+    keychain_added: "{program} 已在列表中：它的命令可以请求钥匙串。",
+    keychain_listed_already: "{program} 已经在列表中。",
+    keychain_removed: "{program} 已从列表中移除。",
+    keychain_not_listed: "{program} 不在列表中。",
+    keychain_opened: "钥匙串已对 Glut 运行的每个命令开放，跨会话保持 — glut keychain close 会再次关闭它。",
+    keychain_closed: "钥匙串已再次对 Glut 运行的每个命令关闭；列表中的程序会请求它。",
 };

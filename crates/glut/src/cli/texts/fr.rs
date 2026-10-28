@@ -130,4 +130,16 @@ pub const TEXTS: Texts = Texts {
     mcp_token_elsewhere: "{name} reçoit ses jetons de {host}.",
     mcp_enter_opens: "Appuie sur Entrée pour l’ouvrir dans ton navigateur — ou colle ici l’adresse sur laquelle il a \
                       fini :",
+    keychain_shut: "Trousseau pour les commandes que Glut exécute : fermé. Ces programmes peuvent le demander, à \
+                    chaque fois :",
+    keychain_open: "Trousseau pour les commandes que Glut exécute : ouvert à toutes, d'une session à l'autre (glut \
+                    keychain close le ferme). Les programmes listés :",
+    keychain_added: "{program} est sur la liste : ses commandes peuvent demander le trousseau.",
+    keychain_listed_already: "{program} est déjà sur la liste.",
+    keychain_removed: "{program} est retiré de la liste.",
+    keychain_not_listed: "{program} n'est pas sur la liste.",
+    keychain_opened: "Le trousseau est ouvert à toute commande que Glut exécute, d'une session à l'autre — glut \
+                      keychain close le referme.",
+    keychain_closed: "Le trousseau est de nouveau fermé à toute commande que Glut exécute ; les programmes listés le \
+                      demandent.",
 };

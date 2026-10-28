@@ -238,6 +238,22 @@ crate::catalog! {
         mcp_token_elsewhere: &'static str,
         /// Before the browser opens: the owner's Enter opens it, or a pasted address finishes.
         mcp_enter_opens: &'static str,
+        /// `glut keychain list` with the Keychain shut; the programs follow, one a line.
+        keychain_shut: &'static str,
+        /// `glut keychain list` with the Keychain open to every command; the programs follow.
+        keychain_open: &'static str,
+        /// A program put on the list: `{program}`.
+        keychain_added: &'static str,
+        /// `add` of a program on the list already: `{program}`.
+        keychain_listed_already: &'static str,
+        /// A program taken off the list: `{program}`.
+        keychain_removed: &'static str,
+        /// `remove` of a program not on the list: `{program}`.
+        keychain_not_listed: &'static str,
+        /// `glut keychain open`.
+        keychain_opened: &'static str,
+        /// `glut keychain close`.
+        keychain_closed: &'static str,
     }
 }
 

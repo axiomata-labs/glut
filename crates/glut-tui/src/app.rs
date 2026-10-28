@@ -518,6 +518,14 @@ impl App {
         for note in &parts.notes {
             transcript.note(note.clone(), Tone::Quiet);
         }
+        // T74: the Keychain kept open by `glut keychain open` is said at every start, in the fault colour — and a
+        // file that cannot be read, which leaves it shut with the default list.
+        if parts.tools.keychain().kept_open() {
+            transcript.note(tr!(keychain_kept_note), Tone::Fault);
+        }
+        if let Err(err) = glut::keychain::Owner::load(&parts.home) {
+            transcript.note(err.to_string(), Tone::Fault);
+        }
         // T42: a guide grown too large is said once at the start, in orange; the Meter tab keeps saying it.
         // A guide shortened below the limit since `/init` checked it counts afresh: its kept size goes.
         let mut guide_checked = prefs.guide_checked.clone();
@@ -862,6 +870,49 @@ impl App {
     pub fn say(&mut self, text: impl Into<String>) {
         // A toast may name a file the model made: cleaned like everything else drawn.
         self.toast = Some((crate::transcript::clean(&text.into()), Instant::now()));
+    }
+
+    /// `/keychain` (T74): the Keychain for the commands Glut runs — its state and list, a program put on the list or
+    /// taken off (kept in `~/.glut/keychain.json`), and the switch that opens it to every command for this session.
+    fn keychain_command(&mut self, rest: &str) {
+        let keychain = self.parts.tools.keychain().clone();
+        let words: Vec<&str> = rest.split_whitespace().collect();
+        match words.as_slice() {
+            [] => {
+                let programs = keychain.programs().join(", ");
+                self.tell(if !keychain.is_open() {
+                    tr!(keychain_shut, programs = programs)
+                } else if keychain.kept_open() {
+                    tr!(keychain_open_kept, programs = programs)
+                } else {
+                    tr!(keychain_open_session, programs = programs)
+                });
+            }
+            ["open"] => {
+                keychain.set_session_open(true);
+                self.say(tr!(keychain_opened));
+            }
+            ["close"] => {
+                keychain.set_session_open(false);
+                self.say(tr!(keychain_closed));
+            }
+            [verb @ ("add" | "remove"), program @ ..] if !program.is_empty() => {
+                let add = *verb == "add";
+                let program = program.join(" ");
+                let shown = match glut::keychain::check_program(&program) {
+                    Ok(shown) => shown,
+                    Err(reason) => return self.transcript.note(reason, Tone::Fault),
+                };
+                match keychain.change(&self.parts.home, &program, add) {
+                    Ok(true) if add => self.say(tr!(keychain_added, program = shown)),
+                    Ok(true) => self.say(tr!(keychain_removed, program = shown)),
+                    Ok(false) if add => self.tell(tr!(keychain_listed_already, program = shown)),
+                    Ok(false) => self.tell(tr!(keychain_not_listed, program = shown)),
+                    Err(reason) => self.transcript.note(reason, Tone::Fault),
+                }
+            }
+            _ => self.tell(tr!(keychain_usage)),
+        }
     }
 
     /// `/export`: the session as it was saved after its last turn, into a new file or onto the clipboard (T54).
@@ -3513,6 +3564,7 @@ impl App {
                     .transcript
                     .note(tr!(steps_bad, most = glut::config::MOST_TURNS), Tone::Fault),
             },
+            "keychain" => self.keychain_command(rest),
             "nudge" => match rest {
                 "on" | "off" => match prefs::set_nudge(&self.parts.home, rest == "on") {
                     Ok(()) if rest == "on" => self.say(tr!(nudge_on)),
@@ -9076,6 +9128,7 @@ pub(crate) mod tests {
                 target: "ls".into(),
                 scopes: Vec::new(),
                 from: None,
+                keychain: false,
             },
             reply,
         ));
@@ -10366,6 +10419,7 @@ pub(crate) mod tests {
                 target: "ls".into(),
                 scopes: Vec::new(),
                 from: None,
+                keychain: false,
             },
             reply,
         ));
@@ -10792,6 +10846,7 @@ pub(crate) mod tests {
                 target: "leave plan mode and carry out: 1. change a.rs …".into(),
                 scopes: vec!["accept_edits".into(), "auto".into(), "default".into()],
                 from: None,
+                keychain: false,
             },
             reply,
         ));
@@ -10901,6 +10956,7 @@ pub(crate) mod tests {
                 target: "leave plan mode and carry out: cut of".into(),
                 scopes: vec!["accept_edits".into()],
                 from: None,
+                keychain: false,
             },
             reply,
         ));
@@ -10938,6 +10994,44 @@ pub(crate) mod tests {
     fn typed(app: &mut App, text: &str) {
         app.input.insert_text(text);
         app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
+    }
+
+    #[test]
+    fn keychain_keeps_its_list_in_the_owners_file_and_opens_for_this_session_only() {
+        let home = std::env::temp_dir().join(format!(
+            "glut-tui-keychain-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&home).unwrap();
+        let mut app = app_in(&home, &[], &home);
+        let keychain = app.parts.tools.keychain().clone();
+        typed(&mut app, "/keychain add cargo");
+        assert!(keychain.wants("cargo tauri build").is_some());
+        assert!(
+            glut::keychain::Owner::load(&home)
+                .unwrap()
+                .programs()
+                .contains(&"cargo".to_owned()),
+            "kept in ~/.glut/keychain.json"
+        );
+        typed(&mut app, "/keychain remove git push");
+        assert!(keychain.wants("git push").is_none());
+        typed(&mut app, "/keychain add ../evil");
+        assert!(
+            last_note(&app).contains("no program"),
+            "{}",
+            last_note(&app)
+        );
+        typed(&mut app, "/keychain open");
+        assert!(keychain.is_open());
+        assert!(
+            !glut::keychain::Owner::load(&home).unwrap().open,
+            "open for this session only"
+        );
+        typed(&mut app, "/keychain close");
+        assert!(!keychain.is_open());
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]
@@ -11006,6 +11100,7 @@ pub(crate) mod tests {
                     "git *".into(),
                 ],
                 from: None,
+                keychain: false,
             },
             reply,
         ));

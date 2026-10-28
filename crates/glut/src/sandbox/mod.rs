@@ -168,6 +168,13 @@ pub struct Policy {
     pub proxy_port: Option<u16>,
     /// Everything on localhost is open (the owner's `allowLocalBinding`).
     pub local_binding: bool,
+    /// The Keychain's Mach services are open to the command (T74): the owner's list and the gate's word for this one
+    /// command, or the owner's switch for all. Shut by default.
+    pub keychain: bool,
+    /// Single files a command writes for Glut inside a folder it may not write (the shell's note of where a command
+    /// ended, in the scratch folder that also holds the profile snapshot every later command sources): allowed after
+    /// every deny, so nothing else of that folder opens with them.
+    pub notes: Vec<PathBuf>,
 }
 
 impl Policy {
@@ -206,6 +213,8 @@ impl Policy {
             git_dirs: git_dirs(root),
             proxy_port: None,
             local_binding: false,
+            keychain: false,
+            notes: Vec::new(),
         }
     }
 
@@ -297,6 +306,13 @@ impl Policy {
             out.push_str(&format!("  (regex #\"^{root}/(.*/)?\\.envrc$\")\n"));
         }
         out.push_str(")\n");
+        if !self.notes.is_empty() {
+            out.push_str("(allow file-write*\n");
+            for note in &self.notes {
+                out.push_str(&format!("  (literal {})\n", quoted(note)));
+            }
+            out.push_str(")\n");
+        }
         // Reading: everything but the secrets and the working folder's `.env` files.
         out.push_str("(deny file-read*\n");
         for path in &self.read_denied {
@@ -363,6 +379,15 @@ impl Policy {
         // process's environment needs no rule here: macOS refuses it to non-root processes anyway, sandbox or not, and
         // setuid programs like `ps` do not run in a sandbox at all.
         out.push_str("(deny signal)\n(allow signal (target same-sandbox))\n");
+        // The Keychain (T74): a stored key or sign-in is reached through securityd's Mach services, past every file
+        // rule above — shut unless this command was given it.
+        if !self.keychain {
+            out.push_str("(deny mach-lookup\n");
+            for service in crate::keychain::MACH_SERVICES {
+                out.push_str(&format!("  (global-name \"{service}\")\n"));
+            }
+            out.push_str(")\n");
+        }
         // The network: only the run's proxy — not the other services on this machine (the Opencode service, a
         // database), unless the owner opened localhost.
         out.push_str("(deny network*)\n");
@@ -717,6 +742,28 @@ mod tests {
             let out = sandboxed(&policy, &format!("{script} || echo REFUSED"));
             assert!(out.contains("REFUSED"), "{script}: {out}");
         }
+    }
+
+    #[test]
+    fn the_keychain_is_shut_to_a_command_unless_it_was_given_it() {
+        if !available() {
+            return;
+        }
+        let (home, root) = (temp("kc-home"), temp("kc-root"));
+        let mut policy = Policy::new(&root, &home, &[], &[]);
+        // git's own Keychain helper, asked for a host nobody keeps a key for: shut, securityd is out of reach (-50);
+        // open, it finds nothing and says so with silence.
+        let ask = "printf 'protocol=https\\nhost=example.invalid\\n\\n' | git credential-osxkeychain get; echo rc=$?";
+        let shut = sandboxed(&policy, ask);
+        if shut.contains("is not a git command") {
+            return;
+        }
+        assert!(shut.contains("-50") && !shut.contains("rc=0"), "{shut}");
+        policy.keychain = true;
+        let open = sandboxed(&policy, ask);
+        assert!(open.contains("rc=0") && !open.contains("-50"), "{open}");
+        // TLS trust is no Keychain business: it stays where it was.
+        assert!(!policy.profile().contains("mach-lookup"));
     }
 
     #[test]

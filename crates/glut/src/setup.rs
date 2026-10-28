@@ -43,6 +43,11 @@ pub async fn toolbox(
         glut_files,
     } = extras;
     let mut tools = Toolbox::new();
+    // T74: the owner's Keychain list and switch, shut when there is no home to read them from.
+    if let Ok(home) = crate::permissions::settings::home_dir() {
+        tools.set_keychain(crate::keychain::Keychain::owner(&home));
+    }
+    let keychain = tools.keychain().clone();
     // T60c: the folders beside the working one, which the caller adds to through `Toolbox::folders`.
     let beside = tools.folders().clone();
     tools.extend(file_tools(
@@ -77,6 +82,7 @@ pub async fn toolbox(
             sandbox: Some(sandbox),
             direct,
             beside,
+            keychain,
             ..ShellOptions::from_environment()
         },
     )?);

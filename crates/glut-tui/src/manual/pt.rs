@@ -1,7 +1,7 @@
 //! The commands' manual pages in Portuguese (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 57] = [
+pub const PAGES: [(&str, &str); 58] = [
     (
         "clear",
         "Começa uma sessão nova e vazia nesta pasta.\n\
@@ -560,6 +560,28 @@ pub const PAGES: [(&str, &str); 57] = [
          \n\
          A ocultação protege contra uma chave mostrada por acidente; o sandbox e o Gate de rede continuam sendo as \
          barreiras.",
+    ),
+    (
+        "keychain",
+        "Manter o porta-chaves fora do alcance dos comandos que o Glut executa.\n\
+         \n\
+         /keychain — se está aberto, e os programas que o podem pedir\n\
+         /keychain add <program> — põe um programa na lista (gh, ou git e um subcomando: git push)\n\
+         /keychain remove <program> — tira-o da lista\n\
+         /keychain open — abre-o a todo comando, até esta sessão terminar\n\
+         /keychain close — volta a fechá-lo\n\
+         \n\
+         Uma chave ou um início de sessão no porta-chaves alcança-se para lá de toda regra de ficheiros da sandbox, \
+         por isso um comando que o Glut executa encontra o porta-chaves fechado. Um comando de um programa da lista \
+         pergunta primeiro — em todo modo, também em `auto` — e corre com o porta-chaves aberto assim que o permites; \
+         um «sempre» torna-o uma regra tua. Sem ninguém presente (um plano, `glut run`) só uma regra assim \
+         o abre. Quando um comando falha no porta-chaves fechado, o Glut di-lo sob a sua saída.\n\
+         \n\
+         Permitir um comando dá o porta-chaves também a tudo o que ele inicia: um hook do git, uma extensão do gh ou \
+         um script de compilação pode então ler qualquer chave nele.\n\
+         \n\
+         A lista fica em `~/.glut/keychain.json`; `glut keychain open` mantém o porta-chaves aberto de uma sessão \
+         para outra, `glut keychain close` fecha-o de vez.",
     ),
     (
         "motion",

@@ -1,7 +1,7 @@
 //! The commands' manual pages in Chinese (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 57] = [
+pub const PAGES: [(&str, &str); 58] = [
     (
         "clear",
         "在此文件夹中开始一个新的空会话。\n\
@@ -488,6 +488,26 @@ pub const PAGES: [(&str, &str); 57] = [
          `~/.glut/secrets.json` 中。\n\
          \n\
          遮蔽只防范意外显示的密钥；沙箱和网络 Gate 仍是屏障。",
+    ),
+    (
+        "keychain",
+        "让钥匙串远离 Glut 运行的命令。\n\
+         \n\
+         /keychain — 它是否开放，以及可以请求它的程序\n\
+         /keychain add <program> — 把一个程序加入列表（gh，或 git 加子命令：git push）\n\
+         /keychain remove <program> — 把它从列表中移除\n\
+         /keychain open — 对所有命令开放，直到本会话结束\n\
+         /keychain close — 再次关闭它\n\
+         \n\
+         钥匙串中的密钥或登录可以绕过沙盒的每条文件规则被读取，所以 Glut \
+         运行的命令看到的钥匙串是关闭的。列表中程序的命令会先询问 — 在每种模式下，包括 `auto` — \
+         你允许后便在钥匙串开放的情况下运行；“总是”会把它变成你的一条规则。没有人在场时（计划、`glut \
+         run`），只有这样的规则才能打开它。当命令因钥匙串关闭而失败时，Glut 会在其输出下方说明。\n\
+         \n\
+         允许一个命令，也就把钥匙串交给了它启动的一切：git Hook、gh 扩展或构建脚本都可以读取其中的任何密钥。\n\
+         \n\
+         列表保存在 `~/.glut/keychain.json`；`glut keychain open` 让钥匙串跨会话保持开放，`glut keychain close` \
+         永久关闭它。",
     ),
     (
         "motion",
