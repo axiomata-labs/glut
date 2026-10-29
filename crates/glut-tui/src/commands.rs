@@ -80,6 +80,11 @@ impl Command {
     pub fn what(&self) -> &'static str {
         said(crate::texts::t().commands, self.name, self.what)
     }
+
+    /// What it does in a few words, in the language read now (T85): the `/` list's line.
+    pub fn short(&self) -> &'static str {
+        said(crate::texts::t().commands_short, self.name, self.what)
+    }
 }
 
 const fn command(
@@ -1074,6 +1079,36 @@ mod tests {
             "two characters, anywhere"
         );
         glut::lang::set_for_thread(None);
+    }
+
+    #[test]
+    fn every_language_says_every_command_in_a_few_words() {
+        let names: Vec<&str> = COMMANDS.iter().map(|command| command.name).collect();
+        let english: Vec<&str> = crate::texts::of(Lang::En)
+            .commands_short
+            .iter()
+            .map(|(_, short)| *short)
+            .collect();
+        for lang in Lang::ALL {
+            let texts = crate::texts::of(lang);
+            let named: Vec<&str> = texts.commands_short.iter().map(|(name, _)| *name).collect();
+            assert_eq!(
+                named,
+                names,
+                "{}: every command once, in order",
+                lang.code()
+            );
+            for ((name, short), english) in texts.commands_short.iter().zip(&english) {
+                // A few words: the `/` list is narrow (T85) — in cells, a Chinese or Japanese character takes two.
+                assert!(
+                    unicode_width::UnicodeWidthStr::width(*short) <= 40,
+                    "{} /{name}: {short}",
+                    lang.code()
+                );
+                let lost = crate::texts::check::kept_in(english, short);
+                assert!(lost.is_empty(), "{} /{name} lost {lost:?}", lang.code());
+            }
+        }
     }
 
     #[test]

@@ -15,6 +15,10 @@ use crate::{glimm, select, session, theme};
 const INPUT_ROWS: usize = 8;
 /// The most rows of its target an ask shows.
 const ASK_ROWS: usize = 12;
+/// The most rows the `/` list shows (T85): a handful to choose from, the rest ↑↓ or a letter away.
+const SUGGESTION_ROWS: usize = 10;
+/// The `/` list's widest: a name and a few words.
+const SUGGESTION_WIDTH: u16 = 60;
 /// The most rows a server's form takes (T67): a field per row, the focused one always in sight.
 const FORM_ROWS: usize = 16;
 /// The side panel takes this part of the screen (a third, the owner's choice), never less than its narrowest width;
@@ -2082,75 +2086,79 @@ fn panel_keys(app: &App, width: usize) -> Vec<Line<'static>> {
 }
 
 /// The commands a typed `/` fits, in a small list just above the input, the chosen one marked; a lone `/` shows
-/// them under their topics (T38), the headings never chosen.
+/// them by topic (T38), the topic quiet beside the first of each (T85).
 fn draw_suggestions(frame: &mut Frame, app: &App, area: Rect) {
     let suggestions = app.suggestions();
     if suggestions.is_empty() || area.height < 3 {
         return;
     }
+    // `/` alone lists every command by topic: the topic stands quiet beside the first of each (T85).
     let grouped = app.input.text() == "/";
     let chosen = app.suggested.min(suggestions.len() - 1);
-    // Every row: a topic's heading (`None`) or a command by its place in the list.
-    let mut rows: Vec<Option<usize>> = Vec::new();
-    for (at, command) in suggestions.iter().enumerate() {
-        if grouped && (at == 0 || suggestions[at - 1].topic != command.topic) {
-            rows.push(None);
-        }
-        rows.push(Some(at));
-    }
-    let shown = rows.len().min(usize::from(area.height) - 2);
-    let height = shown as u16 + 2;
-    // As wide as the longest help text needs (mark, name, gap, text and the frame), as far as the screen goes.
-    let needed = suggestions
-        .iter()
-        .map(|command| command.what().width() + 18)
-        .max()
-        .unwrap_or(40);
-    let width = area.width.min(needed as u16);
+    // A few rows, never more than half the stream — a short one gives what it has inside the frame: the rest is ↑↓
+    // away, or a letter typed. The row saying how many more goes first where there is no room for it.
+    let fits = usize::from(area.height) - 2;
+    let room = usize::from(area.height / 2)
+        .clamp(1, SUGGESTION_ROWS)
+        .min(fits);
+    let more_row = usize::from(suggestions.len() > room && room >= 2);
+    let shown = suggestions.len().min(room - more_row);
+    let first = chosen.saturating_sub(shown.saturating_sub(1));
+    let below = suggestions.len().saturating_sub(first + shown);
+    let height = (shown + more_row) as u16 + 2;
+    let width = area.width.min(SUGGESTION_WIDTH);
+    let inner = usize::from(width.saturating_sub(2));
     let place = Rect {
         x: area.x,
         y: area.y + area.height - height,
         width,
         height,
     };
-    let chosen_row = rows
+    let mut lines: Vec<Line> = suggestions
         .iter()
-        .position(|row| *row == Some(chosen))
-        .unwrap_or(0);
-    let first = chosen_row.saturating_sub(shown.saturating_sub(1));
-    let lines: Vec<Line> = rows
-        .iter()
+        .enumerate()
         .skip(first)
         .take(shown)
-        .enumerate()
-        .map(|(seen, row)| match row {
-            None => {
-                // The heading names the topic of the command below it.
-                let topic = rows[first + seen + 1..]
-                    .iter()
-                    .find_map(|row| *row)
-                    .map(|at| suggestions[at].topic.label())
-                    .unwrap_or_default();
-                Line::from(Span::styled(
-                    format!("  {topic}"),
-                    theme::glow().add_modifier(Modifier::BOLD),
-                ))
-            }
-            Some(at) => {
-                let command = suggestions[*at];
-                let style = if *at == chosen {
-                    theme::glow()
-                } else {
-                    Style::default()
-                };
-                Line::from(vec![
-                    Span::styled(if *at == chosen { "▸ " } else { "  " }, theme::glow()),
-                    Span::styled(format!("/{:<10}", command.name), style),
-                    Span::styled(format!(" {}", command.what()), theme::quiet()),
-                ])
-            }
+        .map(|(at, command)| {
+            let style = if at == chosen {
+                theme::glow()
+            } else {
+                Style::default()
+            };
+            let topic = if grouped && (at == 0 || suggestions[at - 1].topic != command.topic) {
+                command.topic.label()
+            } else {
+                ""
+            };
+            let name = format!("/{:<10}", command.name);
+            let used = 2 + name.width() + 1;
+            let text_room =
+                inner.saturating_sub(used + topic.width() + usize::from(!topic.is_empty()));
+            let what = crate::transcript::cut(command.short(), text_room);
+            let gap = inner.saturating_sub(used + what.width() + topic.width());
+            Line::from(vec![
+                Span::styled(if at == chosen { "▸ " } else { "  " }, theme::glow()),
+                Span::styled(name, style),
+                Span::styled(format!(" {what}"), theme::quiet()),
+                Span::raw(" ".repeat(gap)),
+                Span::styled(
+                    topic.to_owned(),
+                    theme::quiet().add_modifier(Modifier::ITALIC),
+                ),
+            ])
         })
         .collect();
+    if more_row > 0 {
+        let said = if below > 0 {
+            tr!(commands_more, n = below)
+        } else {
+            String::new()
+        };
+        lines.push(Line::from(Span::styled(
+            format!("  {said}"),
+            theme::quiet(),
+        )));
+    }
     // Framed as the pickers are (/model): the glow, it waits for the owner's choice.
     let block = Block::default()
         .borders(Borders::ALL)
@@ -2159,7 +2167,15 @@ fn draw_suggestions(frame: &mut Frame, app: &App, area: Rect) {
             format!(" {} ", tr!(commands_title)),
             theme::glow(),
         ));
-    frame.render_widget(Clear, place);
+    // Its rows clear across the stream: no cut-off tail of what stands behind peeks out beside the narrow list.
+    frame.render_widget(
+        Clear,
+        Rect {
+            x: area.x,
+            width: area.width,
+            ..place
+        },
+    );
     frame.render_widget(Paragraph::new(lines).block(block), place);
 }
 

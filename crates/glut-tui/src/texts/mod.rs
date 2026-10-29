@@ -36,6 +36,11 @@ glut::catalog! {
         /// What each `/` command does, by its name — every command of `commands::COMMANDS`, in its order; English's
         /// are its own words there.
         commands: &'static [(&'static str, &'static str)],
+        /// What each command does in a few words, by its name (T85): the `/` list's line — every command of
+        /// `commands::COMMANDS`, in its order.
+        commands_short: &'static [(&'static str, &'static str)],
+        /// The `/` list's last row while it holds more than it shows (T85): `{n}` how many more.
+        commands_more: &'static str,
         /// What each key does, by the key as written — every key of `commands::KEYS`, in its order.
         keys: &'static [(&'static str, &'static str)],
         /// `/help`'s heading of the commands.

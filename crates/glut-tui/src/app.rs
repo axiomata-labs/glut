@@ -12538,6 +12538,50 @@ pub(crate) mod tests {
         std::fs::write(out, html).unwrap();
     }
 
+    #[test]
+    fn the_command_list_fits_however_short_the_screen() {
+        // A pane among six, or a small window: the list stays inside the stream at every height.
+        for height in 4..12 {
+            let (mut app, _reports) = app();
+            type_text(&mut app, "/");
+            let mut terminal =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(60, height)).unwrap();
+            terminal
+                .draw(|frame| crate::view::draw(frame, &mut app))
+                .unwrap();
+            type_text(&mut app, "c");
+            terminal
+                .draw(|frame| crate::view::draw(frame, &mut app))
+                .unwrap();
+        }
+    }
+
+    /// T85's preview: the `/` list as the owner opens it, in German, written as HTML to `GLUT_PREVIEW`.
+    #[test]
+    #[ignore = "writes a preview for the owner to look at"]
+    fn preview_commands() {
+        let Ok(out) = std::env::var("GLUT_PREVIEW") else {
+            return;
+        };
+        crate::theme::set("glut");
+        glut::lang::set_for_thread(Some(glut::lang::Lang::De));
+        let (mut app, _reports) = app();
+        type_text(&mut app, "/");
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 34)).unwrap();
+        terminal
+            .draw(|frame| crate::view::draw(frame, &mut app))
+            .unwrap();
+        let mut html = buffer_html(terminal.backend().buffer());
+        type_text(&mut app, "lo");
+        terminal
+            .draw(|frame| crate::view::draw(frame, &mut app))
+            .unwrap();
+        html.push_str(&buffer_html(terminal.backend().buffer()));
+        glut::lang::set_for_thread(None);
+        std::fs::write(out, html).unwrap();
+    }
+
     /// The screens of the preview, each as a `<pre>` of coloured cells.
     fn preview_scenes() -> Vec<(&'static str, String)> {
         use glut::Event;
