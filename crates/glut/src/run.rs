@@ -469,7 +469,7 @@ async fn run_inner<M: ChatModel>(
         .offer
         .specs
         .iter()
-        .any(|spec| spec.name == crate::code::NAME);
+        .any(|spec| spec.name == crate::lsp::NAME);
     match opening {
         Opening::Fresh { earlier, prompt } => {
             run.messages = opening_messages(
@@ -1103,7 +1103,7 @@ impl Offer {
             && crate::sandbox::available()
             && tools.gate().is_none_or(|gate| {
                 gate.offers(
-                    crate::code::NAME,
+                    crate::lsp::NAME,
                     &Access::Read {
                         path: String::new(),
                     },
@@ -1114,7 +1114,7 @@ impl Offer {
                 .iter()
                 .chain(&behind)
                 .cloned()
-                .chain(offers_code.then(crate::code::spec))
+                .chain(offers_code.then(crate::lsp::spec))
                 .collect(),
         });
         let mut specs = if codemode {
@@ -1137,7 +1137,7 @@ impl Offer {
             specs.push(crate::task::spec(&config.agents));
         }
         if offers_code {
-            specs.push(crate::code::spec());
+            specs.push(crate::lsp::spec());
         }
         // Offered from the first turn on, so the tool list — and with it the prompt's cached head — stays put.
         specs.push(results::spec());
@@ -2627,7 +2627,7 @@ impl<'a, M: ChatModel> Loop<'a, M> {
         if self.offer.codemode && name == codemode::NAME {
             return Box::pin(self.run_codemode(call, sink)).await;
         }
-        if name == crate::code::NAME {
+        if name == crate::lsp::NAME {
             if !self
                 .offer
                 .catalog
@@ -2768,8 +2768,8 @@ impl<'a, M: ChatModel> Loop<'a, M> {
         // A subagent's steps are covered by the snapshot its parent took before the `task` call: one record per run.
         let changes = self.depth == 0
             && (call.function.name == crate::task::NAME
-                || (call.function.name == crate::code::NAME
-                    && crate::code::renames(&call.function.arguments))
+                || (call.function.name == crate::lsp::NAME
+                    && crate::lsp::renames(&call.function.arguments))
                 || match self
                     .tools
                     .access_of(&call.function.name, &call.function.arguments)
@@ -2866,8 +2866,8 @@ impl<'a, M: ChatModel> Loop<'a, M> {
     /// The `code` arm (T62): a question to the language server of the file — judged as a read of where its path really
     /// leads first —, its answer shaped for the model; a rename judged and made in [`Self::rename`].
     async fn run_code(&mut self, call: &ToolCall, sink: &mut dyn EventSink) -> (bool, String) {
-        use crate::code::{self, Op};
-        let args = match code::parse(&call.function.arguments) {
+        use crate::lsp::{self, Op};
+        let args = match lsp::parse(&call.function.arguments) {
             Ok(args) => args,
             Err(reason) => return (false, format!("error: {reason}")),
         };
@@ -2876,12 +2876,12 @@ impl<'a, M: ChatModel> Loop<'a, M> {
         if named.starts_with(['~', '/']) {
             return (
                 false,
-                "error: code knows the working folder's project only: give a path relative to it"
+                "error: lsp knows the working folder's project only: give a path relative to it"
                     .into(),
             );
         }
         // Judged where it really leads, as read_file judges a path: a link inside the folder is no way around a rule.
-        let Some(rel) = code::inside(&self.config.cwd, &self.config.cwd.join(named)) else {
+        let Some(rel) = lsp::inside(&self.config.cwd, &self.config.cwd.join(named)) else {
             return (
                 false,
                 format!("error: {named} is no file inside the working folder"),
@@ -2895,7 +2895,7 @@ impl<'a, M: ChatModel> Loop<'a, M> {
         }
         if let Some(gate) = self.tools.gate() {
             let read = Access::Read { path: rel.clone() };
-            if let Err(reason) = gate.judge(code::NAME, &read).await {
+            if let Err(reason) = gate.judge(lsp::NAME, &read).await {
                 return (false, format!("error: {reason}"));
             }
         }
@@ -2910,8 +2910,8 @@ impl<'a, M: ChatModel> Loop<'a, M> {
                 let root = servers.root().to_owned();
                 let mut question = |op: Op| {
                     servers.ask(&asked, op.method(), |uri, text| {
-                        let position = code::position(text, line, &symbol, occurrence)?;
-                        Ok(code::params(op, uri, position, new_name.as_deref()))
+                        let position = lsp::position(text, line, &symbol, occurrence)?;
+                        Ok(lsp::params(op, uri, position, new_name.as_deref()))
                     })
                 };
                 let answer = question(op)?;
@@ -2939,7 +2939,7 @@ impl<'a, M: ChatModel> Loop<'a, M> {
         let symbol = args.symbol.clone();
         match op {
             Op::Definition | Op::References => {
-                let places = code::places(&answer);
+                let places = lsp::places(&answer);
                 if places.is_empty() {
                     let what = if op == Op::Definition {
                         "definition"
@@ -2952,7 +2952,7 @@ impl<'a, M: ChatModel> Loop<'a, M> {
                     );
                 }
                 let after = if op == Op::Definition {
-                    code::DEFINITION_LINES_AFTER
+                    lsp::DEFINITION_LINES_AFTER
                 } else {
                     0
                 };
@@ -2967,7 +2967,7 @@ impl<'a, M: ChatModel> Loop<'a, M> {
                 };
                 // Files are read to show their lines: blocking work.
                 let body = tokio::task::spawn_blocking(move || {
-                    code::show_places(&places, &root, after, &shown)
+                    lsp::show_places(&places, &root, after, &shown)
                 })
                 .await
                 .unwrap_or_default();
@@ -2977,9 +2977,9 @@ impl<'a, M: ChatModel> Loop<'a, M> {
                 // Where it cannot be told where the definition lies, nothing is shown.
                 let held_back = defined.is_some_and(|defined| {
                     defined.is_err()
-                        || code::places(&defined.unwrap_or_default())
+                        || lsp::places(&defined.unwrap_or_default())
                             .iter()
-                            .filter_map(|place| code::inside(&root, &place.path))
+                            .filter_map(|place| lsp::inside(&root, &place.path))
                             .any(|rel| !shown(&rel))
                 });
                 if held_back {
@@ -2990,7 +2990,7 @@ impl<'a, M: ChatModel> Loop<'a, M> {
                         ),
                     );
                 }
-                let text = code::hover_text(&answer);
+                let text = lsp::hover_text(&answer);
                 if text.is_empty() {
                     (
                         true,
@@ -3026,7 +3026,7 @@ impl<'a, M: ChatModel> Loop<'a, M> {
     ) -> (bool, String) {
         /// Files whose errors follow a rename: each waits for its server.
         const CHECKED_AFTER: usize = 5;
-        let edits = match crate::code::workspace_edits(answer) {
+        let edits = match crate::lsp::workspace_edits(answer) {
             Ok(edits) if edits.is_empty() => {
                 return (
                     false,
@@ -3065,12 +3065,12 @@ impl<'a, M: ChatModel> Loop<'a, M> {
                 .collect();
             let shown = format!(
                 "rename {} → {}: {places} place(s) in {} file(s): {}",
-                crate::code::short(symbol),
-                crate::code::short(new_name),
+                crate::lsp::short(symbol),
+                crate::lsp::short(new_name),
                 files.len(),
                 listed.join(", ")
             );
-            if let Err(reason) = gate.judge_all(crate::code::NAME, &accesses, &shown).await {
+            if let Err(reason) = gate.judge_all(crate::lsp::NAME, &accesses, &shown).await {
                 return (false, format!("error: {reason}"));
             }
         }
@@ -3081,7 +3081,7 @@ impl<'a, M: ChatModel> Loop<'a, M> {
             for (rel, edits) in &files {
                 let opened = crate::tools::files::open_for_change(&cwd, rel)
                     .map_err(|reason| format!("{rel}: {reason}"))?;
-                let text = crate::code::apply(&opened.text, edits, Some(&old))
+                let text = crate::lsp::apply(&opened.text, edits, Some(&old))
                     .map_err(|reason| format!("{rel}: {reason}"))?;
                 changed.push((opened, text, rel.clone(), edits.len()));
             }
@@ -4457,8 +4457,7 @@ mod tests {
         tools.extend([Box::new(Echo) as Box<dyn Tool>]);
         let offered = |config: &RunConfig, depth: u32| {
             let offer = Offer::of(config, &tools, depth, false);
-            let named =
-                |specs: &[ToolSpec]| specs.iter().any(|spec| spec.name == crate::code::NAME);
+            let named = |specs: &[ToolSpec]| specs.iter().any(|spec| spec.name == crate::lsp::NAME);
             (named(&offer.specs), named(&offer.catalog.specs))
         };
         let mut config = RunConfig::new("/tmp");

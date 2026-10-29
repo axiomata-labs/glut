@@ -253,7 +253,7 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "lsp",
-            "si les serveurs de langage aident : erreurs après une modification et l'outil code pour définitions, \
+            "si les serveurs de langage aident : erreurs après une modification et l'outil lsp pour définitions, \
              usages et renommages — /lsp seul montre chaque serveur",
         ),
         (
@@ -754,12 +754,12 @@ pub const TEXTS: Texts = Texts {
                qu'il travaille et lui demande d'en écrire une quand il n'en a pas",
     nudge_off: "un tour s'arrête là où le modèle l'arrête — ni rappel de la liste ni demande d'une",
     lsp_now: "serveurs de langage : {lsp} — /lsp on ou off",
-    lsp_on: "les serveurs de langage servent de nouveau : erreurs après une modification, et l'outil code pour \
+    lsp_on: "les serveurs de langage servent de nouveau : erreurs après une modification, et l'outil lsp pour \
 définitions, usages et renommages",
     lsp_off: "serveurs de langage arrêtés : processus terminés, plus d'erreurs après une modification, plus d'outil \
 code",
     lsp_busy: "  les serveurs répondent à une question — regarde de nouveau dans un instant",
-    lsp_none: "  aucun démarré dans cette session — la première modification ou question code en démarre un",
+    lsp_none: "  aucun démarré dans cette session — la première modification ou question lsp en démarre un",
     lsp_ready: "prêt",
     lsp_indexing: "indexe le projet",
     lsp_given_up: "arrêté pour cette session (refusé, cassé ou muet)",
@@ -1402,9 +1402,9 @@ code",
             "Un plan et l'historique de ses passages supprimés ; ses sessions restent",
         ),
         (
-            "Start no language server: no errors after an edit, no `code` tool (T62; `\"lsp\": false` in \
+            "Start no language server: no errors after an edit, no `lsp` tool (T62; `\"lsp\": false` in \
              ~/.glut/settings.json)",
-            "Ne démarre aucun serveur de langage : pas d'erreurs après une modification, pas d'outil `code` (T62 ; \
+            "Ne démarre aucun serveur de langage : pas d'erreurs après une modification, pas d'outil `lsp` (T62 ; \
              `\"lsp\": false` dans ~/.glut/settings.json)",
         ),
         (

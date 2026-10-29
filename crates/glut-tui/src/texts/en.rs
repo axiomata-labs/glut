@@ -381,11 +381,11 @@ pub const TEXTS: Texts = Texts {
                asks it to write one when it has none",
     nudge_off: "a turn ends where the model ends it — no reminder of the task list and no request for one",
     lsp_now: "language servers: {lsp} — /lsp on or off",
-    lsp_on: "the language servers serve again: errors after an edit, and the code tool for definitions, uses and \
+    lsp_on: "the language servers serve again: errors after an edit, and the lsp tool for definitions, uses and \
 renames",
-    lsp_off: "language servers off: their processes ended, no errors after an edit, no code tool",
+    lsp_off: "language servers off: their processes ended, no errors after an edit, no lsp tool",
     lsp_busy: "  the servers are answering a question right now — look again in a moment",
-    lsp_none: "  none started in this session yet — the first edit or code question starts one",
+    lsp_none: "  none started in this session yet — the first edit or lsp question starts one",
     lsp_ready: "ready",
     lsp_indexing: "indexing the project",
     lsp_given_up: "off for this session (refused, broken or silent)",

@@ -1,5 +1,6 @@
-//! The `code` tool (T62): where a symbol is defined, where it is used, what it is, and renaming it — asked of the
+//! The `lsp` tool (T62): where a symbol is defined, where it is used, what it is, and renaming it — asked of the
 //! language servers that report an edit's errors ([`crate::diagnostics`]), the same safe servers in the run's sandbox.
+//! Named as Claude Code and Opencode name theirs, which models know: as `code`, beside `codemode`, it was never called.
 //!
 //! * **A symbol by line and name**: the model names the file, the line as `read_file` numbers it and the symbol as it
 //!   stands there; Glut finds the column — models miscount columns, never the lines they read.
@@ -18,7 +19,7 @@ use serde_json::{Value, json};
 
 use crate::model::ToolSpec;
 
-pub(crate) const NAME: &str = "code";
+pub(crate) const NAME: &str = "lsp";
 
 /// Lines shown after a definition's own.
 pub(crate) const DEFINITION_LINES_AFTER: usize = 3;

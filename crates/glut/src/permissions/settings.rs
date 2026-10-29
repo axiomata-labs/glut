@@ -115,7 +115,7 @@ struct File {
     /// owner's only.
     #[serde(default)]
     nudge: Option<bool>,
-    /// Whether the language servers serve the runs (T62): an edit's errors and the `code` tool; `false` turns both
+    /// Whether the language servers serve the runs (T62): an edit's errors and the `lsp` tool; `false` turns both
     /// off. The owner's only.
     #[serde(default)]
     lsp: Option<bool>,

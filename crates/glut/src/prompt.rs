@@ -37,13 +37,13 @@ const WORKING_TODOS: &str = "
 in_progress when you start it and done the moment it is done — the owner watches the list live. Make the items \
 the steps you will really take one after another; what you do in one go, mark done together once it is.";
 
-/// The language servers' part of [`WORKING`], only where `code` is offered (T62).
+/// The language servers' part of [`WORKING`], only where `lsp` is offered (T62).
 const WORKING_CODE: &str = "
-- To find where a symbol is defined or used, ask code rather than grep: it finds the symbol itself, not every word \
-that looks like it. Rename a symbol with code, not by editing each place.";
+- To find where a symbol is defined or used, ask lsp rather than grep: it finds the symbol itself, not every word \
+that looks like it. Rename a symbol with lsp, not by editing each place.";
 
 /// The system prompt for a run in `cwd` on `date` with `model`, with the caller's instructions, if any, after it;
-/// `todos`: `todo_write` is offered, and the guide says how to keep its list; `code`: `code` is offered (T62).
+/// `todos`: `todo_write` is offered, and the guide says how to keep its list; `code`: `lsp` is offered (T62).
 /// It names the harness and the model, so a model asked who it is says where it runs rather than a name it learned
 /// (DeepSeek in the Glut chat called itself "Claude", `docs/plans/glut-round.md`).
 pub fn system_prompt(
@@ -102,7 +102,7 @@ mod tests {
         );
         assert!(prompt.ends_with("\n\nBe a reviewer."));
         assert!(prompt.contains("## How to work") && prompt.contains("todo_write"));
-        assert!(prompt.contains("ask code rather than grep"));
+        assert!(prompt.contains("ask lsp rather than grep"));
         let bare = system_prompt(
             Path::new("/w"),
             "2026-10-13",
@@ -113,7 +113,7 @@ mod tests {
         );
         assert!(bare.ends_with(WORKING), "blank instructions add nothing");
         assert!(
-            !bare.contains("todo_write") && !bare.contains("ask code"),
+            !bare.contains("todo_write") && !bare.contains("ask lsp"),
             "no list to keep and no server to ask where neither is offered"
         );
     }

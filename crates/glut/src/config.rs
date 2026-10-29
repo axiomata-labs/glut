@@ -395,7 +395,7 @@ pub struct RunConfig {
     /// events say it.
     pub savings: Option<PathBuf>,
     /// Whether the language servers serve the run (Glut 2, G12; T62): an edit's result carries the server's errors for
-    /// the file, and the `code` tool is offered. On by default (the owner's `lsp`); without an installed server for a
+    /// the file, and the `lsp` tool is offered. On by default (the owner's `lsp`); without an installed server for a
     /// file's language nothing is added.
     pub diagnostics: bool,
     /// The language servers the run asks (T62). A host keeps one for a whole session and clones it into each turn's

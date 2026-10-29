@@ -252,7 +252,7 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "lsp",
-            "se i server di linguaggio aiutano: errori dopo una modifica e lo strumento code per definizioni, usi e \
+            "se i server di linguaggio aiutano: errori dopo una modifica e lo strumento lsp per definizioni, usi e \
              rinomine — /lsp da solo mostra ogni server",
         ),
         (
@@ -755,11 +755,11 @@ pub const TEXTS: Texts = Texts {
                mentre lavora e gli chiede di scriverne una quando non ne ha nessuna",
     nudge_off: "un turno finisce dove il modello lo finisce — nessun richiamo alla lista, nessuna richiesta",
     lsp_now: "server di linguaggio: {lsp} — /lsp on o off",
-    lsp_on: "i server di linguaggio servono di nuovo: errori dopo una modifica e lo strumento code per definizioni, \
+    lsp_on: "i server di linguaggio servono di nuovo: errori dopo una modifica e lo strumento lsp per definizioni, \
 usi e rinomine",
-    lsp_off: "server di linguaggio spenti: processi terminati, niente errori dopo una modifica, niente strumento code",
+    lsp_off: "server di linguaggio spenti: processi terminati, niente errori dopo una modifica, niente strumento lsp",
     lsp_busy: "  i server stanno rispondendo a una domanda — guarda di nuovo tra un attimo",
-    lsp_none: "  nessuno avviato in questa sessione — la prima modifica o domanda code ne avvia uno",
+    lsp_none: "  nessuno avviato in questa sessione — la prima modifica o domanda lsp ne avvia uno",
     lsp_ready: "pronto",
     lsp_indexing: "indicizza il progetto",
     lsp_given_up: "spento per questa sessione (rifiutato, rotto o muto)",
@@ -1397,9 +1397,9 @@ usi e rinomine",
             "Un piano e il registro delle sue esecuzioni rimossi; le sue sessioni restano",
         ),
         (
-            "Start no language server: no errors after an edit, no `code` tool (T62; `\"lsp\": false` in \
+            "Start no language server: no errors after an edit, no `lsp` tool (T62; `\"lsp\": false` in \
              ~/.glut/settings.json)",
-            "Non avvia alcun server di linguaggio: niente errori dopo una modifica, niente strumento `code` (T62; \
+            "Non avvia alcun server di linguaggio: niente errori dopo una modifica, niente strumento `lsp` (T62; \
              `\"lsp\": false` in ~/.glut/settings.json)",
         ),
         (

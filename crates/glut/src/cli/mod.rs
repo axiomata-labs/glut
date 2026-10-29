@@ -178,7 +178,7 @@ pub struct RunArgs {
     #[arg(long)]
     #[serde(default)]
     no_mask: bool,
-    /// Start no language server: no errors after an edit, no `code` tool (T62; `"lsp": false` in
+    /// Start no language server: no errors after an edit, no `lsp` tool (T62; `"lsp": false` in
     /// ~/.glut/settings.json).
     #[arg(long)]
     #[serde(default)]

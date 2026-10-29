@@ -427,7 +427,7 @@ pub const COMMANDS: [Command; 62] = [
         Topic::Settings,
         "lsp",
         "[on|off]",
-        "whether the language servers serve: errors after an edit and the code tool for definitions, uses and renames \
+        "whether the language servers serve: errors after an edit and the lsp tool for definitions, uses and renames \
          — /lsp alone shows each server",
     ),
     command(

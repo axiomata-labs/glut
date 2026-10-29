@@ -7,7 +7,7 @@
 //!   `didChange` with the whole text, and wait until the server has been quiet for a moment (at most
 //!   [`WAIT_LIMIT`]); the last `publishDiagnostics` for the file counts. Only errors go to the model, at most
 //!   [`MAX_ERRORS`]. A server that is not installed, or slow, adds nothing — it never fails the edit.
-//! * **Questions** (T62, the `code` tool): definition, references, hover and rename go to the same servers, once a
+//! * **Questions** (T62, the `lsp` tool): definition, references, hover and rename go to the same servers, once a
 //!   server has finished indexing ([`INDEX_LIMIT`] at its first question); the `code` module shapes them.
 //! * **Blocking work** (the server's pipes) runs on tokio's blocking pool. The servers live in [`LanguageServers`],
 //!   which a host keeps for a whole session (a new run would index the project anew) and a run shares with its
@@ -899,7 +899,7 @@ mod tests {
     #[test]
     #[ignore = "needs rust-analyzer"]
     fn rust_analyzer_answers_questions_about_a_symbol() {
-        use crate::code::{self, Op};
+        use crate::lsp::{self, Op};
         let dir = std::env::temp_dir().join(format!("glut-code-live-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::write(
@@ -921,21 +921,20 @@ mod tests {
         let mut ask = |op: Op, line: u32, symbol: &str| {
             servers
                 .ask("src/main.rs", op.method(), |uri, text| {
-                    let position = code::position(text, line, symbol, 1)?;
-                    Ok(code::params(op, uri, position, Some("Note")))
+                    let position = lsp::position(text, line, symbol, 1)?;
+                    Ok(lsp::params(op, uri, position, Some("Note")))
                 })
                 .unwrap()
         };
-        let definition = code::places(&ask(Op::Definition, 9, "make"));
+        let definition = lsp::places(&ask(Op::Definition, 9, "make"));
         assert_eq!(definition.len(), 1, "{definition:?}");
         assert_eq!(definition[0].line, 3);
-        let uses = code::places(&ask(Op::References, 2, "Letter"));
+        let uses = lsp::places(&ask(Op::References, 2, "Letter"));
         assert_eq!(uses.len(), 3, "{uses:?}");
-        assert!(code::hover_text(&ask(Op::Hover, 4, "Letter")).contains("A note."));
-        let edits = code::workspace_edits(&ask(Op::Rename, 2, "Letter")).unwrap();
+        assert!(lsp::hover_text(&ask(Op::Hover, 4, "Letter")).contains("A note."));
+        let edits = lsp::workspace_edits(&ask(Op::Rename, 2, "Letter")).unwrap();
         let text = std::fs::read_to_string(root.join("src/main.rs")).unwrap();
-        let renamed =
-            code::apply(&text, &edits[&root.join("src/main.rs")], Some("Letter")).unwrap();
+        let renamed = lsp::apply(&text, &edits[&root.join("src/main.rs")], Some("Letter")).unwrap();
         assert_eq!(renamed.matches("Note").count(), 3, "{renamed}");
         assert!(!renamed.contains("Letter"), "{renamed}");
         let _ = std::fs::remove_dir_all(&dir);

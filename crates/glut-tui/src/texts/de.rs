@@ -252,7 +252,7 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "lsp",
-            "ob die Language Server helfen: Fehler nach dem Bearbeiten und das Werkzeug code für Definitionen, \
+            "ob die Language Server helfen: Fehler nach dem Bearbeiten und das Werkzeug lsp für Definitionen, \
              Verwendungen und Umbenennen — /lsp allein zeigt jeden Server",
         ),
         (
@@ -737,11 +737,11 @@ pub const TEXTS: Texts = Texts {
                bittet es um eine, wenn es keine hat",
     nudge_off: "ein Turn endet, wo das Modell ihn beendet — keine Erinnerung an die Liste, keine Bitte darum",
     lsp_now: "Language Server: {lsp} — /lsp on oder off",
-    lsp_on: "die Language Server helfen wieder: Fehler nach dem Bearbeiten und das Werkzeug code für Definitionen, \
+    lsp_on: "die Language Server helfen wieder: Fehler nach dem Bearbeiten und das Werkzeug lsp für Definitionen, \
 Verwendungen und Umbenennen",
-    lsp_off: "Language Server aus: ihre Prozesse beendet, keine Fehler nach dem Bearbeiten, kein Werkzeug code",
+    lsp_off: "Language Server aus: ihre Prozesse beendet, keine Fehler nach dem Bearbeiten, kein Werkzeug lsp",
     lsp_busy: "  die Server beantworten gerade eine Frage — gleich noch einmal schauen",
-    lsp_none: "  in dieser Session noch keiner gestartet — das erste Bearbeiten oder die erste code-Frage startet \
+    lsp_none: "  in dieser Session noch keiner gestartet — das erste Bearbeiten oder die erste lsp-Frage startet \
 einen",
     lsp_ready: "bereit",
     lsp_indexing: "indexiert das Projekt",
@@ -1383,9 +1383,9 @@ einen",
             "Ein Plan und die Liste seiner Läufe fort; seine Sessions bleiben",
         ),
         (
-            "Start no language server: no errors after an edit, no `code` tool (T62; `\"lsp\": false` in \
+            "Start no language server: no errors after an edit, no `lsp` tool (T62; `\"lsp\": false` in \
              ~/.glut/settings.json)",
-            "Startet keinen Language Server: keine Fehler nach dem Bearbeiten, kein Werkzeug `code` (T62; `\"lsp\": \
+            "Startet keinen Language Server: keine Fehler nach dem Bearbeiten, kein Werkzeug `lsp` (T62; `\"lsp\": \
              false` in ~/.glut/settings.json)",
         ),
         (

@@ -601,7 +601,7 @@ pub fn tool_hue(name: &str) -> Option<Color> {
     let at = |index: usize| hues[index % hues.len()];
     Some(match name {
         "write_file" | "edit_file" | "glut_file" | "memory" => c().glow,
-        "read_file" | "glob" | "grep" | "list_dir" | "outline" | "read_full_result" | "code" => {
+        "read_file" | "glob" | "grep" | "list_dir" | "outline" | "read_full_result" | "lsp" => {
             at(0)
         }
         "bash" | "bash_output" | "kill_shell" | "codemode" => at(1),

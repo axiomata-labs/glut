@@ -2649,7 +2649,7 @@ mod tests {
         // Default mode asks about an edit: one question for the two, nothing kept from it.
         let asker = Arc::new(Always(Answer::AllowAlways, Mutex::new(0)));
         let gate = Gate::new(RuleSet::default(), Mode::Default, asker.clone());
-        assert!(gate.judge_all("code", &both, "rename a → b").await.is_ok());
+        assert!(gate.judge_all("lsp", &both, "rename a → b").await.is_ok());
         assert_eq!(*asker.1.lock().unwrap(), 1);
         assert!(
             gate.granted().is_empty(),
@@ -2664,7 +2664,7 @@ mod tests {
             Mode::Default,
             Arc::new(Always(Answer::Deny, Mutex::new(0))),
         );
-        assert!(gate.judge_all("code", &both, "rename a → b").await.is_err());
+        assert!(gate.judge_all("lsp", &both, "rename a → b").await.is_err());
         assert!(gate.take_log().iter().all(|judged| !judged.allowed));
         // A rule refusing one file refuses the whole rename, nobody asked; plan mode writes nothing.
         let asker = Arc::new(Always(Answer::Allow, Mutex::new(0)));
@@ -2673,17 +2673,17 @@ mod tests {
             ..RuleSet::default()
         };
         let gate = Gate::new(rules, Mode::AcceptEdits, asker.clone());
-        assert!(gate.judge_all("code", &both, "rename a → b").await.is_err());
+        assert!(gate.judge_all("lsp", &both, "rename a → b").await.is_err());
         let gate = Gate::new(RuleSet::default(), Mode::Plan, asker.clone());
-        assert!(gate.judge_all("code", &both, "rename a → b").await.is_err());
+        assert!(gate.judge_all("lsp", &both, "rename a → b").await.is_err());
         assert_eq!(*asker.1.lock().unwrap(), 0);
         // Accepting edits: no question at all.
         let gate = Gate::new(RuleSet::default(), Mode::AcceptEdits, asker.clone());
-        assert!(gate.judge_all("code", &both, "rename a → b").await.is_ok());
+        assert!(gate.judge_all("lsp", &both, "rename a → b").await.is_ok());
         assert_eq!(*asker.1.lock().unwrap(), 0);
         // Nobody there to ask: refused.
         let gate = Gate::new(RuleSet::default(), Mode::Default, Arc::new(Nobody));
-        assert!(gate.judge_all("code", &both, "rename a → b").await.is_err());
+        assert!(gate.judge_all("lsp", &both, "rename a → b").await.is_err());
     }
 
     #[tokio::test]
