@@ -136,6 +136,15 @@ scripts/install.sh               # glut for every terminal: ~/.cargo/bin, linked
   program, every `PATH` folder) never lies where a plan's commands write, or a run would leave the next one a
   program outside the sandbox. A plan's name is a file's and a launchd label's part: `check_name` before it reaches
   a path.
+- **`code` asks the safe language servers, and a rename is one change** (T62, `crates/glut/src/code.rs`,
+  `diagnostics.rs` `LanguageServers`): the same `SAFE_PROGRAMS` as an edit's errors, in the sandbox, started only where
+  the gate allows the command line (`Diagnostics::allow`; nothing else starts one) — a new server needs its own audit
+  (it must never run the project's code). Every path is judged where it really leads (`code::inside`, links followed),
+  every question as a read of its file first; what an answer names outside the folder, or in a file the rules hold
+  back, shows by path alone, and a hover only where its definition may be read. A rename goes through
+  `Gate::judge_all` (every file weighed as an edit, one ask, all or none) and `files::open_for_change`, never a write
+  of its own, and only where every replaced piece is the old name; one that would create, move or delete a file, or
+  reach one through a link, is not done.
 - **A server's question is the owner's alone** (T67, `crates/glut/src/mcp/elicit.rs`, `client.rs` `Asks`,
   `glut-tui/src/form.rs`): an `elicitation/create` goes through the call's `Gate::fill` to the asker — never to the
   model, declined where nobody is there; a form whose field reads like a secret is declined unshown. A server's own

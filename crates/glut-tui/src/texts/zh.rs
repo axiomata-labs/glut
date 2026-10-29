@@ -185,6 +185,10 @@ pub const TEXTS: Texts = Texts {
             "Glut 是否让模型在回合结束时继续、在工作时提醒它的任务清单、没有清单时请它写一份",
         ),
         (
+            "lsp",
+            "是否使用语言服务器：编辑后的错误，以及用于定义、引用和重命名的 code 工具 — 单独 /lsp 显示每个服务器",
+        ),
+        (
             "reader",
             "供读屏软件使用：按键用文字表示，界面简洁，没有动态，每次状态变化一行",
         ),
@@ -262,6 +266,7 @@ pub const TEXTS: Texts = Texts {
         ("rule", "本会话的规则"),
         ("maxsteps", "每轮最多步数"),
         ("nudge", "让模型专注任务"),
+        ("lsp", "语言服务器"),
         ("reader", "供读屏软件使用"),
         ("language", "Glut 使用的语言"),
         ("theme", "选择配色"),
@@ -605,6 +610,14 @@ pub const TEXTS: Texts = Texts {
     nudge_now: "让模型继续：{nudge} — /nudge on 或 off",
     nudge_on: "Glut 在回合结束时让模型继续，工作时提醒它的任务清单，它没有清单时还请它写一份",
     nudge_off: "回合在模型结束的地方结束 — 不提醒任务清单，也不请求写一份",
+    lsp_now: "语言服务器：{lsp} — /lsp on 或 off",
+    lsp_on: "语言服务器重新工作：编辑后的错误，以及用于定义、引用和重命名的 code 工具",
+    lsp_off: "语言服务器已关闭：进程已结束，编辑后不再报错，没有 code 工具",
+    lsp_busy: "  服务器正在回答一个问题 — 稍后再看",
+    lsp_none: "  本会话尚未启动任何服务器 — 第一次编辑或 code 提问会启动一个",
+    lsp_ready: "就绪",
+    lsp_indexing: "正在为项目建立索引",
+    lsp_given_up: "本会话中已关闭（被拒绝、出错或无响应）",
     thinking_unknown: "/thinking {word}：off、folded 或 open",
     no_command: "没有命令 /{name} — /help 列出全部",
     model_locked: "本会话的模型由启动它的程序设定 — 此处不能切换",
@@ -1199,6 +1212,11 @@ pub const TEXTS: Texts = Texts {
         (
             "A plan and its record of runs gone; its sessions stay",
             "删除计划及其运行记录；其会话保留",
+        ),
+        (
+            "Start no language server: no errors after an edit, no `code` tool (T62; `\"lsp\": false` in \
+             ~/.glut/settings.json)",
+            "不启动任何语言服务器：编辑后不报错，没有 `code` 工具（T62；~/.glut/settings.json 中的 `\"lsp\": false`）",
         ),
         (
             "Send what the tools answer as it is, without hiding the keys in it (T58; `\"mask\": false` in \

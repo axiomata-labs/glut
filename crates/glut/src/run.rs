@@ -432,11 +432,11 @@ async fn run_inner<M: ChatModel>(
             Vec::new()
         },
         snapshots: SnapshotState::Unopened,
-        diagnostics: None,
         chain: None,
         shown: std::collections::HashMap::new(),
         refusals: Ledger::new(config.refusals),
         refused_now: Vec::new(),
+        servers_refused: std::collections::HashSet::new(),
         subagent_refusals: 0,
         window: config
             .compaction
@@ -465,6 +465,11 @@ async fn run_inner<M: ChatModel>(
         reading_told: false,
     };
     let mut resumed_calls = Vec::new();
+    let offers_code = run
+        .offer
+        .specs
+        .iter()
+        .any(|spec| spec.name == crate::code::NAME);
     match opening {
         Opening::Fresh { earlier, prompt } => {
             run.messages = opening_messages(
@@ -474,6 +479,7 @@ async fn run_inner<M: ChatModel>(
                 prompt,
                 depth,
                 &tools.folders().prompt(),
+                offers_code,
             );
             if depth == 0
                 && let Some(spec) = &config.journal
@@ -499,6 +505,7 @@ async fn run_inner<M: ChatModel>(
                     "",
                     depth,
                     &tools.folders().prompt(),
+                    offers_code,
                 )
                 .remove(0),
             ];
@@ -641,6 +648,7 @@ fn opening_messages(
     prompt: &str,
     depth: u32,
     beside: &str,
+    code: bool,
 ) -> Vec<Message> {
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let system = if depth == 0 {
@@ -650,6 +658,7 @@ fn opening_messages(
             model,
             config.instructions.as_deref(),
             config.todos,
+            code,
         )
     } else {
         // A named agent's own text follows the subagent's frame (T37a); a plain subagent has none (D5).
@@ -790,8 +799,6 @@ struct Loop<'a, M: ChatModel> {
     todos: Vec<planning::TodoItem>,
     /// Glut 2, D: the work folder's snapshots of this run, opened at its first change.
     snapshots: SnapshotState,
-    /// Glut 2, D: the language servers this run started for its edits, at the first one.
-    diagnostics: Option<Arc<std::sync::Mutex<crate::diagnostics::Diagnostics>>>,
     /// Durable runs: the run's journal, when it keeps one (depth 0 only).
     journal: Option<Journal>,
     /// How many of `messages` the journal holds.
@@ -805,6 +812,9 @@ struct Loop<'a, M: ChatModel> {
     refusals: Ledger,
     /// The current call's refusals judged outside [`Self::perform`] (the `task` judgement), taken by it.
     refused_now: Vec<Refusal>,
+    /// The language servers the gate refused to start in this run (T62): not asked about again in it — the next run
+    /// (another mode, other rules) asks afresh.
+    servers_refused: std::collections::HashSet<&'static str>,
     /// The refusals of the subagent the current call started, taken by [`Self::perform`] (R5).
     subagent_refusals: u32,
     /// #111: what the run knows of its model's context window.
@@ -1084,8 +1094,28 @@ impl Offer {
             behind.retain(|spec| spec.name != crate::config::LOOP_TOOL);
         }
         let codemode = config.codemode && !(direct.is_empty() && behind.is_empty());
+        // T62: the language servers' questions where the owner lets them serve and they can run — in the sandbox.
+        let offers_code = config.diagnostics
+            && config
+                .sandbox
+                .as_ref()
+                .is_some_and(|sandbox| sandbox.enabled)
+            && crate::sandbox::available()
+            && tools.gate().is_none_or(|gate| {
+                gate.offers(
+                    crate::code::NAME,
+                    &Access::Read {
+                        path: String::new(),
+                    },
+                )
+            });
         let catalog = Arc::new(codemode::Catalog {
-            specs: direct.iter().chain(&behind).cloned().collect(),
+            specs: direct
+                .iter()
+                .chain(&behind)
+                .cloned()
+                .chain(offers_code.then(crate::code::spec))
+                .collect(),
         });
         let mut specs = if codemode {
             direct.clone()
@@ -1105,6 +1135,9 @@ impl Offer {
             .is_none_or(|gate| gate.offers(crate::task::NAME, &Access::Other));
         if depth == 0 && config.subagents && task_offered {
             specs.push(crate::task::spec(&config.agents));
+        }
+        if offers_code {
+            specs.push(crate::code::spec());
         }
         // Offered from the first turn on, so the tool list — and with it the prompt's cached head — stays put.
         specs.push(results::spec());
@@ -2594,6 +2627,23 @@ impl<'a, M: ChatModel> Loop<'a, M> {
         if self.offer.codemode && name == codemode::NAME {
             return Box::pin(self.run_codemode(call, sink)).await;
         }
+        if name == crate::code::NAME {
+            if !self
+                .offer
+                .catalog
+                .specs
+                .iter()
+                .any(|spec| spec.name == *name)
+            {
+                return Ok((
+                    false,
+                    format!(
+                        "error: {name} is offered only where the language servers may run (/lsp)"
+                    ),
+                ));
+            }
+            return Ok(self.run_code(call, sink).await);
+        }
         self.chain = None;
         // T40: beside other subagents a write holds its path, and one after another's write since this run's read
         // of that file is said so.
@@ -2718,6 +2768,8 @@ impl<'a, M: ChatModel> Loop<'a, M> {
         // A subagent's steps are covered by the snapshot its parent took before the `task` call: one record per run.
         let changes = self.depth == 0
             && (call.function.name == crate::task::NAME
+                || (call.function.name == crate::code::NAME
+                    && crate::code::renames(&call.function.arguments))
                 || match self
                     .tools
                     .access_of(&call.function.name, &call.function.arguments)
@@ -2780,10 +2832,10 @@ impl<'a, M: ChatModel> Loop<'a, M> {
         }
     }
 
-    /// The language server's errors for the file an edit just changed (Glut 2, D, G12). A server reads files the agent
-    /// wrote and may run programs because of them, so it is treated as a command of the run: it starts only at the top
-    /// level, only where the run has a sandbox (it runs in it, without network), and only when the gate allows its
-    /// command line as it would a shell command — judged once, at its start. The servers' pipes are blocking work,
+    /// The language server's errors for the file an edit just changed (Glut 2, D, G12) — at the top level only; a
+    /// subagent's edits get none. A server reads files the agent wrote and may run programs because of them, so it is
+    /// treated as a command of the run: it starts only where the run has a sandbox (it runs in it, without network),
+    /// and only when the gate allows its command line as it would a shell command ([`Self::servers_allowed`]). The servers' pipes are blocking work,
     /// done on the blocking pool; the run's end does not wait for them.
     async fn diagnostics_after(
         &mut self,
@@ -2803,18 +2855,331 @@ impl<'a, M: ChatModel> Loop<'a, M> {
         if path.starts_with(['~', '/']) {
             return None;
         }
-        if self.diagnostics.is_none() {
-            let profile = self.sandbox_profile()?;
-            self.diagnostics = Some(Arc::new(std::sync::Mutex::new(
-                crate::diagnostics::Diagnostics::new(&self.config.cwd, profile),
-            )));
+        if self.servers_allowed(&path, &call.id, sink).await.is_err() {
+            return None;
         }
-        let servers = Arc::clone(self.diagnostics.as_ref()?);
-        let launch = servers
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .launch(&path);
-        if let (Some(launch), Some(gate)) = (launch, self.tools.gate()) {
+        self.with_servers(move |servers| servers.after_edit(&path))
+            .await
+            .flatten()
+    }
+
+    /// The `code` arm (T62): a question to the language server of the file — judged as a read of where its path really
+    /// leads first —, its answer shaped for the model; a rename judged and made in [`Self::rename`].
+    async fn run_code(&mut self, call: &ToolCall, sink: &mut dyn EventSink) -> (bool, String) {
+        use crate::code::{self, Op};
+        let args = match code::parse(&call.function.arguments) {
+            Ok(args) => args,
+            Err(reason) => return (false, format!("error: {reason}")),
+        };
+        let named = args.path.trim_start_matches("./");
+        // The servers know the working folder's project only; a folder beside it (T60c) is no part of it.
+        if named.starts_with(['~', '/']) {
+            return (
+                false,
+                "error: code knows the working folder's project only: give a path relative to it"
+                    .into(),
+            );
+        }
+        // Judged where it really leads, as read_file judges a path: a link inside the folder is no way around a rule.
+        let Some(rel) = code::inside(&self.config.cwd, &self.config.cwd.join(named)) else {
+            return (
+                false,
+                format!("error: {named} is no file inside the working folder"),
+            );
+        };
+        if !crate::tools::files::shown(None, &rel) {
+            return (
+                false,
+                format!("error: {rel} lies in a version control's own store"),
+            );
+        }
+        if let Some(gate) = self.tools.gate() {
+            let read = Access::Read { path: rel.clone() };
+            if let Err(reason) = gate.judge(code::NAME, &read).await {
+                return (false, format!("error: {reason}"));
+            }
+        }
+        if let Err(reason) = self.servers_allowed(&rel, &call.id, sink).await {
+            return (false, format!("error: {reason}; use grep or read_file"));
+        }
+        let (op, line, symbol) = (args.op, args.line, args.symbol.clone());
+        let (occurrence, new_name) = (args.occurrence.unwrap_or(1), args.new_name.clone());
+        let asked = rel.clone();
+        let answer = self
+            .with_servers(move |servers| {
+                let root = servers.root().to_owned();
+                let mut question = |op: Op| {
+                    servers.ask(&asked, op.method(), |uri, text| {
+                        let position = code::position(text, line, &symbol, occurrence)?;
+                        Ok(code::params(op, uri, position, new_name.as_deref()))
+                    })
+                };
+                let answer = question(op)?;
+                // A hover shows what the definition says: only where the definition may be read.
+                let defined = if op == Op::Hover {
+                    Some(question(Op::Definition))
+                } else {
+                    None
+                };
+                Ok::<_, String>((answer, defined, root))
+            })
+            .await;
+        let (answer, defined, root) = match answer {
+            Some(Ok(answered)) => answered,
+            Some(Err(reason)) => return (false, format!("error: {reason}")),
+            None => {
+                return (
+                    false,
+                    "error: the language server did not answer before the run ended".into(),
+                );
+            }
+        };
+        let gate = self.tools.gate().cloned();
+        let shown = move |rel: &str| crate::tools::files::shown(gate.as_deref(), rel);
+        let symbol = args.symbol.clone();
+        match op {
+            Op::Definition | Op::References => {
+                let places = code::places(&answer);
+                if places.is_empty() {
+                    let what = if op == Op::Definition {
+                        "definition"
+                    } else {
+                        "use"
+                    };
+                    return (
+                        true,
+                        format!("the server knows no {what} of `{symbol}` there"),
+                    );
+                }
+                let after = if op == Op::Definition {
+                    code::DEFINITION_LINES_AFTER
+                } else {
+                    0
+                };
+                let files = places
+                    .iter()
+                    .map(|place| &place.path)
+                    .collect::<std::collections::HashSet<_>>()
+                    .len();
+                let head = match op {
+                    Op::Definition => format!("`{symbol}` is defined at:"),
+                    _ => format!("`{symbol}`: {} place(s) in {files} file(s):", places.len()),
+                };
+                // Files are read to show their lines: blocking work.
+                let body = tokio::task::spawn_blocking(move || {
+                    code::show_places(&places, &root, after, &shown)
+                })
+                .await
+                .unwrap_or_default();
+                (true, format!("{head}\n{body}"))
+            }
+            Op::Hover => {
+                // Where it cannot be told where the definition lies, nothing is shown.
+                let held_back = defined.is_some_and(|defined| {
+                    defined.is_err()
+                        || code::places(&defined.unwrap_or_default())
+                            .iter()
+                            .filter_map(|place| code::inside(&root, &place.path))
+                            .any(|rel| !shown(&rel))
+                });
+                if held_back {
+                    return (
+                        false,
+                        format!(
+                            "error: `{symbol}` is defined in a file the rules hold back, or nowhere the server can tell: nothing shown"
+                        ),
+                    );
+                }
+                let text = code::hover_text(&answer);
+                if text.is_empty() {
+                    (
+                        true,
+                        format!("the server says nothing about `{symbol}` there"),
+                    )
+                } else {
+                    (true, text)
+                }
+            }
+            Op::Rename => {
+                let new_name = args
+                    .new_name
+                    .as_deref()
+                    .unwrap_or_default()
+                    .trim()
+                    .to_owned();
+                self.rename(&answer, &root, &symbol, &new_name).await
+            }
+        }
+    }
+
+    /// Makes a rename the server answered (T62): every file it touches, where it really is inside the working folder,
+    /// judged as one change — refused or asked as a whole —, then all read and changed before any is written, each
+    /// through the guard `edit_file` gets and only where every replaced piece is the old name (a file changed outside
+    /// Glut since the server read it is not reckoned on). The snapshot before the call covers them; the first files'
+    /// errors follow, as after an edit.
+    async fn rename(
+        &mut self,
+        answer: &Value,
+        root: &Path,
+        symbol: &str,
+        new_name: &str,
+    ) -> (bool, String) {
+        /// Files whose errors follow a rename: each waits for its server.
+        const CHECKED_AFTER: usize = 5;
+        let edits = match crate::code::workspace_edits(answer) {
+            Ok(edits) if edits.is_empty() => {
+                return (
+                    false,
+                    format!("error: the server found nothing to rename at `{symbol}`"),
+                );
+            }
+            Ok(edits) => edits,
+            Err(reason) => return (false, format!("error: {reason}")),
+        };
+        let mut files = Vec::new();
+        for (path, changes) in edits {
+            // A link is no way into a file the rules or the owner's look never saw: only a file where it really is.
+            let real = path.canonicalize().ok();
+            let rel = real
+                .as_ref()
+                .filter(|real| **real == path)
+                .and_then(|real| real.strip_prefix(root).ok())
+                .map(|rel| rel.to_string_lossy().into_owned());
+            let Some(rel) = rel else {
+                return (
+                    false,
+                    format!(
+                        "error: the rename reaches {} outside the working folder or through a link: not done",
+                        path.display()
+                    ),
+                );
+            };
+            files.push((rel, changes));
+        }
+        let places: usize = files.iter().map(|(_, changes)| changes.len()).sum();
+        let listed: Vec<String> = files.iter().map(|(rel, _)| rel.clone()).collect();
+        if let Some(gate) = self.tools.gate() {
+            let accesses: Vec<Access> = listed
+                .iter()
+                .map(|rel| Access::Edit { path: rel.clone() })
+                .collect();
+            let shown = format!(
+                "rename {} → {}: {places} place(s) in {} file(s): {}",
+                crate::code::short(symbol),
+                crate::code::short(new_name),
+                files.len(),
+                listed.join(", ")
+            );
+            if let Err(reason) = gate.judge_all(crate::code::NAME, &accesses, &shown).await {
+                return (false, format!("error: {reason}"));
+            }
+        }
+        let cwd = self.config.cwd.clone();
+        let old = symbol.trim().to_owned();
+        let written = tokio::task::spawn_blocking(move || {
+            let mut changed = Vec::new();
+            for (rel, edits) in &files {
+                let opened = crate::tools::files::open_for_change(&cwd, rel)
+                    .map_err(|reason| format!("{rel}: {reason}"))?;
+                let text = crate::code::apply(&opened.text, edits, Some(&old))
+                    .map_err(|reason| format!("{rel}: {reason}"))?;
+                changed.push((opened, text, rel.clone(), edits.len()));
+            }
+            let mut done = Vec::new();
+            for (opened, text, rel, count) in changed {
+                if let Err(reason) = opened.write(&text) {
+                    let reason = if done.is_empty() {
+                        format!("{rel}: {reason}; nothing was changed")
+                    } else {
+                        format!(
+                            "{rel}: {reason}; changed before it: {} — undo brings them back",
+                            done.join(", ")
+                        )
+                    };
+                    return Err(reason);
+                }
+                done.push(format!("{rel} ({count})"));
+            }
+            Ok(done)
+        })
+        .await;
+        let done = match written {
+            Ok(Ok(done)) => done,
+            Ok(Err(reason)) => return (false, format!("error: the rename was not made: {reason}")),
+            Err(_) => return (false, "error: the rename was not made".into()),
+        };
+        // T40: subagents beside this one hear of the change like of an edit's.
+        if let Some(sibling) = &self.sibling {
+            for rel in &listed {
+                sibling.group.wrote(&self.full_path(rel), &sibling.id);
+            }
+        }
+        let mut text = format!(
+            "renamed `{symbol}` to `{new_name}`: {places} place(s) in {} file(s):\n{}",
+            done.len(),
+            done.join("\n")
+        );
+        if self.config.diagnostics && self.depth == 0 {
+            for rel in listed.into_iter().take(CHECKED_AFTER) {
+                if let Some(Some(note)) = self
+                    .with_servers(move |servers| servers.after_edit(&rel))
+                    .await
+                {
+                    text.push_str("\n\n");
+                    text.push_str(&note);
+                }
+            }
+        }
+        (true, text)
+    }
+
+    /// Works with the session's language servers (T62) on the blocking pool — their pipes block, and a question
+    /// another call asks holds them —, held to the run's deadline and cancel. `None` where the run has no sandbox (a
+    /// server runs in it, or not at all), or the run ended meanwhile.
+    async fn with_servers<R: Send + 'static>(
+        &self,
+        work: impl FnOnce(&mut crate::diagnostics::Diagnostics) -> R + Send + 'static,
+    ) -> Option<R> {
+        let profile = self.sandbox_profile()?;
+        let (servers, cwd) = (self.config.servers.clone(), self.config.cwd.clone());
+        let job =
+            tokio::task::spawn_blocking(move || servers.lock(&cwd, &profile).as_mut().map(work));
+        tokio::select! {
+            joined = job => joined.ok().flatten(),
+            () = tokio::time::sleep_until(self.deadline) => None,
+            () = self.cancel.cancelled() => None,
+        }
+    }
+
+    /// Whether the server for `rel` may answer: one the gate has not allowed for the session's servers starts only
+    /// where it allows its command line as it would a shell command; refused, it is not asked about again in this run.
+    ///
+    /// # Errors
+    ///
+    /// Why no server may answer, for the model.
+    async fn servers_allowed(
+        &mut self,
+        rel: &str,
+        call_id: &str,
+        sink: &mut dyn EventSink,
+    ) -> Result<(), String> {
+        let wanted = rel.to_owned();
+        let Some(launch) = self
+            .with_servers(move |servers| servers.launch(&wanted))
+            .await
+        else {
+            return Err(
+                "this run has no sandbox, and Glut starts language servers only inside it".into(),
+            );
+        };
+        let Some(launch) = launch else {
+            return Ok(());
+        };
+        let server = launch.server;
+        if self.servers_refused.contains(server) {
+            return Err(format!("{server} was refused to start in this run"));
+        }
+        if let Some(gate) = self.tools.gate() {
             let access = Access::Bash {
                 command: launch.line.clone(),
                 folder: String::new(),
@@ -2823,27 +3188,16 @@ impl<'a, M: ChatModel> Loop<'a, M> {
             };
             let judged = gate.judge("bash", &access).await;
             for entry in gate.take_log() {
-                sink.emit(Event::permission(self.turns, &call.id, &entry));
+                sink.emit(Event::permission(self.turns, call_id, &entry));
             }
-            if judged.is_err() {
-                servers
-                    .lock()
-                    .unwrap_or_else(|poison| poison.into_inner())
-                    .refuse(launch.server);
-                return None;
+            if let Err(reason) = judged {
+                self.servers_refused.insert(server);
+                return Err(format!("{server} may not start: {reason}"));
             }
         }
-        let job = tokio::task::spawn_blocking(move || {
-            servers
-                .lock()
-                .unwrap_or_else(|poison| poison.into_inner())
-                .after_edit(&path)
-        });
-        tokio::select! {
-            joined = job => joined.ok().flatten(),
-            () = tokio::time::sleep_until(self.deadline) => None,
-            () = self.cancel.cancelled() => None,
-        }
+        self.with_servers(move |servers| servers.allow(server))
+            .await;
+        Ok(())
     }
 
     /// The run's sandbox as a Seatbelt profile without network — `None` where there is no sandbox (not on, not on this
@@ -3884,6 +4238,7 @@ mod tests {
             "second",
             0,
             "",
+            false,
         );
         assert_eq!(messages.len(), 4);
         assert!(messages.iter().all(|message| !message.has_reasoning()));
@@ -4093,6 +4448,31 @@ mod tests {
             "never to a subagent"
         );
         assert!(names(&config, 1).contains(&"echo".to_owned()));
+    }
+
+    #[test]
+    fn code_is_offered_where_the_language_servers_may_run_in_the_sandbox_to_subagents_and_scripts_too()
+     {
+        let mut tools = Toolbox::new();
+        tools.extend([Box::new(Echo) as Box<dyn Tool>]);
+        let offered = |config: &RunConfig, depth: u32| {
+            let offer = Offer::of(config, &tools, depth, false);
+            let named =
+                |specs: &[ToolSpec]| specs.iter().any(|spec| spec.name == crate::code::NAME);
+            (named(&offer.specs), named(&offer.catalog.specs))
+        };
+        let mut config = RunConfig::new("/tmp");
+        assert_eq!(offered(&config, 0), (false, false), "no sandbox, no server");
+        config.sandbox = Some(crate::permissions::settings::SandboxSettings {
+            enabled: true,
+            ..crate::permissions::settings::SandboxSettings::default()
+        });
+        if crate::sandbox::available() {
+            assert_eq!(offered(&config, 0), (true, true));
+            assert_eq!(offered(&config, 1), (true, true), "a subagent asks too");
+        }
+        config.diagnostics = false;
+        assert_eq!(offered(&config, 0), (false, false), "the owner's lsp off");
     }
 
     /// A stand-in for the screen's `end_loop` (TUI T60a).

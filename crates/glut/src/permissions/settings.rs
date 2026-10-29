@@ -115,6 +115,10 @@ struct File {
     /// owner's only.
     #[serde(default)]
     nudge: Option<bool>,
+    /// Whether the language servers serve the runs (T62): an edit's errors and the `code` tool; `false` turns both
+    /// off. The owner's only.
+    #[serde(default)]
+    lsp: Option<bool>,
     /// The most model turns a run takes (T73b), else 100. The owner's only.
     #[serde(default, rename = "maxTurns")]
     max_turns: Option<u32>,
@@ -322,6 +326,8 @@ pub struct Settings {
     pub loops: Option<LoopSection>,
     /// `nudge` as written (T73); only the owner's is read.
     pub nudge: Option<bool>,
+    /// `lsp` as written (T62); only the owner's is read.
+    pub lsp: Option<bool>,
     /// `maxTurns` as written (T73b); only the owner's is read.
     pub max_turns: Option<u32>,
 }
@@ -451,6 +457,7 @@ fn settings_of(
         notify: file.notify,
         loops: file.loops,
         nudge: file.nudge,
+        lsp: file.lsp,
         max_turns: file.max_turns,
     })
 }
@@ -489,6 +496,8 @@ pub struct Loaded {
     pub loops: LoopSection,
     /// Whether runs ask their model once to go on (T73): the owner's `nudge`, else on.
     pub nudge: bool,
+    /// Whether the language servers serve the runs (T62): the owner's `lsp`, else on.
+    pub lsp: bool,
     /// The owner's `maxTurns` (T73b); `None`: the default.
     pub max_turns: Option<u32>,
 }
@@ -685,6 +694,7 @@ pub fn load(home: &Path, project: &Path, trusted: bool) -> Result<Loaded, Harnes
             .and_then(|section| section.auto)
             .unwrap_or(true),
         nudge: user.nudge.unwrap_or(true),
+        lsp: user.lsp.unwrap_or(true),
         max_turns: user.max_turns,
         context_windows: user.context_window,
         prices: user.prices,

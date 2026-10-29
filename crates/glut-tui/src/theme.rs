@@ -601,7 +601,9 @@ pub fn tool_hue(name: &str) -> Option<Color> {
     let at = |index: usize| hues[index % hues.len()];
     Some(match name {
         "write_file" | "edit_file" | "glut_file" | "memory" => c().glow,
-        "read_file" | "glob" | "grep" | "list_dir" | "outline" | "read_full_result" => at(0),
+        "read_file" | "glob" | "grep" | "list_dir" | "outline" | "read_full_result" | "code" => {
+            at(0)
+        }
         "bash" | "bash_output" | "kill_shell" | "codemode" => at(1),
         "web_fetch" | "web_search" => at(2),
         name if name.starts_with("mcp__") => at(2),

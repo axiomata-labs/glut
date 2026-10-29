@@ -225,6 +225,10 @@ pub const TEXTS: Texts = Texts {
             "ターンの終わりに Glut がモデルに続行を求め、作業中はタスクリストを思い出させ、それがなければ書くように頼むかどうか",
         ),
         (
+            "lsp",
+            "言語サーバーを使うか: 編集後のエラーと、定義・使用箇所・名前変更のための code ツール — /lsp だけで各サーバーを表示",
+        ),
+        (
             "reader",
             "スクリーンリーダー向け: キーを言葉で、簡素な画面、動きなし、状態が変わるたびに一行",
         ),
@@ -302,6 +306,7 @@ pub const TEXTS: Texts = Texts {
         ("rule", "このセッションのルール"),
         ("maxsteps", "ターンあたりの最大ステップ"),
         ("nudge", "モデルをタスクに留める"),
+        ("lsp", "言語サーバー"),
         ("reader", "スクリーンリーダー向け"),
         ("language", "Glut の言語"),
         ("theme", "配色を選ぶ"),
@@ -677,6 +682,14 @@ pub const TEXTS: Texts = Texts {
     nudge_now: "モデルに続行を求める: {nudge} — /nudge on または off",
     nudge_on: "Glut はターンの終わりにモデルに続行を求め、作業中はタスクリストを思い出させ、それがなければ書くように頼みます",
     nudge_off: "ターンはモデルが終えたところで終わります — リストを思い出させることも、書くように頼むこともありません",
+    lsp_now: "言語サーバー: {lsp} — /lsp on または off",
+    lsp_on: "言語サーバーが再び働きます: 編集後のエラーと、定義・使用箇所・名前変更のための code ツール",
+    lsp_off: "言語サーバーを停止: プロセスを終了し、編集後のエラーも code ツールもありません",
+    lsp_busy: "  サーバーは今質問に答えています — 少ししてからもう一度見てください",
+    lsp_none: "  このセッションではまだ起動していません — 最初の編集か code の質問で起動します",
+    lsp_ready: "準備完了",
+    lsp_indexing: "プロジェクトを索引中",
+    lsp_given_up: "このセッションでは停止 (拒否・故障・無応答)",
     thinking_unknown: "/thinking {word}: off、folded、open",
     no_command: "/{name} というコマンドはありません — /help で一覧",
     model_locked: "このセッションのモデルは起動したプログラムが設定しています — ここでは切り替えられません",
@@ -1285,6 +1298,11 @@ pub const TEXTS: Texts = Texts {
         (
             "A plan and its record of runs gone; its sessions stay",
             "プランと実行の記録を削除します。セッションは残ります",
+        ),
+        (
+            "Start no language server: no errors after an edit, no `code` tool (T62; `\"lsp\": false` in \
+             ~/.glut/settings.json)",
+            "言語サーバーを起動しません: 編集後のエラーも `code` ツールもありません (T62; ~/.glut/settings.json の `\"lsp\": false`)",
         ),
         (
             "Send what the tools answer as it is, without hiding the keys in it (T58; `\"mask\": false` in \

@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use axiomata_files::{
-    EntryKind, FilesError, LinkPolicy, MAX_READ_BYTES, MAX_WRITE_BYTES, Root, SearchQuery,
+    EntryKind, FilesError, LinkPolicy, MAX_READ_BYTES, MAX_WRITE_BYTES, Root, SearchQuery, Version,
     index_files, list_dir, make_dir, read_text, search, write_text,
 };
 use globset::Glob;
@@ -726,6 +726,52 @@ fn edit(places: &Places, args: EditArgs) -> Result<String, String> {
     Ok(format!("replaced {count} occurrence(s) in {path}"))
 }
 
+/// A file of the working folder opened for a change Glut makes itself (T62: a rename across files), through the guard
+/// `edit_file` gets: its text, and the version it was read at — a file changed in between is not overwritten.
+pub(crate) struct Opened {
+    root: Root,
+    path: String,
+    pub text: String,
+    version: Version,
+}
+
+/// Opens `path` below `cwd` for a change.
+///
+/// # Errors
+///
+/// A path out of the folder, into a protected one, with more than one name, or a file that cannot be read as text.
+pub(crate) fn open_for_change(cwd: &Path, path: &str) -> Result<Opened, String> {
+    let root = Root::dir(cwd, LinkPolicy::Contained).map_err(describe)?;
+    guard_resolved(&root, path, &PROTECTED_DIRS, &PROTECTED_FILES)?;
+    refuse_hard_links(&root, path)?;
+    let file = read_text(&root, path, MAX_READ_BYTES).map_err(describe)?;
+    Ok(Opened {
+        root,
+        path: path.to_owned(),
+        text: file.content,
+        version: file.version,
+    })
+}
+
+impl Opened {
+    /// Writes `text` in place of what was read.
+    ///
+    /// # Errors
+    ///
+    /// The file changed since it was read, grew past the limit, or cannot be written.
+    pub(crate) fn write(&self, text: &str) -> Result<(), String> {
+        write_text(
+            &self.root,
+            &self.path,
+            text,
+            Some(&self.version),
+            MAX_WRITE_BYTES,
+        )
+        .map(|_| ())
+        .map_err(describe)
+    }
+}
+
 #[derive(Deserialize)]
 struct ListArgs {
     #[serde(default)]
@@ -773,7 +819,7 @@ fn yes() -> bool {
 
 /// Whether a search shows `rel`: not when a read rule holds it back (the file would be asked about or refused by
 /// `read_file`; a search must not hand out its lines instead).
-fn shown(gate: Option<&Gate>, rel: &str) -> bool {
+pub(crate) fn shown(gate: Option<&Gate>, rel: &str) -> bool {
     gate.is_none_or(|gate| !gate.read_held_back(rel) && guard(rel, &PRIVATE_DIRS, &[]).is_ok())
 }
 

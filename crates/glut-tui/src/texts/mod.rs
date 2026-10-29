@@ -593,6 +593,22 @@ glut::catalog! {
         nudge_on: &'static str,
         /// `/nudge off` (T73).
         nudge_off: &'static str,
+        /// `/lsp` alone: `{lsp}` on or off (T62).
+        lsp_now: &'static str,
+        /// `/lsp on`.
+        lsp_on: &'static str,
+        /// `/lsp off`.
+        lsp_off: &'static str,
+        /// `/lsp` while a question holds the servers.
+        lsp_busy: &'static str,
+        /// `/lsp` before any server started.
+        lsp_none: &'static str,
+        /// A server that answers.
+        lsp_ready: &'static str,
+        /// A server still indexing.
+        lsp_indexing: &'static str,
+        /// A server given up on for the session.
+        lsp_given_up: &'static str,
         /// `/thinking` with a word it does not take.
         thinking_unknown: &'static str,
         /// A command that is none: `{name}`.

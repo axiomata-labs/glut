@@ -400,6 +400,7 @@ pub async fn build(
     config.compaction.auto = built.compact_auto;
     config.nudge = built.nudge;
     config.remind = built.nudge;
+    config.diagnostics = built.lsp;
     if let Some(turns) = built.max_turns {
         config.max_turns = turns;
     }
@@ -809,6 +810,8 @@ pub struct Before {
     pub steps: u32,
     /// The owner's rules for the session (T73b, `/rule`).
     pub rules: Vec<String>,
+    /// Whether the language servers serve the turn (T62: `/lsp`, else the settings).
+    pub lsp: bool,
 }
 
 /// Runs one turn in the background: `prompt` after `conversation` on `engine`, every step to the screen, the end as
@@ -830,6 +833,7 @@ pub fn turn(
         remind,
         steps,
         rules,
+        lsp,
     } = before;
     let kept = conversation.clone();
     let host = Arc::clone(&parts.host);
@@ -851,6 +855,7 @@ pub fn turn(
         // A loop's round ends as its loop says, never asked to go on (T73).
         config.nudge = nudge && parts.loop_link.left().is_none();
         config.remind = remind;
+        config.diagnostics = lsp;
         config.todo_list = todos;
         config.max_turns = steps;
         // A loop's round stops at what its loop may still spend, not only once it is over.

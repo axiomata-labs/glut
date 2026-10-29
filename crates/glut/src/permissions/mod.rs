@@ -900,6 +900,14 @@ fn agent_narrowing() -> Option<Arc<Narrowing>> {
     AGENT_NARROWING.try_with(Clone::clone).ok().flatten()
 }
 
+/// The rules', narrowings' and mode's word on one access before anyone is asked ([`Gate::weigh`]).
+struct Weighed {
+    verdict: Verdict,
+    reason: String,
+    /// The program that would get the Keychain (T74), if any.
+    keychain: Option<String>,
+}
+
 /// A question to the owner.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AskRequest {
@@ -1426,105 +1434,11 @@ impl Gate {
                 .unwrap_or_else(|poison| poison.into_inner())
                 .retain(|(judged, _)| judged != command);
         }
-        // C3: an `allowed-tools` list only narrows. What one of them does not name is refused here, before any
-        // rule or mode is even asked; what all of them name goes on to the normal judgement below, where such a
-        // rule never allows anything by itself.
-        let agent = agent_narrowing();
-        let role = self.role_narrowing();
-        if let Some(narrowing) = self
-            .narrowings
-            .iter()
-            .chain(agent.as_deref())
-            .chain(role.as_deref())
-            .find(|narrowing| !restrict_allows(&narrowing.rules, tool, access))
-        {
-            let rules = narrowing
-                .rules
-                .iter()
-                .map(Rule::text)
-                .collect::<Vec<_>>()
-                .join(", ");
-            let reason = format!("{} allows only: {rules}", narrowing.by);
-            self.record(Judgement {
-                tool: tool.to_owned(),
-                target,
-                allowed: false,
-                reason: reason.clone(),
-            });
-            return Err(format!("not permitted: {reason}"));
-        }
-        // T36c: a role that may edit nothing runs only commands that only read — `git diff --output=…` is a write
-        // a prefix rule like `Bash(git diff:*)` would let through.
-        if let (Some(role), Access::Bash { command, .. }) = (&role, access)
-            && !role.rules.iter().any(|rule| rule.kind == RuleKind::Edit)
-            && !kinds::reads_only(&analyze(command))
-        {
-            let reason = format!("{} only reads: this command is no plain reading", role.by);
-            self.record(Judgement {
-                tool: tool.to_owned(),
-                target,
-                allowed: false,
-                reason: reason.clone(),
-            });
-            return Err(format!("not permitted: {reason}"));
-        }
-        let keychain = self.wants_keychain(access);
-        let said = {
-            let rules = self
-                .rules
-                .lock()
-                .unwrap_or_else(|poison| poison.into_inner());
-            // T74b: the Keychain comes by the owner's word alone — a project's allow rule lets the command run, but
-            // not with it open, so then it is asked.
-            if keychain.is_some() {
-                rules
-                    .owners()
-                    .verdict_with(tool, access, true, &self.beside())
-            } else {
-                rules.verdict_with(tool, access, true, &self.beside())
-            }
-        };
-        let mode = format!("mode {}", self.mode_name());
-        let (mut verdict, mut reason) = match said {
-            Said::Verdict(verdict, why) => (verdict, why),
-            // T74: no reader, no `auto` — the owner's word or a rule of theirs.
-            _ if keychain.is_some() => (
-                Verdict::Ask,
-                format!(
-                    "{} would get the Keychain: asked in every mode",
-                    keychain.as_deref().unwrap_or_default()
-                ),
-            ),
-            unsure_or_silent => match self.command_kind(access) {
-                Some(judged) => judged,
-                None => match unsure_or_silent {
-                    Said::Unsure(why) => (Verdict::Ask, why),
-                    _ => (self.mode().fallback(access), mode.clone()),
-                },
-            },
-        };
-        // Plan mode writes nothing, whatever a rule says (P3) — neither with the file tools nor by a redirection.
-        let writes = match access {
-            Access::Edit { .. } | Access::Memory { .. } | Access::GlutFile { .. } => true,
-            Access::Bash { command, .. } => !analyze(command).writes.is_empty(),
-            _ => false,
-        };
-        if self.mode() == Mode::Plan && writes {
-            (verdict, reason) = (Verdict::Deny, mode.clone());
-        }
-        // T37b: Glut's own files are asked every time — no allow rule stands in for the owner's look at a hook.
-        if verdict == Verdict::Allow && matches!(access, Access::GlutFile { .. }) {
-            (verdict, reason) = (
-                Verdict::Ask,
-                format!("{reason}; Glut's own files are always asked"),
-            );
-        }
-        // A message to another pane is asked in plan mode too (T36c): it writes nothing here.
-        let plan_asks = self.mode() == Mode::Plan && matches!(access, Access::Pane { .. });
-        if verdict == Verdict::Ask && self.mode().asks_nothing() && !plan_asks {
-            verdict = Verdict::Deny;
-            reason = format!("{reason}; {mode} asks nothing");
-        }
+        let Weighed {
+            verdict,
+            mut reason,
+            keychain,
+        } = self.weigh(tool, access, &target)?;
         let allowed = match verdict {
             Verdict::Allow => true,
             Verdict::Deny => false,
@@ -1605,6 +1519,169 @@ impl Gate {
             Ok(())
         } else {
             Err(format!("not permitted: {reason}"))
+        }
+    }
+
+    /// What the rules, the narrowings and the mode say of `access` before anyone is asked: a refusal by a narrowing is
+    /// recorded and returned as `Err`; every other word, a refusal too, comes back to be settled.
+    fn weigh(&self, tool: &str, access: &Access, target: &str) -> Result<Weighed, String> {
+        // C3: an `allowed-tools` list only narrows. What one of them does not name is refused here, before any
+        // rule or mode is even asked; what all of them name goes on to the normal judgement below, where such a
+        // rule never allows anything by itself.
+        let agent = agent_narrowing();
+        let role = self.role_narrowing();
+        if let Some(narrowing) = self
+            .narrowings
+            .iter()
+            .chain(agent.as_deref())
+            .chain(role.as_deref())
+            .find(|narrowing| !restrict_allows(&narrowing.rules, tool, access))
+        {
+            let rules = narrowing
+                .rules
+                .iter()
+                .map(Rule::text)
+                .collect::<Vec<_>>()
+                .join(", ");
+            let reason = format!("{} allows only: {rules}", narrowing.by);
+            self.record(Judgement {
+                tool: tool.to_owned(),
+                target: target.to_owned(),
+                allowed: false,
+                reason: reason.clone(),
+            });
+            return Err(format!("not permitted: {reason}"));
+        }
+        // T36c: a role that may edit nothing runs only commands that only read — `git diff --output=…` is a write
+        // a prefix rule like `Bash(git diff:*)` would let through.
+        if let (Some(role), Access::Bash { command, .. }) = (&role, access)
+            && !role.rules.iter().any(|rule| rule.kind == RuleKind::Edit)
+            && !kinds::reads_only(&analyze(command))
+        {
+            let reason = format!("{} only reads: this command is no plain reading", role.by);
+            self.record(Judgement {
+                tool: tool.to_owned(),
+                target: target.to_owned(),
+                allowed: false,
+                reason: reason.clone(),
+            });
+            return Err(format!("not permitted: {reason}"));
+        }
+        let keychain = self.wants_keychain(access);
+        let said = {
+            let rules = self
+                .rules
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            // T74b: the Keychain comes by the owner's word alone — a project's allow rule lets the command run, but
+            // not with it open, so then it is asked.
+            if keychain.is_some() {
+                rules
+                    .owners()
+                    .verdict_with(tool, access, true, &self.beside())
+            } else {
+                rules.verdict_with(tool, access, true, &self.beside())
+            }
+        };
+        let mode = format!("mode {}", self.mode_name());
+        let (mut verdict, mut reason) = match said {
+            Said::Verdict(verdict, why) => (verdict, why),
+            // T74: no reader, no `auto` — the owner's word or a rule of theirs.
+            _ if keychain.is_some() => (
+                Verdict::Ask,
+                format!(
+                    "{} would get the Keychain: asked in every mode",
+                    keychain.as_deref().unwrap_or_default()
+                ),
+            ),
+            unsure_or_silent => match self.command_kind(access) {
+                Some(judged) => judged,
+                None => match unsure_or_silent {
+                    Said::Unsure(why) => (Verdict::Ask, why),
+                    _ => (self.mode().fallback(access), mode.clone()),
+                },
+            },
+        };
+        // Plan mode writes nothing, whatever a rule says (P3) — neither with the file tools nor by a redirection.
+        let writes = match access {
+            Access::Edit { .. } | Access::Memory { .. } | Access::GlutFile { .. } => true,
+            Access::Bash { command, .. } => !analyze(command).writes.is_empty(),
+            _ => false,
+        };
+        if self.mode() == Mode::Plan && writes {
+            (verdict, reason) = (Verdict::Deny, mode.clone());
+        }
+        // T37b: Glut's own files are asked every time — no allow rule stands in for the owner's look at a hook.
+        if verdict == Verdict::Allow && matches!(access, Access::GlutFile { .. }) {
+            (verdict, reason) = (
+                Verdict::Ask,
+                format!("{reason}; Glut's own files are always asked"),
+            );
+        }
+        // A message to another pane is asked in plan mode too (T36c): it writes nothing here.
+        let plan_asks = self.mode() == Mode::Plan && matches!(access, Access::Pane { .. });
+        if verdict == Verdict::Ask && self.mode().asks_nothing() && !plan_asks {
+            verdict = Verdict::Deny;
+            reason = format!("{reason}; {mode} asks nothing");
+        }
+        Ok(Weighed {
+            verdict,
+            reason,
+            keychain,
+        })
+    }
+
+    /// Judges several changes of one call as one (T62: a rename across files): each weighed as its own call would be,
+    /// one refused refusing them all unasked; where any would be asked, the owner is asked once about `shown`, only
+    /// this once — a rename's set of files is no rule to keep. Every change is recorded with the outcome.
+    pub async fn judge_all(
+        &self,
+        tool: &str,
+        accesses: &[Access],
+        shown: &str,
+    ) -> Result<(), String> {
+        let mut weighed = Vec::new();
+        for access in accesses {
+            let target = describe(access);
+            let said = self.weigh(tool, access, &target)?;
+            weighed.push((target, said));
+        }
+        if let Some((target, said)) = weighed
+            .iter()
+            .find(|(_, said)| said.verdict == Verdict::Deny)
+        {
+            self.record(Judgement {
+                tool: tool.to_owned(),
+                target: target.clone(),
+                allowed: false,
+                reason: said.reason.clone(),
+            });
+            return Err(format!("not permitted: {}", said.reason));
+        }
+        let asked = if !weighed.iter().any(|(_, said)| said.verdict == Verdict::Ask) {
+            None
+        } else if !self.asker.present() {
+            Some((false, "no one to ask".to_owned()))
+        } else {
+            Some(match self.ask_owner(tool, shown).await {
+                Answer::Deny => (false, "refused when asked".to_owned()),
+                _ => (true, "allowed when asked, this once".to_owned()),
+            })
+        };
+        let allowed = asked.as_ref().is_none_or(|(allowed, _)| *allowed);
+        for (target, said) in weighed {
+            self.record(Judgement {
+                tool: tool.to_owned(),
+                target,
+                allowed,
+                reason: asked
+                    .as_ref()
+                    .map_or(said.reason, |(_, reason)| reason.clone()),
+            });
+        }
+        match asked {
+            Some((false, reason)) => Err(format!("not permitted: {reason}")),
+            _ => Ok(()),
         }
     }
 
@@ -1739,6 +1816,8 @@ pub struct BuiltGate {
     pub loops: settings::LoopSection,
     /// Whether runs ask their model once to go on (T73).
     pub nudge: bool,
+    /// Whether the language servers serve the runs (T62).
+    pub lsp: bool,
     /// The owner's `maxTurns` (T73b).
     pub max_turns: Option<u32>,
 }
@@ -1824,6 +1903,7 @@ pub fn build_gate(
         notify: loaded.notify,
         loops: loaded.loops,
         nudge: loaded.nudge,
+        lsp: loaded.lsp,
         max_turns: loaded.max_turns,
     })
 }
@@ -2563,6 +2643,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn changes_judged_as_one_are_asked_once_and_one_refused_refuses_all_unasked() {
+        let edit = |path: &str| Access::Edit { path: path.into() };
+        let both = [edit("src/a.rs"), edit("src/b.rs")];
+        // Default mode asks about an edit: one question for the two, nothing kept from it.
+        let asker = Arc::new(Always(Answer::AllowAlways, Mutex::new(0)));
+        let gate = Gate::new(RuleSet::default(), Mode::Default, asker.clone());
+        assert!(gate.judge_all("code", &both, "rename a → b").await.is_ok());
+        assert_eq!(*asker.1.lock().unwrap(), 1);
+        assert!(
+            gate.granted().is_empty(),
+            "a rename's files are no rule to keep"
+        );
+        let log = gate.take_log();
+        assert_eq!(log.len(), 2);
+        assert!(log.iter().all(|judged| judged.allowed));
+        // Refused when asked: neither goes.
+        let gate = Gate::new(
+            RuleSet::default(),
+            Mode::Default,
+            Arc::new(Always(Answer::Deny, Mutex::new(0))),
+        );
+        assert!(gate.judge_all("code", &both, "rename a → b").await.is_err());
+        assert!(gate.take_log().iter().all(|judged| !judged.allowed));
+        // A rule refusing one file refuses the whole rename, nobody asked; plan mode writes nothing.
+        let asker = Arc::new(Always(Answer::Allow, Mutex::new(0)));
+        let rules = RuleSet {
+            deny: vec![Rule::parse("Edit(src/b.rs)").unwrap()],
+            ..RuleSet::default()
+        };
+        let gate = Gate::new(rules, Mode::AcceptEdits, asker.clone());
+        assert!(gate.judge_all("code", &both, "rename a → b").await.is_err());
+        let gate = Gate::new(RuleSet::default(), Mode::Plan, asker.clone());
+        assert!(gate.judge_all("code", &both, "rename a → b").await.is_err());
+        assert_eq!(*asker.1.lock().unwrap(), 0);
+        // Accepting edits: no question at all.
+        let gate = Gate::new(RuleSet::default(), Mode::AcceptEdits, asker.clone());
+        assert!(gate.judge_all("code", &both, "rename a → b").await.is_ok());
+        assert_eq!(*asker.1.lock().unwrap(), 0);
+        // Nobody there to ask: refused.
+        let gate = Gate::new(RuleSet::default(), Mode::Default, Arc::new(Nobody));
+        assert!(gate.judge_all("code", &both, "rename a → b").await.is_err());
+    }
+
+    #[tokio::test]
     async fn taking_an_always_back_leaves_the_same_rule_of_the_settings() {
         let asker = Arc::new(Always(Answer::AllowAlways, Mutex::new(0)));
         let rules = RuleSet {
@@ -2717,6 +2841,7 @@ mod tests {
             notify: settings::NotifySection::default(),
             loops: settings::LoopSection::default(),
             nudge: true,
+            lsp: true,
             max_turns: None,
         };
         let off = built(true, true, false).notes();

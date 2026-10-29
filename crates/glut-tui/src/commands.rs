@@ -102,7 +102,7 @@ const fn command(
 }
 
 /// Every command, grouped by topic in [`Topic::ALL`]'s order, the most used first inside a topic.
-pub const COMMANDS: [Command; 61] = [
+pub const COMMANDS: [Command; 62] = [
     command(Topic::Session, "clear", "", "start a new session"),
     command(
         Topic::Session,
@@ -422,6 +422,13 @@ pub const COMMANDS: [Command; 61] = [
         "on|off",
         "whether Glut asks the model to go on at a turn's end, to keep to its task list, and to write one when it \
          works without one",
+    ),
+    command(
+        Topic::Settings,
+        "lsp",
+        "[on|off]",
+        "whether the language servers serve: errors after an edit and the code tool for definitions, uses and renames \
+         — /lsp alone shows each server",
     ),
     command(
         Topic::Settings,

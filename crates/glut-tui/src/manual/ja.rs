@@ -1,7 +1,7 @@
 //! The commands' manual pages in Japanese (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 61] = [
+pub const PAGES: [(&str, &str); 62] = [
     (
         "clear",
         "このフォルダーで、空の新しいセッションを始めます。\n\
@@ -626,6 +626,21 @@ pub const PAGES: [(&str, &str); 61] = [
          \n\
          最後の問いはターンに一度だけ。plan モード、あなたへの質問の後、ループのラウンド、スケジュールの実行では行いません。思い出しも頼みも同じ選択に従いますが、スケジュールの実行では常に思い出させます。/nudge だけで\
          現在の選択を表示。`~/.glut/prefs.json` に保存。`~/.glut/settings.json` の `\"nudge\": false` ですべての実行で無効になります。",
+    ),
+    (
+        "lsp",
+        "言語サーバーがモデルを助けるかどうか。\n\
+         \n\
+         /lsp on — 編集後、ファイルのエラーが結果と一緒に届き、モデルは code ツールを使えます: シンボルの定義場所、使われているすべての箇所、型とドキュメント、プロジェクト全体での名前変更\n\
+         /lsp off — サーバーは動きません: プロセスはすぐに終了し、編集後のエラーも code ツールもありません\n\
+         /lsp — 今の選択と、このセッションの各サーバー: 準備完了、プロジェクトを索引中、またはセッション中は停止\n\
+         \n\
+         Glut はプロジェクトのコードを決して実行しないサーバーだけを起動します (ビルドスクリプトと手続きマクロなしの \
+         rust-analyzer、pyright、TOML・YAML・JSON・CSS・HTML・Markdown \
+         のサーバー)。ネットワークのないサンドボックスの中だけで、Gate がそのコマンドラインを許すときだけです。サーバーはその言語の最初の編集か質問で起動し、セッションの間残ります。rust-analyzer \
+         は大きなプロジェクトの索引に数秒かかり、その間 code はそう伝え、モデルは grep を使います。名前変更は一つの変更です: \
+         すべてのファイルについて一度だけ尋ね、すべてか何もしないか、その前にスナップショットを取ります。`~/.glut/prefs.json` に保存されます。`~/.glut/settings.json` の \
+         `\"lsp\": false` ですべての実行で、`glut run --no-lsp` で一回だけオフにします。",
     ),
     (
         "reader",

@@ -959,6 +959,7 @@ mod tests {
             "m",
             config.instructions.as_deref(),
             true,
+            false,
         );
         assert!(prompt.ends_with("Do the thing."), "{prompt}");
     }

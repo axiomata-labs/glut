@@ -1,7 +1,7 @@
 //! The commands' manual pages in Spanish (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 61] = [
+pub const PAGES: [(&str, &str); 62] = [
     (
         "clear",
         "Empieza una sesión nueva y vacía en esta carpeta.\n\
@@ -691,6 +691,26 @@ pub const PAGES: [(&str, &str); 61] = [
          bucle o en la ejecución de un plan; el recordatorio y la petición siguen la misma elección, pero en la \
          ejecución de un plan Glut siempre recuerda. /nudge solo muestra la elección actual. Guardado en \
          `~/.glut/prefs.json`; `\"nudge\": false` en `~/.glut/settings.json` lo apaga para cada ejecución.",
+    ),
+    (
+        "lsp",
+        "Si los servidores de lenguaje ayudan al modelo.\n\
+         \n\
+         /lsp on — tras una edición, los errores del archivo llegan con el resultado, y el modelo tiene la herramienta \
+         code: dónde se define un símbolo, cada lugar donde se usa, su tipo y su documentación, y un renombre en todo \
+         el proyecto\n\
+         /lsp off — ningún servidor corre: sus procesos terminan al instante, sin errores tras una edición, sin \
+         herramienta code\n\
+         /lsp — la elección actual, y cada servidor de la sesión: listo, indexando el proyecto, o apagado para la \
+         sesión\n\
+         \n\
+         Glut solo inicia servidores que nunca ejecutan el código del proyecto (rust-analyzer sin scripts de build ni \
+         macros procedurales, pyright y los servidores de TOML, YAML, JSON, CSS, HTML y Markdown), solo en el sandbox \
+         sin red, y solo donde el Gate permite su línea de comando. Un servidor arranca con la primera edición o \
+         pregunta de su lenguaje y se queda para la sesión; rust-analyzer tarda unos segundos en indexar un proyecto \
+         grande, mientras code lo dice y el modelo usa grep. Un renombre es un solo cambio: se pregunta una vez por \
+         todos sus archivos, todos o ninguno, con una instantánea antes. Se guarda en `~/.glut/prefs.json`; `\"lsp\": \
+         false` en `~/.glut/settings.json` lo apaga para cada ejecución, `glut run --no-lsp` para una.",
     ),
     (
         "reader",

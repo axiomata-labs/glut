@@ -1,7 +1,7 @@
 //! The commands' manual pages in Italian (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 61] = [
+pub const PAGES: [(&str, &str); 62] = [
     (
         "clear",
         "Inizia una nuova sessione vuota in questa cartella.\n\
@@ -692,6 +692,26 @@ pub const PAGES: [(&str, &str); 61] = [
          ciclo o nell'esecuzione di un piano; il richiamo e la richiesta seguono la stessa scelta, ma nell'esecuzione \
          di un piano Glut ricorda sempre. /nudge da solo mostra la scelta attuale. Tenuto in `~/.glut/prefs.json`; \
          `\"nudge\": false` in `~/.glut/settings.json` lo spegne per ogni esecuzione.",
+    ),
+    (
+        "lsp",
+        "Se i server di linguaggio aiutano il modello.\n\
+         \n\
+         /lsp on — dopo una modifica gli errori del file arrivano con il risultato, e il modello ha lo strumento code: \
+         dove un simbolo è definito, ogni punto in cui è usato, il suo tipo e la sua documentazione, e una rinomina in \
+         tutto il progetto\n\
+         /lsp off — nessun server gira: i loro processi finiscono subito, niente errori dopo una modifica, niente \
+         strumento code\n\
+         /lsp — la scelta attuale, e ogni server della sessione: pronto, indicizza il progetto, o spento per la \
+         sessione\n\
+         \n\
+         Glut avvia solo server che non eseguono mai il codice del progetto (rust-analyzer senza script di build né \
+         macro procedurali, pyright e i server di TOML, YAML, JSON, CSS, HTML e Markdown), solo nella sandbox senza \
+         rete, e solo dove il Gate permette la loro riga di comando. Un server parte alla prima modifica o domanda \
+         del suo linguaggio e resta per la sessione; rust-analyzer impiega alcuni secondi per indicizzare un progetto \
+         grande, intanto code lo dice e il modello usa grep. Una rinomina è un solo cambiamento: chiesta una volta per \
+         tutti i suoi file, tutti o nessuno, con un'istantanea prima. Salvato in `~/.glut/prefs.json`; `\"lsp\": \
+         false` in `~/.glut/settings.json` lo spegne per ogni esecuzione, `glut run --no-lsp` per una.",
     ),
     (
         "reader",

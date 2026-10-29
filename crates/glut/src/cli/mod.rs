@@ -178,6 +178,11 @@ pub struct RunArgs {
     #[arg(long)]
     #[serde(default)]
     no_mask: bool,
+    /// Start no language server: no errors after an edit, no `code` tool (T62; `"lsp": false` in
+    /// ~/.glut/settings.json).
+    #[arg(long)]
+    #[serde(default)]
+    no_lsp: bool,
     /// default, accept_edits, plan, dont_ask or auto; otherwise the settings files', else default. Headless, an
     /// ask is refused: name what the run may do with --allow, or pick a mode.
     #[arg(long)]
@@ -577,6 +582,7 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
         context_window,
         no_auto_compact,
         no_mask,
+        no_lsp,
         max_tokens,
         max_usd,
         permission_mode,
@@ -795,6 +801,7 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
     config.refusals = built.refusals;
     config.nudge = built.nudge;
     config.remind = built.nudge;
+    config.diagnostics = built.lsp && !no_lsp;
     // The owner's `maxTurns` (T73b) where `--max-turns` named none.
     if max_turns.is_none()
         && let Some(turns) = built.max_turns

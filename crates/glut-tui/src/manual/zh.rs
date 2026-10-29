@@ -1,7 +1,7 @@
 //! The commands' manual pages in Chinese (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 61] = [
+pub const PAGES: [(&str, &str); 62] = [
     (
         "clear",
         "在此文件夹中开始一个新的空会话。\n\
@@ -599,6 +599,19 @@ pub const PAGES: [(&str, &str); 61] = [
          \n\
          结尾的提问每回合一次，绝不在 plan 模式、向你提问之后、循环的一轮或计划的运行中；提醒与请求跟随同一个选择，但在计划的运行中 Glut 总会提醒。单独 /nudge 显示当前选择。保存在 \
          `~/.glut/prefs.json`；`~/.glut/settings.json` 中的 `\"nudge\": false` 对每次运行关闭它。",
+    ),
+    (
+        "lsp",
+        "语言服务器是否帮助模型。\n\
+         \n\
+         /lsp on — 编辑之后，文件的错误随结果一起返回，模型可以使用 code 工具：符号在哪里定义、在哪些地方使用、它的类型和文档，以及在整个项目中重命名\n\
+         /lsp off — 不运行任何服务器：它们的进程立即结束，编辑后不再报错，也没有 code 工具\n\
+         /lsp — 当前的选择，以及本会话的每个服务器：就绪、正在为项目建立索引，或本会话中已关闭\n\
+         \n\
+         Glut 只启动从不运行项目代码的服务器（不带构建脚本和过程宏的 rust-analyzer、pyright，以及 TOML、YAML、JSON、CSS、HTML 和 Markdown \
+         的服务器），只在没有网络的沙盒中，并且只在 Gate 允许其命令行时启动。服务器在其语言的第一次编辑或提问时启动，并在会话期间一直保留；rust-analyzer 为大型项目建立索引需要几秒钟，在此期间 code \
+         会说明，模型改用 grep。重命名是一次更改：对所有文件只询问一次，要么全部要么都不，之前先拍快照。保存在 `~/.glut/prefs.json`；`~/.glut/settings.json` 中的 \
+         `\"lsp\": false` 对所有运行关闭，`glut run --no-lsp` 只对一次运行关闭。",
     ),
     (
         "reader",

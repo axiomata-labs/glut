@@ -394,9 +394,14 @@ pub struct RunConfig {
     /// Where the run counts what Glut lean saves (N9; `~/.glut/lean.jsonl`, `glut gain`). `None`: only the `lean`
     /// events say it.
     pub savings: Option<PathBuf>,
-    /// Whether an edit's result carries the language server's errors for the file (Glut 2, D, G12). On by default;
-    /// without an installed server for the file's language nothing is added.
+    /// Whether the language servers serve the run (Glut 2, G12; T62): an edit's result carries the server's errors for
+    /// the file, and the `code` tool is offered. On by default (the owner's `lsp`); without an installed server for a
+    /// file's language nothing is added.
     pub diagnostics: bool,
+    /// The language servers the run asks (T62). A host keeps one for a whole session and clones it into each turn's
+    /// config — a new one starts the servers anew, and rust-analyzer indexes the project again; a run's subagents
+    /// share it.
+    pub servers: crate::diagnostics::LanguageServers,
     /// When refusals end the run (#112); the owner's `"refusals"` in `~/.glut/settings.json` sets them.
     pub refusals: RefusalLimits,
     /// When the run compacts itself (#111); the owner's `"compact"` and `"contextWindow"` set it.
@@ -493,6 +498,7 @@ impl RunConfig {
             results: None,
             savings: None,
             diagnostics: true,
+            servers: crate::diagnostics::LanguageServers::default(),
             refusals: RefusalLimits::DEFAULT,
             compaction: Compaction::default(),
             hand_on_prepared: false,

@@ -7,13 +7,18 @@
 //!   `didChange` with the whole text, and wait until the server has been quiet for a moment (at most
 //!   [`WAIT_LIMIT`]); the last `publishDiagnostics` for the file counts. Only errors go to the model, at most
 //!   [`MAX_ERRORS`]. A server that is not installed, or slow, adds nothing — it never fails the edit.
-//! * **Blocking work** (the server's pipes) runs on tokio's blocking pool; the servers live until the run ends.
+//! * **Questions** (T62, the `code` tool): definition, references, hover and rename go to the same servers, once a
+//!   server has finished indexing ([`INDEX_LIMIT`] at its first question); the `code` module shapes them.
+//! * **Blocking work** (the server's pipes) runs on tokio's blocking pool. The servers live in [`LanguageServers`],
+//!   which a host keeps for a whole session (a new run would index the project anew) and a run shares with its
+//!   subagents; a change of the root or of the sandbox's profile starts them anew.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use axiomata_files::lsp::framing;
@@ -30,6 +35,24 @@ const INIT_LIMIT: Duration = Duration::from_secs(20);
 const MAX_ERRORS: usize = 10;
 /// LSP's severity of an error.
 const ERROR: u64 = 1;
+/// The longest a server's first question waits for its indexing to end (T62): rust-analyzer loads a workspace like
+/// Glut's in some ten to forty seconds.
+pub(crate) const INDEX_LIMIT: Duration = Duration::from_secs(30);
+/// How long a later question waits for a server still busy (an edit made it look again).
+const READY_LIMIT: Duration = Duration::from_secs(5);
+/// How long a server must have reported no work under way before it counts as ready.
+const READY_QUIET: Duration = Duration::from_millis(1500);
+/// The longest one question waits for its answer.
+const ANSWER_LIMIT: Duration = Duration::from_secs(15);
+/// How long a server that has reported no work at all is given before its first answer counts: rust-analyzer begins
+/// its loading report a moment after `initialized`, and asked before it, it knows no use of anything.
+const FIRST_SETTLE: Duration = Duration::from_secs(3);
+/// Work reported under way and unchanged this long counts as ended: its end was lost (a full channel), or it hangs.
+const STALE_PROGRESS: Duration = Duration::from_secs(120);
+/// How long a server silent after edits is not waited for: it still gets each edit's text.
+const SILENT_PAUSE: Duration = Duration::from_secs(300);
+/// How often the waits look at the server's messages.
+const LOOK_EVERY: Duration = Duration::from_millis(250);
 
 /// The programs asked after an edit, by file name — never by the table's server id, which also stands for fallbacks
 /// (`pylsp` for "pyright", with plugins that run the project's config). A language server reads files the agent wrote
@@ -132,6 +155,21 @@ struct Server {
     known: HashMap<String, Vec<String>>,
     /// Edits in a row the server said nothing about within the limit.
     silent: u32,
+    /// When it fell silent the last time: it is not waited for until [`SILENT_PAUSE`] has passed.
+    silent_at: Instant,
+    /// The text each open document was handed over with: one changed on disk since (a command, a formatter) is
+    /// handed over again before a question, or a rename would be reckoned on an old text.
+    texts: HashMap<String, String>,
+    /// When the server was ready to be asked (`initialized` sent).
+    started: Instant,
+    /// Whether it has reported any work at all.
+    reported: bool,
+    /// The work the server reports under way (`$/progress` begun and not ended): indexing, mostly.
+    progress: HashSet<String>,
+    /// When the work under way last changed.
+    progress_changed: Instant,
+    /// Whether the server was asked a question before: the first one waits longest for its indexing.
+    asked: bool,
 }
 
 impl Drop for Server {
@@ -199,6 +237,13 @@ impl Server {
             versions: HashMap::new(),
             known: HashMap::new(),
             silent: 0,
+            silent_at: Instant::now(),
+            texts: HashMap::new(),
+            started: Instant::now(),
+            reported: false,
+            progress: HashSet::new(),
+            progress_changed: Instant::now(),
+            asked: false,
         };
         let uri = uri_of(root);
         let id = server.request(
@@ -208,8 +253,17 @@ impl Server {
                 "rootUri": uri,
                 "workspaceFolders": [{ "uri": uri, "name": "work" }],
                 "capabilities": {
-                    "textDocument": { "publishDiagnostics": { "relatedInformation": false } },
-                    "workspace": { "configuration": true },
+                    "textDocument": {
+                        "publishDiagnostics": { "relatedInformation": false },
+                        "definition": { "linkSupport": true },
+                        "references": {},
+                        "hover": { "contentFormat": ["plaintext", "markdown"] },
+                        "rename": { "prepareSupport": false },
+                    },
+                    // Edits of documents only: no file a rename would create, move or delete (none is announced).
+                    "workspace": { "configuration": true, "workspaceEdit": { "documentChanges": true } },
+                    // Its indexing reported, so a question waits until the server knows the project.
+                    "window": { "workDoneProgress": true },
                 },
                 "initializationOptions": settings_for(id),
             }),
@@ -224,6 +278,8 @@ impl Server {
             }
         }
         server.notify("initialized", json!({}))?;
+        server.started = Instant::now();
+        server.progress_changed = server.started;
         Ok(server)
     }
 
@@ -265,14 +321,135 @@ impl Server {
         Ok(())
     }
 
-    /// Sends `text` as the file's content and returns the errors the server reports for it within the limit.
-    fn errors_for(
-        &mut self,
-        path: &Path,
-        language: &str,
-        text: &str,
-    ) -> Result<Option<Vec<String>>, String> {
+    /// A message of the server's that answers nothing of ours: its work under way noted, its own request answered.
+    fn note(&mut self, message: &Value) -> Result<(), String> {
+        if message.get("method").and_then(Value::as_str) == Some("$/progress") {
+            let token = match &message["params"]["token"] {
+                Value::String(token) => token.clone(),
+                other => other.to_string(),
+            };
+            // rust-analyzer answers while it primes its caches, only slower: that work keeps no question waiting.
+            if token.contains("cachePriming") {
+                return Ok(());
+            }
+            match message["params"]["value"]["kind"].as_str() {
+                Some("begin") => {
+                    self.progress.insert(token);
+                }
+                Some("end") => {
+                    self.progress.remove(&token);
+                }
+                _ => return Ok(()),
+            }
+            self.progress_changed = Instant::now();
+            self.reported = true;
+            return Ok(());
+        }
+        self.answer_request(message)
+    }
+
+    /// Whether the server reports work under way — not counting work unchanged for [`STALE_PROGRESS`].
+    fn busy(&self) -> bool {
+        !self.progress.is_empty() && self.progress_changed.elapsed() < STALE_PROGRESS
+    }
+
+    /// Whether the server may be asked: no work under way for [`READY_QUIET`], and either some work reported and
+    /// done, or [`FIRST_SETTLE`] passed without any.
+    fn ready(&self) -> bool {
+        !self.busy()
+            && self.progress_changed.elapsed() >= READY_QUIET
+            && (self.reported || self.started.elapsed() >= FIRST_SETTLE)
+    }
+
+    /// Takes what the server has sent meanwhile.
+    fn drain(&mut self) -> Result<(), String> {
+        loop {
+            match self.incoming.try_recv() {
+                Ok(message) => self.note(&message)?,
+                Err(mpsc::TryRecvError::Empty) => return Ok(()),
+                Err(mpsc::TryRecvError::Disconnected) => return Err("the server ended".into()),
+            }
+        }
+    }
+
+    /// Waits up to `limit` until the server is [`Self::ready`]: whether it got there.
+    fn wait_ready(&mut self, limit: Duration) -> Result<bool, String> {
+        let deadline = Instant::now() + limit;
+        loop {
+            self.drain()?;
+            if self.ready() {
+                return Ok(true);
+            }
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Ok(false);
+            }
+            match self.incoming.recv_timeout(left.min(LOOK_EVERY)) {
+                Ok(message) => self.note(&message)?,
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => return Err("the server ended".into()),
+            }
+        }
+    }
+
+    /// Hands every open document over again whose text on disk changed since (T62), so a question — a rename above all
+    /// — is reckoned on the files as they are.
+    fn refresh(&mut self) -> Result<(), String> {
+        let open: Vec<(String, String)> = self
+            .texts
+            .iter()
+            .map(|(uri, text)| (uri.clone(), text.clone()))
+            .collect();
+        for (uri, before) in open {
+            let Some(path) = path_of(&uri) else { continue };
+            let now = read_capped(&path).unwrap_or_default();
+            if now != before {
+                let language = language_of(&path).unwrap_or("plaintext");
+                self.sync(&path, language, &now)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether the server's process has ended.
+    fn ended(&mut self) -> bool {
+        self.child.try_wait().is_ok_and(|status| status.is_some())
+    }
+
+    /// Asks `method` and waits up to [`ANSWER_LIMIT`] for its answer.
+    fn ask(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        let id = self.request(method, params)?;
+        let deadline = Instant::now() + ANSWER_LIMIT;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            match self.incoming.recv_timeout(left) {
+                Ok(message)
+                    if message.get("id") == Some(&json!(id)) && message.get("method").is_none() =>
+                {
+                    if let Some(error) = message.get("error") {
+                        return Err(format!(
+                            "the server could not answer: {}",
+                            error["message"].as_str().unwrap_or("no reason given")
+                        ));
+                    }
+                    return Ok(message.get("result").cloned().unwrap_or(Value::Null));
+                }
+                Ok(message) => self.note(&message)?,
+                Err(RecvTimeoutError::Timeout) => {
+                    return Err(format!(
+                        "the server gave no answer within {} s",
+                        ANSWER_LIMIT.as_secs()
+                    ));
+                }
+                Err(RecvTimeoutError::Disconnected) => return Err("the server ended".into()),
+            }
+        }
+    }
+
+    /// Hands the server the file's content as it is now: opened the first time, changed after.
+    fn sync(&mut self, path: &Path, language: &str, text: &str) -> Result<String, String> {
         let uri = uri_of(path);
+        self.texts.insert(uri.clone(), text.to_owned());
         match self.versions.get_mut(&uri) {
             None => {
                 self.versions.insert(uri.clone(), 1);
@@ -292,6 +469,17 @@ impl Server {
                 )?;
             }
         }
+        Ok(uri)
+    }
+
+    /// Sends `text` as the file's content and returns the errors the server reports for it within the limit.
+    fn errors_for(
+        &mut self,
+        path: &Path,
+        language: &str,
+        text: &str,
+    ) -> Result<Option<Vec<String>>, String> {
+        let uri = self.sync(path, language, text)?;
         let deadline = Instant::now() + WAIT_LIMIT;
         let mut last: Option<Vec<String>> = None;
         loop {
@@ -309,7 +497,7 @@ impl Server {
                     {
                         last = Some(errors_in(&message["params"]["diagnostics"]));
                     } else {
-                        self.answer_request(&message)?;
+                        self.note(&message)?;
                     }
                 }
                 Err(RecvTimeoutError::Timeout) => return Ok(self.settle(&uri, last)),
@@ -357,7 +545,7 @@ fn errors_in(diagnostics: &Value) -> Vec<String> {
         .collect()
 }
 
-fn uri_of(path: &Path) -> String {
+pub(crate) fn uri_of(path: &Path) -> String {
     let encoded: String = path
         .to_string_lossy()
         .split('/')
@@ -376,6 +564,35 @@ fn uri_of(path: &Path) -> String {
     format!("file://{encoded}")
 }
 
+/// A file's text, refused past [`axiomata_files::MAX_READ_BYTES`] as `read_file` refuses it.
+pub(crate) fn read_capped(path: &Path) -> Result<String, String> {
+    let size = std::fs::metadata(path)
+        .map_err(|err| err.to_string())?
+        .len();
+    if size > axiomata_files::MAX_READ_BYTES {
+        return Err(format!("{size} bytes, over the limit"));
+    }
+    std::fs::read_to_string(path).map_err(|err| err.to_string())
+}
+
+/// The path a `file://` URI names, its `%XX` escapes undone; `None` for any other URI or one that is no UTF-8.
+pub(crate) fn path_of(uri: &str) -> Option<PathBuf> {
+    let encoded = uri.strip_prefix("file://")?;
+    let mut bytes = Vec::with_capacity(encoded.len());
+    let mut rest = encoded.as_bytes();
+    while let Some((&first, tail)) = rest.split_first() {
+        if first == b'%' && tail.len() >= 2 {
+            let hex = std::str::from_utf8(&tail[..2]).ok()?;
+            bytes.push(u8::from_str_radix(hex, 16).ok()?);
+            rest = &tail[2..];
+        } else {
+            bytes.push(first);
+            rest = tail;
+        }
+    }
+    String::from_utf8(bytes).ok().map(PathBuf::from)
+}
+
 /// A server that would start for an edit: its id and the command line the gate judges.
 pub(crate) struct Launch {
     pub server: &'static str,
@@ -390,6 +607,9 @@ pub(crate) struct Diagnostics {
     /// The run's sandbox profile, which every server runs in.
     profile: String,
     servers: HashMap<&'static str, Option<Server>>,
+    /// The servers the gate allowed to start for these servers' root and profile (T62): no other starts, whatever
+    /// file an edit or a rename names.
+    allowed: HashSet<&'static str>,
 }
 
 /// What [`Diagnostics::resolve`] finds for a file: its path, language, server id, program and arguments.
@@ -404,6 +624,7 @@ impl Diagnostics {
             search: servers::search_path(std::env::var_os("PATH").as_deref(), home.as_deref()),
             profile,
             servers: HashMap::new(),
+            allowed: HashSet::new(),
         }
     }
 
@@ -429,11 +650,11 @@ impl Diagnostics {
             .then_some((path, language, server, program, args))
     }
 
-    /// The server an edit of `rel` would start now — for the gate to judge first; `None` when none would start (no
-    /// server, already running, or given up on in this run).
+    /// The server `rel` needs that the gate has not allowed yet — for it to judge first; `None` when there is none
+    /// or it is allowed.
     pub(crate) fn launch(&self, rel: &str) -> Option<Launch> {
         let (_, _, server, program, args) = self.resolve(rel)?;
-        if self.servers.contains_key(server) {
+        if self.allowed.contains(server) {
             return None;
         }
         let line = std::iter::once(program.display().to_string())
@@ -443,22 +664,117 @@ impl Diagnostics {
         Some(Launch { server, line })
     }
 
-    /// The gate refused to start `server`: it is not asked about again in this run.
-    pub(crate) fn refuse(&mut self, server: &'static str) {
-        self.servers.insert(server, None);
+    /// The project's folder, as the servers know it (resolved: what their answers name).
+    pub(crate) fn root(&self) -> &Path {
+        &self.root
+    }
+
+    /// Asks the server of `rel` (relative to the root) `method` about it (T62): the file's content handed over as it
+    /// is now, the question sent once the server knows the project, `params` built from the file's URI and text.
+    ///
+    /// # Errors
+    ///
+    /// No server for the file, one given up on in this session, one still indexing, or its answer an error.
+    pub(crate) fn ask(
+        &mut self,
+        rel: &str,
+        method: &str,
+        params: impl FnOnce(&str, &str) -> Result<Value, String>,
+    ) -> Result<Value, String> {
+        let Some((path, language, server, program, args)) = self.resolve(rel) else {
+            return Err(format!(
+                "no language server Glut may start knows {rel}; use grep or read_file"
+            ));
+        };
+        let text = read_capped(&path).map_err(|err| format!("cannot read {rel}: {err}"))?;
+        let Some(entry) = self.running(server, &program, &args) else {
+            return Err(format!(
+                "{server} was not allowed to start; use grep or read_file"
+            ));
+        };
+        let Some(running) = entry.as_mut() else {
+            return Err(format!(
+                "{server} is off for this session (refused, broken or silent); use grep or read_file"
+            ));
+        };
+        let answer = (|| {
+            running.refresh()?;
+            let uri = running.sync(&path, language, &text)?;
+            let limit = if running.asked {
+                READY_LIMIT
+            } else {
+                INDEX_LIMIT
+            };
+            if !running.wait_ready(limit)? {
+                return Err(format!(
+                    "{server} is still indexing the project; use grep for now, or ask again in a moment"
+                ));
+            }
+            running.asked = true;
+            running.ask(method, params(&uri, &text)?)
+        })();
+        // A server that ended or stopped listening is not asked again; a question it could not answer leaves it be.
+        if answer.is_err() && running.ended() {
+            *entry = None;
+        }
+        answer
+    }
+
+    /// Each server of the session and how it stands, for the owner (`/lsp`).
+    pub(crate) fn status(&self) -> Vec<(String, ServerState)> {
+        let mut all: Vec<(String, ServerState)> = self
+            .servers
+            .iter()
+            .map(|(id, server)| {
+                let state = match server {
+                    Some(server) if server.busy() => ServerState::Indexing,
+                    Some(_) => ServerState::Ready,
+                    None => ServerState::Off,
+                };
+                ((*id).to_owned(), state)
+            })
+            .collect();
+        all.sort();
+        all
+    }
+
+    /// The gate allowed `server` to start.
+    pub(crate) fn allow(&mut self, server: &'static str) {
+        self.allowed.insert(server);
+    }
+
+    /// The running server for `server`, started where the gate allowed it and it is not given up on; `None` else.
+    fn running(
+        &mut self,
+        server: &'static str,
+        program: &Path,
+        args: &[String],
+    ) -> Option<&mut Option<Server>> {
+        if !self.allowed.contains(server) {
+            return None;
+        }
+        let (root, profile) = (self.root.clone(), self.profile.clone());
+        Some(
+            self.servers
+                .entry(server)
+                .or_insert_with(|| Server::start(server, program, args, &root, &profile).ok()),
+        )
     }
 
     /// The note to append to an edit of `rel` (relative to the root): the server's errors, or `None` when there is no
     /// server, it said nothing in time, or found nothing.
     pub(crate) fn after_edit(&mut self, rel: &str) -> Option<String> {
         let (path, language, server, program, args) = self.resolve(rel)?;
-        let text = std::fs::read_to_string(&path).ok()?;
-        let (root, profile) = (self.root.clone(), self.profile.clone());
-        let entry = self
-            .servers
-            .entry(server)
-            .or_insert_with(|| Server::start(server, &program, &args, &root, &profile).ok());
+        let text = read_capped(&path).ok()?;
+        let entry = self.running(server, &program, &args)?;
         let running = entry.as_mut()?;
+        // Silent lately: it gets the text, nobody waits for its word until the pause has passed.
+        if running.silent >= MAX_SILENT && running.silent_at.elapsed() < SILENT_PAUSE {
+            if running.sync(&path, language, &text).is_err() {
+                *entry = None;
+            }
+            return None;
+        }
         match running.errors_for(&path, language, &text) {
             Ok(Some(errors)) => {
                 running.silent = 0;
@@ -470,20 +786,73 @@ impl Diagnostics {
                     )
                 })
             }
+            // A server still indexing says nothing yet: that is no silence to give it up for.
+            Ok(None) if running.busy() => None,
             Ok(None) => {
                 // Nothing within the limit: a server still loading a large project would add seconds to every edit.
                 running.silent += 1;
-                if running.silent >= MAX_SILENT {
-                    *entry = None;
-                }
+                running.silent_at = Instant::now();
                 None
             }
             Err(_) => {
-                // A server that broke is not asked again in this run.
+                // A server that broke is not asked again in this session.
                 *entry = None;
                 None
             }
         }
+    }
+}
+
+/// How a language server of the session stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ServerState {
+    /// Answering.
+    Ready,
+    /// Reporting work under way — loading or indexing the project.
+    Indexing,
+    /// Given up on for the session: refused by the gate, broken, or silent.
+    Off,
+}
+
+/// The language servers of a session (T62): kept by a host across its runs, shared by a run with its subagents. A
+/// clone is the same set.
+#[derive(Clone, Default)]
+pub struct LanguageServers(Arc<Mutex<Option<Diagnostics>>>);
+
+impl std::fmt::Debug for LanguageServers {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("LanguageServers")
+    }
+}
+
+impl LanguageServers {
+    /// The servers for `root`, each started in the sandbox `profile`: the ones running stay where both are the same,
+    /// else they end and start anew as they are needed. Blocks while a question is under way.
+    pub(crate) fn lock(&self, root: &Path, profile: &str) -> MutexGuard<'_, Option<Diagnostics>> {
+        let mut held = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let root = root.canonicalize().unwrap_or_else(|_| root.to_owned());
+        if held
+            .as_ref()
+            .is_none_or(|servers| servers.root != root || servers.profile != profile)
+        {
+            *held = Some(Diagnostics::new(&root, profile.to_owned()));
+        }
+        held
+    }
+
+    /// Each server and how it stands, for the owner; `None` while a question holds them (they are busy answering).
+    pub fn status(&self) -> Option<Vec<(String, ServerState)>> {
+        let held = self.0.try_lock().ok()?;
+        Some(held.as_ref().map(Diagnostics::status).unwrap_or_default())
+    }
+
+    /// Ends every server: a switch turned off, a session closed. Beside the caller — a question may hold them for a
+    /// while yet, and the screen must not wait for it.
+    pub fn stop(&self) {
+        let servers = Arc::clone(&self.0);
+        std::thread::spawn(move || {
+            *servers.lock().unwrap_or_else(PoisonError::into_inner) = None;
+        });
     }
 }
 
@@ -525,6 +894,53 @@ mod tests {
         assert_eq!(settings_for("yaml")["yaml"]["schemaStore"]["enable"], false);
     }
 
+    /// Live against rust-analyzer when it is installed (T62): a definition, the uses, a hover and a rename's edits,
+    /// once it has indexed the project.
+    #[test]
+    #[ignore = "needs rust-analyzer"]
+    fn rust_analyzer_answers_questions_about_a_symbol() {
+        use crate::code::{self, Op};
+        let dir = std::env::temp_dir().join(format!("glut-code-live-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"d\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("src/main.rs"),
+            "/// A note.\nstruct Letter;\n\nfn make() -> Letter {\n    Letter\n}\n\n\
+             fn main() {\n    let _ = make();\n}\n",
+        )
+        .unwrap();
+        let root = dir.canonicalize().unwrap();
+        let home = std::path::PathBuf::from(std::env::var_os("HOME").unwrap());
+        let profile = crate::sandbox::Policy::new(&root, &home, &[], &[]).profile();
+        let mut servers = Diagnostics::new(&root, profile);
+        servers.allow("rust-analyzer");
+        let mut ask = |op: Op, line: u32, symbol: &str| {
+            servers
+                .ask("src/main.rs", op.method(), |uri, text| {
+                    let position = code::position(text, line, symbol, 1)?;
+                    Ok(code::params(op, uri, position, Some("Note")))
+                })
+                .unwrap()
+        };
+        let definition = code::places(&ask(Op::Definition, 9, "make"));
+        assert_eq!(definition.len(), 1, "{definition:?}");
+        assert_eq!(definition[0].line, 3);
+        let uses = code::places(&ask(Op::References, 2, "Letter"));
+        assert_eq!(uses.len(), 3, "{uses:?}");
+        assert!(code::hover_text(&ask(Op::Hover, 4, "Letter")).contains("A note."));
+        let edits = code::workspace_edits(&ask(Op::Rename, 2, "Letter")).unwrap();
+        let text = std::fs::read_to_string(root.join("src/main.rs")).unwrap();
+        let renamed =
+            code::apply(&text, &edits[&root.join("src/main.rs")], Some("Letter")).unwrap();
+        assert_eq!(renamed.matches("Note").count(), 3, "{renamed}");
+        assert!(!renamed.contains("Letter"), "{renamed}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Live against rust-analyzer when it is installed: an edit with a type error gets the error back.
     #[test]
     #[ignore = "needs rust-analyzer"]
@@ -545,6 +961,11 @@ mod tests {
         let home = std::path::PathBuf::from(std::env::var_os("HOME").unwrap());
         let profile = crate::sandbox::Policy::new(&root, &home, &[], &[]).profile();
         let mut diagnostics = Diagnostics::new(&root, profile);
+        assert!(
+            diagnostics.after_edit("src/main.rs").is_none(),
+            "nothing starts unallowed"
+        );
+        diagnostics.allow("rust-analyzer");
         // Its own diagnostics (no `cargo check`): the type error among them; asked again, the last word stands.
         let first = diagnostics.after_edit("src/main.rs");
         let note = diagnostics.after_edit("src/main.rs");

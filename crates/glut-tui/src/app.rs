@@ -1543,6 +1543,32 @@ impl App {
             .unwrap_or(self.parts.config.max_turns)
     }
 
+    /// Whether the language servers serve the turns (T62): what `/lsp` kept, else the owner's settings.
+    fn lsp_on(&self) -> bool {
+        Prefs::load(&self.parts.home)
+            .lsp
+            .unwrap_or(self.parts.config.diagnostics)
+    }
+
+    /// `/lsp` alone (T62): whether the servers serve, and each one of the session with how it stands.
+    fn show_lsp(&mut self) {
+        let switch = if self.lsp_on() { "on" } else { "off" };
+        let mut lines = vec![tr!(lsp_now, lsp = switch)];
+        match self.parts.config.servers.status() {
+            None => lines.push(tr!(lsp_busy).to_owned()),
+            Some(servers) if servers.is_empty() => lines.push(tr!(lsp_none).to_owned()),
+            Some(servers) => lines.extend(servers.into_iter().map(|(server, state)| {
+                let state = match state {
+                    glut::ServerState::Ready => tr!(lsp_ready),
+                    glut::ServerState::Indexing => tr!(lsp_indexing),
+                    glut::ServerState::Off => tr!(lsp_given_up),
+                };
+                format!("  {server}: {state}")
+            })),
+        }
+        self.tell(lines.join("\n"));
+    }
+
     /// Whether Glut asks the model once to go on (T73): what `/nudge` kept, else the owner's settings.
     fn nudges(&self) -> bool {
         Prefs::load(&self.parts.home)
@@ -1680,6 +1706,7 @@ impl App {
                 remind: self.nudges(),
                 steps: self.steps_now(),
                 rules: self.rules.clone(),
+                lsp: self.lsp_on(),
             },
             session::TurnInput::Message(prompt, images),
             cancel,
@@ -1717,6 +1744,7 @@ impl App {
                 remind: self.nudges(),
                 steps: self.steps_now(),
                 rules: self.rules.clone(),
+                lsp: self.lsp_on(),
             },
             session::TurnInput::Resume(run),
             cancel,
@@ -3886,6 +3914,18 @@ impl App {
             },
             "keychain" => self.keychain_command(rest),
             "clean" => self.clean_command(rest),
+            "lsp" => match rest {
+                "on" | "off" => match prefs::set_lsp(&self.parts.home, rest == "on") {
+                    Ok(()) if rest == "on" => self.say(tr!(lsp_on)),
+                    Ok(()) => {
+                        // Off ends the servers at once: their memory and their processes go with them.
+                        self.parts.config.servers.stop();
+                        self.say(tr!(lsp_off));
+                    }
+                    Err(reason) => self.transcript.note(reason, Tone::Fault),
+                },
+                _ => self.show_lsp(),
+            },
             "nudge" => match rest {
                 "on" | "off" => match prefs::set_nudge(&self.parts.home, rest == "on") {
                     Ok(()) if rest == "on" => self.say(tr!(nudge_on)),
@@ -11526,6 +11566,16 @@ pub(crate) mod tests {
         assert!(!app.nudges(), "kept, and the next turn is not asked on");
         typed(&mut app, "/nudge on");
         assert!(app.nudges());
+        // T62: `/lsp off` is kept and reaches the next turn; `/lsp` alone says so and lists no server yet.
+        typed(&mut app, "/lsp off");
+        assert!(!app.lsp_on());
+        typed(&mut app, "/lsp");
+        assert!(app.transcript.blocks.iter().any(|block| matches!(
+            &block.kind,
+            crate::transcript::Kind::Note { text, .. } if text.contains("/lsp on")
+        )));
+        typed(&mut app, "/lsp on");
+        assert!(app.lsp_on());
         typed(&mut app, "/loop tokens 2M");
         assert_eq!(
             Prefs::load(&app.parts.home).loop_max_tokens,

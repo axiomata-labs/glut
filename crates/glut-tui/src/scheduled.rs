@@ -930,6 +930,7 @@ async fn attempt(home: &Path, plan: &Plan, cancel: glut::Cancel) -> Attempt {
             remind: true,
             steps: parts.config.max_turns,
             rules: Vec::new(),
+            lsp: parts.config.diagnostics,
         },
         session::TurnInput::Message(prompt, Vec::new()),
         cancel,

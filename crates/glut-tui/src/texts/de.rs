@@ -251,6 +251,11 @@ pub const TEXTS: Texts = Texts {
              bittet, eine zu schreiben, wenn es keine hat",
         ),
         (
+            "lsp",
+            "ob die Language Server helfen: Fehler nach dem Bearbeiten und das Werkzeug code für Definitionen, \
+             Verwendungen und Umbenennen — /lsp allein zeigt jeden Server",
+        ),
+        (
             "reader",
             "für einen Bildschirmleser: Tasten in Worten, ein schlichter Bildschirm, nichts bewegt sich, eine Zeile \
              bei jedem Wechsel des Zustands",
@@ -330,6 +335,7 @@ pub const TEXTS: Texts = Texts {
         ("rule", "Regel für diese Session"),
         ("maxsteps", "höchstens so viele Schritte pro Turn"),
         ("nudge", "Modell bei der Aufgabe halten"),
+        ("lsp", "Language Server"),
         ("reader", "für Screenreader"),
         ("language", "die Sprache von Glut"),
         ("theme", "Farben wählen"),
@@ -730,6 +736,16 @@ pub const TEXTS: Texts = Texts {
     nudge_on: "Glut lässt das Modell weitermachen, wenn ein Turn endet, erinnert es an seine Aufgabenliste und \
                bittet es um eine, wenn es keine hat",
     nudge_off: "ein Turn endet, wo das Modell ihn beendet — keine Erinnerung an die Liste, keine Bitte darum",
+    lsp_now: "Language Server: {lsp} — /lsp on oder off",
+    lsp_on: "die Language Server helfen wieder: Fehler nach dem Bearbeiten und das Werkzeug code für Definitionen, \
+Verwendungen und Umbenennen",
+    lsp_off: "Language Server aus: ihre Prozesse beendet, keine Fehler nach dem Bearbeiten, kein Werkzeug code",
+    lsp_busy: "  die Server beantworten gerade eine Frage — gleich noch einmal schauen",
+    lsp_none: "  in dieser Session noch keiner gestartet — das erste Bearbeiten oder die erste code-Frage startet \
+einen",
+    lsp_ready: "bereit",
+    lsp_indexing: "indexiert das Projekt",
+    lsp_given_up: "aus für diese Session (verweigert, kaputt oder stumm)",
     thinking_unknown: "/thinking {word}: off, folded oder open",
     no_command: "kein Befehl /{name} — /help listet sie",
     model_locked: "das Modell dieser Session wird vom Programm gesetzt, das sie gestartet hat — hier kein Wechsel",
@@ -1365,6 +1381,12 @@ pub const TEXTS: Texts = Texts {
         (
             "A plan and its record of runs gone; its sessions stay",
             "Ein Plan und die Liste seiner Läufe fort; seine Sessions bleiben",
+        ),
+        (
+            "Start no language server: no errors after an edit, no `code` tool (T62; `\"lsp\": false` in \
+             ~/.glut/settings.json)",
+            "Startet keinen Language Server: keine Fehler nach dem Bearbeiten, kein Werkzeug `code` (T62; `\"lsp\": \
+             false` in ~/.glut/settings.json)",
         ),
         (
             "Send what the tools answer as it is, without hiding the keys in it (T58; `\"mask\": false` in \

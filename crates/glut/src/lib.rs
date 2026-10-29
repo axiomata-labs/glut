@@ -12,11 +12,12 @@ pub mod agents;
 pub mod anthropic;
 pub mod clean;
 pub mod cli;
+mod code;
 pub mod codemode;
 pub mod commands;
 pub mod compact;
 pub mod config;
-mod diagnostics;
+pub(crate) mod diagnostics;
 pub mod error;
 pub mod event;
 pub mod folders;
@@ -52,6 +53,7 @@ pub use config::{
     Budget, Compaction, Effort, Inbox, LOOP_TOOL, ModelEndpoint, PANE_TOOLS, Prices, RefusalLimits,
     RunConfig,
 };
+pub use diagnostics::{LanguageServers, ServerState};
 pub use error::HarnessError;
 pub use event::{Event, EventSink, FinishReason, McpStatus, NudgeKind, SharedSink, SkillHow};
 pub use model::{ChatModel, Message, Model, OpenAiCompat, Piece, Reply, ToolCall, ToolSpec, Usage};

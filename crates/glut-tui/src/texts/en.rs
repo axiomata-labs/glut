@@ -82,6 +82,7 @@ pub const TEXTS: Texts = Texts {
         ("rule", "a rule for this session"),
         ("maxsteps", "steps per turn at most"),
         ("nudge", "keep the model on task"),
+        ("lsp", "language servers"),
         ("reader", "for screen readers"),
         ("language", "the language Glut speaks"),
         ("theme", "pick the colours"),
@@ -379,6 +380,15 @@ pub const TEXTS: Texts = Texts {
     nudge_on: "Glut asks the model to go on at the end of a turn, reminds it of its task list while it works, and \
                asks it to write one when it has none",
     nudge_off: "a turn ends where the model ends it — no reminder of the task list and no request for one",
+    lsp_now: "language servers: {lsp} — /lsp on or off",
+    lsp_on: "the language servers serve again: errors after an edit, and the code tool for definitions, uses and \
+renames",
+    lsp_off: "language servers off: their processes ended, no errors after an edit, no code tool",
+    lsp_busy: "  the servers are answering a question right now — look again in a moment",
+    lsp_none: "  none started in this session yet — the first edit or code question starts one",
+    lsp_ready: "ready",
+    lsp_indexing: "indexing the project",
+    lsp_given_up: "off for this session (refused, broken or silent)",
     thinking_unknown: "/thinking {word}: off, folded or open",
     no_command: "no command /{name} — /help lists them",
     model_locked: "this session's model is set by the program that started it — no switch here",

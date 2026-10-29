@@ -37,8 +37,13 @@ const WORKING_TODOS: &str = "
 in_progress when you start it and done the moment it is done — the owner watches the list live. Make the items \
 the steps you will really take one after another; what you do in one go, mark done together once it is.";
 
+/// The language servers' part of [`WORKING`], only where `code` is offered (T62).
+const WORKING_CODE: &str = "
+- To find where a symbol is defined or used, ask code rather than grep: it finds the symbol itself, not every word \
+that looks like it. Rename a symbol with code, not by editing each place.";
+
 /// The system prompt for a run in `cwd` on `date` with `model`, with the caller's instructions, if any, after it;
-/// `todos`: `todo_write` is offered, and the guide says how to keep its list.
+/// `todos`: `todo_write` is offered, and the guide says how to keep its list; `code`: `code` is offered (T62).
 /// It names the harness and the model, so a model asked who it is says where it runs rather than a name it learned
 /// (DeepSeek in the Glut chat called itself "Claude", `docs/plans/glut-round.md`).
 pub fn system_prompt(
@@ -47,12 +52,14 @@ pub fn system_prompt(
     model: &str,
     instructions: Option<&str>,
     todos: bool,
+    code: bool,
 ) -> String {
     let mut prompt = format!(
         "{BASE}\nYou run in Glut, Axiomata's own agent harness, on the model {model}.\n\
-         Working folder: {}\nToday: {date}\n\n{WORKING}{}",
+         Working folder: {}\nToday: {date}\n\n{WORKING}{}{}",
         cwd.display(),
-        if todos { WORKING_TODOS } else { "" }
+        if todos { WORKING_TODOS } else { "" },
+        if code { WORKING_CODE } else { "" }
     );
     if let Some(extra) = instructions.map(str::trim).filter(|text| !text.is_empty()) {
         prompt.push_str("\n\n");
@@ -87,6 +94,7 @@ mod tests {
             "m/x",
             Some("  Be a reviewer.  "),
             true,
+            true,
         );
         assert!(prompt.contains("Working folder: /w\nToday: 2026-10-13"));
         assert!(
@@ -94,11 +102,19 @@ mod tests {
         );
         assert!(prompt.ends_with("\n\nBe a reviewer."));
         assert!(prompt.contains("## How to work") && prompt.contains("todo_write"));
-        let bare = system_prompt(Path::new("/w"), "2026-10-13", "m/x", Some("   "), false);
+        assert!(prompt.contains("ask code rather than grep"));
+        let bare = system_prompt(
+            Path::new("/w"),
+            "2026-10-13",
+            "m/x",
+            Some("   "),
+            false,
+            false,
+        );
         assert!(bare.ends_with(WORKING), "blank instructions add nothing");
         assert!(
-            !bare.contains("todo_write"),
-            "no list to keep where none is offered"
+            !bare.contains("todo_write") && !bare.contains("ask code"),
+            "no list to keep and no server to ask where neither is offered"
         );
     }
 
@@ -118,6 +134,7 @@ mod tests {
             "d",
             "deepseek/deepseek-v4.1-flash",
             None,
+            true,
             true,
         );
         assert!(prompt.len() < 3_000, "{}", prompt.len());

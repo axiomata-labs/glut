@@ -95,6 +95,9 @@ pub struct Prefs {
     /// Whether Glut asks the model once to go on (T73, `/nudge`); `None`: `nudge` of the settings, else on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nudge: Option<bool>,
+    /// Whether the language servers serve the turns (T62, `/lsp`); `None`: `lsp` of the settings, else on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lsp: Option<bool>,
     /// Whether the reader mode is on (TUI9b, `/reader`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reader: Option<bool>,
@@ -384,6 +387,17 @@ pub fn set_steps(home: &Path, steps: u32) -> Result<(), String> {
 pub fn set_nudge(home: &Path, on: bool) -> Result<(), String> {
     let mut prefs = Prefs::read(home)?;
     prefs.nudge = Some(on);
+    prefs.save(home)
+}
+
+/// Keeps whether the language servers serve the turns (`/lsp`, T62).
+///
+/// # Errors
+///
+/// A message when the file cannot be read (it is not written over) or written.
+pub fn set_lsp(home: &Path, on: bool) -> Result<(), String> {
+    let mut prefs = Prefs::read(home)?;
+    prefs.lsp = Some(on);
     prefs.save(home)
 }
 
