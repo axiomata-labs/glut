@@ -437,6 +437,8 @@ async fn run_inner<M: ChatModel>(
         refusals: Ledger::new(config.refusals),
         refused_now: Vec::new(),
         servers_refused: std::collections::HashSet::new(),
+        lsp_hinted: false,
+        lsp_hint: None,
         subagent_refusals: 0,
         window: config
             .compaction
@@ -815,6 +817,10 @@ struct Loop<'a, M: ChatModel> {
     /// The language servers the gate refused to start in this run (T62): not asked about again in it — the next run
     /// (another mode, other rules) asks afresh.
     servers_refused: std::collections::HashSet<&'static str>,
+    /// Whether a `grep` for a name was told of `lsp` in this run (T62): once is enough.
+    lsp_hinted: bool,
+    /// That hint, for [`Self::reminded`] to put after the call's output once a tool's own `[glut]` lines are quoted.
+    lsp_hint: Option<String>,
     /// The refusals of the subagent the current call started, taken by [`Self::perform`] (R5).
     subagent_refusals: u32,
     /// #111: what the run knows of its model's context window.
@@ -2346,6 +2352,25 @@ impl<'a, M: ChatModel> Loop<'a, M> {
             output.push_str("\n\n");
             output.push_str(&note);
         }
+        // T62: a search for one name is told once a run that lsp finds it as a symbol.
+        if ok
+            && !self.lsp_hinted
+            && call.function.name == "grep"
+            && self
+                .offer
+                .catalog
+                .specs
+                .iter()
+                .any(|spec| spec.name == crate::lsp::NAME)
+        {
+            let pattern = serde_json::from_str::<Value>(&call.function.arguments)
+                .ok()
+                .and_then(|args| args["pattern"].as_str().map(str::to_owned));
+            if let Some(name) = pattern.as_deref().and_then(crate::lsp::searched_name) {
+                self.lsp_hinted = true;
+                self.lsp_hint = Some(crate::lsp::grep_hint(&name));
+            }
+        }
         if let Some(gate) = self.tools.gate() {
             for judged in gate.take_log() {
                 sink.emit(Event::permission(turn, &call.id, &judged));
@@ -2429,6 +2454,9 @@ impl<'a, M: ChatModel> Loop<'a, M> {
         // Only Glut speaks as `[glut]` (the prompt tells the model to follow such lines): a file, a page or a server
         // writing one is quoted, never obeyed.
         let mut output = planning::unforged(output);
+        if let Some(hint) = self.lsp_hint.take() {
+            output = format!("{output}\n\n{hint}");
+        }
         // Long reading without a change (T73b): said once, at the first result of the step that reaches the mark.
         if self.reading_steps >= READING_HINT_AT && !self.reading_told && self.depth == 0 {
             self.reading_told = true;
@@ -4401,6 +4429,81 @@ mod tests {
         fn call(&self, arguments: Value, _context: crate::tools::CallContext) -> ToolFuture<'_> {
             Box::pin(async move { Ok(arguments["text"].as_str().unwrap_or_default().to_owned()) })
         }
+    }
+
+    /// A stand-in for `grep` (T62's hint).
+    struct FakeGrep;
+
+    impl Tool for FakeGrep {
+        fn spec(&self) -> ToolSpec {
+            ToolSpec {
+                name: "grep".into(),
+                description: "g".into(),
+                parameters: json!({"type": "object"}),
+            }
+        }
+
+        fn access(&self, _arguments: &Value) -> crate::permissions::Access {
+            crate::permissions::Access::Own
+        }
+
+        fn call(&self, _arguments: Value, _context: crate::tools::CallContext) -> ToolFuture<'_> {
+            Box::pin(async move { Ok("src/a.rs:1: struct Letter;".to_owned()) })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_grep_for_one_name_is_told_of_lsp_once_a_run() {
+        if !crate::sandbox::available() {
+            return;
+        }
+        let mut tools = Toolbox::new();
+        tools.extend([Box::new(FakeGrep) as Box<dyn Tool>]);
+        let config = RunConfig {
+            sandbox: Some(crate::permissions::settings::SandboxSettings {
+                enabled: true,
+                ..crate::permissions::settings::SandboxSettings::default()
+            }),
+            codemode: false,
+            ..RunConfig::new(std::env::temp_dir())
+        };
+        let model = Script::new(vec![
+            Ok(calls(&[("g1", "grep", r#"{"pattern":"Letter"}"#)])),
+            Ok(calls(&[("g2", "grep", r#"{"pattern":"\\.send\\("}"#)])),
+            Ok(text("Done.")),
+        ]);
+        let outcome = run(
+            &config,
+            &model,
+            &tools,
+            "go",
+            &mut Vec::new(),
+            &Cancel::new(),
+        )
+        .await;
+        assert_eq!(outcome.reason, FinishReason::Answered);
+        let seen = model.seen.lock().unwrap();
+        let result = |id: &str| {
+            seen.last()
+                .unwrap()
+                .iter()
+                .find(|m| m.tool_call_id.as_deref() == Some(id))
+                .and_then(|m| m.content.clone())
+                .unwrap_or_default()
+        };
+        assert!(
+            result("g1").contains("[glut] For where `Letter`"),
+            "{}",
+            result("g1")
+        );
+        assert!(!result("g2").contains("[glut]"), "once a run");
+        assert!(
+            seen[0][0]
+                .content
+                .as_deref()
+                .unwrap_or_default()
+                .contains("use lsp")
+        );
     }
 
     /// A stand-in for the screen's `tell` (TUI T36c).

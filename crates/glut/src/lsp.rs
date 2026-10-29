@@ -145,6 +145,43 @@ pub(crate) fn inside(root: &Path, path: &Path) -> Option<String> {
         .map(|rel| rel.to_string_lossy().into_owned())
 }
 
+/// The one name a `grep` pattern looks for — `Letter`, `\.send\(`, `fn send|async fn send` —, for the hint that
+/// `lsp` finds it as a symbol (T62); `None` for a pattern of several names, of text, or of short words.
+pub(crate) fn searched_name(pattern: &str) -> Option<String> {
+    /// Words of a declaration around the name, not the name.
+    const KEYWORDS: [&str; 14] = [
+        "fn", "pub", "async", "struct", "enum", "trait", "impl", "type", "class", "def", "let",
+        "const", "mut", "s",
+    ];
+    if pattern.contains(' ')
+        && !KEYWORDS
+            .iter()
+            .any(|word| pattern.contains(&format!("{word} ")))
+    {
+        return None;
+    }
+    let mut names: Vec<&str> = pattern
+        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .filter(|word| !word.is_empty() && !KEYWORDS.contains(word))
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    match names.as_slice() {
+        [name] if name.chars().count() >= 3 && !name.starts_with(|c: char| c.is_ascii_digit()) => {
+            Some((*name).to_owned())
+        }
+        _ => None,
+    }
+}
+
+/// The hint to a `grep` for `name` (T62): once a run, a line of Glut's own.
+pub(crate) fn grep_hint(name: &str) -> String {
+    format!(
+        "[glut] For where `{name}` is defined and every place it is used, the lsp tool finds the symbol itself — \
+         use it before grepping for a name."
+    )
+}
+
 /// Whether a call's arguments ask for a rename — a change, so a snapshot comes first.
 pub(crate) fn renames(arguments: &str) -> bool {
     parse(arguments).is_ok_and(|args| args.op == Op::Rename)
@@ -580,6 +617,24 @@ mod tests {
         assert_eq!(inside(&root, &root.join("src/../../x")), None);
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    #[test]
+    fn a_grep_for_one_name_is_told_of_lsp() {
+        assert_eq!(searched_name("Letter").as_deref(), Some("Letter"));
+        assert_eq!(searched_name("\\.send\\(").as_deref(), Some("send"));
+        assert_eq!(
+            searched_name("fn send|async fn send").as_deref(),
+            Some("send")
+        );
+        assert_eq!(searched_name("Letter\\s*\\{").as_deref(), Some("Letter"));
+        assert_eq!(
+            searched_name("tell_window|send_window"),
+            None,
+            "several names"
+        );
+        assert_eq!(searched_name("TODO later"), None, "text");
+        assert_eq!(searched_name("id"), None, "too short");
     }
 
     #[test]

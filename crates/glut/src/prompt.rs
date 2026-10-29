@@ -39,8 +39,8 @@ the steps you will really take one after another; what you do in one go, mark do
 
 /// The language servers' part of [`WORKING`], only where `lsp` is offered (T62).
 const WORKING_CODE: &str = "
-- To find where a symbol is defined or used, ask lsp rather than grep: it finds the symbol itself, not every word \
-that looks like it. Rename a symbol with lsp, not by editing each place.";
+- Before you grep for a function, method or type name, use lsp: it finds the definition and every use of that \
+symbol itself, not every word that looks like it. Rename a symbol with lsp, not by editing each place.";
 
 /// The system prompt for a run in `cwd` on `date` with `model`, with the caller's instructions, if any, after it;
 /// `todos`: `todo_write` is offered, and the guide says how to keep its list; `code`: `lsp` is offered (T62).
@@ -102,7 +102,7 @@ mod tests {
         );
         assert!(prompt.ends_with("\n\nBe a reviewer."));
         assert!(prompt.contains("## How to work") && prompt.contains("todo_write"));
-        assert!(prompt.contains("ask lsp rather than grep"));
+        assert!(prompt.contains("use lsp"));
         let bare = system_prompt(
             Path::new("/w"),
             "2026-10-13",
@@ -113,7 +113,7 @@ mod tests {
         );
         assert!(bare.ends_with(WORKING), "blank instructions add nothing");
         assert!(
-            !bare.contains("todo_write") && !bare.contains("ask lsp"),
+            !bare.contains("todo_write") && !bare.contains("use lsp"),
             "no list to keep and no server to ask where neither is offered"
         );
     }
