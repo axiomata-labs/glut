@@ -1,7 +1,7 @@
 //! Draws a frame: the header, the stream (or Glimm's welcome), an open question, the input and a line of keys.
 
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Position, Rect};
+use ratatui::layout::{Alignment, Constraint, Layout, Position, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
@@ -744,6 +744,9 @@ fn draw_agent(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
+/// The columns the folder keeps in the header before the window's address gives way.
+const HEADER_FOLDER_ROOM: usize = 24;
+
 fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
     let working = app.working() || app.ask.is_some() || app.form.is_some();
     let spark_style = if working {
@@ -759,7 +762,16 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
         ),
         Span::styled("Glut", theme::strong()),
     ];
-    let room = usize::from(area.width).saturating_sub(left_width(&spans) + 2);
+    // The window's address on the right (T83), the name other windows reach this pane by; it gives way first.
+    let address = app
+        .address
+        .as_deref()
+        .map(|address| format!("⇄ {} ", crate::transcript::clean(address)))
+        .filter(|shown| {
+            usize::from(area.width) >= left_width(&spans) + shown.width() + HEADER_FOLDER_ROOM
+        });
+    let right = address.as_ref().map_or(0, |shown| shown.width());
+    let room = usize::from(area.width).saturating_sub(left_width(&spans) + 2 + right);
     if room > 4 {
         spans.push(Span::styled(
             crate::transcript::cut(&format!("  {}", app.folder), room),
@@ -767,6 +779,13 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
         ));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
+    if let Some(shown) = address {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(shown, theme::quiet())))
+                .alignment(Alignment::Right),
+            area,
+        );
+    }
 }
 
 /// The most waiting messages shown above the input; the rest are counted.

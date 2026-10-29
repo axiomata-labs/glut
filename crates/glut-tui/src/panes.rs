@@ -1661,11 +1661,13 @@ impl Panes {
             })
             .collect();
         let window = Some(link.name());
-        for pane in &self.list {
+        let addresses: Vec<String> = (0..self.list.len()).map(|at| self.address(at)).collect();
+        for (pane, address) in self.list.iter_mut().zip(addresses) {
             pane.app
                 .parts
                 .pane_link
                 .set_sessions(window.clone(), lines.clone());
+            pane.app.address = Some(address);
         }
     }
 
@@ -1808,9 +1810,15 @@ impl Panes {
                 } => self.start(resume, place, role, host),
                 Request::Send { to, text, whole } => {
                     // A first word naming no pane or agent is the message's own (`/send 3 files changed`).
-                    let named = to
-                        .as_deref()
-                        .is_some_and(|word| self.resolve(word, self.active).is_some());
+                    // A window seen (T83) names one too, as the `/send` list puts it there; a mere hyphen does not,
+                    // or `/send re-check this` would leave the pane beside.
+                    let named = to.as_deref().is_some_and(|word| {
+                        self.resolve(word, self.active).is_some()
+                            || self
+                                .link
+                                .as_ref()
+                                .is_some_and(|link| link.names_other(word))
+                    });
                     if named {
                         self.send(to, Some(text));
                     } else {
@@ -3549,6 +3557,37 @@ mod tests {
             Some(crate::picker::Pick::WriteTo("2".into())),
             "the other pane, by its number"
         );
+    }
+
+    #[tokio::test]
+    async fn send_to_another_window_from_a_single_pane_reaches_it() {
+        use crate::sessions::By;
+        let host: Arc<dyn Host> = Arc::new(crate::Standalone);
+        let (first, reports) = app();
+        let (mut panes, _inlets) = Panes::new(first, reports, true, Servers::Owner);
+        let home = std::env::temp_dir().join(format!("glut-send-window-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let (link, _inlet) = crate::sessions::Link::start(&home, std::path::Path::new("/x/alpha"))
+            .await
+            .unwrap();
+        let mut letters = crate::sessions::fake_window(&link, "beta-xy");
+        link.look().await;
+        panes.link = Some(link);
+        panes.sync();
+        assert!(
+            panes.list[0].app.address.is_some(),
+            "the header names this window"
+        );
+        // What the `/send` list puts into the input, and the message typed behind it.
+        panes.active().pane_request = Some(parse_send("beta-xy hello there").unwrap());
+        panes.settle(&host);
+        let letter = tokio::time::timeout(Duration::from_secs(5), letters.recv())
+            .await
+            .expect("the other window took it")
+            .unwrap();
+        assert_eq!(letter.text, "hello there");
+        assert_eq!(letter.by, By::Owner);
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[tokio::test]

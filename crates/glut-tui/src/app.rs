@@ -256,6 +256,8 @@ pub struct App {
     pub parts: Arc<Parts>,
     pub engine: Engine,
     pub folder: String,
+    /// This pane's address for other Glut windows (T83), shown in the header; `None` without the sessions' socket.
+    pub address: Option<String>,
     pub transcript: Transcript,
     pub input: Input,
     pub picker: Option<Picker>,
@@ -625,6 +627,7 @@ impl App {
             parts,
             engine,
             folder,
+            address: None,
             transcript,
             input: Input::new(),
             picker: None,

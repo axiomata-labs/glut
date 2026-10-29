@@ -535,6 +535,39 @@ fn fresh_name(base: &str, taken: &[String]) -> String {
     fresh
 }
 
+/// Another window for a test, named `name`, beside `link`: it answers who it is and hands on every message it takes.
+#[cfg(test)]
+pub(crate) fn fake_window(link: &Link, name: &str) -> mpsc::UnboundedReceiver<Letter> {
+    let listener = UnixListener::bind(link.dir.join(format!("{name}.sock"))).unwrap();
+    let (incoming, mut asked) = mpsc::channel(4);
+    let (letters, taken) = mpsc::unbounded_channel();
+    let name = name.to_owned();
+    tokio::spawn(listen(listener, incoming));
+    tokio::spawn(async move {
+        while let Some(Incoming { ask, reply }) = asked.recv().await {
+            let answer = match ask {
+                Ask::Who => Reply {
+                    card: Some(Card {
+                        name: name.clone(),
+                        off: false,
+                        seats: Vec::new(),
+                    }),
+                    sent: None,
+                },
+                Ask::Send(letter) => {
+                    let _ = letters.send(letter);
+                    Reply {
+                        card: None,
+                        sent: Some(Ok("delivered".into())),
+                    }
+                }
+            };
+            let _ = reply.send(answer);
+        }
+    });
+    taken
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
