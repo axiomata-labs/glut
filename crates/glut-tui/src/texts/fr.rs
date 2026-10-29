@@ -1736,6 +1736,7 @@ pub const TEXTS: Texts = Texts {
     model_plan: "abonnement",
     agent_starting: "démarrage…",
     compacted_tokens: "conversation compactée : {before}k → {after}k tokens",
+    compacted_prepared: " (préparé à l'avance)",
     nudged_reminder: "Glut a rappelé au modèle sa liste de tâches",
     nudged_no_list: "Glut a demandé au modèle d'écrire une liste de tâches",
     nudged_pressed: "Glut a demandé au modèle, dans un message à part, de mettre à jour sa liste de tâches",

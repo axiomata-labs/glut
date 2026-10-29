@@ -207,6 +207,19 @@ pub struct RunOutcome {
     /// compaction. Later calls carry this run's thinking, which the next turn leaves out, so their cache entries are
     /// no head the next turn begins with. `None` for a run that called no model.
     pub warm: Option<Warm>,
+    /// A summary made beside the run that the threshold never called for (T63): the next turn's host may go on from it
+    /// — its cost is in [`Self::usage`] already.
+    pub prepared: Option<Ahead>,
+}
+
+/// A summary made ahead of the compaction threshold (T63): the conversation to go on with in place of the returned
+/// one's first `base` messages — what follows them is appended whole.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Ahead {
+    pub conversation: Vec<Message>,
+    pub base: usize,
+    /// How many messages the summary replaced.
+    pub replaced: usize,
 }
 
 /// A run's model call, to be sent again to keep its cache: how many messages of the conversation it held (the run's
@@ -227,6 +240,7 @@ impl RunOutcome {
             usage: Usage::default(),
             refusals: 0,
             warm: None,
+            prepared: None,
         }
     }
 }
@@ -432,6 +446,8 @@ async fn run_inner<M: ChatModel>(
         last_prompt: None,
         compacted_at: None,
         compacted_size: None,
+        prepared: None,
+        compactions: 0,
         sibling,
         read_at: HashMap::new(),
         paid_usd: 0.0,
@@ -533,6 +549,7 @@ async fn run_inner<M: ChatModel>(
         Ok(()) if run.answered_before(sink) => FinishReason::Answered,
         Ok(()) => run.drive(sink).await,
     };
+    let prepared = run.finish_prepared(reason, sink).await;
     stop.store(true, Ordering::SeqCst);
     let refusals = run.refusals.total();
     let Loop {
@@ -563,6 +580,7 @@ async fn run_inner<M: ChatModel>(
         usage,
         refusals,
         warm: last_call,
+        prepared,
     };
     (outcome, messages)
 }
@@ -797,6 +815,10 @@ struct Loop<'a, M: ChatModel> {
     compacted_at: Option<usize>,
     /// The prompt's estimated size right after the last compaction.
     compacted_size: Option<u64>,
+    /// T63: the summary being made beside the run, ahead of the threshold.
+    prepared: Option<Prepared<'a>>,
+    /// How many compactions the run made: a summary prepared before one of them no longer fits.
+    compactions: u32,
     /// A subagent run beside others (TUI T40): the batch it shares a budget, the paths' locks and their writes with.
     sibling: Option<Sibling<'a>>,
     /// The batch's version of each path at this run's last read or write of it, for a write after another's.
@@ -861,6 +883,46 @@ pub fn compact_from(window: u32, max_output_tokens: Option<u32>) -> u64 {
         .map_or(DEFAULT_OUTPUT_RESERVE, u64::from)
         .min(quarter);
     window - reserve - output
+}
+
+/// The summary call under way beside the run (T63).
+type Summarising<'a> = std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<compact::Compacted, HarnessError>> + Send + 'a>,
+>;
+
+/// A summary made beside the run ahead of the threshold (T63): the conversation as it was then, summarised while the
+/// run goes on. Put in at the threshold with what came since appended whole.
+struct Prepared<'a> {
+    /// How long the conversation was when it was taken.
+    base: usize,
+    /// The run's compactions then: one made since leaves this one stale.
+    compactions: u32,
+    /// In a mutex only so the run stays shareable between threads (a future is not); polled through `get_mut`,
+    /// never locked.
+    work: std::sync::Mutex<Summarising<'a>>,
+    done: Option<Result<compact::Compacted, HarnessError>>,
+}
+
+/// `work`, with the summary being prepared beside it moved on as long as it runs (T63): the run never waits for it.
+async fn beside<T>(
+    prepared: &mut Option<Prepared<'_>>,
+    work: impl std::future::Future<Output = T>,
+) -> T {
+    let mut work = std::pin::pin!(work);
+    loop {
+        match prepared.as_mut().filter(|prepared| prepared.done.is_none()) {
+            // The run's own work first: the summary moves on while it waits, never ahead of it.
+            Some(prepared) => tokio::select! {
+                biased;
+                out = &mut work => return out,
+                done = prepared
+                    .work
+                    .get_mut()
+                    .unwrap_or_else(|poison| poison.into_inner()) => prepared.done = Some(done),
+            },
+            None => return work.await,
+        }
+    }
 }
 
 /// How much of the newest conversation a compaction keeps (K3): at most half of the room before the limit, so the
@@ -1129,7 +1191,7 @@ fn store_tag() -> String {
     )
 }
 
-impl<M: ChatModel> Loop<'_, M> {
+impl<'a, M: ChatModel> Loop<'a, M> {
     /// HS7, D3: SessionStart once, after `Started` and before the first model call — at depth 0 only (HS8, D4:
     /// it belongs to the run, not to each subagent). Its context becomes a system message right behind the
     /// harness's own; it can never block, and a run that ends while it works ends at its first turn.
@@ -1179,7 +1241,10 @@ impl<M: ChatModel> Loop<'_, M> {
                 return ending;
             }
             let specs = self.offer.specs.clone();
-            let calls = match self.ask(&specs, sink).await {
+            let mut prepared = self.prepared.take();
+            let asked = beside(&mut prepared, self.ask(&specs, sink)).await;
+            self.restore_prepared(prepared, sink);
+            let calls = match asked {
                 Ok(calls) => calls,
                 Err(ending) => return ending,
             };
@@ -1209,7 +1274,10 @@ impl<M: ChatModel> Loop<'_, M> {
                     Err(ending) => Err(ending),
                 }
             } else {
-                self.run_calls(calls, sink).await
+                let mut prepared = self.prepared.take();
+                let ran = beside(&mut prepared, self.run_calls(calls, sink)).await;
+                self.restore_prepared(prepared, sink);
+                ran
             };
             if let Err(ending) = ended {
                 return ending;
@@ -1423,11 +1491,139 @@ impl<M: ChatModel> Loop<'_, M> {
         let grown = self
             .compacted_size
             .is_none_or(|after| estimate >= after + from / 4);
-        if estimate < from || !grown {
+        let keep = keep_for(Some(window), self.config.max_output_tokens);
+        if !grown {
             return Ok(());
         }
-        let keep = keep_for(Some(window), self.config.max_output_tokens);
+        if estimate < from {
+            // T63: near the threshold the summary is begun beside the run, from the conversation as it is now.
+            if estimate >= from * compact::PREPARE_PERCENT / 100 && self.prepared.is_none() {
+                self.prepare(keep);
+                sink.emit(Event::Preparing { turn: self.turns });
+            }
+            return Ok(());
+        }
+        if self.take_prepared(estimate, sink).await? {
+            return Ok(());
+        }
         self.compact_now(keep, estimate, sink).await.map(|_| ())
+    }
+
+    /// The summary made beside the run when the run ends before the threshold called for it (T63): waited for when it
+    /// is still made — its tokens are spent either way, and the next turn starts from it —, counted, handed on. A
+    /// run that was stopped, or a summary that failed or no longer fits, hands on nothing.
+    async fn finish_prepared(
+        &mut self,
+        reason: FinishReason,
+        sink: &mut dyn EventSink,
+    ) -> Option<Ahead> {
+        let mut prepared = self.prepared.take()?;
+        // Only for a host that goes on from it, after an answer: a failed run, a spent budget or a limit is no
+        // reason to wait for more.
+        if !self.config.hand_on_prepared
+            || reason != FinishReason::Answered
+            || prepared.compactions != self.compactions
+            || prepared.base > self.messages.len()
+        {
+            self.drop_prepared(prepared, sink);
+            return None;
+        }
+        let done = match prepared.done.take() {
+            Some(done) => done,
+            None => tokio::select! {
+                done = prepared.work.get_mut().unwrap_or_else(|poison| poison.into_inner()) => done,
+                () = tokio::time::sleep_until(self.deadline) => return None,
+                () = self.cancel.cancelled() => return None,
+            },
+        };
+        let compacted = done.ok()?;
+        self.count_summary(compacted.usage, sink);
+        Some(Ahead {
+            conversation: compacted.conversation,
+            base: prepared.base,
+            replaced: compacted.replaced,
+        })
+    }
+
+    /// Puts the summary moved out for [`beside`] back — unless a compaction came meanwhile (the provider's "too long",
+    /// inside the call), which leaves it stale.
+    fn restore_prepared(&mut self, prepared: Option<Prepared<'a>>, sink: &mut dyn EventSink) {
+        match prepared {
+            Some(prepared) if prepared.compactions != self.compactions => {
+                self.drop_prepared(prepared, sink)
+            }
+            prepared => self.prepared = prepared,
+        }
+    }
+
+    /// A summary made beside the run and not used: what it cost counts, if it came back — one still under way is
+    /// stopped, its tokens unknown.
+    fn drop_prepared(&mut self, prepared: Prepared<'a>, sink: &mut dyn EventSink) {
+        let Some(Ok(compacted)) = prepared.done else {
+            return;
+        };
+        self.count_summary(compacted.usage, sink);
+    }
+
+    /// A summary's tokens, counted as the run's: its usage, its batch's budget, the event.
+    fn count_summary(&mut self, usage: Usage, sink: &mut dyn EventSink) {
+        self.usage += usage;
+        if let Some(sibling) = &self.sibling {
+            sibling.group.spend(usage, self.config.budget.prices);
+        }
+        sink.emit(Event::Usage {
+            turn: self.turns,
+            input_tokens: usage.input_tokens,
+            cached_input_tokens: usage.cached_input_tokens,
+            output_tokens: usage.output_tokens,
+        });
+    }
+
+    /// Begins the summary of the conversation as it is now, beside the run (T63).
+    fn prepare(&mut self, keep: u64) {
+        let model = self.model;
+        let snapshot = self.messages.clone();
+        self.prepared = Some(Prepared {
+            base: snapshot.len(),
+            compactions: self.compactions,
+            work: std::sync::Mutex::new(Box::pin(async move {
+                compact::compact_older(model, &snapshot, keep).await
+            })),
+            done: None,
+        });
+    }
+
+    /// Puts in the summary prepared beside the run, waiting for what is left of it: `true` when it did. One made before
+    /// another compaction, or that failed, is dropped — the run compacts as before.
+    async fn take_prepared(
+        &mut self,
+        before: u64,
+        sink: &mut dyn EventSink,
+    ) -> Result<bool, FinishReason> {
+        let Some(mut prepared) = self.prepared.take() else {
+            return Ok(false);
+        };
+        if prepared.compactions != self.compactions || prepared.base > self.messages.len() {
+            self.drop_prepared(prepared, sink);
+            return Ok(false);
+        }
+        let done = match prepared.done.take() {
+            Some(done) => done,
+            None => tokio::select! {
+                done = prepared.work.get_mut().unwrap_or_else(|poison| poison.into_inner()) => done,
+                () = tokio::time::sleep_until(self.deadline) => return Err(FinishReason::Timeout),
+                () = self.cancel.cancelled() => return Err(FinishReason::Cancelled),
+            },
+        };
+        let Ok(mut compacted) = done else {
+            return Ok(false);
+        };
+        // What came since it was taken follows the summary whole: steps, never a call parted from its result.
+        compacted
+            .conversation
+            .extend_from_slice(&self.messages[prepared.base..]);
+        self.adopt(compacted, before, true, sink);
+        Ok(true)
     }
 
     /// Compacts the older part of the conversation (K3, K5): `true` when it did. A failure leaves the conversation as it
@@ -1454,6 +1650,21 @@ impl<M: ChatModel> Loop<'_, M> {
                 return Ok(false);
             }
         };
+        self.adopt(compacted, before, false, sink);
+        Ok(true)
+    }
+
+    /// Goes on from `compacted`: its cost counted, what it replaced kept in the result store, the journal told —
+    /// `prepared` when it was made beside the run (T63).
+    fn adopt(
+        &mut self,
+        compacted: compact::Compacted,
+        before: u64,
+        prepared: bool,
+        sink: &mut dyn EventSink,
+    ) {
+        self.prepared = None;
+        self.compactions += 1;
         self.usage += compacted.usage;
         if let Some(sibling) = &self.sibling {
             sibling
@@ -1503,13 +1714,13 @@ impl<M: ChatModel> Loop<'_, M> {
             before_tokens: before,
             after_tokens: self.estimated_prompt(),
             replaced: compacted.replaced,
+            prepared,
         });
         let line = Line::Compacted {
             messages: self.messages.clone(),
         };
         self.journal_line(&line, sink);
         self.journaled = self.messages.len();
-        Ok(true)
     }
 
     /// HS7, D3: a Stop hook may refuse the answer; its reason goes back as a user message and the loop takes
@@ -5758,6 +5969,103 @@ mod tests {
             .filter(|e| matches!(e, Event::Usage { .. }))
             .count();
         assert_eq!(metered, 6, "five model calls and the summary");
+    }
+
+    #[tokio::test]
+    async fn near_its_threshold_a_run_prepares_the_summary_beside_itself_and_puts_it_in_with_what_came_since()
+     {
+        // Window 30k, 1k output: compacts from 21,500 tokens, prepares from 85% of it (18,275).
+        let model = Script::new(vec![
+            Ok(echo_long("c1", 10)),
+            Ok(echo_long("c2", 10)),
+            Ok(echo_long("c3", 10)),
+            Ok(echo_long("c4", 17_000)),
+            Ok(echo_long("c5", 21_000)),
+            Ok(text("Echoed four long texts.")),
+            Ok(text("done")),
+        ]);
+        let mut config = RunConfig::new("/w");
+        config.compaction.context_window = Some(30_000);
+        config.max_output_tokens = Some(1_000);
+        let mut events = Vec::new();
+        let outcome = run(
+            &config,
+            &model,
+            &toolbox(),
+            "go",
+            &mut events,
+            &Cancel::new(),
+        )
+        .await;
+        assert_eq!(outcome.answer.as_deref(), Some("done"));
+        assert!(events.iter().any(|e| matches!(e, Event::Preparing { .. })));
+        let prepared: Vec<bool> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Compacted { prepared, .. } => Some(*prepared),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(prepared, [true], "one compaction, the prepared summary");
+        let seen = model.seen.lock().unwrap();
+        let last = seen.last().unwrap();
+        assert!(
+            last[1]
+                .content
+                .as_deref()
+                .unwrap()
+                .contains("Echoed four long texts.")
+        );
+        // The step after the summary was taken follows it whole: its call and its answer.
+        let ids: Vec<&str> = last
+            .iter()
+            .filter_map(|m| m.tool_call_id.as_deref())
+            .collect();
+        assert_eq!(ids.last(), Some(&"c5"), "{ids:?}");
+        assert!(outcome.prepared.is_none(), "put in, not handed on");
+    }
+
+    #[tokio::test]
+    async fn a_summary_the_threshold_never_called_for_is_counted_and_handed_on() {
+        let model = Script::new(vec![
+            Ok(echo_long("c1", 10)),
+            Ok(echo_long("c2", 10)),
+            Ok(echo_long("c3", 10)),
+            // With the step's ~4k: past 85% of the threshold, short of it.
+            Ok(echo_long("c4", 15_000)),
+            Ok(text("done")),
+            Ok(text("The summary.")),
+        ]);
+        let mut config = RunConfig::new("/w");
+        config.hand_on_prepared = true;
+        config.compaction.context_window = Some(30_000);
+        config.max_output_tokens = Some(1_000);
+        let mut events = Vec::new();
+        let outcome = run(
+            &config,
+            &model,
+            &toolbox(),
+            "go",
+            &mut events,
+            &Cancel::new(),
+        )
+        .await;
+        assert_eq!(outcome.answer.as_deref(), Some("done"));
+        assert!(compactions(&events).is_empty());
+        let ahead = outcome.prepared.expect("handed on");
+        assert!(ahead.base > 0 && ahead.replaced > 0);
+        assert!(
+            ahead.conversation[1]
+                .content
+                .as_deref()
+                .unwrap()
+                .contains("The summary.")
+        );
+        let metered = events
+            .iter()
+            .filter(|e| matches!(e, Event::Usage { .. }))
+            .count();
+        assert_eq!(metered, 6, "five model calls and the summary, counted");
     }
 
     #[tokio::test]

@@ -230,6 +230,13 @@ pub enum Event {
         after_tokens: u64,
         /// How many messages the summary replaced.
         replaced: usize,
+        /// The summary was made beside the run, ahead of the threshold (T63).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        prepared: bool,
+    },
+    /// Near the compaction threshold a summary is begun beside the run (T63): put in when the threshold comes.
+    Preparing {
+        turn: u32,
     },
     Finished {
         reason: FinishReason,

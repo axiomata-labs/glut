@@ -19,6 +19,9 @@ const MAX_RESULT_CHARS: usize = 2_000;
 const MAX_TRANSCRIPT_CHARS: usize = 200_000;
 /// The most output tokens the summary may take.
 const MAX_SUMMARY_TOKENS: u32 = 4_000;
+/// The share of the compaction threshold, in percent, from which a summary is made ahead of it (T63): beside a run,
+/// or as the owner begins the next message — ready, mostly, when the threshold comes, and seldom made for nothing.
+pub const PREPARE_PERCENT: u64 = 85;
 /// How many of the newest tokens an automatic compaction keeps as they are (K3): Pi keeps 20k, Opencode about 15k.
 pub const KEEP_RECENT_TOKENS: u64 = 20_000;
 /// Characters per token for the estimate: the common rule of thumb for English and code; the provider's own count

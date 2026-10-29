@@ -754,6 +754,7 @@ pub const TEXTS: Texts = Texts {
     model_plan: "plan",
     agent_starting: "starting…",
     compacted_tokens: "compacted the conversation: {before}k → {after}k tokens",
+    compacted_prepared: " (prepared ahead)",
     nudged_reminder: "Glut reminded the model of its task list",
     nudged_no_list: "Glut asked the model to write a task list",
     nudged_pressed: "Glut asked the model in a message of its own to update its task list",

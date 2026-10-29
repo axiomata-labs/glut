@@ -499,12 +499,21 @@ impl Transcript {
             Event::Compacted {
                 before_tokens,
                 after_tokens,
+                prepared,
                 ..
             } => self.note(
-                tr!(
-                    compacted_tokens,
-                    before = before_tokens / 1000,
-                    after = after_tokens / 1000
+                format!(
+                    "{}{}",
+                    tr!(
+                        compacted_tokens,
+                        before = before_tokens / 1000,
+                        after = after_tokens / 1000
+                    ),
+                    if *prepared {
+                        tr!(compacted_prepared)
+                    } else {
+                        ""
+                    }
                 ),
                 Tone::Quiet,
             ),

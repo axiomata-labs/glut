@@ -401,6 +401,9 @@ pub struct RunConfig {
     pub refusals: RefusalLimits,
     /// When the run compacts itself (#111); the owner's `"compact"` and `"contextWindow"` set it.
     pub compaction: Compaction,
+    /// The host goes on from a summary the run made ahead of its threshold and never put in (T63,
+    /// `RunOutcome::prepared`): then a run that answered waits for it. Off, such a summary is dropped as the run ends.
+    pub hand_on_prepared: bool,
     /// What the run may spend (C6 of `docs/plans/glut-cards.md`); none by default.
     pub budget: Budget,
     /// What the owner sends while the run works (T10 of `docs/plans/glut-tui.md`, steering): taken before the run's
@@ -492,6 +495,7 @@ impl RunConfig {
             diagnostics: true,
             refusals: RefusalLimits::DEFAULT,
             compaction: Compaction::default(),
+            hand_on_prepared: false,
             budget: Budget::default(),
             masks: Some(crate::masks::Masks::default()),
             inbox: None,

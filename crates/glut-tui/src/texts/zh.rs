@@ -1505,6 +1505,7 @@ pub const TEXTS: Texts = Texts {
     model_plan: "套餐",
     agent_starting: "启动中…",
     compacted_tokens: "已压缩对话：{before}k → {after}k Token",
+    compacted_prepared: "（已提前准备）",
     nudged_reminder: "Glut 提醒了模型它的任务清单",
     nudged_no_list: "Glut 请模型写一份任务清单",
     nudged_pressed: "Glut 用一条单独的消息要求模型更新它的任务清单",

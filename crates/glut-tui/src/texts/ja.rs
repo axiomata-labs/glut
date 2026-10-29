@@ -1602,6 +1602,7 @@ pub const TEXTS: Texts = Texts {
     model_plan: "プラン",
     agent_starting: "起動中…",
     compacted_tokens: "会話を圧縮しました: {before}k → {after}k Token",
+    compacted_prepared: "（事前に準備済み）",
     nudged_reminder: "Glut がモデルにタスクリストを思い出させました",
     nudged_no_list: "Glut がモデルにタスクリストを書くよう頼みました",
     nudged_pressed: "Glut が独自のメッセージでモデルにタスクリストの更新を求めました",

@@ -3204,6 +3204,7 @@ mod tests {
                 usage: glut::Usage::default(),
                 refusals: 0,
                 warm: None,
+                prepared: None,
             },
             Vec::new(),
         )

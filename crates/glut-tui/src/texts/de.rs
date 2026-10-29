@@ -1717,6 +1717,7 @@ pub const TEXTS: Texts = Texts {
     model_plan: "Abo",
     agent_starting: "startet…",
     compacted_tokens: "Gespräch kompaktiert: {before}k → {after}k Token",
+    compacted_prepared: " (vorbereitet)",
     nudged_reminder: "Glut hat das Modell an seine Aufgabenliste erinnert",
     nudged_no_list: "Glut hat das Modell gebeten, eine Aufgabenliste anzulegen",
     nudged_pressed: "Glut hat das Modell mit einer eigenen Nachricht aufgefordert, seine Aufgabenliste zu \

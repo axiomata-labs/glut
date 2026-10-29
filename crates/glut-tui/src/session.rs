@@ -33,6 +33,9 @@ pub enum Report {
     Done(RunOutcome, Vec<Message>),
     /// `/compact` ended: the shorter conversation, or why there is none.
     Compacted(Result<Compacted, String>, Vec<Message>),
+    /// T63: the summary made while the owner typed, of the conversation's first `usize` messages — or why there is
+    /// none.
+    Prepared(Result<Compacted, String>, usize),
     /// `/model`, `/provider` or `/effort` built the new engine, with what to say about it — or why not.
     Switched(Result<(Engine, Vec<String>), String>),
     /// `/provider` named a provider without a model: its list is fetched, the owner picks one of it.
@@ -811,6 +814,8 @@ pub fn turn(
             inbox: Some(inbox),
             ..engine.config(&parts)
         };
+        // T63: a summary the turn made ahead and never put in comes back, for the next message.
+        config.hand_on_prepared = true;
         config.pane_tools = parts.pane_link.split();
         config.loop_tool = parts.loop_link.on();
         // A loop's round ends as its loop says, never asked to go on (T73).
@@ -972,6 +977,7 @@ fn refused() -> RunOutcome {
         usage: Usage::default(),
         refusals: 0,
         warm: None,
+        prepared: None,
     }
 }
 
@@ -990,6 +996,31 @@ pub fn compact(engine: Engine, conversation: Vec<Message>, reports: mpsc::Unboun
             .unwrap_or_else(|err| Err(tr!(summary_broke_off, reason = err)));
         let _ = reports.send(Report::Compacted(result, kept));
     });
+}
+
+/// T63: the older part of `conversation` summarised in the background while the owner types — the newest
+/// `keep_tokens` stay —, reported as [`Report::Prepared`] with how many messages it was made of.
+pub fn prepare(
+    engine: Engine,
+    conversation: Vec<Message>,
+    keep_tokens: u64,
+    reports: mpsc::UnboundedSender<Report>,
+) -> tokio::task::AbortHandle {
+    let base = conversation.len();
+    let summary = tokio::spawn(async move {
+        glut::compact::compact_older(engine.model.as_ref(), &conversation, keep_tokens)
+            .await
+            .map_err(|err| err.to_string())
+    });
+    // A session left or cleared stops it: its tokens are not spent for nothing.
+    let abort = summary.abort_handle();
+    tokio::spawn(async move {
+        let result = summary
+            .await
+            .unwrap_or_else(|err| Err(tr!(summary_broke_off, reason = err)));
+        let _ = reports.send(Report::Prepared(result, base));
+    });
+    abort
 }
 
 /// `/model`, `/provider`, `/effort`: the new engine built in the background, reported as [`Report::Switched`] —

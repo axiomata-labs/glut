@@ -46,6 +46,8 @@ pub struct Live {
     streamed: usize,
     /// The tool calls asked and not answered yet: a batch is "thinking" again only once all have answered.
     open: Vec<String>,
+    /// A summary is made beside the turn, ahead of the compaction threshold (T63): "📝" beside what it does.
+    pub preparing: bool,
 }
 
 impl Live {
@@ -82,6 +84,9 @@ impl Live {
                 self.counted += output_tokens;
                 self.streamed = 0;
             }
+            Event::Preparing { .. } => self.preparing = true,
+            // Put in, or the run ended without it.
+            Event::Compacted { .. } | Event::Finished { .. } => self.preparing = false,
             Event::Sub { event, .. } => self.take_sub(event),
             _ => {}
         }
@@ -166,6 +171,11 @@ pub fn line(live: &Live, said: &Said, width: usize) -> String {
             Doing::Tool(tool, what) => format!("{tool}: {what}"),
             Doing::Agent(name) => format!("⬡ {name}"),
         }
+    };
+    let doing = if live.preparing {
+        format!("{doing} 📝")
+    } else {
+        doing
     };
     let time = format!("{mark} {}", elapsed(said.time));
     let tokens = (said.tokens > 0).then(|| tr!(live_tokens, n = crate::meter::tokens(said.tokens)));

@@ -1392,6 +1392,8 @@ glut::catalog! {
         agent_starting: &'static str,
         /// The conversation compacted by the model's side: `{before}` and `{after}` thousands of tokens.
         compacted_tokens: &'static str,
+        /// After `compacted_tokens` when the summary was made ahead of the threshold (T63).
+        compacted_prepared: &'static str,
         /// Glut reminded the model of its task list (T73).
         nudged_reminder: &'static str,
         /// Glut asked the model to write a task list it worked without (T80).

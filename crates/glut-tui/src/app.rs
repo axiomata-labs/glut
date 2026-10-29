@@ -110,6 +110,41 @@ impl OpenAsk {
     }
 }
 
+/// What a summary made ahead was made of (T63): the session, how many of its messages, and the last of them — it
+/// fits only the conversation that still begins with exactly those.
+#[derive(Debug, Clone)]
+struct Made {
+    session: String,
+    base: usize,
+    last: Option<Message>,
+}
+
+impl Made {
+    fn of(session: &str, conversation: &[Message], base: usize) -> Self {
+        Made {
+            session: session.to_owned(),
+            base,
+            last: base
+                .checked_sub(1)
+                .and_then(|at| conversation.get(at))
+                .cloned(),
+        }
+    }
+
+    fn fits(&self, session: &str, conversation: &[Message]) -> bool {
+        self.session == session
+            && self.base <= conversation.len()
+            && self.base.checked_sub(1).and_then(|at| conversation.get(at)) == self.last.as_ref()
+    }
+}
+
+/// A summary made in the background while the owner types (T63).
+#[derive(Debug)]
+struct Preparing {
+    made: Made,
+    abort: tokio::task::AbortHandle,
+}
+
 /// The side panel's tabs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
@@ -370,6 +405,15 @@ pub struct App {
     pub queue: Vec<String>,
     /// The queue was filled while Glut compacted, handed off or switched: it goes as soon as that is done.
     send_when_free: bool,
+    /// T63: a summary made in the background while the owner types.
+    preparing: Option<Preparing>,
+    /// The conversation's length a summary was last prepared for: not again before it grew.
+    prepared_for: Option<usize>,
+    /// A summary the last turn made beside itself that its threshold never called for (T63): put in as the owner
+    /// begins the next message near the threshold — with what it was made of.
+    ahead: Option<(glut::Ahead, Made)>,
+    /// A message waits for the summary under way (T63): sent once it is in.
+    prepare_waited: bool,
     /// The owner's `!cmd` outputs waiting for the conversation to be the session's again.
     pending: Vec<Message>,
     /// How many `!` commands ran: each one's block has an id of its own, whatever `/clear` did since.
@@ -649,6 +693,10 @@ impl App {
             steering: None,
             queue: Vec::new(),
             send_when_free: false,
+            preparing: None,
+            prepared_for: None,
+            ahead: None,
+            prepare_waited: false,
             pending: Vec::new(),
             shells: 0,
             files: None,
@@ -749,6 +797,7 @@ impl App {
     /// Opens session `session`: its conversation goes on, its stream is shown again.
     pub fn open(&mut self, session: Session) {
         self.forget_warm();
+        self.forget_prepared();
         self.forget_masks();
         // A side question was about the session that goes (T57).
         self.side = None;
@@ -1539,6 +1588,15 @@ impl App {
         if prompt.trim().is_empty() || self.working() {
             return;
         }
+        // T63: a message sent while the summary begun at typing is still made waits for it, as one sent during
+        // `/compact` does — the turn then starts from the shorter conversation.
+        if self.preparing.is_some() && images.is_empty() {
+            self.queue.push(prompt);
+            self.send_when_free = true;
+            self.prepare_waited = true;
+            self.busy = Some(Busy::Compacting);
+            return self.say(tr!(queued_free));
+        }
         // A picker left open (glut -r with a first message) is no place to choose from while the turn runs.
         self.picker = None;
         // Nor is the question of a new key: unanswered, the old key stays (T70).
@@ -1658,6 +1716,112 @@ impl App {
             let next = self.queue.remove(0);
             self.send(next);
         }
+    }
+
+    /// T63: the owner began to type and the conversation stands near the compaction threshold: its older part is
+    /// summarised in the background, so the next turn starts short instead of waiting for it at the limit.
+    fn prepare_while_typing(&mut self) {
+        let Some(from) = self.meter_window().compacts_at else {
+            return;
+        };
+        let length = self.conversation.len();
+        if self.working()
+            || self.busy.is_some()
+            || self.preparing.is_some()
+            || self.prepared_for == Some(length)
+            || self.context_used < from * glut::compact::PREPARE_PERCENT / 100
+            || self.input.text().trim_start().starts_with('/')
+        {
+            return;
+        }
+        // The last turn's own, made beside it: no second summary.
+        if let Some((ahead, made)) = self.ahead.take()
+            && made.fits(&self.session.id, &self.conversation)
+        {
+            return self.summary_ahead(ahead.conversation, ahead.base);
+        }
+        self.prepared_for = Some(length);
+        let keep = glut::compact::KEEP_RECENT_TOKENS.min(from / 2);
+        let abort = session::prepare(
+            self.engine.clone(),
+            self.conversation.clone(),
+            keep,
+            self.reports.clone(),
+        );
+        self.preparing = Some(Preparing {
+            made: Made::of(&self.session.id, &self.conversation, length),
+            abort,
+        });
+    }
+
+    /// T63: the summary made while the owner typed. Put in when the conversation is still the one it was made of —
+    /// what came since follows it whole —; dropped when a turn began meanwhile, which compacts on its own. Its cost
+    /// counts either way.
+    fn prepared(&mut self, result: Result<glut::compact::Compacted, String>, base: usize) {
+        let Some(preparing) = self.preparing.take() else {
+            // One stopped (a session left or cleared) and answered anyway.
+            return;
+        };
+        if std::mem::take(&mut self.prepare_waited) {
+            self.busy = None;
+        }
+        // A summary that could not be made says nothing: at the threshold the turn compacts as before.
+        let Ok(compacted) = result else {
+            return;
+        };
+        self.spent(compacted.usage);
+        if let Some(prices) = self.engine.prices {
+            *self.cost.get_or_insert(0.0) += prices.cost_usd(&compacted.usage);
+        }
+        self.usage += compacted.usage;
+        if self.working()
+            || preparing.made.base != base
+            || !preparing.made.fits(&self.session.id, &self.conversation)
+        {
+            return;
+        }
+        self.summary_ahead(compacted.conversation, base);
+    }
+
+    /// The session goes on from a summary made ahead (T63) in place of its first `base` messages, what came since
+    /// following it whole.
+    fn summary_ahead(&mut self, mut conversation: Vec<Message>, base: usize) {
+        let before = self.context_used;
+        conversation.extend_from_slice(&self.conversation[base..]);
+        self.conversation = conversation;
+        self.ahead = None;
+        self.forget_warm();
+        let after = glut::compact::estimate_tokens(&self.conversation);
+        self.context_used = after;
+        for mark in &mut self.session.marks {
+            mark.at = None;
+        }
+        self.keep();
+        self.transcript.note(
+            format!(
+                "{}{}",
+                tr!(
+                    compacted_tokens,
+                    before = before / 1000,
+                    after = after / 1000
+                ),
+                tr!(compacted_prepared)
+            ),
+            Tone::Quiet,
+        );
+    }
+
+    /// T63: a summary under way is stopped and one kept from the last turn forgotten — the session is left, cleared
+    /// or rewound, so neither fits it any more.
+    fn forget_prepared(&mut self) {
+        if let Some(preparing) = self.preparing.take() {
+            preparing.abort.abort();
+        }
+        if std::mem::take(&mut self.prepare_waited) {
+            self.busy = None;
+        }
+        self.ahead = None;
+        self.prepared_for = None;
     }
 
     /// A subagent's call costs as the session's own do (the owner's Mac test: a subagent's 216k tokens were in no
@@ -1896,6 +2060,10 @@ impl App {
                     self.session.marks.pop();
                 }
                 self.conversation = conversation;
+                self.ahead = outcome.prepared.clone().map(|ahead| {
+                    let made = Made::of(&self.session.id, &self.conversation, ahead.base);
+                    (ahead, made)
+                });
                 self.conversation.append(&mut self.pending);
                 self.running = None;
                 self.busy = None;
@@ -1954,6 +2122,7 @@ impl App {
                     self.after_turn(answered);
                 }
             }
+            Report::Prepared(result, base) => self.prepared(result, base),
             Report::Compacted(result, before) => {
                 self.forget_warm();
                 self.busy = None;
@@ -2838,6 +3007,7 @@ impl App {
             KeyCode::Char(c) if !ctrl => {
                 self.input.insert(c);
                 self.suggested = 0;
+                self.prepare_while_typing();
             }
             _ => {}
         }
@@ -3043,6 +3213,7 @@ impl App {
             self.say(tr!(image_reading));
             return;
         }
+
         if let Some(command) = text.trim().strip_prefix('/') {
             let (name, rest) = command.split_once(' ').unwrap_or((command, ""));
             if !name.is_empty() && !name.contains('/') {
@@ -3377,6 +3548,7 @@ impl App {
                 // A loop that ended belongs to the conversation that goes.
                 self.loop_ended = None;
                 self.forget_warm();
+                self.forget_prepared();
                 self.forget_masks();
                 self.side = None;
                 self.last_side = None;
@@ -3439,6 +3611,8 @@ impl App {
             "context" => self.context(rest),
             "compact" if self.refused_spend() => {}
             "compact" => {
+                // One summary at a time: what typing began goes (T63).
+                self.forget_prepared();
                 self.busy = Some(Busy::Compacting);
                 self.transcript.note(tr!(compacting), Tone::Quiet);
                 self.lend(None);
@@ -4717,6 +4891,7 @@ impl App {
     /// Goes back to before mark `mark`: the conversation cut there (its message back in the input to edit), the files
     /// put back from the snapshot — or one of the two.
     fn rewind(&mut self, mark: usize, conversation: bool, files: bool) {
+        self.forget_prepared();
         if conversation {
             self.forget_warm();
             self.side = None;
@@ -8484,6 +8659,7 @@ pub(crate) mod tests {
                     usage: Usage::default(),
                     refusals: 0,
                     warm,
+                    prepared: None,
                 },
                 vec![glut::Message::user("hi"), glut::Message::user("ok")],
             )
@@ -8618,6 +8794,7 @@ pub(crate) mod tests {
                 usage: Usage::default(),
                 refusals: 0,
                 warm: None,
+                prepared: None,
             },
             Vec::new(),
         ));
@@ -8645,6 +8822,7 @@ pub(crate) mod tests {
                 usage: Usage::default(),
                 refusals: 0,
                 warm: None,
+                prepared: None,
             },
             Vec::new(),
         ));
@@ -8731,6 +8909,7 @@ pub(crate) mod tests {
             turn: 1,
             before_tokens: 10_000,
             after_tokens: 1_000,
+            prepared: false,
             replaced: 2,
         }));
         assert_eq!(app.session.marks[0].at, None);
@@ -9132,6 +9311,7 @@ pub(crate) mod tests {
                 usage: Usage::default(),
                 refusals: 0,
                 warm: None,
+                prepared: None,
             },
             Vec::new(),
         ));
@@ -11268,6 +11448,7 @@ pub(crate) mod tests {
                     usage: Usage::default(),
                     refusals: 0,
                     warm: None,
+                    prepared: None,
                 },
                 Vec::new(),
             )
@@ -11296,6 +11477,7 @@ pub(crate) mod tests {
                 usage: Usage::default(),
                 refusals: 0,
                 warm: None,
+                prepared: None,
             },
             Vec::new(),
         ));
@@ -11916,6 +12098,7 @@ pub(crate) mod tests {
             usage: Usage::default(),
             refusals: 0,
             warm: None,
+            prepared: None,
         };
         app.on_report(Report::Done(
             outcome.clone(),
@@ -12004,5 +12187,98 @@ pub(crate) mod tests {
         app.on_terminal(key(KeyCode::Char('y'), KeyModifiers::NONE));
         assert!(app.ask.is_none());
         assert!(matches!(answer.try_recv(), Ok(Answer::Allow)));
+    }
+
+    #[tokio::test]
+    async fn a_summary_made_while_the_owner_typed_is_put_in_and_a_message_sent_meanwhile_waits_for_it()
+     {
+        let summary = || {
+            Ok(glut::compact::Compacted {
+                conversation: vec![Message::user("summary")],
+                usage: Usage::default(),
+                replaced: 2,
+                older: Vec::new(),
+            })
+        };
+        let (mut app, _reports) = app();
+        app.conversation = vec![
+            Message::user("one"),
+            Message::user("two"),
+            Message::user("three"),
+        ];
+        app.preparing = Some(preparing(&app, 2));
+        app.on_report(Report::Prepared(summary(), 2));
+        assert!(app.preparing.is_none());
+        // The summary, then what came after the two messages it was made of.
+        assert_eq!(
+            app.conversation,
+            [Message::user("summary"), Message::user("three")]
+        );
+        assert!(
+            app.transcript.blocks.iter().any(|block| matches!(
+                &block.kind,
+                crate::transcript::Kind::Note { text, .. } if text.contains("prepared ahead")
+            )),
+            "said, and that it was made ahead"
+        );
+        // A message sent before it came waits for it, and goes once it is in.
+        let three = app.conversation.len();
+        app.preparing = Some(preparing(&app, three));
+        for c in "next".chars() {
+            app.on_terminal(key(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.queue, ["next"], "it waits for the summary");
+        app.on_report(Report::Prepared(summary(), three));
+        assert!(
+            app.queue.is_empty() && app.turn_runs(),
+            "the waiting message went"
+        );
+    }
+
+    /// What typing began for the conversation's first `base` messages, as `prepare_while_typing` keeps it.
+    fn preparing(app: &App, base: usize) -> Preparing {
+        Preparing {
+            made: Made::of(&app.session.id, &app.conversation, base),
+            abort: tokio::spawn(async {}).abort_handle(),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_summary_that_comes_while_a_turn_runs_or_for_another_conversation_is_dropped_but_counted()
+     {
+        let (mut app, _reports) = app();
+        app.conversation = vec![Message::user("one"), Message::user("two")];
+        app.preparing = Some(preparing(&app, 2));
+        app.busy = Some(Busy::Turn);
+        let usage = Usage {
+            output_tokens: 300,
+            ..Usage::default()
+        };
+        app.on_report(Report::Prepared(
+            Ok(glut::compact::Compacted {
+                conversation: vec![Message::user("summary")],
+                usage,
+                replaced: 2,
+                older: Vec::new(),
+            }),
+            2,
+        ));
+        assert_eq!(app.conversation.len(), 2, "the turn compacts on its own");
+        assert_eq!(app.usage.output_tokens, 300);
+        // Made of a conversation that has changed since (rewritten, another session's): not spliced on.
+        app.busy = None;
+        app.preparing = Some(preparing(&app, 2));
+        app.conversation[1] = Message::user("changed");
+        app.on_report(Report::Prepared(
+            Ok(glut::compact::Compacted {
+                conversation: vec![Message::user("summary")],
+                usage: Usage::default(),
+                replaced: 2,
+                older: Vec::new(),
+            }),
+            2,
+        ));
+        assert_eq!(app.conversation[0], Message::user("one"));
     }
 }
