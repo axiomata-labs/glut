@@ -326,6 +326,8 @@ pub enum Request {
         text: String,
         whole: String,
     },
+    /// `/send` alone: the panes, agents and other Glut windows to pick whom to write to.
+    SendPick,
     /// The asking pane's last plan with its task list, to be built in pane `to`.
     SendPlan { to: Option<String> },
     /// A side question (T57) about pane or agent `to` — a word only when it names one, else the question's own, as
@@ -445,7 +447,9 @@ pub fn parse_send(rest: &str) -> Result<Request, String> {
             whole: rest.to_owned(),
         }),
         None if rest == "plan" => Ok(Request::SendPlan { to: None }),
-        None if rest.is_empty() || rest.parse::<u8>().is_ok() => empty(),
+        // Nobody named: the panes, agents and windows to pick one from.
+        None if rest.is_empty() => Ok(Request::SendPick),
+        None if rest.parse::<u8>().is_ok() => empty(),
         None => Ok(Request::Send {
             to: None,
             text: rest.to_owned(),
@@ -1261,6 +1265,51 @@ impl Panes {
         })
     }
 
+    /// `/send` alone: whom to write to — the other panes and agents of this window, then the other windows' panes as
+    /// last seen; ⏎ puts `/send <who> ` into the input, the message to be written after it.
+    fn send_picker(&mut self) {
+        use crate::picker::{Item, Pick, Picker};
+        let mut items: Vec<Item> = (0..self.list.len())
+            .filter(|at| *at != self.active)
+            .map(|at| {
+                let pane = &self.list[at];
+                let who = match &pane.name {
+                    Some(name) if pane.background => name.clone(),
+                    _ => pane.number.to_string(),
+                };
+                let detail = format!(
+                    "{} · {} · {}",
+                    tr!(send_here),
+                    pane.app.role.as_deref().unwrap_or("all-rounder"),
+                    crate::transcript::clean(pane.app.engine.model_name())
+                );
+                Item::plain(self.shown_label(at), detail, Pick::WriteTo(who))
+            })
+            .collect();
+        if let Some(link) = &self.link {
+            items.extend(
+                link.seen()
+                    .into_iter()
+                    .filter(|card| !card.off)
+                    .flat_map(|card| card.seats)
+                    .map(|seat| {
+                        let address = crate::transcript::clean(&seat.address);
+                        let detail = format!(
+                            "{} · {} · {}",
+                            crate::transcript::cut(&crate::transcript::clean(&seat.project), 40),
+                            crate::transcript::clean(&seat.model),
+                            crate::transcript::clean(&seat.mode)
+                        );
+                        Item::plain(address.clone(), detail, Pick::WriteTo(address))
+                    }),
+            );
+        }
+        if items.is_empty() {
+            return self.active().tell(tr!(one_pane_send));
+        }
+        self.active().picker = Some(Picker::new(tr!(send_title), items, None));
+    }
+
     /// `/sessions` (T83): every pane of the other windows as last seen, ⏎ writes to one; they are looked at anew
     /// beside the screen for the next time.
     fn sessions_picker(&mut self) {
@@ -1775,6 +1824,7 @@ impl Panes {
                     self.send(None, Some(format!("{word} plan")));
                 }
                 Request::SendPlan { to } => self.send(to, None),
+                Request::SendPick => self.send_picker(),
                 Request::Btw {
                     to,
                     question,
@@ -3483,6 +3533,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn send_alone_lists_whom_to_write_to_and_a_pick_puts_the_address_into_the_input() {
+        let host: Arc<dyn Host> = Arc::new(crate::Standalone);
+        let (mut panes, _inlets) = split();
+        panes.focus(0);
+        panes.active().pane_request = Some(parse_send("").unwrap());
+        panes.settle(&host);
+        let picker = panes.list[0]
+            .app
+            .picker
+            .as_ref()
+            .expect("the list of whom to write to");
+        assert_eq!(
+            picker.chosen(),
+            Some(crate::picker::Pick::WriteTo("2".into())),
+            "the other pane, by its number"
+        );
+    }
+
+    #[tokio::test]
     async fn close_takes_a_pane_by_its_number_from_elsewhere_and_alone_lists_what_could_close() {
         let host: Arc<dyn Host> = Arc::new(crate::Standalone);
         // From the main pane, which never closes: `/close` alone lists pane 2 rather than refusing.
@@ -4165,7 +4234,8 @@ mod tests {
                 to: Some("2".to_owned())
             }
         );
-        assert!(parse_send("").is_err() && parse_send("2").is_err());
+        assert_eq!(parse_send("").unwrap(), Request::SendPick);
+        assert!(parse_send("2").is_err());
     }
 
     #[tokio::test]

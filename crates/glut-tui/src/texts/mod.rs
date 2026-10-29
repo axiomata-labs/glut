@@ -2127,6 +2127,10 @@ glut::catalog! {
         close_this: &'static str,
         /// `/close <word>` named no single pane: `{word}`.
         close_which: &'static str,
+        /// `/send`'s list of whom to write to.
+        send_title: &'static str,
+        /// Beside a pane of this window in `/send`'s list.
+        send_here: &'static str,
         /// A message of another window's owner: `{session}`, `{text}`.
         from_session_owner: &'static str,
         /// A message of another window's model: `{session}`, `{text}`.

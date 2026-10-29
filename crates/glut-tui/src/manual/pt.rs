@@ -288,6 +288,8 @@ pub const PAGES: [(&str, &str); 61] = [
         "send",
         "Envia uma mensagem a outro pane ou agente em segundo plano, recebida lá como se você a tivesse digitado.\n\
          \n\
+         /send — uma lista de a quem escrever: os panes e agentes daqui, depois as outras janelas do Glut; ⏎ põe \
+         /send <who> na entrada\n\
          /send <text> — para o único outro pane\n\
          /send <n|name> <text> — para o pane n ou o agente desse nome (necessário com três ou mais)\n\
          /send plan — passa o plano deste pane ao outro pane para construir\n\

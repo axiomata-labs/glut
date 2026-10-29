@@ -279,6 +279,8 @@ pub const PAGES: [(&str, &str); 61] = [
         "send",
         "Send a message to another pane or background agent, taken there as if you had typed it.\n\
          \n\
+         /send — a list of whom to write to: the panes and agents here, then the other Glut windows; ⏎ puts /send \
+         <who> into the input\n\
          /send <text> — to the only other pane\n\
          /send <n|name> <text> — to pane n or the agent of that name (needed with three or more)\n\
          /send plan — hands this pane's plan to the other pane to build\n\

@@ -1958,6 +1958,8 @@ pub const TEXTS: Texts = Texts {
     close_title: "关闭哪个 Pane？· ⏎ 关闭",
     close_this: "此 Pane",
     close_which: "{word} 对应的不是唯一的 Pane — 请选择一个",
+    send_title: "发送给谁？· ⏎ 选择，然后输入",
+    send_here: "在此窗口中",
     from_session_owner: "{session} 的所有者：{text}",
     from_session_model: "{session} 的模型（不是所有者）：{text}",
     from_session_notice: "{session}：{text}",

@@ -2059,6 +2059,8 @@ pub const TEXTS: Texts = Texts {
     close_title: "どの Pane を閉じますか？· ⏎ で閉じる",
     close_this: "この Pane",
     close_which: "{word} は 1 つの Pane を指していません — 選んでください",
+    send_title: "誰に送りますか？· ⏎ で選んでから入力",
+    send_here: "このウィンドウ内",
     from_session_owner: "{session} のオーナー：{text}",
     from_session_model: "{session} のモデル（オーナーではありません）：{text}",
     from_session_notice: "{session}：{text}",

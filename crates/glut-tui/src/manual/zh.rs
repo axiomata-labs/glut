@@ -249,6 +249,7 @@ pub const PAGES: [(&str, &str); 61] = [
         "send",
         "向另一个 Pane 或后台代理发送一条消息，在那里如同你亲手输入的一样处理。\n\
          \n\
+         /send — 可发送对象的列表：此处的 Pane 和代理，然后是其他 Glut 窗口；⏎ 会把 /send <who> 放入输入框\n\
          /send <text> — 发给唯一的另一个 Pane\n\
          /send <n|name> <text> — 发给 Pane n 或该名字的代理（三个及以上时需要）\n\
          /send plan — 把此 Pane 的计划交给另一个 Pane 去构建\n\

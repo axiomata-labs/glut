@@ -2196,6 +2196,8 @@ pub const TEXTS: Texts = Texts {
     close_title: "¿Cerrar qué pane? · ⏎ cierra",
     close_this: "este pane",
     close_which: "{word} no nombra un solo pane — elige uno",
+    send_title: "¿A quién enviar? · ⏎ elige, luego escribe",
+    send_here: "en esta ventana",
     from_session_owner: "el propietario de {session}: {text}",
     from_session_model: "el modelo de {session} (no el propietario): {text}",
     from_session_notice: "{session}: {text}",

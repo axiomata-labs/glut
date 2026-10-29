@@ -1224,6 +1224,8 @@ pub const TEXTS: Texts = Texts {
     close_title: "Close which pane? · ⏎ closes",
     close_this: "this pane",
     close_which: "{word} names no single pane — pick one",
+    send_title: "Send to whom? · ⏎ picks, then write",
+    send_here: "in this window",
     from_session_owner: "{session}'s owner: {text}",
     from_session_model: "{session}'s model (not the owner): {text}",
     from_session_notice: "{session}: {text}",
