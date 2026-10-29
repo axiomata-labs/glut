@@ -101,6 +101,11 @@ pub fn render(export: &Export, format: Format) -> String {
     }
 }
 
+/// The folder exports go to by default (T54), below the owner's `home`.
+pub fn dir(home: &Path) -> PathBuf {
+    home.join(glut::providers::DIR).join(DIR)
+}
+
 /// Where an export goes unless a path is named: `~/.glut/exports/<project>-<date>-<time>.<ext>`.
 pub fn default_path(home: &Path, cwd: &Path, format: Format, now: DateTime<Local>) -> PathBuf {
     let project: String = cwd
@@ -116,7 +121,7 @@ pub fn default_path(home: &Path, cwd: &Path, format: Format, now: DateTime<Local
             }
         })
         .collect();
-    home.join(glut::providers::DIR).join(DIR).join(format!(
+    dir(home).join(format!(
         "{project}-{}.{}",
         now.format("%Y%m%d-%H%M%S"),
         format.extension()
@@ -139,7 +144,7 @@ pub fn named_path(typed: &str, home: &Path, cwd: &Path) -> PathBuf {
 /// The text the owner reads: the file is there, or cannot be written.
 pub fn write(path: &Path, text: &str, home: &Path) -> Result<(), String> {
     use std::os::unix::fs::OpenOptionsExt as _;
-    let own = home.join(glut::providers::DIR).join(DIR);
+    let own = dir(home);
     if path.parent() == Some(own.as_path()) {
         glut::providers::make_private_dir(&own)
             .map_err(|err| tr!(cannot_use, path = own.display(), reason = err))?;

@@ -157,6 +157,10 @@ pub const TEXTS: Texts = Texts {
             "Glut 运行的命令的钥匙串 — 除列表中的程序外都关闭，这些程序每次都会请求；/keychain add|remove <program>，/keychain open|close 用于本会话",
         ),
         (
+            "clean",
+            "Glut 在 ~/.glut 中保存的内容，以及按你的期限可清理的部分；/clean now 立即清理，/clean keep <kind> <days>d 设置期限",
+        ),
+        (
             "motion",
             "屏幕的动态程度；calm 和 off 让 Glimm 静止（macOS 的“减弱动态效果”视为 off）",
         ),
@@ -960,6 +964,29 @@ pub const TEXTS: Texts = Texts {
     ],
     setup_provider_prompt: "提供商：",
     cli: &[
+        (
+            "Cleans Glut's own data in ~/.glut by the owner's terms: old snapshots, journals and sessions, and what \
+             only they held",
+            "按所有者的期限清理 Glut 在 ~/.glut 中的数据：旧快照、日志和会话，以及只被它们引用的内容",
+        ),
+        (
+            "Counts what would go and removes nothing",
+            "只统计会删除的内容，不删除任何东西",
+        ),
+        (
+            "The report as JSON, for a program to read",
+            "以 JSON 输出报告，供程序读取",
+        ),
+        (
+            "The terms Glut keeps its data for, or one of them set: snapshots, journals, sessions, results or lean, \
+             in days (30d)",
+            "Glut 保留数据的期限，或设置其中一项：snapshots、journals、sessions、results 或 lean，以天计（30d）",
+        ),
+        (
+            "snapshots, journals, sessions, results or lean",
+            "snapshots、journals、sessions、results 或 lean",
+        ),
+        ("Days, as 30d", "天数，如 30d"),
         (
             "The Keychain for the commands Glut runs: shut but to the listed programs, which ask for it each time",
             "Glut 运行的命令的钥匙串：除列表中的程序外都关闭，这些程序每次都会请求它",
@@ -1795,4 +1822,27 @@ pub const TEXTS: Texts = Texts {
     keychain_usage: "/keychain, /keychain add <program>, /keychain remove <program>, /keychain open, /keychain close",
     ask_keychain: "使用钥匙串",
     keychain_footer: "🔑 开放",
+    clean_names: &[
+        "快照",
+        "日志",
+        "会话",
+        "结果",
+        "图片",
+        "导出",
+        "lean.jsonl",
+        "其他",
+    ],
+    clean_item: "{name}：{bytes}",
+    clean_item_would_go: "，可清理 {bytes}",
+    clean_item_went: "，已释放 {bytes}",
+    clean_item_kept: " · 保留 {keep}",
+    clean_total_dry: "~/.glut 占用 {total}，可清理 {freeable}",
+    clean_total_done: "~/.glut 曾占用 {total}，已释放 {freeable}",
+    clean_last: "上次清理 {when}",
+    clean_never: "尚未清理",
+    clean_keep_set: "{kind}：现在保留 {keep}",
+    clean_usage: "/clean, /clean now, /clean keep, /clean keep <snapshots|journals|sessions|results|lean> <days>d",
+    clean_busy: "另一个 Glut 正在清理 ~/.glut",
+    clean_started: "正在后台清理 ~/.glut — 释放的空间会显示在这里",
+    clean_auto: "Glut 已清理 ~/.glut：释放 {freeable}（/clean）",
 };

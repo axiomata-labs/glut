@@ -136,6 +136,10 @@ scripts/install.sh               # glut for every terminal: ~/.cargo/bin, linked
   program, every `PATH` folder) never lies where a plan's commands write, or a run would leave the next one a
   program outside the sandbox. A plan's name is a file's and a launchd label's part: `check_name` before it reaches
   a path.
+- **Glut cleans its own `~/.glut`** (T82, `crates/glut-tui/src/clean.rs`, `glut::clean`): once a day at the start, by
+  the owner's terms in `~/.glut/clean.json` (written only by `glut clean keep` / `/clean keep`). A new kind of data
+  Glut keeps there gets its line in the report (`clean::ITEMS`, `--json` is read by Axiomata — add, never rename) and
+  a rule for when it goes; a dry run removes nothing; what a session's JSON names is never a path to delete.
 - **What a command *is* decides beside the rules** (TUI1e, `crates/glut/src/permissions/kinds.rs`): a command whose
   every part is a listed reader (`ls`, `grep`, `sed -n 1,9p`, `git status`, …) runs in every mode like `read_file`;
   in `auto` everything sandboxed runs but a `kinds::heavy` one (`rm -rf`, `git push`, `sudo`, …). A new reader needs

@@ -1,7 +1,7 @@
 //! The commands' manual pages in Spanish (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 58] = [
+pub const PAGES: [(&str, &str); 59] = [
     (
         "clear",
         "Empieza una sesión nueva y vacía en esta carpeta.\n\
@@ -583,6 +583,29 @@ pub const PAGES: [(&str, &str); 58] = [
          \n\
          La lista se guarda en `~/.glut/keychain.json`; `glut keychain open` mantiene el llavero abierto de una \
          sesión a otra, `glut keychain close` lo cierra para siempre.",
+    ),
+    (
+        "clean",
+        "Evitar que los datos de Glut en ~/.glut crezcan sin fin.\n\
+         \n\
+         /clean — lo que Glut guarda, partida por partida, y lo que puede irse según tus plazos\n\
+         /clean now — limpia ya, en segundo plano\n\
+         /clean keep — los plazos\n\
+         /clean keep <kind> <days>d — fija uno: snapshots, journals, sessions, results o lean\n\
+         \n\
+         Lo que se va: las instantáneas de una ejecución más antiguas que su plazo (7 días) — el almacén entero de \
+         una carpeta cuando no queda ninguna, esté la carpeta o no; el diario de una ejecución sin terminar (7 días); \
+         una sesión sin escribir desde hace 90 días, con su registro de eventos y sus resultados largos; los \
+         resultados largos sin sesión tras 30 días; las imágenes que ninguna sesión guardada nombra; las líneas de \
+         lean.jsonl de más de 90 días. Las exportaciones solo se cuentan: son tus archivos.\n\
+         \n\
+         Una vez al día Glut limpia solo al arrancar — aquí y en `glut run` — y dice lo que liberó. La salida de \
+         compilación y las cachés (una carpeta con un CACHEDIR.TAG, bajo node_modules/ o el target/ de un proyecto \
+         Cargo) no tienen instantáneas.\n\
+         \n\
+         Los plazos se guardan en `~/.glut/clean.json`. En la línea de comandos: `glut clean`, `glut clean \
+         --dry-run`, `glut clean keep sessions 30d`; `glut clean --dry-run --json` escribe el informe para un \
+         programa.",
     ),
     (
         "motion",

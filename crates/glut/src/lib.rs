@@ -10,6 +10,7 @@
 
 pub mod agents;
 pub mod anthropic;
+pub mod clean;
 pub mod cli;
 pub mod codemode;
 pub mod commands;

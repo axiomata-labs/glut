@@ -113,6 +113,92 @@ fn keep_newer_half(path: &Path, file: &mut File) -> io::Result<()> {
     moved
 }
 
+/// `glut clean`'s pass over the count (T82): the savings older than `keep` go, the rest written beside the file and
+/// moved over it as the halving does — unless a saving was recorded meanwhile; `dry` only counts them.
+pub fn clean(path: &Path, keep: std::time::Duration, dry: bool) -> crate::clean::Tally {
+    let days = u32::try_from(keep.as_secs() / (24 * 60 * 60)).unwrap_or(u32::MAX);
+    let mut tally = crate::clean::Tally::new("lean", Some(days));
+    let Ok(mut file) = open_own(path, OpenOptions::new().read(true)) else {
+        return tally;
+    };
+    remove_stale_copies(path);
+    let mut bytes = Vec::new();
+    // A file past what the halving lets it grow to is not Glut's: left as it is.
+    if io::Read::read_to_end(
+        &mut io::Read::take(&mut file, 2 * MAX_BYTES + 1),
+        &mut bytes,
+    )
+    .is_err()
+        || bytes.len() as u64 > 2 * MAX_BYTES
+    {
+        return tally;
+    }
+    let since = Utc::now() - chrono::Duration::from_std(keep).unwrap_or(chrono::Duration::MAX);
+    let mut kept = Vec::new();
+    for line in bytes.split_inclusive(|byte| *byte == b'\n') {
+        tally.count += 1;
+        // A line that does not read as a saving (a newer Glut's) stays: only a saving's time says it is old.
+        let fresh =
+            serde_json::from_slice::<Saving>(line).map_or(true, |saving| saving.at >= since);
+        if fresh {
+            kept.extend_from_slice(line);
+        } else {
+            tally.freeable_count += 1;
+        }
+    }
+    tally.bytes = bytes.len() as u64;
+    tally.freeable_bytes = (bytes.len() - kept.len()) as u64;
+    if dry || tally.freeable_count == 0 {
+        return tally;
+    }
+    let fresh = path.with_extension(format!("jsonl.{}", std::process::id()));
+    let _ = fs::remove_file(&fresh);
+    // A saving recorded meanwhile would be lost by the move: then this pass leaves the file, the next one cuts it.
+    let unchanged =
+        || fs::symlink_metadata(path).is_ok_and(|meta| meta.len() == bytes.len() as u64);
+    let written = open_own(&fresh, OpenOptions::new().create_new(true).write(true))
+        .and_then(|mut out| out.write_all(&kept))
+        .and_then(|()| {
+            if unchanged() {
+                fs::rename(&fresh, path)
+            } else {
+                Err(io::Error::other("the count grew meanwhile"))
+            }
+        });
+    if written.is_err() {
+        let _ = fs::remove_file(&fresh);
+        tally.freeable_bytes = 0;
+        tally.freeable_count = 0;
+    }
+    tally
+}
+
+/// The copies a halving or a pass left when its process ended before the move (`lean.jsonl.<pid>`), an hour old.
+fn remove_stale_copies(path: &Path) {
+    let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else {
+        return;
+    };
+    let prefix = format!("{}.", name.to_string_lossy());
+    for entry in fs::read_dir(dir).into_iter().flatten().flatten() {
+        let named = entry.file_name().to_string_lossy().into_owned();
+        let stale = entry
+            .metadata()
+            .ok()
+            .and_then(|meta| meta.modified().ok())
+            .is_some_and(|modified| {
+                modified
+                    .elapsed()
+                    .is_ok_and(|age| age > std::time::Duration::from_secs(60 * 60))
+            });
+        let copy = named
+            .strip_prefix(&prefix)
+            .is_some_and(|pid| !pid.is_empty() && pid.chars().all(|c| c.is_ascii_digit()));
+        if copy && stale && entry.file_type().is_ok_and(|kind| kind.is_file()) {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
+}
+
 /// The sums of one kind of saving.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Total {
@@ -309,5 +395,35 @@ mod tests {
     fn no_file_is_no_savings() {
         assert!(totals(&scratch(), None).unwrap().is_empty());
         assert_eq!(table(&[]), "nothing counted yet\n");
+    }
+
+    #[test]
+    fn a_clean_keeps_the_newer_lines_and_drops_the_old_and_the_unreadable() {
+        let dir = std::env::temp_dir().join(format!("glut-lean-clean-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let path = dir.join(FILE);
+        let mut old = saving("cargo", 100, 10);
+        old.at = Utc::now() - chrono::Duration::days(100);
+        record(&path, &old).unwrap();
+        record(&path, &saving("git", 50, 5)).unwrap();
+        let mut file = OpenOptions::new().append(true).open(&path).unwrap();
+        file.write_all(b"not a saving\n").unwrap();
+        let keep = std::time::Duration::from_secs(90 * 24 * 60 * 60);
+        let counted = clean(&path, keep, true);
+        assert_eq!((counted.count, counted.freeable_count), (3, 1));
+        assert_eq!(fs::read_to_string(&path).unwrap().lines().count(), 3);
+        let done = clean(&path, keep, false);
+        assert_eq!(done.keep.as_deref(), Some("90d"));
+        let left = fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            left.lines().count(),
+            2,
+            "the old saving went, the unreadable line stayed"
+        );
+        assert!(
+            left.contains("\"git\"") && left.contains("not a saving"),
+            "{left}"
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 }

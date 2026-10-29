@@ -220,6 +220,11 @@ pub const TEXTS: Texts = Texts {
              Mal fragen; /keychain add|remove <program>, /keychain open|close für diese Session",
         ),
         (
+            "clean",
+            "was Glut in ~/.glut ablegt und was davon nach deinen Fristen weg kann; /clean now räumt auf, /clean keep \
+             <kind> <days>d setzt eine Frist",
+        ),
+        (
             "motion",
             "wie viel sich auf dem Bildschirm bewegt; calm und off halten Glimm still (macOS „Bewegung reduzieren“ \
              zählt als off)",
@@ -1107,6 +1112,31 @@ pub const TEXTS: Texts = Texts {
     ],
     setup_provider_prompt: "Provider:",
     cli: &[
+        (
+            "Cleans Glut's own data in ~/.glut by the owner's terms: old snapshots, journals and sessions, and what \
+             only they held",
+            "Räumt Gluts eigene Ablage in ~/.glut nach den Fristen des Owners auf: alte Snapshots, Journale und \
+             Sessions und was nur sie hielten",
+        ),
+        (
+            "Counts what would go and removes nothing",
+            "Zählt, was weg würde, und entfernt nichts",
+        ),
+        (
+            "The report as JSON, for a program to read",
+            "Der Bericht als JSON, für ein Programm",
+        ),
+        (
+            "The terms Glut keeps its data for, or one of them set: snapshots, journals, sessions, results or lean, \
+             in days (30d)",
+            "Die Fristen, für die Glut seine Daten behält, oder eine davon gesetzt: snapshots, journals, sessions, \
+             results oder lean, in Tagen (30d)",
+        ),
+        (
+            "snapshots, journals, sessions, results or lean",
+            "snapshots, journals, sessions, results oder lean",
+        ),
+        ("Days, as 30d", "Tage, als 30d"),
         (
             "The Keychain for the commands Glut runs: shut but to the listed programs, which ask for it each time",
             "Der Schlüsselbund für die Befehle, die Glut ausführt: zu außer für die gelisteten Programme, die jedes \
@@ -2044,4 +2074,27 @@ pub const TEXTS: Texts = Texts {
     keychain_usage: "/keychain, /keychain add <program>, /keychain remove <program>, /keychain open, /keychain close",
     ask_keychain: "mit dem Schlüsselbund",
     keychain_footer: "🔑 offen",
+    clean_names: &[
+        "Snapshots",
+        "Journale",
+        "Sessions",
+        "Ergebnisse",
+        "Bilder",
+        "Exporte",
+        "lean.jsonl",
+        "Sonstiges",
+    ],
+    clean_item: "{name}: {bytes}",
+    clean_item_would_go: ", davon kann {bytes} weg",
+    clean_item_went: ", {bytes} freigegeben",
+    clean_item_kept: " · behalten {keep}",
+    clean_total_dry: "~/.glut belegt {total}; davon kann {freeable} weg",
+    clean_total_done: "~/.glut belegte {total}; {freeable} freigegeben",
+    clean_last: "zuletzt aufgeräumt {when}",
+    clean_never: "noch nie aufgeräumt",
+    clean_keep_set: "{kind}: jetzt {keep} behalten",
+    clean_usage: "/clean, /clean now, /clean keep, /clean keep <snapshots|journals|sessions|results|lean> <days>d",
+    clean_busy: "ein anderes Glut räumt ~/.glut gerade auf",
+    clean_started: "räume ~/.glut im Hintergrund auf — was frei wurde, steht gleich hier",
+    clean_auto: "Glut hat ~/.glut aufgeräumt: {freeable} freigegeben (/clean)",
 };

@@ -108,8 +108,14 @@ impl Snapshots {
         {
             return Err("no snapshots of a folder that holds the snapshot store".into());
         }
+        if is_cache(&work_tree) {
+            return Err(
+                "no snapshots of build output or a cache (CACHEDIR.TAG, target/, node_modules/)"
+                    .into(),
+            );
+        }
         let git_dir = store_of(root, &work_tree);
-        if !git_dir.join("HEAD").exists() {
+        if !git_dir.join("HEAD").exists() || !mark_in_use(&git_dir) {
             make_private_dir(root)?;
             make_private_dir(&git_dir)?;
             init(&git_dir)?;
@@ -482,38 +488,102 @@ fn changed(
     Ok(text)
 }
 
-/// Removes the records older than [`KEEP`] and their refs from every store under `root`, and collects a store's
-/// garbage at most once a day. Best effort: a store that cannot be swept is left as it is.
+/// Removes the records older than the owner's term (`~/.glut/clean.json` beside `root`, [`KEEP`] without one) from
+/// every store under `root`, and a store none of whose runs is left; each store at most once a day, as a run starts.
+/// Best effort: a store that cannot be swept is left as it is.
 pub fn sweep(root: &Path) {
+    let days = match root
+        .parent()
+        .filter(|dir| dir.is_absolute())
+        .map(crate::clean::Keep::load_in)
+    {
+        Some(Ok(keep)) => crate::clean::span(keep.snapshots),
+        // Terms the owner wrote that cannot be read: nothing is removed by others.
+        Some(Err(_)) => return,
+        None => KEEP,
+    };
+    sweep_stores(root, days, false, true);
+}
+
+/// `glut clean`'s pass over the stores under `root` (T82): every store, swept or not today, its records older than
+/// `keep` gone — and the whole store when none is left, its folder there or not (a folder renamed for a while finds
+/// its snapshots until then). `dry` only counts: what a store kept goes is known only once git collected it, so a
+/// dry run counts the whole stores alone.
+pub fn clean(root: &Path, keep: Duration, dry: bool) -> crate::clean::Tally {
+    let mut tally = sweep_stores(root, keep, dry, false);
+    tally.keep = Some(crate::clean::term(
+        u32::try_from(keep.as_secs() / (24 * 60 * 60)).unwrap_or(u32::MAX),
+    ));
+    tally
+}
+
+fn sweep_stores(root: &Path, keep: Duration, dry: bool, daily: bool) -> crate::clean::Tally {
     let now = SystemTime::now();
-    let old = |path: &Path, age: Duration| {
+    let age = |path: &Path| {
         std::fs::metadata(path)
             .and_then(|meta| meta.modified())
-            .is_ok_and(|modified| now.duration_since(modified).unwrap_or_default() > age)
+            .map(|modified| now.duration_since(modified).unwrap_or_default())
+            .unwrap_or_default()
     };
+    let mut tally = crate::clean::Tally::new("snapshots", None);
     for store in std::fs::read_dir(root).into_iter().flatten().flatten() {
         let git_dir = store.path();
-        let marker = git_dir.join("swept");
-        if marker.exists() && !old(&marker, GC_EVERY) {
+        if !store.file_type().is_ok_and(|kind| kind.is_dir()) {
             continue;
         }
-        let Ok(folder) = std::fs::read_to_string(git_dir.join("folder")) else {
+        let marker = git_dir.join("swept");
+        if daily && marker.exists() && age(&marker) <= GC_EVERY {
             continue;
+        }
+        // A run's own sweep needs no sizes: walking every store at each run's first snapshot would cost seconds.
+        let size = if daily {
+            0
+        } else {
+            crate::clean::size_of(&git_dir)
         };
-        let Ok(_locked) = lock(&git_dir) else {
-            continue;
-        };
-        let folder = Path::new(&folder);
-        for record in std::fs::read_dir(git_dir.join("runs"))
-            .into_iter()
-            .flatten()
-            .flatten()
-        {
-            if !old(&record.path(), KEEP) {
-                continue;
+        tally.bytes += size;
+        tally.count += 1;
+        // A wet pass decides under the store's lock: a run opening it touches `folder` under the same lock.
+        let _locked = if dry {
+            None
+        } else {
+            match lock(&git_dir) {
+                Ok(locked) => Some(locked),
+                Err(_) => continue,
             }
+        };
+        let folder = std::fs::read_to_string(git_dir.join("folder")).ok();
+        let records: Vec<PathBuf> = match std::fs::read_dir(git_dir.join("runs")) {
+            Ok(entries) => entries.flatten().map(|record| record.path()).collect(),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            // Runs that cannot be listed may be young: the store stays.
+            Err(_) => continue,
+        };
+        let expired: Vec<&PathBuf> = records.iter().filter(|record| age(record) > keep).collect();
+        // Every run expired, and no run opened the store within the term (it touches `folder`); a store an open
+        // left without its `folder` counts from its own last change.
+        let made = match &folder {
+            Some(_) => git_dir.join("folder"),
+            None => git_dir.clone(),
+        };
+        let spent = expired.len() == records.len() && age(&made) > keep;
+        if spent {
+            // Under the lock no snapshot is being taken; a run that opens the store after this makes it anew.
+            if dry || std::fs::remove_dir_all(&git_dir).is_ok() {
+                tally.freeable_bytes += size;
+                tally.freeable_count += 1;
+            }
+            continue;
+        }
+        let Some(folder) = folder else {
+            continue;
+        };
+        if dry {
+            continue;
+        }
+        let folder = Path::new(&folder);
+        for record in &expired {
             let run = record
-                .path()
                 .file_stem()
                 .and_then(|s| s.to_str())
                 .map(str::to_owned);
@@ -525,12 +595,70 @@ pub fn sweep(root: &Path) {
                 );
                 let _ = std::fs::remove_file(git_dir.join(format!("index-{run}")));
             }
-            let _ = std::fs::remove_file(record.path());
+            let _ = std::fs::remove_file(record);
         }
         // Objects only an expired run's ref held are unreachable now; the lock keeps a running snapshot out.
         let _ = git(&git_dir, folder, &["gc", "--quiet", "--prune=now"]);
         let _ = std::fs::write(&marker, b"");
+        if !daily {
+            tally.freeable_bytes += size.saturating_sub(crate::clean::size_of(&git_dir));
+        }
     }
+    tally
+}
+
+/// Marks a store as in use as a run opens it (T82): under its lock its `folder` file is touched, so a sweep that
+/// decides under the same lock sees it young and keeps the store. False when the store went meanwhile.
+fn mark_in_use(git_dir: &Path) -> bool {
+    let Ok(_locked) = lock(git_dir) else {
+        return false;
+    };
+    git_dir.join("HEAD").exists()
+        && File::options()
+            .write(true)
+            .open(git_dir.join("folder"))
+            .and_then(|file| file.set_modified(SystemTime::now()))
+            .is_ok()
+}
+
+/// Whether `folder` is build output or a cache, or lies in one (T82): a folder marked by a `CACHEDIR.TAG` (Cargo's
+/// `target/`, many tools' caches), one below `node_modules/`, or below the `target/` of a Cargo project. Its files
+/// are rebuilt, not written — once Glut ran in `target/release` and its store held 321 MB of builds.
+fn is_cache(folder: &Path) -> bool {
+    folder.ancestors().any(|dir| {
+        (tagged(dir) && !is_project(dir))
+            || dir.file_name().is_some_and(|name| name == "node_modules")
+            || (dir.file_name().is_some_and(|name| name == "target")
+                && dir
+                    .parent()
+                    .is_some_and(|parent| parent.join("Cargo.toml").is_file()))
+    })
+}
+
+/// The start every `CACHEDIR.TAG` has (the Cache Directory Tagging Specification): an empty file of that name is no
+/// tag — a project shipping one, or a model writing one, would otherwise switch its undo off.
+const CACHEDIR_SIGNATURE: &[u8] = b"Signature: 8a477f597d28d172789f06886806bc55";
+
+/// Whether `dir` holds a `CACHEDIR.TAG` that starts with its signature.
+fn tagged(dir: &Path) -> bool {
+    use std::io::Read as _;
+    let mut start = [0u8; CACHEDIR_SIGNATURE.len()];
+    crate::providers::open_no_follow(&dir.join("CACHEDIR.TAG"))
+        .and_then(|mut file| file.read_exact(&mut start))
+        .is_ok_and(|()| start == CACHEDIR_SIGNATURE)
+}
+
+/// Whether `dir` is a project's own folder, whose tag never counts: build output carries none of these.
+fn is_project(dir: &Path) -> bool {
+    [
+        ".git",
+        "Cargo.toml",
+        "package.json",
+        "pyproject.toml",
+        "go.mod",
+    ]
+    .iter()
+    .any(|marker| dir.join(marker).exists())
 }
 
 /// A folder only the owner can enter: the snapshots hold the folder's files, untracked secrets included.
@@ -880,16 +1008,107 @@ mod tests {
             .unwrap()
             .set_modified(past)
             .unwrap();
+        let mut fresh = Snapshots::open(&root, &folder, "new").unwrap();
+        std::fs::write(folder.join("a.txt"), "two").unwrap();
+        fresh.take(1).unwrap().unwrap();
         sweep(&root);
-        assert!(runs(&root, &folder).is_empty());
+        let left = runs(&root, &folder);
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].run, "new");
+        let refs = git(&store, &folder, &["show-ref"]).unwrap_or_default();
         assert!(
-            git(&store, &folder, &["show-ref"])
-                .unwrap_or_default()
-                .trim()
-                .is_empty()
+            refs.contains("refs/glut/new") && !refs.contains("refs/glut/old"),
+            "{refs}"
         );
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn a_store_without_a_run_left_goes_whole_and_a_dry_run_only_counts_it() {
+        let (root, folder) = (temp("root-spent"), temp("folder-spent"));
+        std::fs::write(folder.join("a.txt"), "one").unwrap();
+        let mut snaps = Snapshots::open(&root, &folder, "old").unwrap();
+        snaps.take(1).unwrap().unwrap();
+        let store = store_of(&root, &folder);
+        let past = SystemTime::now() - KEEP - Duration::from_secs(60);
+        let age_store = || {
+            // The run's record is gone once a pass took it: what is there is aged.
+            for file in ["runs/old.json", "folder"] {
+                if let Ok(file) = File::options().write(true).open(store.join(file)) {
+                    file.set_modified(past).unwrap();
+                }
+            }
+        };
+        age_store();
+        let counted = clean(&root, KEEP, true);
+        assert_eq!((counted.count, counted.freeable_count), (1, 1));
+        assert!(counted.freeable_bytes > 0 && counted.freeable_bytes == counted.bytes);
+        assert!(store.exists(), "a dry run removes nothing");
+        assert_eq!(
+            clean(&root, KEEP * 2, true).freeable_count,
+            0,
+            "a longer term keeps it"
+        );
+        Snapshots::open(&root, &folder, "again").unwrap();
+        assert_eq!(
+            clean(&root, KEEP, false).freeable_count,
+            0,
+            "a store a run just opened stays"
+        );
+        age_store();
+        let done = clean(&root, KEEP, false);
+        assert_eq!(done.freeable_count, 1);
+        assert_eq!(done.keep.as_deref(), Some("7d"));
+        assert!(!store.exists());
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn build_output_and_caches_get_no_snapshots() {
+        let (root, project) = (temp("root-cache"), temp("project-cache"));
+        std::fs::write(project.join("Cargo.toml"), "[package]").unwrap();
+        let release = project.join("target/release");
+        std::fs::create_dir_all(&release).unwrap();
+        assert!(Snapshots::open(&root, &release, "r").is_err());
+        let tagged = project.join("cache/inner");
+        std::fs::create_dir_all(&tagged).unwrap();
+        std::fs::write(
+            project.join("cache/CACHEDIR.TAG"),
+            "Signature: 8a477f597d28d172789f06886806bc55",
+        )
+        .unwrap();
+        assert!(Snapshots::open(&root, &tagged, "r").is_err());
+        let packages = project.join("web/node_modules/x");
+        std::fs::create_dir_all(&packages).unwrap();
+        assert!(Snapshots::open(&root, &packages, "r").is_err());
+        assert!(
+            Snapshots::open(&root, &project, "r").is_ok(),
+            "the project itself is recorded"
+        );
+        let signed = "Signature: 8a477f597d28d172789f06886806bc55";
+        std::fs::write(project.join("CACHEDIR.TAG"), signed).unwrap();
+        assert!(
+            Snapshots::open(&root, &project, "r").is_ok(),
+            "a project's own tag never counts"
+        );
+        std::fs::remove_file(project.join("CACHEDIR.TAG")).unwrap();
+        let docs = project.join("docs");
+        std::fs::create_dir_all(&docs).unwrap();
+        std::fs::write(docs.join("CACHEDIR.TAG"), "").unwrap();
+        assert!(
+            Snapshots::open(&root, &docs, "r").is_ok(),
+            "a tag without its signature is none"
+        );
+        let plain = temp("plain-target").join("target");
+        std::fs::create_dir_all(&plain).unwrap();
+        assert!(
+            Snapshots::open(&root, &plain, "r").is_ok(),
+            "a folder named target outside Cargo is not output"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&project);
     }
 
     #[test]

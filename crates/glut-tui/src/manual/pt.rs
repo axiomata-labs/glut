@@ -1,7 +1,7 @@
 //! The commands' manual pages in Portuguese (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 58] = [
+pub const PAGES: [(&str, &str); 59] = [
     (
         "clear",
         "Começa uma sessão nova e vazia nesta pasta.\n\
@@ -582,6 +582,28 @@ pub const PAGES: [(&str, &str); 58] = [
          \n\
          A lista fica em `~/.glut/keychain.json`; `glut keychain open` mantém o porta-chaves aberto de uma sessão \
          para outra, `glut keychain close` fecha-o de vez.",
+    ),
+    (
+        "clean",
+        "Evitar que os dados do Glut em ~/.glut cresçam sem fim.\n\
+         \n\
+         /clean — o que o Glut guarda, item por item, e o que pode sair segundo os seus prazos\n\
+         /clean now — limpa já, em segundo plano\n\
+         /clean keep — os prazos\n\
+         /clean keep <kind> <days>d — define um: snapshots, journals, sessions, results ou lean\n\
+         \n\
+         O que sai: os snapshots de uma execução mais antigos que o seu prazo (7 dias) — o depósito inteiro de uma \
+         pasta quando não resta nenhum, exista a pasta ou não; o diário de uma execução inacabada (7 dias); uma \
+         sessão não escrita há 90 dias, com o seu registo de eventos e os seus resultados longos; os resultados \
+         longos sem sessão após 30 dias; as imagens que nenhuma sessão guardada nomeia; as linhas de lean.jsonl com \
+         mais de 90 dias. As exportações são só contadas: são ficheiros seus.\n\
+         \n\
+         Uma vez por dia o Glut limpa sozinho ao arrancar — aqui e em `glut run` — e diz o que liberou. Saídas de \
+         build e caches (uma pasta com um CACHEDIR.TAG, sob node_modules/ ou o target/ de um projeto Cargo) não têm \
+         snapshots.\n\
+         \n\
+         Os prazos ficam em `~/.glut/clean.json`. Na linha de comandos: `glut clean`, `glut clean --dry-run`, `glut \
+         clean keep sessions 30d`; `glut clean --dry-run --json` escreve o relatório para um programa.",
     ),
     (
         "motion",

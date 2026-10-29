@@ -423,15 +423,43 @@ pub fn discard(dir: &Path, run: &str) -> Result<(), String> {
     std::fs::remove_file(&journal.path).map_err(|err| err.to_string())
 }
 
-/// Removes the unfinished journals older than [`KEEP`] (D8); a run still going is left alone.
+/// Removes the unfinished journals older than the owner's term (`clean.json` beside `dir`, T82) or [`KEEP`] (D8); a
+/// run still going is left alone, and nothing goes while that file does not read.
 pub fn sweep(dir: &Path) {
+    let keep = match dir
+        .parent()
+        .filter(|glut_dir| glut_dir.is_absolute())
+        .map(crate::clean::Keep::load_in)
+    {
+        Some(Ok(keep)) => crate::clean::span(keep.journals),
+        // Terms the owner wrote that cannot be read: nothing is removed by others.
+        Some(Err(_)) => return,
+        None => KEEP,
+    };
+    clean(dir, keep, false);
+}
+
+/// `glut clean`'s pass over the journals in `dir` (T82): the unfinished ones older than `keep` go, a run still going
+/// stays; `dry` only counts them.
+pub fn clean(dir: &Path, keep: Duration, dry: bool) -> crate::clean::Tally {
+    let days = u32::try_from(keep.as_secs() / (24 * 60 * 60)).unwrap_or(u32::MAX);
+    let mut tally = crate::clean::Tally::new("journals", Some(days));
     let now = SystemTime::now();
     for unfinished in list(dir) {
+        let path = dir.join(format!("{}.{EXTENSION}", unfinished.run));
+        let size = crate::clean::size_of(&path);
+        tally.bytes += size;
+        tally.count += 1;
         let age = now.duration_since(unfinished.modified).unwrap_or_default();
-        if !unfinished.running && age > KEEP {
-            let _ = discard(dir, &unfinished.run);
+        if unfinished.running || age <= keep {
+            continue;
+        }
+        if dry || discard(dir, &unfinished.run).is_ok() {
+            tally.freeable_bytes += size;
+            tally.freeable_count += 1;
         }
     }
+    tally
 }
 
 /// A folder only the owner can enter: a journal holds the conversation, tool results included.
@@ -657,5 +685,30 @@ mod tests {
             discard(&dir, "run-p").unwrap();
             assert!(list(&dir).is_empty());
         }
+    }
+
+    #[test]
+    fn a_clean_takes_the_old_unfinished_journals_and_leaves_a_running_one() {
+        let dir = scratch("clean");
+        let left = Journal::create(&spec(&dir, "run-old"), Path::new("/w"), "m").unwrap();
+        drop(left);
+        let going = Journal::create(&spec(&dir, "run-going"), Path::new("/w"), "m").unwrap();
+        let past = SystemTime::now() - KEEP - Duration::from_secs(60);
+        for run in ["run-old", "run-going"] {
+            File::options()
+                .write(true)
+                .open(dir.join(format!("{run}.jsonl")))
+                .unwrap()
+                .set_modified(past)
+                .unwrap();
+        }
+        let counted = clean(&dir, KEEP, true);
+        assert_eq!((counted.count, counted.freeable_count), (2, 1));
+        assert!(counted.freeable_bytes > 0);
+        assert_eq!(list(&dir).len(), 2, "a dry run removes nothing");
+        assert_eq!(clean(&dir, KEEP, false).freeable_count, 1);
+        let left: Vec<String> = list(&dir).into_iter().map(|entry| entry.run).collect();
+        assert_eq!(left, ["run-going"]);
+        drop(going);
     }
 }

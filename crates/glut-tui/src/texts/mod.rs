@@ -2012,6 +2012,34 @@ glut::catalog! {
         ask_keychain: &'static str,
         /// The footer while the Keychain is open to every command.
         keychain_footer: &'static str,
+        /// The kinds of `glut clean`'s report (T82), in `clean::ITEMS`' order.
+        clean_names: &'static [&'static str],
+        /// A line of `/clean` and `glut clean` (T82): `{name}` the kind, `{bytes}` its size.
+        clean_item: &'static str,
+        /// After it in a dry run: `{bytes}` of it can go.
+        clean_item_would_go: &'static str,
+        /// After it once cleaned: `{bytes}` freed.
+        clean_item_went: &'static str,
+        /// After it: the term the kind is kept for, `{keep}` (30d).
+        clean_item_kept: &'static str,
+        /// The sum of a dry run: `{total}` in `~/.glut`, `{freeable}` of it can go.
+        clean_total_dry: &'static str,
+        /// The sum once cleaned: `{total}` before, `{freeable}` freed.
+        clean_total_done: &'static str,
+        /// When the last pass ended: `{when}`.
+        clean_last: &'static str,
+        /// No pass ended yet.
+        clean_never: &'static str,
+        /// `/clean keep <kind> <days>d`: `{kind}`, `{keep}`.
+        clean_keep_set: &'static str,
+        /// `/clean` with words it does not know.
+        clean_usage: &'static str,
+        /// Another pass holds the lock of `~/.glut`.
+        clean_busy: &'static str,
+        /// `/clean now`, started in the background.
+        clean_started: &'static str,
+        /// A pass that freed something, at the start or by `/clean now`: `{freeable}`.
+        clean_auto: &'static str,
     }
 }
 

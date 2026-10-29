@@ -97,7 +97,7 @@ const fn command(
 }
 
 /// Every command, grouped by topic in [`Topic::ALL`]'s order, the most used first inside a topic.
-pub const COMMANDS: [Command; 58] = [
+pub const COMMANDS: [Command; 59] = [
     command(Topic::Session, "clear", "", "start a new session"),
     command(
         Topic::Session,
@@ -370,6 +370,13 @@ pub const COMMANDS: [Command; 58] = [
         "[add|remove <program>|open|close]",
         "the Keychain for the commands Glut runs — shut but to the listed programs, which ask each time; /keychain \
          add|remove <program>, /keychain open|close for this session",
+    ),
+    command(
+        Topic::Settings,
+        "clean",
+        "[now|keep [<kind> <term>]]",
+        "what Glut keeps in ~/.glut and what of it can go by your terms; /clean now cleans, /clean keep <kind> \
+         <days>d sets a term",
     ),
     command(
         Topic::Settings,
@@ -1196,6 +1203,7 @@ mod tests {
                 "html",
                 "inline",
                 "jsonl",
+                "keep",
                 "key",
                 "list",
                 "login",
@@ -1203,6 +1211,7 @@ mod tests {
                 "md",
                 "none",
                 "notify",
+                "now",
                 "off",
                 "on",
                 "open",
@@ -1312,7 +1321,7 @@ mod tests {
     fn a_typed_part_takes_the_names_first_then_what_they_do() {
         assert_eq!(
             names(&fitting("c")),
-            ["clear", "compact", "context", "close", "cache"]
+            ["clear", "compact", "context", "close", "clean", "cache"]
         );
         assert_eq!(names(&fitting("hook")), ["skill"]);
         let con = fitting("con");

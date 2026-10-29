@@ -9,6 +9,7 @@ mod app;
 mod background;
 mod branch;
 mod btw;
+mod clean;
 mod cli_help;
 mod commands;
 mod export;
@@ -65,6 +66,9 @@ mod warm;
 mod watch;
 mod worktree;
 
+pub use clean::{
+    Command as CleanCommand, auto as clean_auto, freed as clean_freed, headless as clean_headless,
+};
 pub use cli_help::{localized as localized_cli, untranslated as untranslated_cli};
 pub use export::{Format as ExportFormat, headless as export_headless};
 pub use finder::headless as search_headless;

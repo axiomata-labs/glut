@@ -92,6 +92,18 @@ enum Command {
         #[command(subcommand)]
         what: glut_tui::ScheduleCommand,
     },
+    /// Cleans Glut's own data in ~/.glut by the owner's terms: old snapshots, journals and sessions, and what only they
+    /// held.
+    Clean {
+        #[command(subcommand)]
+        what: Option<glut_tui::CleanCommand>,
+        /// Counts what would go and removes nothing.
+        #[arg(long)]
+        dry_run: bool,
+        /// The report as JSON, for a program to read.
+        #[arg(long)]
+        json: bool,
+    },
     #[command(flatten)]
     Headless(glut::cli::Command),
 }
@@ -127,6 +139,9 @@ fn lang_given(args: impl Iterator<Item = String>) -> Option<glut::lang::Lang> {
 fn parse_lang(word: &str) -> Result<glut::lang::Lang, String> {
     glut::lang::Lang::parse(word).ok_or_else(|| "one of en, de, fr, it, es, zh, ja, pt".to_owned())
 }
+
+/// How long a `glut run` that ended waits for its pass over `~/.glut` (T82) before it exits.
+const CLEAN_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// How long the runtime's last tasks get to end before a switch starts Glut anew (T44).
 const SHUTDOWN: std::time::Duration = std::time::Duration::from_secs(3);
@@ -165,7 +180,34 @@ fn main() -> std::process::ExitCode {
                 (glut_tui::search_headless(&words, all, &cli.cwd), None)
             }
             Some(Command::Schedule { what }) => (glut_tui::schedule_headless(what).await, None),
-            Some(Command::Headless(command)) => (glut::cli::dispatch(command).await, None),
+            Some(Command::Clean {
+                what,
+                dry_run,
+                json,
+            }) => (glut_tui::clean_headless(what, dry_run, json), None),
+            Some(Command::Headless(command)) => {
+                // T82: a run cleans `~/.glut` once a day as Glut does at its start, and says on stderr what went.
+                let cleaning = if matches!(command, glut::cli::Command::Run(_))
+                    && let Ok(home) = glut::permissions::settings::home_dir()
+                {
+                    glut_tui::clean_auto(&home, |report| {
+                        if let Some(note) = glut_tui::clean_freed(report) {
+                            eprintln!("glut: {note}");
+                        }
+                    })
+                } else {
+                    None
+                };
+                let code = glut::cli::dispatch(command).await;
+                // A short run waits a little for its pass, so it is not cut off halfway (the next start finishes it).
+                if let Some(cleaning) = cleaning {
+                    let until = std::time::Instant::now() + CLEAN_WAIT;
+                    while !cleaning.is_finished() && std::time::Instant::now() < until {
+                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    }
+                }
+                (code, None)
+            }
             None => {
                 if cli.reader {
                     glut_tui::motion::force_reader();

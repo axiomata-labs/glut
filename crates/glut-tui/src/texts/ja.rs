@@ -197,6 +197,10 @@ pub const TEXTS: Texts = Texts {
              open|close はこのセッション用",
         ),
         (
+            "clean",
+            "Glut が ~/.glut に保存しているものと、期限に従って削除できるもの。/clean now で整理、/clean keep <kind> <days>d で期限を設定",
+        ),
+        (
             "motion",
             "画面の動きの量; calm と off では Glimm が止まる（macOS の「視差効果を減らす」は off 扱い）",
         ),
@@ -1033,6 +1037,29 @@ pub const TEXTS: Texts = Texts {
     ],
     setup_provider_prompt: "プロバイダー:",
     cli: &[
+        (
+            "Cleans Glut's own data in ~/.glut by the owner's terms: old snapshots, journals and sessions, and what \
+             only they held",
+            "所有者の期限に従って ~/.glut の Glut のデータを整理します：古いスナップショット、ジャーナル、セッションと、それらだけが参照していたもの",
+        ),
+        (
+            "Counts what would go and removes nothing",
+            "削除されるものを数えるだけで、何も削除しません",
+        ),
+        (
+            "The report as JSON, for a program to read",
+            "プログラム向けの JSON レポート",
+        ),
+        (
+            "The terms Glut keeps its data for, or one of them set: snapshots, journals, sessions, results or lean, \
+             in days (30d)",
+            "Glut がデータを保持する期限、またはその 1 つを設定：snapshots、journals、sessions、results、lean（日数、30d）",
+        ),
+        (
+            "snapshots, journals, sessions, results or lean",
+            "snapshots、journals、sessions、results、lean",
+        ),
+        ("Days, as 30d", "日数（30d など）"),
         (
             "The Keychain for the commands Glut runs: shut but to the listed programs, which ask for it each time",
             "Glut が実行するコマンドのキーチェーン: リストのプログラム以外には閉じており、それらは毎回それを求めます",
@@ -1896,4 +1923,27 @@ pub const TEXTS: Texts = Texts {
     keychain_usage: "/keychain, /keychain add <program>, /keychain remove <program>, /keychain open, /keychain close",
     ask_keychain: "キーチェーン付き",
     keychain_footer: "🔑 開",
+    clean_names: &[
+        "スナップショット",
+        "ジャーナル",
+        "セッション",
+        "結果",
+        "画像",
+        "エクスポート",
+        "lean.jsonl",
+        "その他",
+    ],
+    clean_item: "{name}：{bytes}",
+    clean_item_would_go: "、{bytes} を削除可能",
+    clean_item_went: "、{bytes} を解放",
+    clean_item_kept: " · 保持 {keep}",
+    clean_total_dry: "~/.glut は {total} を使用、{freeable} を削除可能",
+    clean_total_done: "~/.glut は {total} を使用、{freeable} を解放",
+    clean_last: "前回の整理 {when}",
+    clean_never: "まだ整理していません",
+    clean_keep_set: "{kind}：今後 {keep} 保持",
+    clean_usage: "/clean, /clean now, /clean keep, /clean keep <snapshots|journals|sessions|results|lean> <days>d",
+    clean_busy: "別の Glut が ~/.glut を整理中です",
+    clean_started: "~/.glut をバックグラウンドで整理中 — 解放した分はここに表示されます",
+    clean_auto: "Glut が ~/.glut を整理しました：{freeable} を解放（/clean）",
 };

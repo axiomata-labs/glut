@@ -915,6 +915,54 @@ impl App {
         }
     }
 
+    /// `/clean` (T82): what Glut keeps in `~/.glut` and what of it can go by the owner's terms, a pass now in the
+    /// background, or the terms — kept in `~/.glut/clean.json`.
+    fn clean_command(&mut self, rest: &str) {
+        let home = self.parts.home.clone();
+        let words: Vec<&str> = rest.split_whitespace().collect();
+        if let ["keep", rest @ ..] = words.as_slice()
+            && rest.len() <= 2
+        {
+            return match crate::clean::keep_command(
+                &home,
+                rest.first().copied(),
+                rest.get(1).copied(),
+            ) {
+                Ok(said) => self.tell(said),
+                Err(reason) => self.transcript.note(reason, Tone::Fault),
+            };
+        }
+        let keep = match glut::clean::Keep::load(&home) {
+            Ok(keep) => keep,
+            Err(err) => return self.transcript.note(err.to_string(), Tone::Fault),
+        };
+        match words.as_slice() {
+            [] => crate::clean::list(&home, keep),
+            ["now"] => {
+                crate::clean::now(&home, keep);
+                self.say(tr!(clean_started));
+            }
+            _ => self.tell(tr!(clean_usage)),
+        }
+    }
+
+    /// A pass that ended in the background (T82): the daily one said only when it freed something, one the owner
+    /// asked for said whole.
+    pub fn cleaned(&mut self, done: crate::clean::Done) {
+        use crate::clean::Done;
+        match done {
+            Done::Auto(report) => {
+                if let Some(note) = crate::clean::freed(&report) {
+                    self.transcript.note(note, Tone::Quiet);
+                }
+            }
+            Done::Asked(report) | Done::Listed(report) => {
+                self.tell(crate::clean::lines(&report).join("\n"));
+            }
+            Done::Failed(reason) => self.transcript.note(reason, Tone::Fault),
+        }
+    }
+
     /// `/export`: the session as it was saved after its last turn, into a new file or onto the clipboard (T54).
     fn export_command(&mut self, rest: &str) {
         let asked = crate::export::parse(rest);
@@ -3565,6 +3613,7 @@ impl App {
                     .note(tr!(steps_bad, most = glut::config::MOST_TURNS), Tone::Fault),
             },
             "keychain" => self.keychain_command(rest),
+            "clean" => self.clean_command(rest),
             "nudge" => match rest {
                 "on" | "off" => match prefs::set_nudge(&self.parts.home, rest == "on") {
                     Ok(()) if rest == "on" => self.say(tr!(nudge_on)),
@@ -11259,7 +11308,7 @@ pub(crate) mod tests {
                 .iter()
                 .map(|command| command.name)
                 .collect::<Vec<_>>(),
-            ["clear", "compact", "context", "close", "cache"]
+            ["clear", "compact", "context", "close", "clean", "cache"]
         );
         app.on_terminal(key(KeyCode::Down, KeyModifiers::NONE));
         app.on_terminal(key(KeyCode::Tab, KeyModifiers::NONE));

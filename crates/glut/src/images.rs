@@ -112,6 +112,12 @@ pub fn keep(home: &Path, bytes: &[u8], number: u32) -> Result<Image, String> {
             .map_err(|err| format!("{}: {err}", dir.display()))?;
         crate::providers::write_replacing(&dir, &path, &data, 0o600)
             .map_err(|err| format!("{}: {err}", path.display()))?;
+    } else {
+        // Kept again: young again, so `glut clean`'s grace (T82) covers a draft or a session not saved yet.
+        let _ = std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .and_then(|file| file.set_modified(std::time::SystemTime::now()));
     }
     Ok(Image {
         number,

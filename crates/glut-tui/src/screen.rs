@@ -85,6 +85,10 @@ pub async fn standalone_switching(
             return (std::process::ExitCode::from(1), None);
         }
     }
+    // T82: once a day Glut cleans its own `~/.glut` as it starts, in the background.
+    if let Ok(home) = glut::permissions::settings::home_dir() {
+        let _ = crate::clean::auto(&home, |_| {});
+    }
     run_switching(launch, Arc::new(crate::Standalone), open, |_| {}).await
 }
 
@@ -536,6 +540,12 @@ async fn run_loop(
         tokio::select! {
             // A plan's run that ended while Glut is open comes as a tile (T60b); the first look says what ran before.
             _ = runs_look.tick() => panes.watch_runs(chrono::Utc::now()),
+            // A pass over `~/.glut` that ended in the background (T82) is said in the pane in front.
+            () = crate::clean::ready().notified() => {
+                for done in crate::clean::take_done() {
+                    panes.active().cleaned(done);
+                }
+            }
             // A closed window or a kill ends the session cleanly: the turn stopped, the terminal given back.
             _ = terminate.recv() => panes.list.iter_mut().for_each(|pane| pane.app.abandon()),
             _ = hangup.recv() => panes.list.iter_mut().for_each(|pane| pane.app.abandon()),
