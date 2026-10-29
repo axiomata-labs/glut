@@ -892,6 +892,7 @@ impl Panes {
                     .then(|| app.warm_until.is_some_and(|until| until > Instant::now()));
                 crate::agents::Behind {
                     name: pane.name.clone().unwrap_or_else(|| "agent".to_owned()),
+                    number: pane.number,
                     role: app.role.clone().unwrap_or_else(|| "all-rounder".to_owned()),
                     model: app.engine.model_name().to_owned(),
                     doing,
@@ -3677,7 +3678,7 @@ mod tests {
         let target = &panes.list[1].app;
         assert!(target.transcript.blocks.iter().any(|block| matches!(
             &block.kind,
-            crate::transcript::Kind::Note { text, tone: Tone::Heed }
+            crate::transcript::Kind::Note { text, tone: Tone::Pane(1) }
                 if text.starts_with("pane 1's model (not the owner): which test fails?")
         )));
         assert!(

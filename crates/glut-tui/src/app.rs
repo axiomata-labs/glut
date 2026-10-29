@@ -1617,7 +1617,9 @@ impl App {
         // Another pane's model is not the owner (T36c): its message stands apart, and only the owner's word ends a
         // chain of messages between models.
         if let Some(shown) = crate::tell::shown(&prompt) {
-            self.transcript.note(shown, Tone::Heed);
+            // In the hue of the pane it came from (T84), told apart from the owner's own words.
+            let tone = crate::tell::from(&prompt).map_or(Tone::Heed, Tone::Pane);
+            self.transcript.note(shown, tone);
         } else {
             self.owner_spoke = true;
             // The images stand under the words, each a picture of its own (T46).
@@ -7460,7 +7462,7 @@ impl App {
 
     /// Moves the reading mode's choice `by` blocks — over those that draw nothing — and lets the stream follow.
     fn read_step(&mut self, by: isize) {
-        let (width, thinking, frame) = (self.stream_layout, self.transcript.thinking, self.frame);
+        let (width, thinking) = (self.stream_layout, self.transcript.thinking);
         let count = self.transcript.blocks.len();
         let Some(reading) = &mut self.reading else {
             return;
@@ -7469,11 +7471,7 @@ impl App {
             self.reading = None;
             return;
         }
-        let mut drawn = |at: usize| {
-            !self.transcript.blocks[at]
-                .lines(width, thinking, frame)
-                .is_empty()
-        };
+        let mut drawn = |at: usize| !self.transcript.blocks[at].lines(width, thinking).is_empty();
         let from = reading.block.min(count - 1);
         // Upwards for a choice that only has to draw (`by` 0): the stream's end is where it starts.
         let back = by <= 0;
@@ -7741,7 +7739,7 @@ impl App {
                     crate::transcript::Kind::Picture(image) => {
                         lines.push(ratatui::text::Line::from(format!("  {}", image.label())));
                     }
-                    _ => lines.extend_from_slice(block.lines(width, thinking, 0)),
+                    _ => lines.extend_from_slice(block.lines(width, thinking)),
                 }
                 lines
             })
@@ -7749,13 +7747,13 @@ impl App {
 
     /// Every line of the stream as text, at the width it was last drawn: what a selection copies from.
     pub fn stream_lines_text(&mut self) -> Vec<String> {
-        let (width, thinking, frame) = (self.stream_layout, self.transcript.thinking, self.frame);
+        let (width, thinking) = (self.stream_layout, self.transcript.thinking);
         self.transcript
             .blocks
             .iter_mut()
             .flat_map(|block| {
                 let picture = matches!(block.kind, crate::transcript::Kind::Picture(_));
-                let lines = block.lines(width, thinking, frame);
+                let lines = block.lines(width, thinking);
                 let last = lines.len().saturating_sub(1);
                 lines
                     .iter()
@@ -11110,6 +11108,7 @@ pub(crate) mod tests {
         let (mut app, _reports) = app();
         let behind = |name: &str, doing| crate::agents::Behind {
             name: name.into(),
+            number: 2,
             role: "all-rounder".into(),
             model: "m".into(),
             doing,
@@ -12501,5 +12500,193 @@ pub(crate) mod tests {
             2,
         ));
         assert_eq!(app.conversation[0], Message::user("one"));
+    }
+
+    /// T84's preview: two screens as the terminal draws them, written as HTML to `GLUT_PREVIEW` (a file) — run by
+    /// hand, `GLUT_PREVIEW=/tmp/x.html cargo test -p glut-tui preview_screens -- --ignored`.
+    #[test]
+    #[ignore = "writes a preview for the owner to look at"]
+    fn preview_screens() {
+        let Ok(out) = std::env::var("GLUT_PREVIEW") else {
+            return;
+        };
+        crate::theme::set("glut");
+        // `GLUT_PREVIEW_TINTS`: the strengths to draw, in hundredths (`20,30,45`); none, the one set.
+        let tints: Vec<u8> = std::env::var("GLUT_PREVIEW_TINTS")
+            .ok()
+            .map(|tints| {
+                tints
+                    .split(',')
+                    .filter_map(|tint| tint.trim().parse().ok())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut html = String::new();
+        for tint in tints
+            .iter()
+            .map(Some)
+            .chain(tints.is_empty().then_some(None))
+        {
+            if let Some(tint) = tint {
+                crate::theme::set_tint(*tint);
+                html.push_str(&format!("<h2>Stärke {tint} %</h2>\n"));
+            }
+            for (title, scene) in preview_scenes() {
+                html.push_str(&format!("<h3>{title}</h3>\n{scene}\n"));
+            }
+        }
+        std::fs::write(out, html).unwrap();
+    }
+
+    /// The screens of the preview, each as a `<pre>` of coloured cells.
+    fn preview_scenes() -> Vec<(&'static str, String)> {
+        use glut::Event;
+        let mut scenes = Vec::new();
+        for (title, asking) in [
+            ("Ein Turn bei der Arbeit", false),
+            ("Eine Frage im Modus auto, Seitenpanel offen", true),
+        ] {
+            let (mut parts, engine) = session::for_tests();
+            let mode = if asking { Mode::Auto } else { Mode::Default };
+            parts.tools.set_gate(Arc::new(glut::permissions::Gate::new(
+                glut::permissions::RuleSet::default(),
+                mode,
+                Arc::new(glut::permissions::Nobody),
+            )));
+            let (send, _reports) = mpsc::unbounded_channel();
+            let mut app = App::new(Arc::new(parts), engine, send);
+            app.panel = Some(asking);
+            app.context_used = if asking { 27_400 } else { 12_300 };
+            app.cost = Some(0.0412);
+            app.transcript.push(crate::transcript::Kind::Owner(
+                "Prüf bitte, ob die Tests grün sind, und räum die Warnung auf.".into(),
+            ));
+            let calls: [(&str, &str, &str, bool); 6] = [
+                (
+                    "read_file",
+                    r#"{"path":"crates/glut/src/run.rs"}"#,
+                    "fn run() {}",
+                    true,
+                ),
+                (
+                    "grep",
+                    r#"{"pattern":"Prepared","path":"crates"}"#,
+                    "run.rs:12",
+                    true,
+                ),
+                (
+                    "bash",
+                    r#"{"command":"cargo test -p glut"}"#,
+                    "test result: ok. 585 passed",
+                    true,
+                ),
+                (
+                    "edit_file",
+                    r#"{"path":"crates/glut/src/run.rs"}"#,
+                    "edited",
+                    true,
+                ),
+                ("mcp__demo__ask_form", "{}", "accept", true),
+                (
+                    "web_fetch",
+                    r#"{"url":"https://docs.rs/tokio"}"#,
+                    "refused",
+                    false,
+                ),
+            ];
+            for (at, (name, arguments, output, ok)) in calls.iter().enumerate() {
+                let id = format!("c{at}");
+                app.transcript.take(&Event::ToolCall {
+                    turn: 1,
+                    id: id.clone(),
+                    name: (*name).into(),
+                    arguments: (*arguments).into(),
+                });
+                app.transcript.take(&Event::ToolResult {
+                    turn: 1,
+                    id,
+                    name: (*name).into(),
+                    ok: *ok,
+                    output: (*output).into(),
+                    truncated: false,
+                });
+            }
+            app.transcript.take(&Event::AssistantText {
+                turn: 1,
+                text: "Die Tests sind grün (585). Die Warnung kam von einem ungenutzten Import in `run.rs`; ich habe \
+                       ihn entfernt."
+                    .into(),
+            });
+            if asking {
+                let (reply, _answer) = oneshot::channel();
+                app.on_report(Report::Ask(
+                    AskRequest {
+                        tool: "bash".into(),
+                        target: "git push origin main".into(),
+                        scopes: vec!["git push origin main".into(), "git push *".into()],
+                        from: None,
+                        keychain: false,
+                    },
+                    reply,
+                ));
+                std::mem::forget(_answer);
+            }
+            let mut terminal =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 30)).unwrap();
+            terminal
+                .draw(|frame| crate::view::draw(frame, &mut app))
+                .unwrap();
+            scenes.push((title, buffer_html(terminal.backend().buffer())));
+        }
+        scenes
+    }
+
+    /// A drawn buffer as HTML: a `<pre>` of runs of cells in their colours, the terminal's own fore- and background
+    /// as the glut theme's.
+    fn buffer_html(buffer: &ratatui::buffer::Buffer) -> String {
+        use ratatui::style::Color;
+        let css = |color: Color, fallback: &str| match color {
+            Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
+            Color::Reset => fallback.to_owned(),
+            other => format!("{other}").to_lowercase(),
+        };
+        let mut html = String::from(
+            "<pre style=\"background:#1a1a1a;color:#d8d8d8;font:13px/1.25 'JetBrains Mono',monospace;padding:8px\">",
+        );
+        for y in 0..buffer.area.height {
+            let mut run = String::new();
+            let mut style = String::new();
+            for x in 0..buffer.area.width {
+                let cell = &buffer[(x, y)];
+                let mut here = format!(
+                    "color:{};background:{}",
+                    css(cell.fg, "#d8d8d8"),
+                    css(cell.bg, "#1a1a1a")
+                );
+                if cell.modifier.contains(ratatui::style::Modifier::BOLD) {
+                    here.push_str(";font-weight:bold");
+                }
+                if cell.modifier.contains(ratatui::style::Modifier::DIM) {
+                    here.push_str(";opacity:.6");
+                }
+                if here != style {
+                    if !run.is_empty() {
+                        html.push_str(&format!("<span style=\"{style}\">{run}</span>"));
+                    }
+                    run.clear();
+                    style = here;
+                }
+                run.push_str(
+                    &cell
+                        .symbol()
+                        .replace('&', "&amp;")
+                        .replace('<', "&lt;")
+                        .replace('>', "&gt;"),
+                );
+            }
+            html.push_str(&format!("<span style=\"{style}\">{run}</span>\n"));
+        }
+        html.push_str("</pre>");
+        html
     }
 }

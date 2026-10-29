@@ -184,8 +184,8 @@ fn draw_tiles(frame: &mut Frame, panes: &mut crate::panes::Panes) {
     }
 }
 
-/// Panes held as tabs where the room is too small for all (T36f): each by its number and role, the one shown marked,
-/// one that asks the owner in Glut's glow.
+/// Panes held as tabs where the room is too small for all (T36f): each by its number and role in its hue, the one shown
+/// marked, one that asks the owner in Glut's glow.
 fn draw_tabs(frame: &mut Frame, panes: &crate::panes::Panes, tabs: &crate::panes::Tabs) {
     let names: Vec<(u64, String)> = tabs
         .panes
@@ -201,12 +201,18 @@ fn draw_tabs(frame: &mut Frame, panes: &crate::panes::Panes, tabs: &crate::panes
             .list
             .iter()
             .any(|pane| pane.id == id && pane.app.waits_for_owner());
+        let number = panes
+            .list
+            .iter()
+            .find(|pane| pane.id == id)
+            .map_or(1, |pane| pane.number);
         let style = if id == tabs.shown {
             theme::strong().add_modifier(ratatui::style::Modifier::REVERSED)
         } else if asks {
             theme::glow()
         } else {
-            theme::quiet()
+            // T84: a tab in its pane's hue, muted.
+            Style::default().fg(theme::soft(theme::pane_hue(number)))
         };
         frame.render_widget(
             Paragraph::new(Span::styled(format!(" {name} "), style)),
@@ -258,12 +264,26 @@ fn draw_in(frame: &mut Frame, app: &mut App, area: Rect, chrome: &Chrome) {
     let input_width = usize::from(area.width.saturating_sub(2));
     let (rows, cursor) = app.input.layout(input_width);
     let input_height = rows.len().clamp(1, INPUT_ROWS) as u16 + 1;
+    // The side panel shows this frame: Glimm heads it, so no card beside it gets one of its own (T84).
+    // The stream spans the whole width, so whether the panel fits is known before the layout.
+    if chrome.alone() {
+        app.panel_fits = area.width >= PANEL_MIN_SCREEN;
+    }
+    // Among panes the panel is the screen's, beside them: it stood there the frame before when it does now.
+    let panel_shows = if chrome.alone() {
+        app.panel == Some(true) && app.panel_fits
+    } else {
+        app.panel_drawn
+    };
     // The plan's ask is its dialog over the stream (T19), not a card below it.
     let plan_asking = app.plan_asks();
     // A server's card stands where the gate's would (T67); the gate asks one question at a time, so never both.
     // The rows that must stay in sight are; the fields drawn count as seen — ⏎ sends only once each one was.
     let form_lines = app.form.as_mut().map(|form| {
-        let width = usize::from(area.width.saturating_sub(4 + ask_glimm_width(area.width)));
+        let width = usize::from(
+            area.width
+                .saturating_sub(4 + ask_glimm_width(area.width, panel_shows)),
+        );
         let most = usize::from(area.height / 2).clamp(3, FORM_ROWS);
         let drawn = form.lines(width, most);
         let first = drawn
@@ -294,7 +314,10 @@ fn draw_in(frame: &mut Frame, app: &mut App, area: Rect, chrome: &Chrome) {
         .filter(|_| !plan_asking && form_lines.is_none())
         .map(|open| {
             let most = usize::from(area.height / 3).clamp(3, ASK_ROWS);
-            let width = usize::from(area.width.saturating_sub(4 + ask_glimm_width(area.width)));
+            let width = usize::from(
+                area.width
+                    .saturating_sub(4 + ask_glimm_width(area.width, panel_shows)),
+            );
             if open.request.keychain {
                 keychain_rows(open, width, most)
             } else {
@@ -307,7 +330,7 @@ fn draw_in(frame: &mut Frame, app: &mut App, area: Rect, chrome: &Chrome) {
         .zip(app.ask.as_ref().filter(|_| !plan_asking))
         .map_or(0, |(rows, open)| {
             let inner = (rows.len() + 2 + open.request.scopes.len().min(9)) as u16;
-            let glimm = if ask_glimm_width(area.width) > 0 {
+            let glimm = if ask_glimm_width(area.width, panel_shows) > 0 {
                 glimm::cells(glimm::Size::Small).1
             } else {
                 0
@@ -316,7 +339,7 @@ fn draw_in(frame: &mut Frame, app: &mut App, area: Rect, chrome: &Chrome) {
         });
     let ask_height = match &form_lines {
         Some(lines) => {
-            let glimm = if ask_glimm_width(area.width) > 0 {
+            let glimm = if ask_glimm_width(area.width, panel_shows) > 0 {
                 glimm::cells(glimm::Size::Small).1
             } else {
                 0
@@ -354,10 +377,7 @@ fn draw_in(frame: &mut Frame, app: &mut App, area: Rect, chrome: &Chrome) {
     // The side panel (T28) takes the right of the stream where the screen is wide enough for both; among panes it is
     // the screen's, drawn beside them.
     app.stream_width = stream.x + stream.width;
-    if chrome.alone() {
-        app.panel_fits = stream.width >= PANEL_MIN_SCREEN;
-    }
-    let stream = if chrome.alone() && app.panel == Some(true) && app.panel_fits {
+    let stream = if chrome.alone() && panel_shows {
         // The to-dos are looked at once per frame the panel shows: their count heads the tab, the model may change
         // them.
         let cwd = app.parts.config.cwd.clone();
@@ -383,7 +403,7 @@ fn draw_in(frame: &mut Frame, app: &mut App, area: Rect, chrome: &Chrome) {
             .transcript
             .blocks
             .iter_mut()
-            .map(|block| block.lines(width, thinking, 0).len())
+            .map(|block| block.lines(width, thinking).len())
             .sum();
         let notes = (notes as u16).min(stream.height / 2);
         let [welcome, below] =
@@ -398,10 +418,10 @@ fn draw_in(frame: &mut Frame, app: &mut App, area: Rect, chrome: &Chrome) {
     app.ask_area = Rect::default();
     if let Some(rows) = ask_rows {
         app.ask_area = ask;
-        draw_ask(frame, app, ask, rows);
+        draw_ask(frame, app, ask, rows, panel_shows);
     }
     if let Some(lines) = form_lines {
-        draw_form(frame, app, ask, lines);
+        draw_form(frame, app, ask, lines, panel_shows);
     }
     draw_input(
         frame,
@@ -452,7 +472,6 @@ fn side_rows(app: &mut App, area: Rect) -> (Vec<Line<'static>>, u16) {
         return (Vec::new(), 1);
     }
     let thinking = app.transcript.thinking;
-    let tick = app.frame;
     let Some(side) = &mut app.side else {
         return (Vec::new(), 0);
     };
@@ -462,7 +481,7 @@ fn side_rows(app: &mut App, area: Rect) -> (Vec<Line<'static>>, u16) {
         .stream
         .blocks
         .iter_mut()
-        .flat_map(|block| block.lines(width, thinking, tick).to_vec())
+        .flat_map(|block| block.lines(width, thinking).to_vec())
         .collect();
     if side.waiting() {
         lines.push(Line::default());
@@ -689,7 +708,6 @@ fn draw_agent(frame: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
     let thinking = app.transcript.thinking;
-    let tick = app.frame;
     let Some(mut view) = app.agent_view.take() else {
         return;
     };
@@ -715,7 +733,6 @@ fn draw_agent(frame: &mut Frame, app: &mut App, area: Rect) {
         inner.width.saturating_sub(1).max(8),
         usize::from(inner.height),
         thinking,
-        tick,
     );
     app.overlay_rows = usize::from(inner.height);
     app.agent_view = Some(view);
@@ -915,10 +932,10 @@ fn draw_stream(frame: &mut Frame, app: &mut App, area: Rect) {
     {
         let after: usize = app.transcript.blocks[reading.block + 1..]
             .iter_mut()
-            .map(|block| block.lines(width, app.transcript.thinking, app.frame).len())
+            .map(|block| block.lines(width, app.transcript.thinking).len())
             .sum();
         let length = app.transcript.blocks[reading.block]
-            .lines(width, app.transcript.thinking, app.frame)
+            .lines(width, app.transcript.thinking)
             .len();
         let top = after + length;
         if top > app.scroll + height || length > height {
@@ -933,7 +950,7 @@ fn draw_stream(frame: &mut Frame, app: &mut App, area: Rect) {
         .transcript
         .blocks
         .iter_mut()
-        .map(|block| block.lines(width, thinking, app.frame).len())
+        .map(|block| block.lines(width, thinking).len())
         .sum();
     // The search finds its matches when its query or the stream changed — not at every frame — and scrolls to the
     // one shown before the screen's lines are taken.
@@ -946,7 +963,7 @@ fn draw_stream(frame: &mut Frame, app: &mut App, area: Rect) {
         if changed {
             let mut all: Vec<String> = Vec::with_capacity(total);
             for block in &mut app.transcript.blocks {
-                all.extend_from_slice(block.texts(width, thinking, app.frame));
+                all.extend_from_slice(block.texts(width, thinking));
             }
             if let Some(search) = &mut app.search {
                 search.matches = select::matches(&search.query, &all);
@@ -982,7 +999,7 @@ fn draw_stream(frame: &mut Frame, app: &mut App, area: Rect) {
         if taken.len() >= wanted {
             break;
         }
-        let lines = app.transcript.blocks[at].lines(width, thinking, app.frame);
+        let lines = app.transcript.blocks[at].lines(width, thinking);
         for line in lines.iter().rev() {
             taken.push((at, line.clone()));
         }
@@ -1092,7 +1109,7 @@ fn mark_stream(frame: &mut Frame, app: &App, area: Rect) {
     }
 }
 
-fn draw_ask(frame: &mut Frame, app: &App, area: Rect, rows: Vec<String>) {
+fn draw_ask(frame: &mut Frame, app: &App, area: Rect, rows: Vec<String>, panel_shows: bool) {
     let Some(open) = &app.ask else { return };
     let block = Block::default()
         .borders(Borders::ALL)
@@ -1156,7 +1173,7 @@ fn draw_ask(frame: &mut Frame, app: &App, area: Rect, rows: Vec<String>) {
     lines.push(Line::from(vec![key("n".into()), Span::raw(tr!(refuse))]));
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    let beside = ask_glimm_width(area.width);
+    let beside = ask_glimm_width(area.width, panel_shows);
     if beside == 0 {
         frame.render_widget(Paragraph::new(lines), inner);
         return;
@@ -1170,7 +1187,13 @@ fn draw_ask(frame: &mut Frame, app: &App, area: Rect, rows: Vec<String>) {
 }
 
 /// A server's card (T67): who asks in its title, its lines, the waiting Glimm beside them.
-fn draw_form(frame: &mut Frame, app: &App, area: Rect, lines: Vec<Line<'static>>) {
+fn draw_form(
+    frame: &mut Frame,
+    app: &App,
+    area: Rect,
+    lines: Vec<Line<'static>>,
+    panel_shows: bool,
+) {
     let Some(form) = &app.form else { return };
     let block = Block::default()
         .borders(Borders::ALL)
@@ -1178,7 +1201,7 @@ fn draw_form(frame: &mut Frame, app: &App, area: Rect, lines: Vec<Line<'static>>
         .title(Span::styled(form.title(), theme::glow()));
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    let beside = ask_glimm_width(area.width);
+    let beside = ask_glimm_width(area.width, panel_shows);
     if beside == 0 {
         frame.render_widget(Paragraph::new(lines), inner);
         return;
@@ -1195,9 +1218,10 @@ fn draw_form(frame: &mut Frame, app: &App, area: Rect, lines: Vec<Line<'static>>
 const ASK_GLIMM_MIN_SCREEN: u16 = 60;
 
 /// How many columns the waiting Glimm takes in an ask box on a screen `width` wide: itself and a gap, or none.
-fn ask_glimm_width(width: u16) -> u16 {
-    // The reader mode has no Glimm: the question takes every column.
-    if width >= ASK_GLIMM_MIN_SCREEN && !crate::motion::reader() {
+fn ask_glimm_width(width: u16, panel_shows: bool) -> u16 {
+    // The reader mode has no Glimm: the question takes every column. Nor does a question beside the side panel, whose
+    // head Glimm already is (T84: one Glimm at a time).
+    if width >= ASK_GLIMM_MIN_SCREEN && !panel_shows && !crate::motion::reader() {
         glimm::cells(glimm::Size::Small).0 + 2
     } else {
         0
@@ -1274,14 +1298,22 @@ fn draw_input(
         None
     };
     let in_command = command.is_some();
+    // T84: the rule above the input shows the mode the next message runs in — the default's stays quiet.
+    let rule_style = if in_command {
+        theme::shell()
+    } else {
+        use glut::permissions::Mode;
+        match app.mode() {
+            Mode::Plan => Style::default().fg(theme::soft(theme::c().owner)),
+            Mode::AcceptEdits => Style::default().fg(theme::soft(theme::c().fine)),
+            Mode::Auto => Style::default().fg(theme::soft(theme::c().glow)),
+            _ => theme::quiet(),
+        }
+    };
     frame.render_widget(
         Paragraph::new(Span::styled(
             "─".repeat(usize::from(area.width)),
-            if in_command {
-                theme::shell()
-            } else {
-                theme::quiet()
-            },
+            rule_style,
         )),
         rule,
     );
@@ -1455,12 +1487,21 @@ fn draw_keys(frame: &mut Frame, app: &App, area: Rect, branch: Option<String>, c
             Some(role) => format!("{number} {role}"),
             None => number.to_string(),
         };
+        // T84: each pane in its own hue — strong where the keys are, muted beside.
         segments.push(if chrome.active {
-            Segment::marked(label, theme::c().glow, 0)
+            Segment::marked(
+                label,
+                if theme::plain() {
+                    theme::c().glow
+                } else {
+                    theme::pane_hue(number)
+                },
+                0,
+            )
         } else if asks {
             Segment::marked(label, theme::c().fault, 0)
         } else {
-            Segment::calm(label, 0)
+            Segment::hued(label, theme::pane_hue(number), 0)
         });
     }
     // The vi mode's state first, where a vi user looks for it.
@@ -1478,10 +1519,13 @@ fn draw_keys(frame: &mut Frame, app: &App, area: Rect, branch: Option<String>, c
         glut::permissions::Mode::Plan => {
             Segment::marked(session::mode_label(mode), theme::c().owner, 0)
         }
-        _ => Segment::calm(session::mode_label(mode), 0),
+        glut::permissions::Mode::AcceptEdits => {
+            Segment::hued(session::mode_label(mode), theme::c().fine, 0)
+        }
+        _ => Segment::hued(session::mode_label(mode), theme::c().owner, 0),
     });
     if let (None, Some(role)) = (chrome.number, &role) {
-        segments.push(Segment::calm(role.clone(), 0));
+        segments.push(Segment::hued(role.clone(), theme::c().syntax.kind, 0));
     }
     // T74: the Keychain open to every command stands beside the mode, in the fault colour, as long as it is.
     if app.parts.tools.keychain().is_open() {
@@ -1491,8 +1535,9 @@ fn draw_keys(frame: &mut Frame, app: &App, area: Rect, branch: Option<String>, c
     if let Some(effort) = app.engine.endpoint.effort {
         model.push_str(&format!(" · {effort}"));
     }
-    segments.push(Segment::calm(
+    segments.push(Segment::hued(
         crate::transcript::clean(&model).replace('\n', " "),
+        theme::c().link,
         1,
     ));
     let window = app.meter_window();
@@ -1517,21 +1562,26 @@ fn draw_keys(frame: &mut Frame, app: &App, area: Rect, branch: Option<String>, c
         app.meter.last_rate().map(|rate| format!("{rate:.0} tok/s"))
     };
     if let Some(rate) = rate {
-        segments.push(Segment::calm(rate, 2));
+        segments.push(Segment::hued(rate, theme::c().code, 2));
     }
     if let Some(cost) = app.cost {
-        segments.push(Segment::calm(glut::lang::usd(cost, 4), 2));
+        segments.push(Segment::hued(glut::lang::usd(cost, 4), theme::c().code, 2));
     } else if let Some(known) = app.engine.plan {
         // A subscription's use is the plan's (PV4): its name where money would stand.
-        segments.push(Segment::calm(tr!(plan_footer, name = known.name), 2));
+        segments.push(Segment::hued(
+            tr!(plan_footer, name = known.name),
+            theme::c().code,
+            2,
+        ));
     }
     // A switch kept for the turn's end (T73b).
     if let Some(after) = &app.switch_after {
         segments.push(Segment::calm(tr!(switch_footer, what = after.shown), 1));
     }
     if let Some(branch) = branch {
-        segments.push(Segment::calm(
+        segments.push(Segment::hued(
             format!("{} {branch}", separators.branch_sign()),
+            theme::c().syntax.keyword,
             3,
         ));
     }

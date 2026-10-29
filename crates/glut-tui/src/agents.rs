@@ -96,11 +96,10 @@ pub fn lines(
     width: u16,
     height: usize,
     thinking: Thinking,
-    frame: usize,
 ) -> Vec<Line<'static>> {
     let mut stream: Vec<Line<'static>> = Vec::new();
     for block in &mut agent.stream.blocks {
-        stream.extend_from_slice(block.lines(width, thinking, frame));
+        stream.extend_from_slice(block.lines(width, thinking));
     }
     if stream.is_empty() && agent.state == ToolState::Running {
         stream.push(Line::from(Span::styled(
@@ -411,6 +410,8 @@ fn folded(text: &str, width: usize, rows: usize) -> Vec<String> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Behind {
     pub name: String,
+    /// Its number among the panes and agents: its hue (T84).
+    pub number: u8,
     pub role: String,
     pub model: String,
     pub doing: Doing,
@@ -473,7 +474,11 @@ impl Behind {
             Doing::Asks => (tr!(agent_asks_state), theme::glow()),
             Doing::Holds => (tr!(agent_holds_state), theme::glow()),
             Doing::Works => (tr!(agent_works_state), theme::glow()),
-            Doing::Rests => (tr!(agent_rests_state), theme::quiet()),
+            // At rest its frame takes its own hue, muted (T84): which agent it is, seen at a glance.
+            Doing::Rests => (
+                tr!(agent_rests_state),
+                Style::default().fg(theme::soft(theme::pane_hue(self.number))),
+            ),
         };
         let mut stats = format!("{} · {}", self.role, self.model);
         if let Some(looping) = self.looping.as_ref().or(self.looped.as_ref()) {
@@ -620,6 +625,7 @@ mod tests {
     fn a_background_agent_is_a_card_with_what_it_does_and_its_numbers() {
         let behind = Behind {
             name: "reviewer".into(),
+            number: 2,
             role: "reviewer".into(),
             model: "m/x".into(),
             doing: Doing::Works,

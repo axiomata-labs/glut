@@ -31,6 +31,12 @@ pub fn wrapped(from: u8, text: &str) -> String {
     format!("{OPEN}{from}\" sender=\"model\" owner=\"no\">\n{text}\n{CLOSE}")
 }
 
+/// The pane a wrapped message came from, by its number; `None` for any other message.
+pub fn from(message: &str) -> Option<u8> {
+    let rest = message.strip_prefix(OPEN)?;
+    rest.split_once('"')?.0.parse().ok()
+}
+
 /// How a wrapped message shows in the stream: "pane 1's model (not the owner): …"; `None` for any other message.
 pub fn shown(message: &str) -> Option<String> {
     let rest = message.strip_prefix(OPEN)?;

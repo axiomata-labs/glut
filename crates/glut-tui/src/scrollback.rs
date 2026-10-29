@@ -129,7 +129,7 @@ mod tests {
         let lines: Vec<Line> = stream
             .blocks
             .iter_mut()
-            .flat_map(|block| block.lines(60, Thinking::Folded, 0).to_vec())
+            .flat_map(|block| block.lines(60, Thinking::Folded).to_vec())
             .collect();
         let mut out = Vec::new();
         print(&mut out, &lines).unwrap();

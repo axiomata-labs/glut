@@ -102,6 +102,18 @@ impl Segment {
         }
     }
 
+    /// A segment on a muted `hue` (T84): its own colour, quiet beside what wants to be seen.
+    pub fn hued(text: impl Into<String>, hue: Color, drop: u8) -> Self {
+        if theme::plain() {
+            return Segment::calm(text, drop);
+        }
+        Segment {
+            text: text.into(),
+            style: Some(Style::default().bg(theme::tint(hue)).fg(Color::Reset)),
+            drop,
+        }
+    }
+
     /// A segment on `bg` in the theme's ink, bold: what wants to be seen.
     pub fn marked(text: impl Into<String>, bg: Color, drop: u8) -> Self {
         Segment {
@@ -134,7 +146,7 @@ pub fn context(used: u64, window: Option<u32>, compacts_at: Option<u64>) -> Segm
     } else if share >= CONTEXT_HEED {
         Segment::marked(text, theme::c().glow, 0)
     } else {
-        Segment::calm(text, 0)
+        Segment::hued(text, theme::c().fine, 0)
     }
 }
 
@@ -197,7 +209,7 @@ pub fn line(
     }
     let backgrounds = calm_backgrounds();
     let mut calm = 0;
-    let styles: Vec<Style> = kept
+    let mut styles: Vec<Style> = kept
         .iter()
         .map(|segment| {
             segment.style.unwrap_or_else(|| {
@@ -207,6 +219,12 @@ pub fn line(
             })
         })
         .collect();
+    // Two segments of one hue side by side would melt into one, their joint unseen (T84).
+    for at in 1..styles.len() {
+        if let (Some(bg), Some(before)) = (styles[at].bg, styles[at - 1].bg) {
+            styles[at] = styles[at].bg(theme::apart_from(bg, before));
+        }
+    }
     let mut spans: Vec<Span<'static>> = Vec::new();
     if let (Separators::Powerline, Some(first)) = (separators, styles.first()) {
         spans.push(Span::styled(
@@ -452,7 +470,13 @@ mod tests {
 
     #[test]
     fn the_context_glows_near_where_the_run_compacts_and_turns_to_the_fault_colour_at_it() {
-        assert!(context(100, Some(200_000), Some(160_000)).style.is_none());
+        // The reader mode or `NO_COLOR` keeps the calm segments of before: nothing muted to compare.
+        if theme::plain() {
+            return;
+        }
+        // Far from it the context sits on its muted hue (T84), not in bold.
+        let calm = context(100, Some(200_000), Some(160_000)).style.unwrap();
+        assert!(!calm.add_modifier.contains(Modifier::BOLD));
         // Compared with each other, not with the palette: another test may switch the theme meanwhile.
         let near = context(130_000, Some(200_000), Some(160_000))
             .style
@@ -467,8 +491,12 @@ mod tests {
             "the window counts where the run does not compact"
         );
         assert!(
-            context(190_000, None, None).style.is_none(),
-            "no window, nothing to measure against"
+            !context(190_000, None, None)
+                .style
+                .unwrap()
+                .add_modifier
+                .contains(Modifier::BOLD),
+            "no window, nothing to measure against: the muted hue"
         );
     }
 }

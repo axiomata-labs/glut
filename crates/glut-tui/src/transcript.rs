@@ -233,14 +233,16 @@ pub enum Tone {
     Fine,
     /// Worth a look, no fault: in Glut's orange (T42, a guide grown too large).
     Heed,
+    /// From the pane or agent of this number (T84): in its hue.
+    Pane(u8),
 }
 
 /// A block and its wrapped lines for the width they were made for.
 #[derive(Debug, Clone)]
 pub struct Block {
     pub kind: Kind,
-    /// The lines made last, for the width, way of showing thinking and animation step they were made for.
-    wrapped: Option<(u16, Thinking, usize, Vec<Line<'static>>)>,
+    /// The lines made last, for the width and way of showing thinking they were made for.
+    wrapped: Option<(u16, Thinking, Vec<Line<'static>>)>,
     /// Those lines as text, made once for them: what the search looks through (T47).
     texts: Option<Vec<String>>,
 }
@@ -267,41 +269,34 @@ impl Block {
 
     /// The block's lines as text at `width`, made once for each making of its lines (T47: the search reads them at
     /// every frame it is open).
-    pub fn texts(&mut self, width: u16, thinking: Thinking, frame: usize) -> &[String] {
-        self.lines(width, thinking, frame);
+    pub fn texts(&mut self, width: u16, thinking: Thinking) -> &[String] {
+        self.lines(width, thinking);
         if self.texts.is_none() {
             let made = self
                 .wrapped
                 .as_ref()
-                .map(|(_, _, _, lines)| lines.iter().map(crate::select::text_of).collect())
+                .map(|(_, _, lines)| lines.iter().map(crate::select::text_of).collect())
                 .unwrap_or_default();
             self.texts = Some(made);
         }
         self.texts.as_deref().unwrap_or(&[])
     }
 
-    /// The block's lines at `width`, made once per change, width and way of showing thinking — and, for a thought
-    /// still streaming, once per animation step `frame`: Glimm flickers in front of it.
-    pub fn lines(&mut self, width: u16, thinking: Thinking, frame: usize) -> &[Line<'static>] {
-        let step = match self.kind {
-            Kind::Thinking {
-                streaming: true, ..
-            } => frame,
-            _ => 0,
-        };
+    /// The block's lines at `width`, made once per change, width and way of showing thinking.
+    pub fn lines(&mut self, width: u16, thinking: Thinking) -> &[Line<'static>] {
         if self
             .wrapped
             .as_ref()
-            .is_none_or(|(at, shown, made, _)| *at != width || *shown != thinking || *made != step)
+            .is_none_or(|(at, shown, _)| *at != width || *shown != thinking)
         {
-            let lines = render(&self.kind, width, thinking, step);
-            self.wrapped = Some((width, thinking, step, lines));
+            let lines = render(&self.kind, width, thinking);
+            self.wrapped = Some((width, thinking, lines));
             self.texts = None;
             LAYOUTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
         self.wrapped
             .as_ref()
-            .map(|(_, _, _, lines)| lines.as_slice())
+            .map(|(_, _, lines)| lines.as_slice())
             .unwrap_or(&[])
     }
 }
@@ -853,7 +848,7 @@ pub(crate) fn cut(text: &str, max: usize) -> String {
 }
 
 /// A block as lines of the screen's width.
-fn render(kind: &Kind, width: u16, thinking: Thinking, frame: usize) -> Vec<Line<'static>> {
+fn render(kind: &Kind, width: u16, thinking: Thinking) -> Vec<Line<'static>> {
     let width = usize::from(width.max(8));
     let mut lines = Vec::new();
     match kind {
@@ -908,6 +903,9 @@ fn render(kind: &Kind, width: u16, thinking: Thinking, frame: usize) -> Vec<Line
             // The head is one line: the name and the gate's word cut first to what fits, the target gets the rest.
             // A step's change (`/steps`) is read whole and in colour; a tool's result is a glance.
             let diff = name == "diff";
+            // T84: the name in its kind's colour, one meaning each; a tool of no kind stays as it was.
+            let name_style = theme::tool_hue(name)
+                .map_or_else(theme::strong, |hue| theme::strong().fg(theme::soft(hue)));
             let name = cut(&clean(name), 32);
             let gate = gate
                 .as_deref()
@@ -921,7 +919,7 @@ fn render(kind: &Kind, width: u16, thinking: Thinking, frame: usize) -> Vec<Line
             let mut head = vec![
                 Span::raw(indent.clone()),
                 Span::styled(format!("{mark} "), mark_style),
-                Span::styled(name, theme::strong()),
+                Span::styled(name, name_style),
                 Span::raw(" "),
                 Span::styled(cut(&clean(target), room), theme::quiet()),
             ];
@@ -988,28 +986,9 @@ fn render(kind: &Kind, width: u16, thinking: Thinking, frame: usize) -> Vec<Line
                     style,
                 ),
             ];
-            if *streaming {
-                // While the model thinks, a small flame flickers in front of it, slowly — two rows, so it reads as a
-                // flame and not as a dot; the thought goes back to one row once it is done.
-                let mut glimm = crate::glimm::lines(
-                    crate::glimm::Size::Mini,
-                    crate::glimm::Mood::Working,
-                    frame,
-                );
-                // The reader mode has no flame: the thought's one row.
-                if glimm.is_empty() {
-                    lines.push(Line::from(header));
-                } else {
-                    let lower = glimm.pop().unwrap_or_default();
-                    let mut upper = glimm.pop().unwrap_or_default();
-                    upper.spans.push(Span::raw(" "));
-                    upper.spans.extend(header);
-                    lines.push(upper);
-                    lines.push(lower);
-                }
-            } else {
-                lines.push(Line::from(header));
-            }
+            // T84: no flame before a thought — the live line's spinner says the model thinks, and Glimm stands in one
+            // place at a time.
+            lines.push(Line::from(header));
             if open {
                 let italic = theme::quiet().add_modifier(Modifier::ITALIC);
                 for row in wrap(text.trim(), width.saturating_sub(2)) {
@@ -1049,6 +1028,9 @@ fn render(kind: &Kind, width: u16, thinking: Thinking, frame: usize) -> Vec<Line
                 Tone::Fault => Style::default().fg(theme::c().fault),
                 Tone::Fine => Style::default().fg(theme::c().fine),
                 Tone::Heed => theme::glow(),
+                // Plain, it stands apart in the accent as before T84.
+                Tone::Pane(_) if theme::plain() => theme::glow(),
+                Tone::Pane(number) => Style::default().fg(theme::soft(theme::pane_hue(*number))),
             };
             // A note may name keys: the reader mode says them in words (TUI9b).
             for row in wrap(&crate::motion::spoken_keys(text), width - 2) {
@@ -1330,7 +1312,7 @@ mod tests {
             text: "first line\n\nsecond".into(),
             streaming: false,
         });
-        let rows = render(&stream.blocks[0].kind, 40, Thinking::Folded, 0);
+        let rows = render(&stream.blocks[0].kind, 40, Thinking::Folded);
         let text = |row: &Line| {
             row.spans
                 .iter()
@@ -1354,7 +1336,7 @@ mod tests {
             depth: 0,
         };
         let dot = |state| {
-            render(&tool(state), 40, Thinking::Folded, 0)
+            render(&tool(state), 40, Thinking::Folded)
                 .into_iter()
                 .flat_map(|row| row.spans)
                 .find(|span| span.content.trim() == "●")
@@ -1406,7 +1388,7 @@ mod tests {
         assert_eq!(agent.live, "grep fn test");
         assert_eq!(agent.stream.blocks.len(), 1);
         let tile: Vec<String> = stream.blocks[0]
-            .lines(50, Thinking::Folded, 0)
+            .lines(50, Thinking::Folded)
             .iter()
             .map(ToString::to_string)
             .collect();
@@ -1542,13 +1524,13 @@ mod tests {
             Kind::Tool { target, state: ToolState::Done, .. } if target == "src/main.rs"
         ));
         assert_eq!(
-            stream.blocks[1].lines(80, Thinking::Folded, 0).len(),
+            stream.blocks[1].lines(80, Thinking::Folded).len(),
             1,
             "folded: one line"
         );
         stream.toggle(1);
         assert_eq!(
-            stream.blocks[1].lines(80, Thinking::Folded, 0).len(),
+            stream.blocks[1].lines(80, Thinking::Folded).len(),
             2,
             "unfolded: the result below"
         );
@@ -1575,7 +1557,7 @@ mod tests {
         ));
         let rows = |stream: &mut Transcript| {
             let thinking = stream.thinking;
-            stream.blocks[0].lines(80, thinking, 0).len()
+            stream.blocks[0].lines(80, thinking).len()
         };
         assert_eq!(
             rows(&mut stream),

@@ -500,6 +500,132 @@ pub fn fault() -> Style {
     Style::default().fg(c().fault)
 }
 
+/// How much of a hue a muted background holds, in hundredths (T84): elegant, not garish — the palette's colours mixed
+/// well into the theme's own background. The preview draws more than one.
+static TINT: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(30);
+
+/// Sets how strong the muted hues are, in hundredths.
+#[cfg(test)]
+pub fn set_tint(percent: u8) {
+    TINT.store(percent.min(100), std::sync::atomic::Ordering::Relaxed);
+}
+
+fn tint_share() -> f32 {
+    f32::from(TINT.load(std::sync::atomic::Ordering::Relaxed)) / 100.0
+}
+
+/// Whether the screen keeps to the colours it had before T84: in the reader mode, and where `NO_COLOR` asks for none
+/// (read once, the standard's way: set and not empty).
+pub fn plain() -> bool {
+    static NO_COLOR: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    crate::motion::reader()
+        || *NO_COLOR
+            .get_or_init(|| std::env::var_os("NO_COLOR").is_some_and(|value| !value.is_empty()))
+}
+
+/// `hue` as a muted background: mixed into the theme's background (T84).
+pub fn tint(hue: Color) -> Color {
+    mix(c().ink, hue, tint_share())
+}
+
+/// `hue` as a muted foreground for a name in the stream: between the quiet grey and the hue itself (T84).
+pub fn soft(hue: Color) -> Color {
+    if plain() {
+        return c().quiet;
+    }
+    mix(c().quiet, hue, (0.4 + tint_share()).min(1.0))
+}
+
+/// How far apart, in RGB, two hues must be to read as two (T84); a theme's colours that lie closer count as one.
+const DISTINCT: f32 = 40.0;
+/// How far a hue must lie from the accent and the fault colour, whose meanings it must never borrow.
+const MEANING_APART: f32 = 60.0;
+
+fn distance(a: Color, b: Color) -> f32 {
+    let (Color::Rgb(ar, ag, ab), Color::Rgb(br, bg, bb)) = (a, b) else {
+        return if a == b { 0.0 } else { f32::MAX };
+    };
+    let d = |x: u8, y: u8| f32::from(x) - f32::from(y);
+    (d(ar, br).powi(2) + d(ag, bg).powi(2) + d(ab, bb).powi(2)).sqrt()
+}
+
+/// The theme's hues for kinds and panes (T84), in order: its palette's colours that stand apart from one another and
+/// from what already has a meaning — the accent (what works or asks), the fault colour, the quiet grey and the
+/// background. A theme whose link is its accent (GitHub's) or whose keyword is (Catppuccin's) loses that one here.
+fn hues() -> Vec<Color> {
+    hues_of(&c())
+}
+
+/// [`hues`] of `palette`.
+fn hues_of(palette: &Palette) -> Vec<Color> {
+    let meanings = [palette.glow, palette.fault];
+    let taken = [palette.quiet, palette.ink];
+    let candidates = [
+        palette.link,
+        palette.code,
+        palette.syntax.keyword,
+        palette.fine,
+        palette.syntax.number,
+        palette.owner,
+        palette.syntax.string,
+        palette.syntax.kind,
+        palette.syntax.tag,
+        palette.syntax.function,
+        palette.syntax.property,
+        palette.syntax.constant,
+        palette.syntax.attribute,
+    ];
+    let mut hues: Vec<Color> = Vec::new();
+    for hue in candidates {
+        let apart = |other: &Color| distance(hue, *other) >= DISTINCT;
+        let free = meanings
+            .iter()
+            .all(|meaning| distance(hue, *meaning) >= MEANING_APART);
+        if free && taken.iter().all(apart) && hues.iter().all(apart) {
+            hues.push(hue);
+        }
+    }
+    if hues.is_empty() {
+        hues.push(palette.quiet);
+    }
+    hues
+}
+
+/// The hue of a tool's kind (T84), one meaning each: writing in the accent, reading, commands, what reaches out of the
+/// machine and the agents each a hue of the theme's own; `None` for one of no kind of these.
+pub fn tool_hue(name: &str) -> Option<Color> {
+    if plain() {
+        return None;
+    }
+    let hues = hues();
+    let at = |index: usize| hues[index % hues.len()];
+    Some(match name {
+        "write_file" | "edit_file" | "glut_file" | "memory" => c().glow,
+        "read_file" | "glob" | "grep" | "list_dir" | "outline" | "read_full_result" => at(0),
+        "bash" | "bash_output" | "kill_shell" | "codemode" => at(1),
+        "web_fetch" | "web_search" => at(2),
+        name if name.starts_with("mcp__") => at(2),
+        "task" | "tell" => at(3),
+        _ => return None,
+    })
+}
+
+/// The hue of pane or background agent `number` (T84): its own among the others, never the accent, which is left to
+/// what works or asks.
+pub fn pane_hue(number: u8) -> Color {
+    let hues = hues();
+    hues[usize::from(number.saturating_sub(1)) % hues.len()]
+}
+
+/// A background beside `before` that would melt into it is set apart a little (T84): two segments of one hue side by
+/// side still show where one ends.
+pub fn apart_from(bg: Color, before: Color) -> Color {
+    if distance(bg, before) >= DISTINCT / 4.0 {
+        return bg;
+    }
+    mix(bg, c().quiet, 0.25)
+}
+
 pub fn strong() -> Style {
     Style::default().add_modifier(Modifier::BOLD)
 }
@@ -507,6 +633,60 @@ pub fn strong() -> Style {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_theme_has_three_hues_apart_and_none_near_the_accent_or_the_fault_colour() {
+        // Each palette read as it is: the screen's theme is the tests' to share, never switched here.
+        for palette in all() {
+            let hues = hues_of(&palette);
+            assert!(
+                hues.len() >= 3,
+                "{}: reading, commands and what reaches out need three",
+                palette.name
+            );
+            for (at, one) in hues.iter().enumerate() {
+                assert!(
+                    distance(*one, palette.glow) >= MEANING_APART,
+                    "{}",
+                    palette.name
+                );
+                assert!(
+                    distance(*one, palette.fault) >= MEANING_APART,
+                    "{}",
+                    palette.name
+                );
+                for other in &hues[at + 1..] {
+                    assert!(
+                        distance(*one, *other) >= DISTINCT,
+                        "{}: {one:?} ~ {other:?}",
+                        palette.name
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_tool_kind_and_a_pane_have_a_hue_of_their_own() {
+        // The reader mode or `NO_COLOR` in the shell keeps the colours of before: nothing to compare.
+        if plain() {
+            return;
+        }
+        assert_eq!(
+            tool_hue("read_file"),
+            tool_hue("grep"),
+            "reading is one kind"
+        );
+        assert_ne!(tool_hue("read_file"), tool_hue("edit_file"));
+        assert_ne!(tool_hue("bash"), tool_hue("mcp__mail__send"));
+        assert_eq!(
+            tool_hue("mcp__mail__send"),
+            tool_hue("web_fetch"),
+            "what reaches out is one kind"
+        );
+        assert_eq!(tool_hue("todo"), None);
+        assert_ne!(pane_hue(1), pane_hue(2));
+    }
 
     #[test]
     fn every_theme_has_a_name_of_its_own_and_glut_is_the_default() {

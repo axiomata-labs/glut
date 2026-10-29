@@ -716,7 +716,11 @@ pub const PAGES: [(&str, &str); 59] = [
          \n\
          Glut färbt nur den Text und behält den Hintergrund des Terminals: Ein helles Theme braucht ein helles \
          Terminal. Bleibt in `~/.glut/prefs.json` erhalten; in einem Fenster, das eine Host-App geöffnet hat, gilt die \
-         Wahl für diese Session.",
+         Wahl für diese Session.\n\
+         \n\
+         Jedes Theme gibt den Teilen der Fußzeile, den Namen der Werkzeuge nach ihrer Art (lesen, schreiben, Befehle, \
+         was nach außen geht), den Panes und Agenten und der Linie über der Eingabe eigene gedämpfte Farben; was dich \
+         braucht, bleibt kräftig. Der Lesemodus und `NO_COLOR` halten es schlicht.",
     ),
     (
         "editor",

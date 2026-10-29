@@ -303,7 +303,7 @@ fn draw(frame: &mut ratatui::Frame, followed: &mut Followed, name: &str, view: &
         .transcript
         .blocks
         .iter_mut()
-        .map(|block| block.lines(body.width, thinking, 0).len())
+        .map(|block| block.lines(body.width, thinking).len())
         .sum();
     // What came while the reader is further up goes below: the lines they read stay where they are.
     if view.scroll > 0 && total > view.drawn {
@@ -352,7 +352,7 @@ fn visible_lines(
     let mut at = 0;
     let mut shown = Vec::with_capacity(end - start);
     for block in &mut transcript.blocks {
-        let lines = block.lines(width, thinking, 0);
+        let lines = block.lines(width, thinking);
         let next = at + lines.len();
         if next > start && at < end {
             shown.extend_from_slice(&lines[start.saturating_sub(at)..(end - at).min(lines.len())]);
@@ -483,7 +483,7 @@ mod tests {
             .transcript
             .blocks
             .iter_mut()
-            .flat_map(|block| block.lines(40, Default::default(), 0).to_vec())
+            .flat_map(|block| block.lines(40, Default::default()).to_vec())
             .collect();
         let shown = visible_lines(&mut followed.transcript, 40, 2, all.len() - 1);
         assert_eq!(shown, all[2..all.len() - 1]);
