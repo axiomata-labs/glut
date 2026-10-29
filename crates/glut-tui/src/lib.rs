@@ -54,6 +54,7 @@ mod screen;
 mod scrollback;
 mod select;
 mod session;
+mod sessions;
 pub mod setup;
 mod shell;
 mod store;

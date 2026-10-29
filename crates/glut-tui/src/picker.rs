@@ -55,6 +55,8 @@ pub enum Pick {
     TodoClean,
     /// `/skill` (T37c): a skill to start, by its name.
     Skill(String),
+    /// `/sessions` (T83): a pane of another Glut window, `/send <address> ` put into the input.
+    WriteTo(String),
     /// `/login` (PV4): a subscription to sign in to, or out of, by its provider id.
     Login(String),
     /// `/login`'s second ⏎ on a signed-in subscription: signed out, revoked at its provider.

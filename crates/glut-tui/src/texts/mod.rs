@@ -2111,6 +2111,46 @@ glut::catalog! {
         hint_form: &'static str,
         /// The keys of a server's page.
         hint_page: &'static str,
+        /// `/send` to another Glut window went (T83): `{address}`, `{how}` what became of it.
+        sent_window: &'static str,
+        /// `/send` to another Glut window did not go: `{address}`, `{reason}`.
+        sent_window_failed: &'static str,
+        /// Why a message of another window waits: the windows wrote often without the owner; `{from}`.
+        held_window_chain: &'static str,
+        /// Why a message of another window waits: another mode; `{from}`, `{theirs}`, `{ours}`.
+        held_window_mode: &'static str,
+        /// Why a message of another window waits: its pane may do less than this one (Q6b); `{from}`.
+        held_window_wider: &'static str,
+        /// A message of another window's owner: `{session}`, `{text}`.
+        from_session_owner: &'static str,
+        /// A message of another window's model: `{session}`, `{text}`.
+        from_session_model: &'static str,
+        /// Another window telling a turn ended: `{session}`, `{text}`.
+        from_session_notice: &'static str,
+        /// `/sessions`' list.
+        windows_title: &'static str,
+        /// `/sessions` with no other window.
+        windows_none: &'static str,
+        /// `/sessions off`.
+        sessions_off: &'static str,
+        /// `/sessions on`.
+        sessions_on: &'static str,
+        /// `/sessions` with words it does not know.
+        sessions_usage: &'static str,
+        /// This window talks to no other.
+        sessions_unlinked: &'static str,
+        /// This window could not listen for others: `{reason}`.
+        sessions_failed: &'static str,
+        /// A pane of another window works.
+        sessions_works: &'static str,
+        /// A pane of another window waits.
+        sessions_waits: &'static str,
+        /// `/name` alone: `{name}`.
+        name_now: &'static str,
+        /// `/name <new>`: `{name}`.
+        name_set: &'static str,
+        /// Esc dropped a held message.
+        held_dropped: &'static str,
         /// ⏎ on a form with a field not yet on the screen: it goes there.
         form_see_all: &'static str,
         /// The keys of a server's form before the owner began.

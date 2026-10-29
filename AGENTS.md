@@ -140,6 +140,10 @@ scripts/install.sh               # glut for every terminal: ~/.cargo/bin, linked
   `glut-tui/src/form.rs`): an `elicitation/create` goes through the call's `Gate::fill` to the asker — never to the
   model, declined where nobody is there; a form whose field reads like a secret is declined unshown. A server's own
   request is never an answer, whatever its id; keep the `method` check first on every transport path.
+- **Glut windows talk through Glut alone** (T83, `crates/glut-tui/src/sessions.rs`): a socket per window under
+  `~/.glut/sessions.d/`, the owner's user only; a sandboxed command must never reach it (`(deny network*)` — keep any
+  new network allowance off Unix sockets). A message brings no rights: a model's waits for the owner unless it comes
+  from the receiving pane's mode, and every one is wrapped (`tell::wrapped_session`) as no word of this window's owner.
 - **Glut cleans its own `~/.glut`** (T82, `crates/glut-tui/src/clean.rs`, `glut::clean`): once a day at the start, by
   the owner's terms in `~/.glut/clean.json` (written only by `glut clean keep` / `/clean keep`). A new kind of data
   Glut keeps there gets its line in the report (`clean::ITEMS`, `--json` is read by Axiomata — add, never rename) and

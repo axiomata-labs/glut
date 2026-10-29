@@ -1,7 +1,7 @@
 //! The commands' manual pages in English (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 59] = [
+pub const PAGES: [(&str, &str); 61] = [
     (
         "clear",
         "Start a new, empty session in this folder.\n\
@@ -397,6 +397,21 @@ pub const PAGES: [(&str, &str); 59] = [
          \n\
          /schedule add tests --at 07:00 --days mo-fr --allow \"Bash(cargo test:*)\" run the tests and report what \
          fails",
+    ),
+    (
+        "sessions",
+        "Write to the other Glut windows on this machine.\n\n/sessions — their panes and agents: address, project, \
+        model, mode, working or waiting; ⏎ puts /send <address> into the input\n/sessions off — this window takes no \
+        messages from them\n/sessions on — and again\n\nA message from the owner there goes in at once; one from a \
+        model there only when it runs in the mode of the pane it reaches, else it waits above the input: ⏎ lets it \
+        in, Esc drops it. Neither is your word to the model here. Only Glut talks to the other windows — a command of \
+        the model's never reaches them.",
+    ),
+    (
+        "name",
+        "Name this window among the Glut windows on this machine.\n\n/name — the name this window has now\n/name \
+        <new> — a new one: letters, digits, - _ and .\n\nOther windows reach this one by its name, a pane by name/2 \
+        or name/reviewer. A name you give is kept with the session and comes back with /resume.",
     ),
     (
         "diff",

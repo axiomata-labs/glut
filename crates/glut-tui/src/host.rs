@@ -264,6 +264,12 @@ pub trait Host: Send + Sync + 'static {
         false
     }
 
+    /// Whether this window talks to the other Glut windows of the machine (T83, Q12): their messages come in, `tell` and
+    /// `/send` reach them. A host may keep its window out — the default lets it take part.
+    fn may_talk(&self) -> bool {
+        true
+    }
+
     /// The conversation after a turn, a compaction, a rewind or `/clear`.
     fn kept(&self, conversation: &[Message]) {
         let _ = conversation;

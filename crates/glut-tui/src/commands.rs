@@ -102,7 +102,7 @@ const fn command(
 }
 
 /// Every command, grouped by topic in [`Topic::ALL`]'s order, the most used first inside a topic.
-pub const COMMANDS: [Command; 59] = [
+pub const COMMANDS: [Command; 61] = [
     command(Topic::Session, "clear", "", "start a new session"),
     command(
         Topic::Session,
@@ -293,6 +293,20 @@ pub const COMMANDS: [Command; 59] = [
         "[list|add|run|pause|resume|remove] [name]",
         "plans that run while Glut is closed, at a time or every so often — /schedule add tests --at 07:00 --days \
          mo-fr run the tests; /schedule alone opens the Runs tab (⌃X R)",
+    ),
+    command(
+        Topic::Panes,
+        "sessions",
+        "[on|off]",
+        "the other Glut windows on this machine: ⏎ on one puts /send <address> into the input; /sessions \
+         off takes no messages from them, /sessions on again",
+    ),
+    command(
+        Topic::Panes,
+        "name",
+        "[name]",
+        "this window's name among the Glut windows of the machine, or /name <new> to rename it — kept \
+         with the session",
     ),
     command(
         Topic::Changes,

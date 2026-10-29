@@ -1,7 +1,7 @@
 //! The commands' manual pages in Portuguese (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 59] = [
+pub const PAGES: [(&str, &str); 61] = [
     (
         "clear",
         "Começa uma sessão nova e vazia nesta pasta.\n\
@@ -411,6 +411,21 @@ pub const PAGES: [(&str, &str); 59] = [
          \n\
          /schedule add tests --at 07:00 --days mo-fr --allow \"Bash(cargo test:*)\" rode os testes e relate o que \
          falha",
+    ),
+    (
+        "sessions",
+        "Escrever às outras janelas do Glut desta máquina.\n\n/sessions — os seus panes e agentes: endereço, projeto, \
+        modelo, modo, a trabalhar ou à espera; ⏎ põe /send <address> na entrada\n/sessions off — esta janela não \
+        aceita as mensagens delas\n/sessions on — e de novo\n\nUma mensagem do dono de lá entra logo; a de um modelo \
+        de lá só se trabalhar no modo do pane a que chega, senão espera acima da entrada: ⏎ deixa-a entrar, Esc \
+        descarta-a. Nenhuma é a sua palavra ao modelo daqui. Só o Glut fala com as outras janelas — um comando do \
+        modelo nunca as alcança.",
+    ),
+    (
+        "name",
+        "Dar nome a esta janela entre as janelas do Glut desta máquina.\n\n/name — o nome que tem agora\n/name <new> \
+        — um novo: letras, dígitos, - _ e .\n\nAs outras janelas chegam a esta pelo nome, a um pane por name/2 ou \
+        name/reviewer. Um nome que dá fica com a sessão e volta com /resume.",
     ),
     (
         "diff",

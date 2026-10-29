@@ -339,6 +339,31 @@ async fn run_loop(
     second.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     // The plans' records looked at now and then (T60b): the first tick at once, for what ran while Glut was closed.
     let mut runs_look = tokio::time::interval(crate::panes::RUNS_LOOK);
+    // T83: this window among the other Glut windows of the machine — never in a test, nor where the host keeps it out.
+    let mut windows: Option<tokio::sync::mpsc::Receiver<crate::sessions::Incoming>> = None;
+    if host.may_talk() && !cfg!(test) {
+        let home = panes.list[0].app.parts.home.clone();
+        let cwd = panes.list[0].app.parts.config.cwd.clone();
+        match crate::sessions::Link::start(&home, &cwd).await {
+            Ok((link, inlet)) => {
+                // The others are looked at beside the screen, for `tell` and `/sessions`.
+                let looking = std::sync::Arc::downgrade(&link);
+                tokio::spawn(async move {
+                    let mut every = tokio::time::interval(crate::sessions::LOOK_EVERY);
+                    loop {
+                        every.tick().await;
+                        let Some(link) = looking.upgrade() else {
+                            return;
+                        };
+                        link.look().await;
+                    }
+                });
+                panes.link = Some(link);
+                windows = Some(inlet);
+            }
+            Err(reason) => panes.active().say(tr!(sessions_failed, reason = reason)),
+        }
+    }
     runs_look.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut terminate = signal(SignalKind::terminate())?;
     let mut hangup = signal(SignalKind::hangup())?;
@@ -540,6 +565,13 @@ async fn run_loop(
         tokio::select! {
             // A plan's run that ended while Glut is open comes as a tile (T60b); the first look says what ran before.
             _ = runs_look.tick() => panes.watch_runs(chrono::Utc::now()),
+            // Another Glut window asks who this one is, or brings a message (T83).
+            Some(incoming) = async {
+                match windows.as_mut() {
+                    Some(inlet) => inlet.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => panes.on_incoming(incoming),
             // A pass over `~/.glut` that ended in the background (T82) is said in the pane in front.
             () = crate::clean::ready().notified() => {
                 for done in crate::clean::take_done() {

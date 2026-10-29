@@ -1,7 +1,7 @@
 //! The commands' manual pages in Japanese (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 59] = [
+pub const PAGES: [(&str, &str); 61] = [
     (
         "clear",
         "このフォルダーで、空の新しいセッションを始めます。\n\
@@ -361,6 +361,22 @@ pub const PAGES: [(&str, &str); 59] = [
          r で今すぐ実行、p で一時停止・再開、d で削除します。\n\
          \n\
          /schedule add tests --at 07:00 --days mo-fr --allow \"Bash(cargo test:*)\" テストを実行して、失敗を報告する",
+    ),
+    (
+        "sessions",
+        "このマシンの他の Glut ウィンドウに書き送ります。\n\n/sessions — その Pane \
+        とエージェント：アドレス、プロジェクト、モデル、モード、作業中か待機中か。⏎ で /send <address> \
+        が入力欄に入ります\n/sessions off — このウィンドウはそのメッセージを受け取りません\n/sessions on — \
+        再び受け取ります\n\n向こうのオーナーのメッセージはすぐに入ります。向こうのモデルのものは、届く Pane \
+        と同じモードのときだけすぐに入り、そうでなければ入力欄の上で待ちます：⏎ で入れ、Esc \
+        で破棄。どちらもここのモデルへのあなたの言葉ではありません。他のウィンドウと話すのは Glut \
+        だけで、モデルのコマンドが届くことはありません。",
+    ),
+    (
+        "name",
+        "マシン上の Glut ウィンドウの中でこのウィンドウに名前を付けます。\n\n/name — このウィンドウの今の名前\n/name \
+        <new> — 新しい名前：英字、数字、- _ と .\n\n他のウィンドウは名前でここに届き、Pane には name/2 や \
+        name/reviewer で届きます。付けた名前はセッションと一緒に保存され、/resume で戻ります。",
     ),
     (
         "diff",

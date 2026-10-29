@@ -1,7 +1,7 @@
 //! The commands' manual pages in German (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 59] = [
+pub const PAGES: [(&str, &str); 61] = [
     (
         "clear",
         "Eine neue, leere Session in diesem Ordner beginnen.\n\
@@ -420,6 +420,22 @@ pub const PAGES: [(&str, &str); 59] = [
          \n\
          /schedule add tests --at 07:00 --days mo-fr --allow \"Bash(cargo test:*)\" führe die Tests aus und melde, was \
          fehlschlägt",
+    ),
+    (
+        "sessions",
+        "Den anderen Glut-Fenstern auf diesem Rechner schreiben.\n\n/sessions — ihre Panes und Agenten: Adresse, \
+        Projekt, Modell, Modus, arbeitet oder wartet; ⏎ setzt /send <address> in die Eingabe\n/sessions off — dieses \
+        Fenster nimmt keine Nachrichten von ihnen an\n/sessions on — und wieder\n\nEine Nachricht des Owners dort \
+        geht sofort herein; eine eines Modells dort nur, wenn es im Modus des Panes arbeitet, das sie erreicht, sonst \
+        wartet sie über der Eingabe: ⏎ lässt sie herein, Esc verwirft sie. Keine ist dein Wort an das Modell hier. \
+        Nur Glut spricht mit den anderen Fenstern — ein Befehl des Modells erreicht sie nie.",
+    ),
+    (
+        "name",
+        "Diesem Fenster einen Namen unter den Glut-Fenstern dieses Rechners geben.\n\n/name — der Name, den dieses \
+        Fenster jetzt hat\n/name <new> — ein neuer: Buchstaben, Ziffern, - _ und .\n\nAndere Fenster erreichen dieses \
+        über seinen Namen, ein Pane über name/2 oder name/reviewer. Ein Name, den du gibst, bleibt bei der Session \
+        und kommt mit /resume zurück.",
     ),
     (
         "diff",

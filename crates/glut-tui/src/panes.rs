@@ -19,6 +19,8 @@ use crate::transcript::Tone;
 pub const MOST: usize = 7;
 /// How many messages models send each other without the owner's word before the next waits for it (T36c).
 pub const MOST_CHAIN: u32 = 6;
+/// The most askers waiting to hear that a turn ended (T83, Q8).
+const MOST_NOTIFY: usize = 16;
 /// How many messages one session's model may send to other panes (T36c).
 pub const MOST_TELLS: u32 = 30;
 /// Background agents have no limit (T36f) — only the owner's `/bg` makes one —, but one beyond this many is asked for
@@ -339,6 +341,11 @@ pub enum Request {
     },
     /// The main pane and pane `n` (or the asking one) trade places (T36f, `/swap`).
     Swap(Option<String>),
+    /// `/sessions` (T83): the other Glut windows to pick one to write to, or — `Some` — whether this one takes their
+    /// messages.
+    Sessions(Option<bool>),
+    /// `/name` (T83): this window's name among the others, said, or set to the words given.
+    Name(String),
     /// The main pane wider by this many percent of the window, or narrower (T36f, `⌃X }`, `⌃X {`).
     Widen(i16),
     /// A background agent brought forward as a pane.
@@ -632,6 +639,14 @@ pub struct Panes {
     tile_pressed: bool,
     /// Where the look for the plans' ended runs stands (T60b); `None` before the first.
     runs_seen: Option<RunsSeen>,
+    /// This window among the other Glut windows of the machine (T83); `None` where it talks to none.
+    pub link: Option<Arc<crate::sessions::Link>>,
+    /// `/sessions off`: nothing from outside comes in (Q11).
+    pub sessions_off: bool,
+    /// Who asked to hear when a pane's turn ends (Q8): the pane's session id and the asker's address.
+    notify_back: Vec<(u64, String)>,
+    /// The kept window name last tried, so one another window holds is not tried at every frame.
+    window_tried: Option<String>,
 }
 
 /// How often an open Glut looks whether a plan's run ended (T60b): a tile for it, as for an agent's end.
@@ -730,6 +745,10 @@ impl Panes {
             chain: 0,
             peek: None,
             look: crate::motion::look(),
+            link: None,
+            sessions_off: false,
+            notify_back: Vec::new(),
+            window_tried: None,
         };
         (
             panes,
@@ -810,6 +829,7 @@ impl Panes {
     /// Once per frame: answered questions go, and what the panes share is told to each — the terminal's mouse (the
     /// active pane's word is the screen's) and the sessions the others hold.
     pub fn sync(&mut self) {
+        self.sync_windows();
         // A question's tile stands while its session waits and its card is not the active pane's; the others their
         // time (T69).
         let active = self.list[self.active].id;
@@ -960,9 +980,28 @@ impl Panes {
     /// A report of session `id`; one of a pane closed since is nobody's.
     pub fn on_report(&mut self, id: u64, report: Report) {
         // A model's message to another pane is the screen's to deliver (T36c).
-        if let Report::Tell { to, text, reply } = report {
+        if let Report::Tell {
+            to,
+            text,
+            notify,
+            reply,
+        } = report
+        {
+            // A word no pane here answers to, but another window's name (T83): the message goes there.
+            if let Some(source) = self.list.iter().position(|pane| pane.id == id)
+                && let Some(address) = to
+                    .as_deref()
+                    .filter(|word| self.resolve(word, source).is_none())
+                    .filter(|word| self.reaches_window(word))
+            {
+                return self.tell_window(source, address.to_owned(), text, notify, reply);
+            }
             let _ = reply.send(self.tell(id, to, text));
             return;
+        }
+        // A turn asked about by another window ended (Q8): it hears so, once.
+        if matches!(report, Report::Done(..)) {
+            self.notify_done(id);
         }
         let Some(at) = self.list.iter().position(|pane| pane.id == id) else {
             return;
@@ -1193,9 +1232,12 @@ impl Panes {
         let wider = !target_app.no_wider_than(&sender) || !(same_folder || only_plans);
         let may_start = !wider && self.chain <= MOST_CHAIN;
         use crate::app::Delivered;
-        let delivered = self.list[target]
-            .app
-            .deliver_model(message, from, may_start, sender)?;
+        let delivered = self.list[target].app.deliver_model(
+            message,
+            may_start,
+            sender,
+            &tr!(held_enter, pane = from),
+        )?;
         Ok(match delivered {
             Delivered::Now => format!("delivered: {label} starts on it now"),
             Delivered::AfterTurn => format!("delivered: {label} reads it after its current turn"),
@@ -1210,6 +1252,365 @@ impl Panes {
             ),
             Delivered::OnEnter => format!("held: {label} reads it once the owner goes on there"),
         })
+    }
+
+    /// `/sessions` (T83): every pane of the other windows as last seen, ⏎ writes to one; they are looked at anew
+    /// beside the screen for the next time.
+    fn sessions_picker(&mut self) {
+        use crate::picker::{Item, Pick, Picker};
+        let Some(link) = self.link.clone() else {
+            return self.active().say(tr!(sessions_unlinked));
+        };
+        let items: Vec<Item> = link
+            .seen()
+            .into_iter()
+            .filter(|card| !card.off)
+            .flat_map(|card| card.seats)
+            .map(|seat| {
+                let detail = format!(
+                    "{} · {} · {} · {}",
+                    crate::transcript::cut(&crate::transcript::clean(&seat.project), 40),
+                    crate::transcript::clean(&seat.model),
+                    crate::transcript::clean(&seat.mode),
+                    if seat.works {
+                        tr!(sessions_works)
+                    } else {
+                        tr!(sessions_waits)
+                    }
+                );
+                let address = crate::transcript::clean(&seat.address);
+                Item::plain(address.clone(), detail, Pick::WriteTo(address))
+            })
+            .collect();
+        tokio::spawn(async move {
+            link.look().await;
+        });
+        if items.is_empty() {
+            return self.active().say(tr!(windows_none));
+        }
+        self.active().picker = Some(Picker::new(tr!(windows_title), items, None));
+    }
+
+    /// `/name` (T83): this window's name said, or changed — kept with the main pane's session (Q13).
+    fn name_window(&mut self, name: &str) {
+        let Some(link) = self.link.clone() else {
+            return self.active().say(tr!(sessions_unlinked));
+        };
+        if name.is_empty() {
+            return self.active().say(tr!(name_now, name = link.name()));
+        }
+        match link.rename(name) {
+            Ok(()) => {
+                self.list[0].app.session.window = Some(name.to_owned());
+                self.list[0].app.keep();
+                self.active().say(tr!(name_set, name = name));
+            }
+            Err(reason) => self.active().say(reason),
+        }
+    }
+
+    /// Whether `word`, naming no pane here, is meant for another window: one seen, or an address of a window's form
+    /// (`name-xy`, `name/2`) — a window started since the last look is reached too, and one that is none says so.
+    fn reaches_window(&self, word: &str) -> bool {
+        self.link.as_ref().is_some_and(|link| {
+            link.names_other(word)
+                || (crate::sessions::check_address(word).is_ok()
+                    && (word.contains('/') || word.contains('-')))
+        })
+    }
+
+    /// This window's address of the pane at `at` (T83): its name for the first pane, else `name/<n>` or the agent's
+    /// name behind it.
+    fn address(&self, at: usize) -> String {
+        let window = self
+            .link
+            .as_ref()
+            .map_or_else(String::new, |link| link.name());
+        let pane = &self.list[at];
+        match &pane.name {
+            Some(name) if pane.background => format!("{window}/{name}"),
+            // The main pane — the first of the list, as `/swap` keeps it — answers to the window's name alone.
+            _ if at == 0 => window,
+            _ => format!("{window}/{}", pane.number),
+        }
+    }
+
+    /// Session `id`'s model writes to another window (T83): counted with its messages to the panes here, sent beside
+    /// the screen, its answer to the model once the other window gave it.
+    fn tell_window(
+        &mut self,
+        source: usize,
+        address: String,
+        text: String,
+        notify: bool,
+        reply: tokio::sync::oneshot::Sender<Result<String, String>>,
+    ) {
+        let Some(link) = self.link.clone() else {
+            let _ = reply.send(Err("this window talks to no other".into()));
+            return;
+        };
+        if self.list[source].app.tells_sent >= MOST_TELLS {
+            let _ = reply.send(Err(format!(
+                "this session has sent {MOST_TELLS} messages: no more — tell the owner instead"
+            )));
+            return;
+        }
+        self.list[source].app.tells_sent += 1;
+        self.chain += 1;
+        let letter = crate::sessions::Letter {
+            from: self.address(source),
+            to: String::new(),
+            text,
+            by: crate::sessions::By::Model,
+            mode: self.list[source].app.mode().name().to_owned(),
+            notify,
+            chain: self.chain,
+            rights: Some(crate::sessions::Rights {
+                sender: self.list[source].app.sender(),
+                folder: self.list[source].app.parts.config.cwd.clone(),
+            }),
+        };
+        tokio::spawn(async move {
+            let _ = reply.send(link.send(&address, letter).await);
+        });
+    }
+
+    /// The owner's `/send` to another window (T83): it goes in at once there; what became of it is said here.
+    fn send_window(&mut self, address: String, text: String) {
+        let Some(link) = self.link.clone() else {
+            return;
+        };
+        let letter = crate::sessions::Letter {
+            from: self.address(self.active),
+            to: String::new(),
+            text,
+            by: crate::sessions::By::Owner,
+            mode: self.active().mode().name().to_owned(),
+            notify: false,
+            chain: 0,
+            rights: None,
+        };
+        let id = self.list[self.active].id;
+        let reports = self.reports.clone();
+        tokio::spawn(async move {
+            let said = match link.send(&address, letter).await {
+                Ok(how) => tr!(sent_window, address = address, how = how),
+                Err(reason) => tr!(sent_window_failed, address = address, reason = reason),
+            };
+            let _ = reports.send((id, Report::Host(crate::host::Signal::Note(said))));
+        });
+    }
+
+    /// The pane of session `id` ended a turn: whoever asked to hear of it hears it now (Q8).
+    fn notify_done(&mut self, id: u64) {
+        let Some(link) = self.link.clone() else {
+            return;
+        };
+        let Some(at) = self.list.iter().position(|pane| pane.id == id) else {
+            return;
+        };
+        let from = self.address(at);
+        let mode = self.list[at].app.mode().name().to_owned();
+        let asked: Vec<String> = self
+            .notify_back
+            .iter()
+            .filter(|(pane, _)| *pane == id)
+            .map(|(_, address)| address.clone())
+            .collect();
+        self.notify_back.retain(|(pane, _)| *pane != id);
+        for address in asked {
+            let letter = crate::sessions::Letter {
+                from: from.clone(),
+                to: String::new(),
+                text: format!("{from} ended the turn your message started."),
+                by: crate::sessions::By::Notice,
+                mode: mode.clone(),
+                notify: false,
+                chain: self.chain,
+                rights: Some(crate::sessions::Rights {
+                    sender: self.list[at].app.sender(),
+                    folder: self.list[at].app.parts.config.cwd.clone(),
+                }),
+            };
+            let link = Arc::clone(&link);
+            tokio::spawn(async move {
+                let _ = link.send(&address, letter).await;
+            });
+        }
+    }
+
+    /// What another window asks (T83): who this one is, or to take a message — the owner's in at once, a model's in at
+    /// once only from the same mode and within the chain, else held for the owner's Enter (Q6, Q7).
+    pub fn on_incoming(&mut self, incoming: crate::sessions::Incoming) {
+        use crate::sessions::{Ask, Card, Reply, Seat};
+        let reply = match incoming.ask {
+            Ask::Who => Reply {
+                card: Some(Card {
+                    name: self
+                        .link
+                        .as_ref()
+                        .map_or_else(String::new, |link| link.name()),
+                    off: self.sessions_off,
+                    // A window that takes nothing from outside tells nothing of its panes either.
+                    seats: (0..self.list.len())
+                        .filter(|_| !self.sessions_off)
+                        .map(|at| {
+                            let app = &self.list[at].app;
+                            Seat {
+                                address: self.address(at),
+                                project: app.parts.config.cwd.display().to_string(),
+                                model: app.engine.model_name().to_owned(),
+                                mode: app.mode().name().to_owned(),
+                                role: app.role.clone(),
+                                works: app.working(),
+                            }
+                        })
+                        .collect(),
+                }),
+                sent: None,
+            },
+            Ask::Send(letter) => Reply {
+                card: None,
+                sent: Some(self.take_letter(letter)),
+            },
+        };
+        let _ = incoming.reply.send(reply);
+    }
+
+    /// A message from another window, delivered to the pane it names.
+    fn take_letter(&mut self, letter: crate::sessions::Letter) -> Result<String, String> {
+        use crate::sessions::By;
+        if self.sessions_off {
+            return Err("this Glut takes no messages from other windows".into());
+        }
+        if letter.text.trim().is_empty() || letter.text.len() > crate::tell::MOST_BYTES {
+            return Err("an empty message, or one too long".into());
+        }
+        if crate::sessions::check_address(&letter.from).is_err() {
+            return Err("a sender of no Glut window's address".into());
+        }
+        let target = if letter.to.is_empty() {
+            Some(0)
+        } else {
+            self.resolve(&letter.to, usize::MAX)
+        }
+        .ok_or_else(|| format!("there is no pane {}", crate::transcript::clean(&letter.to)))?;
+        let from = crate::transcript::cut(&crate::transcript::clean(&letter.from), 60);
+        let message = crate::tell::wrapped_session(&from, letter.by, &letter.text);
+        let label = self.address(target);
+        use crate::app::Delivered;
+        let delivered = match letter.by {
+            // The owner's own word in another window goes in at once (Q6).
+            By::Owner => {
+                if self.list[target].app.queue.len() >= crate::app::MOST_HELD {
+                    return Err("messages wait there already: try again later".into());
+                }
+                self.list[target].app.deliver(message)
+            }
+            By::Model | By::Notice => {
+                // The sender counted this message already (Q7): the chain is the longer of the two.
+                self.chain = self.chain.max(letter.chain);
+                let theirs = letter.mode.as_str();
+                let target_app = &self.list[target].app;
+                let ours = target_app.mode().name();
+                let same_mode = theirs == ours;
+                // As `tell` between the panes of one window (Q6b): a pane that can do more than the sender — a looser
+                // mode, an "always" it lacked, a wider role, another folder unless it only plans — starts nothing on
+                // its word. A letter without the sender's rights is taken for one from a pane that may do nothing.
+                let wider = match &letter.rights {
+                    Some(rights) => {
+                        let same_folder = target_app.parts.config.cwd == rights.folder;
+                        let only_plans = target_app.mode() == glut::permissions::Mode::Plan;
+                        !target_app.no_wider_than(&rights.sender) || !(same_folder || only_plans)
+                    }
+                    None => true,
+                };
+                let may_start = same_mode && !wider && self.chain <= MOST_CHAIN;
+                let why = if !same_mode {
+                    tr!(
+                        held_window_mode,
+                        from = from,
+                        theirs = crate::transcript::clean(theirs),
+                        ours = ours
+                    )
+                } else if wider {
+                    tr!(held_window_wider, from = from)
+                } else {
+                    tr!(held_window_chain, from = from)
+                };
+                // The sender's own rights go with a message waiting for a turn's end, checked again then.
+                let sender = letter
+                    .rights
+                    .as_ref()
+                    .map_or_else(crate::app::Sender::nothing, |rights| rights.sender.clone());
+                let delivered = self.list[target]
+                    .app
+                    .deliver_model(message, may_start, sender, &why)?;
+                // Only a turn the message started is told of (Q8), and only a few askers are kept.
+                if letter.notify
+                    && letter.by == By::Model
+                    && delivered == Delivered::Now
+                    && self.notify_back.len() < MOST_NOTIFY
+                {
+                    let id = self.list[target].id;
+                    self.notify_back.push((id, letter.from.clone()));
+                }
+                delivered
+            }
+        };
+        Ok(match delivered {
+            Delivered::Now => format!("delivered: {label} starts on it now"),
+            Delivered::AfterTurn => format!("delivered: {label} reads it after its current turn"),
+            Delivered::WhenFree => format!("delivered: {label} reads it once it is free"),
+            Delivered::OnEnter => {
+                format!("waits for approval: {label} reads it once its owner says so")
+            }
+        })
+    }
+
+    /// The other windows as last seen, told to every pane's `tell` (T83), and this window's name kept with its main
+    /// pane's session (Q13).
+    fn sync_windows(&mut self) {
+        let Some(link) = self.link.clone() else {
+            return;
+        };
+        // A name the owner gave this window, coming back with its main pane's session — tried once per name.
+        if let Some(kept) = self.list[0].app.session.window.clone()
+            && kept != link.name()
+            && self.window_tried.as_deref() != Some(kept.as_str())
+        {
+            let _ = link.rename(&kept);
+            self.window_tried = Some(kept);
+        }
+        // Who asked about a pane that closed hears nothing more.
+        let open: Vec<u64> = self.list.iter().map(|pane| pane.id).collect();
+        self.notify_back.retain(|(id, _)| open.contains(id));
+        let lines: Vec<String> = link
+            .seen()
+            .into_iter()
+            .filter(|card| !card.off)
+            .flat_map(|card| card.seats)
+            .map(|seat| {
+                // Nothing that changes from turn to turn (working or not): the description stays as the cache keeps it.
+                format!(
+                    "{}: {}, {}, {} mode, folder {}",
+                    glut::permissions::printable(&seat.address),
+                    seat.role
+                        .as_deref()
+                        .map_or("all-rounder".to_owned(), glut::permissions::printable),
+                    glut::permissions::printable(&seat.model),
+                    glut::permissions::printable(&seat.mode),
+                    glut::permissions::printable(&seat.project)
+                )
+            })
+            .collect();
+        let window = Some(link.name());
+        for pane in &self.list {
+            pane.app
+                .parts
+                .pane_link
+                .set_sessions(window.clone(), lines.clone());
+        }
     }
 
     /// A key, a paste or the mouse: the active pane's, but a click moves into the pane under it (the click itself
@@ -1394,6 +1795,16 @@ impl Panes {
                     self.start_background(name, role, place, sure, host);
                 }
                 Request::Swap(with) => self.swap(with),
+                Request::Sessions(Some(on)) => {
+                    self.sessions_off = !on;
+                    self.active().say(if on {
+                        tr!(sessions_on)
+                    } else {
+                        tr!(sessions_off)
+                    });
+                }
+                Request::Sessions(None) => self.sessions_picker(),
+                Request::Name(name) => self.name_window(name.trim()),
                 Request::Widen(by) => self.widen(by),
                 Request::Show(name) => self.show(&name),
                 Request::Hide => self.hide(),
@@ -1863,6 +2274,23 @@ impl Panes {
             Some(word) => self.resolve(word, self.active),
             None => self.only_other(self.active),
         };
+        // Not a pane here, but another window (T83): the owner's word goes there.
+        if target.is_none()
+            && let (Some(word), Some(text)) = (&to, &text)
+            && self.reaches_window(word)
+        {
+            return self.send_window(word.clone(), text.clone());
+        }
+        // `/send <window>` with nothing after it: the address is no message for the pane beside.
+        if to.is_none()
+            && let Some(text) = &text
+            && self
+                .link
+                .as_ref()
+                .is_some_and(|link| link.names_other(text.trim()))
+        {
+            return self.active().tell(tr!(send_which));
+        }
         let Some(target) = target else {
             let said = match (&to, self.list.len()) {
                 (_, 1) => tr!(one_pane_send).to_owned(),
@@ -3655,6 +4083,99 @@ mod tests {
         assert_eq!(owners(&panes.list[1].app), ["From pane 1: 3 files changed"]);
     }
 
+    /// What this window answers another one (T83).
+    fn asked(panes: &mut Panes, ask: crate::sessions::Ask) -> crate::sessions::Reply {
+        let (reply, mut answer) = oneshot::channel();
+        panes.on_incoming(crate::sessions::Incoming { ask, reply });
+        answer.try_recv().unwrap()
+    }
+
+    fn letter(by: crate::sessions::By, mode: &str, to: &str) -> crate::sessions::Letter {
+        crate::sessions::Letter {
+            from: "beta-xy/2".into(),
+            to: to.into(),
+            text: "which test fails?".into(),
+            by,
+            mode: mode.into(),
+            notify: false,
+            chain: 0,
+            rights: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn another_window_learns_the_panes_and_its_messages_come_in_by_the_mode() {
+        use crate::sessions::{Ask, By};
+        let (mut panes, _inlets) = split();
+        panes.sync();
+        let card = asked(&mut panes, Ask::Who).card.unwrap();
+        assert_eq!(card.seats.len(), 2);
+        assert!(card.seats[1].address.ends_with("/2"), "{:?}", card.seats);
+        // Q6b: a pane that can do no more than the sender, in its folder and mode, starts on it; one in another folder,
+        // or a letter without the sender's rights, waits for the owner — as `tell` between panes of one window.
+        let (mode, rights) = {
+            let target = &panes.list[1].app;
+            (
+                target.mode().name().to_owned(),
+                crate::sessions::Rights {
+                    sender: target.sender(),
+                    folder: target.parts.config.cwd.clone(),
+                },
+            )
+        };
+        let mut elsewhere = letter(By::Model, &mode, "2");
+        elsewhere.rights = Some(crate::sessions::Rights {
+            folder: "/elsewhere".into(),
+            ..rights.clone()
+        });
+        let sent = asked(&mut panes, Ask::Send(elsewhere))
+            .sent
+            .unwrap()
+            .unwrap();
+        assert!(sent.starts_with("waits for approval"), "{sent}");
+        panes.list[1].app.held.clear();
+        let unknown = letter(By::Model, &mode, "2");
+        let sent = asked(&mut panes, Ask::Send(unknown)).sent.unwrap().unwrap();
+        assert!(sent.starts_with("waits for approval"), "{sent}");
+        panes.list[1].app.held.clear();
+        let mut alike = letter(By::Model, &mode, "2");
+        alike.rights = Some(rights);
+        let sent = asked(&mut panes, Ask::Send(alike)).sent.unwrap().unwrap();
+        assert!(sent.starts_with("delivered"), "{sent}");
+        // From another mode a model's message waits for the owner there (Q6), shown as no word of the owner's.
+        let sent = asked(&mut panes, Ask::Send(letter(By::Model, "auto", "2")))
+            .sent
+            .unwrap();
+        assert!(sent.unwrap().starts_with("waits for approval"));
+        let target = &panes.list[1].app;
+        assert_eq!(target.held.len(), 1);
+        assert!(target.transcript.blocks.iter().any(|block| matches!(
+            &block.kind,
+            crate::transcript::Kind::Note { text, .. }
+                if text.starts_with("beta-xy/2's model (not the owner): which test fails?")
+        )));
+        // The owner's own word from there goes in at once, whatever the mode.
+        let sent = asked(&mut panes, Ask::Send(letter(By::Owner, "auto", "")))
+            .sent
+            .unwrap();
+        assert!(sent.is_ok(), "{sent:?}");
+        // A pane it does not have, and a window that takes nothing from outside.
+        assert!(
+            asked(&mut panes, Ask::Send(letter(By::Model, "default", "7")))
+                .sent
+                .unwrap()
+                .is_err()
+        );
+        panes.sessions_off = true;
+        assert!(
+            asked(&mut panes, Ask::Send(letter(By::Owner, "default", "")))
+                .sent
+                .unwrap()
+                .is_err()
+        );
+        assert!(asked(&mut panes, Ask::Who).card.unwrap().off);
+    }
+
     fn told(panes: &mut Panes, from: u64, to: Option<&str>, text: &str) -> Result<String, String> {
         let (reply, mut answer) = oneshot::channel();
         panes.on_report(
@@ -3662,6 +4183,7 @@ mod tests {
             Report::Tell {
                 to: to.map(str::to_owned),
                 text: text.into(),
+                notify: false,
                 reply,
             },
         );

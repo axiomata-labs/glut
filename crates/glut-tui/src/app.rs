@@ -67,12 +67,23 @@ pub const MOST_HELD: usize = 5;
 
 /// What a pane's model could do when it wrote to another pane (T36c): a message waiting for a turn's end goes on only
 /// if the receiving pane is still no wider than this by then.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Sender {
     pub looseness: u8,
     pub granted: Vec<String>,
     /// The rules of its pane's role; `None` without one.
     pub role: Option<Vec<String>>,
+}
+
+impl Sender {
+    /// A sender that may do nothing (T83): what a message of another window without its rights counts as.
+    pub fn nothing() -> Self {
+        Sender {
+            looseness: 0,
+            granted: Vec::new(),
+            role: Some(Vec::new()),
+        }
+    }
 }
 
 /// When a message from another pane is taken (T36b).
@@ -781,7 +792,7 @@ impl App {
     }
 
     /// Keeps the session as it stands now; a failure is said, the session goes on.
-    fn keep(&mut self) {
+    pub fn keep(&mut self) {
         self.session.conversation.clone_from(&self.conversation);
         self.session.todos.clone_from(&self.todos);
         self.session.provider.clone_from(&self.engine.provider);
@@ -2949,6 +2960,19 @@ impl App {
             KeyCode::Esc if self.side.is_some() => self.close_side(),
             // A selection goes first: Esc lets it go, the next one stops Glut.
             KeyCode::Esc if self.selection.is_some() => self.selection = None,
+            // A message of another model held for the owner (T83, Q10): Esc drops it, the input empty.
+            KeyCode::Esc
+                if self.running.is_none()
+                    && self.input.is_empty()
+                    && !self.held.is_empty()
+                    && self
+                        .held_since
+                        .is_none_or(|since| since.elapsed() >= ASK_SETTLE) =>
+            {
+                self.held.remove(0);
+                self.last_esc = None;
+                self.say(tr!(held_dropped));
+            }
             KeyCode::Esc => {
                 if let Some(cancel) = &self.running {
                     cancel.cancel();
@@ -3780,6 +3804,14 @@ impl App {
                 name => self.play(Some(name)),
             },
             "btw" => self.btw_command(rest),
+            // T83: the other Glut windows of the machine, and this one's name among them.
+            "sessions" => match rest {
+                "" => self.pane_request = Some(crate::panes::Request::Sessions(None)),
+                "on" => self.pane_request = Some(crate::panes::Request::Sessions(Some(true))),
+                "off" => self.pane_request = Some(crate::panes::Request::Sessions(Some(false))),
+                _ => self.say(tr!(sessions_usage)),
+            },
+            "name" => self.pane_request = Some(crate::panes::Request::Name(rest.to_owned())),
             "send" => match crate::panes::parse_send(rest) {
                 Ok(request) => self.pane_request = Some(request),
                 Err(reason) => self.transcript.note(reason, Tone::Fault),
@@ -5936,6 +5968,10 @@ impl App {
                         }
                     }
                     Some(Pick::Skill(name)) => self.input.insert_text(&format!("/skill {name} ")),
+                    Some(Pick::WriteTo(address)) => {
+                        self.input.clear();
+                        self.input.insert_text(&format!("/send {address} "));
+                    }
                     Some(Pick::Login(id)) => self.login(id),
                     Some(Pick::Logout(id)) => {
                         crate::login::sign_out(&self.parts, id, self.reports.clone())
@@ -6575,9 +6611,9 @@ impl App {
     pub fn deliver_model(
         &mut self,
         message: String,
-        from: u8,
         may_start: bool,
         sender: Sender,
+        why: &str,
     ) -> Result<Delivered, String> {
         let free = !self.working()
             && self.picker.is_none()
@@ -6597,7 +6633,7 @@ impl App {
                 "{MOST_HELD} messages wait there for the owner already: tell the owner instead"
             ));
         }
-        self.hold(message, &tr!(held_enter, pane = from));
+        self.hold(message, why);
         Ok(Delivered::OnEnter)
     }
 
@@ -11788,7 +11824,8 @@ pub(crate) mod tests {
         app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(app.input.text(), "/clear ", "a lone slash runs nothing");
         app.input.clear();
-        app.input.insert_text("/session");
+        // `/session` is part of `/sessions`' name now (T83): a word only of what commands do is `new`.
+        app.input.insert_text("/new");
         app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(
             app.input.text(),

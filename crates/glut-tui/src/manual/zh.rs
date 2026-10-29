@@ -1,7 +1,7 @@
 //! The commands' manual pages in Chinese (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 59] = [
+pub const PAGES: [(&str, &str); 61] = [
     (
         "clear",
         "在此文件夹中开始一个新的空会话。\n\
@@ -356,6 +356,20 @@ pub const PAGES: [(&str, &str); 59] = [
          每次运行都是一个独立保存的会话，并通过 macOS 通知告知。在运行标签页中：⏎ 打开计划或某次运行的会话，r 立即运行，p 暂停或恢复，d 删除。\n\
          \n\
          /schedule add tests --at 07:00 --days mo-fr --allow \"Bash(cargo test:*)\" 运行测试并报告失败的项",
+    ),
+    (
+        "sessions",
+        "给本机其他 Glut 窗口写信。\n\n/sessions — 它们的 Pane 和代理：地址、项目、模型、模式、工作中或等待中；⏎ 会把 \
+        /send <address> 放入输入框\n/sessions off — 此窗口不再接收它们的消息\n/sessions on — \
+        恢复接收\n\n那边所有者的消息会立即进入；那边模型的消息只有在与目标 Pane \
+        同一模式时才立即进入，否则在输入框上方等待：⏎ 放行，Esc 丢弃。两者都不是你对这里模型的指示。只有 Glut \
+        与其他窗口通信 — 模型的命令永远无法触及它们。",
+    ),
+    (
+        "name",
+        "为此窗口在本机 Glut 窗口中命名。\n\n/name — 此窗口当前的名称\n/name <new> — 新名称：字母、数字、- _ 和 \
+        .\n\n其他窗口通过名称找到此窗口，通过 name/2 或 name/reviewer 找到某个 Pane。你起的名称随会话保存，/resume \
+        时恢复。",
     ),
     (
         "diff",

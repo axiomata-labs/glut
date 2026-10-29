@@ -47,6 +47,10 @@ pub struct Session {
     /// The task list as the last turn left it (T81): a session opened again goes on with it, as a next turn does.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub todos: Vec<glut::planning::TodoItem>,
+    /// The name the owner gave its window among the Glut windows of the machine (T83, `/name`): it comes back with
+    /// the session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<String>,
 }
 
 /// Where and when a kept session worked, without what it said (T44).
@@ -99,6 +103,7 @@ impl Session {
             marks: Vec::new(),
             parent: None,
             todos: Vec::new(),
+            window: None,
         }
     }
 

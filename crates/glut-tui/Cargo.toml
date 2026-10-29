@@ -20,7 +20,8 @@ rustix = { workspace = true, features = ["process", "event"] }
 # Layout and widgets (T2); the stream itself is our own model.
 ratatui.workspace = true
 crossterm.workspace = true
-tokio = { workspace = true }
+# Unix sockets: Glut windows on this machine talk to each other (T83, `sessions.rs`).
+tokio = { workspace = true, features = ["net"] }
 clap.workspace = true
 serde.workspace = true
 chrono.workspace = true
