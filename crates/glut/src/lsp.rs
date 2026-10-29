@@ -213,17 +213,26 @@ pub(crate) fn position(
     let symbol = symbol.trim();
     let index = usize::try_from(line - 1).unwrap_or(usize::MAX);
     let row = text.lines().nth(index);
-    let on_line = row.is_some_and(|row| !whole_words(row, symbol).is_empty());
+    // A comment's word is no symbol: a line that has it only there counts as not having it.
+    let on_line = row
+        .is_some_and(|row| !whole_words(row, symbol).is_empty() && !(nearest && is_comment(row)));
     if !on_line && nearest {
-        let found = text
+        // Its declaration first, then the nearest place in code: a comment's word is no symbol to ask about.
+        let places: Vec<(usize, &str, usize)> = text
             .lines()
             .enumerate()
+            .filter(|(_, row)| !is_comment(row))
             .filter_map(|(at, row)| {
                 whole_words(row, symbol)
                     .first()
                     .map(|column| (at, row, *column))
             })
-            .min_by_key(|(at, _, _)| at.abs_diff(index));
+            .collect();
+        let found = places
+            .iter()
+            .find(|(_, row, column)| declares(&row[..*column]))
+            .or_else(|| places.iter().min_by_key(|(at, _, _)| at.abs_diff(index)))
+            .copied();
         if let Some((at, row, column)) = found {
             let column: usize = row[..column].chars().map(char::len_utf16).sum();
             return Ok(Spot {
@@ -255,6 +264,37 @@ pub(crate) fn position(
         position: json!({ "line": index, "character": column }),
         moved_to: None,
     })
+}
+
+/// Whether `row` is a comment line, in the languages the servers know.
+fn is_comment(row: &str) -> bool {
+    let row = row.trim_start();
+    ["//", "#", "/*", "*", "--", "<!--"]
+        .iter()
+        .any(|mark| row.starts_with(mark))
+}
+
+/// Whether what stands before a name declares it: `fn `, `pub struct `, `def `, `class `.
+fn declares(before: &str) -> bool {
+    /// The words that declare a name, in the languages the servers know.
+    const DECLARING: [&str; 12] = [
+        "fn",
+        "struct",
+        "enum",
+        "trait",
+        "type",
+        "mod",
+        "const",
+        "static",
+        "class",
+        "def",
+        "interface",
+        "function",
+    ];
+    before
+        .split_whitespace()
+        .next_back()
+        .is_some_and(|word| DECLARING.contains(&word))
 }
 
 /// Where `symbol` stands in `row` as a whole word, by byte.
@@ -563,14 +603,20 @@ mod tests {
 
     #[test]
     fn a_symbol_not_on_its_line_is_taken_from_the_nearest_line_except_for_a_rename() {
-        let text = "fn a() {}\nimpl Link {\n\n    fn send(&self) {}\n}\nfn send() {}\n";
-        let spot = position(text, 2, "send", 1, true).unwrap();
-        assert_eq!(spot.position, json!({ "line": 3, "character": 7 }));
-        assert_eq!(spot.moved_to, Some(4));
+        let text = "//! Windows send letters.\nimpl Link {\n    let x = send;\n    fn send(&self) {}\n}\nfn other() { send() }\n";
+        let spot = position(text, 1, "send", 1, true).unwrap();
         assert_eq!(
-            position(text, 99, "send", 1, true).unwrap().moved_to,
-            Some(6),
-            "past the end: the last"
+            spot.position,
+            json!({ "line": 3, "character": 7 }),
+            "the declaration, not the comment"
+        );
+        assert_eq!(spot.moved_to, Some(4));
+        let plain = "a\nlet x = send;\nb\nc\nsend();\n";
+        assert_eq!(position(plain, 5, "send", 1, true).unwrap().moved_to, None);
+        assert_eq!(
+            position(plain, 99, "send", 1, true).unwrap().moved_to,
+            Some(5),
+            "else the nearest"
         );
         assert!(
             position(text, 2, "send", 1, false).is_err(),
