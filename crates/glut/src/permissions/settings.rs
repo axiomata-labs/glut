@@ -712,7 +712,10 @@ pub fn load(home: &Path, project: &Path, trusted: bool) -> Result<Loaded, Harnes
             loaded.untrusted_project |= !settings.rules.allow.is_empty() || settings.mode.is_some();
             continue;
         }
-        loaded.rules.allow.extend(settings.rules.allow);
+        loaded
+            .rules
+            .allow
+            .extend(settings.rules.allow.into_iter().map(Rule::from_project));
         if let Some(mode) = settings.mode.filter(|mode| mode.looseness() <= ceiling) {
             loaded.mode = Some(mode);
         }
@@ -861,6 +864,16 @@ mod tests {
 
         let trusted = load(&home, &project, true).unwrap();
         assert_eq!(trusted.rules.allow.len(), 2);
+        // T74b: the project's allow rule is marked as its own, the owner's is not.
+        assert_eq!(
+            trusted
+                .rules
+                .allow
+                .iter()
+                .map(|rule| rule.from_project)
+                .collect::<Vec<_>>(),
+            [false, true]
+        );
         assert_eq!(trusted.rules.deny.len(), 1);
         assert_eq!(
             trusted.mode,

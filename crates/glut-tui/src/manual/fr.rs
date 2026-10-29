@@ -589,6 +589,15 @@ pub const PAGES: [(&str, &str); 59] = [
          Autoriser une commande donne aussi le trousseau à tout ce qu'elle lance : un hook git, une extension gh ou \
          un script de build peut alors y lire n'importe quelle clé.\n\
          \n\
+         Seules vos propres règles donnent le trousseau : une règle d'autorisation du `.glut/` d'un projet laisse une \
+         commande s'exécuter, jamais avec le trousseau ouvert. Une chaîne ne l'obtient que si chaque partie est \
+         listée ou ne fait que lire. Ce que `glut keychain open` garde ouvert ne compte qu'ici, où vous êtes — jamais \
+         dans `glut run` ni dans l'exécution d'un hôte.\n\
+         \n\
+         Une de vos règles ne l'ouvre sans demander que si elle nomme un programme et sa sous-commande (`gh pr *`, \
+         `git push *`) — jamais un programme entier (`gh *`). Une carte 🔑 montre toute la commande, ↑↓ pour la \
+         parcourir, et n'autorise qu'une fois lue jusqu'au bout.\n\
+         \n\
          La liste est gardée dans `~/.glut/keychain.json` ; `glut keychain open` garde le trousseau ouvert d'une \
          session à l'autre, `glut keychain close` le ferme pour de bon.",
     ),

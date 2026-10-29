@@ -69,7 +69,8 @@ fn fail(message: &str) -> ExitCode {
 
 /// The state, then the programs one per line.
 fn list(keychain: &Keychain) {
-    if keychain.is_open() {
+    // The owner's file: what `glut keychain open` keeps, wherever it counts.
+    if keychain.kept_open() {
         println!("{}", say!(keychain_open));
     } else {
         println!("{}", say!(keychain_shut));

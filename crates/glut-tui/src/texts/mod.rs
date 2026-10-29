@@ -2040,6 +2040,10 @@ glut::catalog! {
         clean_started: &'static str,
         /// A pass that freed something, at the start or by `/clean now`: `{freeable}`.
         clean_auto: &'static str,
+        /// The last row of a 🔑 card whose command is longer than the card (T74b): `{from}`–`{to}` of `{total}` rows.
+        ask_scroll: &'static str,
+        /// An allow key on a 🔑 card not yet read to its end (T74b).
+        ask_read_first: &'static str,
     }
 }
 

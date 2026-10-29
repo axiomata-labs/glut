@@ -1946,4 +1946,6 @@ pub const TEXTS: Texts = Texts {
     clean_busy: "別の Glut が ~/.glut を整理中です",
     clean_started: "~/.glut をバックグラウンドで整理中 — 解放した分はここに表示されます",
     clean_auto: "Glut が ~/.glut を整理しました：{freeable} を解放（/clean）",
+    ask_scroll: "↑↓ 最後まで読むと許可 · {from}–{to}/{total}",
+    ask_read_first: "まずコマンドを最後まで読んでください（↑↓）",
 };

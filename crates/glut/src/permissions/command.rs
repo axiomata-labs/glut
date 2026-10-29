@@ -388,8 +388,17 @@ pub(crate) fn without_git_globals(words: &[String]) -> Option<Vec<String>> {
 /// Whether a git call reads or writes a setting that runs a program: `git config`, or a `-c` naming one.
 fn touches_git_config(words: &[String]) -> bool {
     let core = without_git_globals(words).unwrap_or_default();
-    core.get(1)
-        .is_some_and(|sub| sub.eq_ignore_ascii_case("config"))
+    // A setting given for one call (`git -c credential.helper='!…' push`, `--config-env`) can name any program git
+    // runs — helpers, filters, diff drivers, transports —: none is read, the command is opaque (T74b).
+    let globals = words.len().saturating_sub(core.len());
+    let one_call = !core.is_empty()
+        && words[1..=globals]
+            .iter()
+            .any(|word| word == "-c" || word.starts_with("--config-env"));
+    one_call
+        || core
+            .get(1)
+            .is_some_and(|sub| sub.eq_ignore_ascii_case("config"))
         || words.iter().any(|word| {
             let lower = word.to_ascii_lowercase();
             GIT_RUNS.iter().any(|setting| lower.contains(setting))

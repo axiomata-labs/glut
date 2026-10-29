@@ -94,6 +94,20 @@ pub struct OpenAsk {
     reply: oneshot::Sender<Answer>,
     /// When the card came up: keys before [`ASK_SETTLE`] has passed do not answer it.
     opened: Instant,
+    /// The first row of a 🔑 card's command shown (T74b): such a card shows the whole command, ↑↓ through it.
+    pub scroll: usize,
+    /// How many of its rows were shown so far, from the top — counted afresh when a new width wraps it anew.
+    pub seen_rows: usize,
+    /// Its rows and the rows the card shows at once, as last drawn.
+    pub rows: usize,
+    pub window: usize,
+}
+
+impl OpenAsk {
+    /// Whether a 🔑 card's command was shown to its end, every row of it: only then does a key allow it.
+    pub fn seen_end(&self) -> bool {
+        self.rows > 0 && self.seen_rows >= self.rows
+    }
 }
 
 /// The side panel's tabs.
@@ -518,6 +532,8 @@ impl App {
         for note in &parts.notes {
             transcript.note(note.clone(), Tone::Quiet);
         }
+        // T74b: the owner sits here, so what `glut keychain open` keeps counts — not in a `glut run` nor a host's run.
+        parts.tools.keychain().set_attended(true);
         // T74: the Keychain kept open by `glut keychain open` is said at every start, in the fault colour — and a
         // file that cannot be read, which leaves it shut with the default list.
         if parts.tools.keychain().kept_open() {
@@ -1816,6 +1832,10 @@ impl App {
                     request,
                     reply,
                     opened: Instant::now(),
+                    scroll: 0,
+                    seen_rows: 0,
+                    rows: 0,
+                    window: 0,
                 });
                 self.scroll = 0;
             }
@@ -6792,12 +6812,40 @@ impl App {
     /// not answer a question the owner has not read yet, nor Ctrl+A (a key of its own) allow for the whole session.
     fn on_ask_key(&mut self, key: KeyEvent) {
         let Some(open) = &self.ask else { return };
+        // T74b: a 🔑 card is read through with ↑↓ — held keys too, they answer nothing —, a page a window less one row
+        // so none is passed unseen.
+        if open.request.keychain
+            && !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+        {
+            let page = open.window.saturating_sub(1).max(1) as isize;
+            let step: isize = match key.code {
+                KeyCode::Up => -1,
+                KeyCode::Down => 1,
+                KeyCode::PageUp => -page,
+                KeyCode::PageDown => page,
+                _ => 0,
+            };
+            if step != 0 {
+                if let Some(open) = &mut self.ask {
+                    open.scroll = open.scroll.saturating_add_signed(step);
+                }
+                return;
+            }
+        }
         if key.kind == KeyEventKind::Repeat
             || key
                 .modifiers
                 .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
             || open.opened.elapsed() < ASK_SETTLE
         {
+            return;
+        }
+        // T74b: a 🔑 card is allowed only once its command was shown to its end.
+        let allows = matches!(key.code, KeyCode::Char('y' | 'j' | 'a' | '1'..='9'));
+        if open.request.keychain && allows && !open.seen_end() {
+            self.say(tr!(ask_read_first));
             return;
         }
         let answer = match key.code {
@@ -11895,5 +11943,53 @@ pub(crate) mod tests {
         assert!(text.contains("mode is set by the program"), "{text}");
         assert!(text.contains("no !commands"), "{text}");
         assert_eq!(text.matches("money is spent").count(), 2, "{text}");
+    }
+
+    #[test]
+    fn a_keychain_card_shows_its_whole_command_and_allows_only_once_read_to_its_end() {
+        let (mut app, _reports) = app();
+        let (reply, mut answer) = oneshot::channel();
+        let target = (0..40)
+            .map(|n| format!("step{n}"))
+            .collect::<Vec<_>>()
+            .join(" && ");
+        app.on_report(Report::Ask(
+            AskRequest {
+                tool: "bash".into(),
+                target,
+                scopes: vec!["gh pr *".into()],
+                from: None,
+                keychain: true,
+            },
+            reply,
+        ));
+        if let Some(open) = &mut app.ask {
+            open.opened -= ASK_SETTLE * 2;
+        }
+        let rows = |app: &mut App| crate::view::keychain_rows(app.ask.as_mut().unwrap(), 30, 6);
+        let first = rows(&mut app);
+        assert!(first[0].starts_with("step0"), "{first:?}");
+        assert!(first.last().unwrap().starts_with("↑↓"), "{first:?}");
+        app.on_terminal(key(KeyCode::Char('y'), KeyModifiers::NONE));
+        assert!(app.ask.is_some(), "not read to its end: no allowing yet");
+        // A jump past rows never drawn leaves them unseen.
+        for _ in 0..100 {
+            app.on_terminal(key(KeyCode::Down, KeyModifiers::NONE));
+        }
+        rows(&mut app);
+        app.on_terminal(key(KeyCode::Char('y'), KeyModifiers::NONE));
+        assert!(app.ask.is_some(), "the middle was never shown");
+        app.ask.as_mut().unwrap().scroll = 0;
+        rows(&mut app);
+        // Page by page, drawn each time as the screen does: every row is shown.
+        for _ in 0..40 {
+            app.on_terminal(key(KeyCode::PageDown, KeyModifiers::NONE));
+            rows(&mut app);
+        }
+        let last = rows(&mut app);
+        assert!(last.iter().any(|row| row.contains("step39")), "{last:?}");
+        app.on_terminal(key(KeyCode::Char('y'), KeyModifiers::NONE));
+        assert!(app.ask.is_none());
+        assert!(matches!(answer.try_recv(), Ok(Answer::Allow)));
     }
 }

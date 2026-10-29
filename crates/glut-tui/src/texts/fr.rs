@@ -2116,4 +2116,6 @@ pub const TEXTS: Texts = Texts {
     clean_busy: "un autre Glut nettoie ~/.glut en ce moment",
     clean_started: "nettoyage de ~/.glut en arrière-plan — ce qui est libéré s'affiche ici",
     clean_auto: "Glut a nettoyé ~/.glut : {freeable} libérés (/clean)",
+    ask_scroll: "↑↓ jusqu'au bout pour autoriser · {from}–{to}/{total}",
+    ask_read_first: "lisez d'abord la commande jusqu'au bout (↑↓)",
 };

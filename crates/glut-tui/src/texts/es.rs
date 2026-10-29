@@ -2083,4 +2083,6 @@ pub const TEXTS: Texts = Texts {
     clean_busy: "otro Glut está limpiando ~/.glut ahora",
     clean_started: "limpiando ~/.glut en segundo plano — lo liberado aparecerá aquí",
     clean_auto: "Glut limpió ~/.glut: {freeable} liberados (/clean)",
+    ask_scroll: "↑↓ hasta el final para permitir · {from}–{to}/{total}",
+    ask_read_first: "lee primero el comando hasta el final (↑↓)",
 };

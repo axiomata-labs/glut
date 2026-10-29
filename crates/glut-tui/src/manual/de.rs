@@ -593,6 +593,15 @@ pub const PAGES: [(&str, &str); 59] = [
          Wer einen Befehl erlaubt, gibt den Schlüsselbund auch allem, was er startet: ein git-Hook, eine \
          gh-Erweiterung oder ein Build-Skript kann dann jeden Key darin lesen.\n\
          \n\
+         Den Schlüsselbund geben nur deine eigenen Regeln frei: eine Erlauben-Regel aus dem `.glut/` eines Projekts \
+         lässt einen Befehl laufen, aber nie mit offenem Schlüsselbund. Eine Kette bekommt ihn nur, wenn jeder Teil \
+         gelistet ist oder nur liest. Was `glut keychain open` offen hält, gilt nur hier, wo du sitzt — nie in `glut \
+         run` oder dem Lauf eines Hosts.\n\
+         \n\
+         Eine Regel von dir öffnet ihn ohne Frage nur, wenn sie ein Programm und seinen Unterbefehl nennt (`gh pr *`, \
+         `git push *`) — nie ein ganzes Programm (`gh *`). Eine 🔑-Karte zeigt den ganzen Befehl, ↑↓ blättert, und \
+         erlauben lässt er sich erst, wenn du ihn bis zum Ende gelesen hast.\n\
+         \n\
          Die Liste bleibt in `~/.glut/keychain.json`; `glut keychain open` hält den Schlüsselbund über Sessions \
          hinweg offen, `glut keychain close` schließt ihn für immer.",
     ),

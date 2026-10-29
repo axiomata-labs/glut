@@ -1845,4 +1845,6 @@ pub const TEXTS: Texts = Texts {
     clean_busy: "另一个 Glut 正在清理 ~/.glut",
     clean_started: "正在后台清理 ~/.glut — 释放的空间会显示在这里",
     clean_auto: "Glut 已清理 ~/.glut：释放 {freeable}（/clean）",
+    ask_scroll: "↑↓ 读到末尾才能允许 · {from}–{to}/{total}",
+    ask_read_first: "请先把命令读到末尾（↑↓）",
 };

@@ -580,6 +580,15 @@ pub const PAGES: [(&str, &str); 59] = [
          Permitir um comando dá o porta-chaves também a tudo o que ele inicia: um hook do git, uma extensão do gh ou \
          um script de compilação pode então ler qualquer chave nele.\n\
          \n\
+         Só as suas próprias regras dão o porta-chaves: uma regra de permissão do `.glut/` de um projeto deixa um \
+         comando correr, nunca com o porta-chaves aberto. Uma cadeia só o recebe quando cada parte está na lista ou \
+         só lê. O que `glut keychain open` mantém aberto só conta aqui, onde você está — nunca em `glut run` nem na \
+         execução de um anfitrião.\n\
+         \n\
+         Uma regra sua só o abre sem perguntar quando nomeia um programa e o seu subcomando (`gh pr *`, `git push *`) \
+         — nunca um programa inteiro (`gh *`). Um cartão 🔑 mostra o comando inteiro, ↑↓ para o percorrer, e só \
+         permite depois de o ler até ao fim.\n\
+         \n\
          A lista fica em `~/.glut/keychain.json`; `glut keychain open` mantém o porta-chaves aberto de uma sessão \
          para outra, `glut keychain close` fecha-o de vez.",
     ),

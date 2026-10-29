@@ -112,6 +112,8 @@ pub struct Rule {
     /// The tool's own name for a [`RuleKind::Tool`] rule.
     tool: String,
     pattern: Option<Pattern>,
+    /// An allow rule from a project's `.glut/` (T74b): it lets a command run, never with the Keychain open.
+    from_project: bool,
 }
 
 #[derive(Clone)]
@@ -214,7 +216,42 @@ impl Rule {
                 name.to_owned()
             },
             pattern,
+            from_project: false,
         })
+    }
+
+    /// Whether the rule may give a command the Keychain (T74b): the owner's own, and — for a command — naming at
+    /// least a program and its sub-command (`gh pr *`, `git push *`, never `gh *`, `git *` or `Bash`): a wide
+    /// "always" from a card that did not ask for the Keychain never opens it later.
+    fn gives_keychain(&self) -> bool {
+        if self.from_project {
+            return false;
+        }
+        if self.kind != RuleKind::Bash {
+            return true;
+        }
+        let fixed = match &self.pattern {
+            Some(Pattern::Prefix(words)) => words.len(),
+            Some(Pattern::Wild(text)) => {
+                let head = text.split('*').next().unwrap_or_default();
+                let words = head.split_whitespace().count();
+                // `gh p*`: the last word is cut by the star, not fixed.
+                if text.contains('*') && !head.ends_with(' ') {
+                    words.saturating_sub(1)
+                } else {
+                    words
+                }
+            }
+            _ => 0,
+        };
+        fixed >= 2
+    }
+
+    /// The rule as a project's settings give it (T74b): it allows what it names, but never gives the Keychain — only
+    /// the owner's own rules do.
+    pub fn from_project(mut self) -> Self {
+        self.from_project = true;
+        self
     }
 
     /// The rule as written.
@@ -533,6 +570,20 @@ enum Said {
 }
 
 impl RuleSet {
+    /// These rules with only the allow rules that may give a command the Keychain (T74b, [`Rule::gives_keychain`]).
+    fn owners(&self) -> RuleSet {
+        RuleSet {
+            allow: self
+                .allow
+                .iter()
+                .filter(|rule| rule.gives_keychain())
+                .cloned()
+                .collect(),
+            ask: self.ask.clone(),
+            deny: self.deny.clone(),
+        }
+    }
+
     /// Adds `other`'s rules to these.
     pub fn extend(&mut self, other: RuleSet) {
         self.allow.extend(other.allow);
@@ -1043,6 +1094,9 @@ pub struct Gate {
     /// The Keychain's list and switch (T74), shared with the run's shell ([`crate::Toolbox::set_gate`]); a gate
     /// without one keeps it shut and asks for every listed program.
     keychain: Mutex<Keychain>,
+    /// The commands this gate let run with the Keychain and the listed program each was judged for (T74b): the shell
+    /// opens it for what was judged, not for what the list says a moment later.
+    keychain_given: Mutex<Vec<(String, String)>>,
 }
 
 /// One `allowed-tools` list and who declared it: only the calls these rules name are judged as usual, everything
@@ -1067,6 +1121,7 @@ impl Gate {
             role: Mutex::new(None),
             beside: Mutex::new(Folders::default()),
             keychain: Mutex::new(Keychain::default()),
+            keychain_given: Mutex::new(Vec::new()),
         }
     }
 
@@ -1078,13 +1133,15 @@ impl Gate {
             .unwrap_or_else(|poison| poison.into_inner()) = keychain;
     }
 
-    /// The listed program `command` would run with the Keychain, by this gate's list — what [`Self::judge`] asked
-    /// about, so the shell opens it for exactly that (T74).
-    pub fn keychain_wants(&self, command: &str) -> Option<String> {
-        self.keychain
+    /// The listed program [`Self::judge`] let `command` run with the Keychain for, taken once: the shell opens it
+    /// for exactly what was judged (T74, T74b) — a list or a switch changed between the two widens nothing.
+    pub fn keychain_given(&self, command: &str) -> Option<String> {
+        let mut given = self
+            .keychain_given
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .wants(command)
+            .unwrap_or_else(|poison| poison.into_inner());
+        let at = given.iter().position(|(judged, _)| judged == command)?;
+        Some(given.remove(at).1)
     }
 
     /// The listed program a sandboxed command would run with the Keychain, when it is shut: then the command is
@@ -1338,6 +1395,13 @@ impl Gate {
         if *access == Access::Own {
             return Ok(());
         }
+        // T74b: a Keychain given to this command before and not taken goes; this judgement decides afresh.
+        if let Access::Bash { command, .. } = access {
+            self.keychain_given
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .retain(|(judged, _)| judged != command);
+        }
         // C3: an `allowed-tools` list only narrows. What one of them does not name is refused here, before any
         // rule or mode is even asked; what all of them name goes on to the normal judgement below, where such a
         // rule never allows anything by itself.
@@ -1380,13 +1444,23 @@ impl Gate {
             });
             return Err(format!("not permitted: {reason}"));
         }
-        let said = self
-            .rules
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .verdict_with(tool, access, true, &self.beside());
-        let mode = format!("mode {}", self.mode_name());
         let keychain = self.wants_keychain(access);
+        let said = {
+            let rules = self
+                .rules
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            // T74b: the Keychain comes by the owner's word alone — a project's allow rule lets the command run, but
+            // not with it open, so then it is asked.
+            if keychain.is_some() {
+                rules
+                    .owners()
+                    .verdict_with(tool, access, true, &self.beside())
+            } else {
+                rules.verdict_with(tool, access, true, &self.beside())
+            }
+        };
+        let mode = format!("mode {}", self.mode_name());
         let (mut verdict, mut reason) = match said {
             Said::Verdict(verdict, why) => (verdict, why),
             // T74: no reader, no `auto` — the owner's word or a rule of theirs.
@@ -1435,10 +1509,17 @@ impl Gate {
                 false
             }
             Verdict::Ask => {
-                let scopes = scopes(tool, access);
+                let scopes = scopes(tool, access, keychain.is_some());
                 let request = AskRequest {
                     tool: tool.to_owned(),
-                    target: target.clone(),
+                    // T74b: a 🔑 card says where the command runs when it is not the working folder's top — git finds
+                    // its repository, its config and its hooks there.
+                    target: match access {
+                        Access::Bash { folder, .. } if keychain.is_some() && !folder.is_empty() => {
+                            format!("{target}   ⟨{folder}/⟩")
+                        }
+                        _ => target.clone(),
+                    },
                     scopes: scopes.iter().map(|scope| scope.label.clone()).collect(),
                     from: subagent().map(|(_, label)| label),
                     keychain: keychain.is_some(),
@@ -1490,6 +1571,12 @@ impl Gate {
             allowed,
             reason: reason.clone(),
         });
+        if let (true, Some(program), Access::Bash { command, .. }) = (allowed, keychain, access) {
+            self.keychain_given
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .push((command.clone(), program));
+        }
         if allowed {
             Ok(())
         } else {
@@ -1728,7 +1815,9 @@ struct Scope {
 /// [`kinds::reaches`] — exactly it, its sub-command (`git status *`), its program (`git *`) — for each of its parts
 /// at once (`cargo fmt *, cargo test *`); one the lexer cannot read offers none, it would be asked again anyway. A
 /// path, a host or a tool offers exactly itself.
-fn scopes(tool: &str, access: &Access) -> Vec<Scope> {
+/// The scopes an "always" may take; `keychain`: the command would get the Keychain (T74b), so never a whole program
+/// (`gh *`) — at most a program and its sub-command.
+fn scopes(tool: &str, access: &Access, keychain: bool) -> Vec<Scope> {
     let one = |text: String| {
         Rule::parse(&text)
             .ok()
@@ -1769,7 +1858,8 @@ fn scopes(tool: &str, access: &Access) -> Vec<Scope> {
             }
             let mut out: Vec<Scope> = Vec::new();
             // Tier by tier, each part at its widest reach no wider than the tier: `cargo fmt, cargo test *`.
-            for tier in 0..=2 {
+            let widest = if keychain { 1 } else { 2 };
+            for tier in 0..=widest {
                 let mut reaches: Vec<&kinds::Reach> = per_part
                     .iter()
                     .filter_map(|reaches| reaches.iter().rfind(|reach| reach.tier() <= tier))
@@ -2090,9 +2180,9 @@ mod tests {
                 "{mode:?}: a reader without the Keychain runs"
             );
         }
-        // An owner's rule is the owner's word: no ask.
+        // An owner's rule naming the program and its sub-command is the owner's word: no ask.
         let ruled = Gate::new(
-            rules(&["Bash(gh *)"], &[], &[]),
+            rules(&["Bash(gh pr *)"], &[], &[]),
             Mode::Default,
             asker.clone(),
         );
@@ -2121,6 +2211,120 @@ mod tests {
         let auto = Gate::new(RuleSet::default(), Mode::Auto, asker.clone());
         assert!(auto.judge("bash", &unfenced).await.is_ok());
         assert!(asker.0.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_projects_allow_rule_runs_a_command_but_never_gives_it_the_keychain() {
+        let asker = Arc::new(KeychainAsks(Mutex::new(Vec::new())));
+        let project = RuleSet {
+            allow: vec![Rule::parse("Bash(gh *)").unwrap().from_project()],
+            ..RuleSet::default()
+        };
+        let gate = Gate::new(project.clone(), Mode::Default, asker.clone());
+        assert!(gate.judge("bash", &bash("gh pr list")).await.is_ok());
+        assert_eq!(
+            asker.0.lock().unwrap().pop(),
+            Some(true),
+            "the Keychain is the owner's word, asked"
+        );
+        // Without the Keychain in play the project's rule still allows: `gh` not on the list.
+        let unlisted = Gate::new(project, Mode::Default, asker.clone());
+        unlisted.set_keychain(Keychain::new(crate::keychain::Owner {
+            open: false,
+            programs: Some(vec!["docker".into()]),
+        }));
+        assert!(
+            unlisted
+                .judge("bash", &bash("gh pr create -t x"))
+                .await
+                .is_ok()
+        );
+        assert!(
+            asker.0.lock().unwrap().is_empty(),
+            "allowed by the project's rule, unasked"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_shell_opens_the_keychain_for_what_the_gate_judged_once_and_never_for_a_mixed_chain()
+     {
+        let asker = Arc::new(KeychainAsks(Mutex::new(Vec::new())));
+        let gate = Gate::new(RuleSet::default(), Mode::Default, asker.clone());
+        assert!(gate.judge("bash", &bash("gh pr list")).await.is_ok());
+        assert_eq!(gate.keychain_given("gh pr list").as_deref(), Some("gh"));
+        assert_eq!(gate.keychain_given("gh pr list"), None, "taken once");
+        let chain = "gh pr list && curl -s https://x.invalid";
+        let _ = gate.judge("bash", &bash(chain)).await;
+        assert_eq!(
+            asker.0.lock().unwrap().last(),
+            Some(&false),
+            "asked as any command, not for the Keychain"
+        );
+        assert_eq!(gate.keychain_given(chain), None);
+        // A Keychain given and not taken goes when the same command is judged again and refused.
+        let refusing = Gate::new(
+            RuleSet::default(),
+            Mode::Default,
+            Arc::new(Always(Answer::Deny, Mutex::new(0))),
+        );
+        refusing
+            .keychain_given
+            .lock()
+            .unwrap()
+            .push(("gh pr list".into(), "gh".into()));
+        assert!(refusing.judge("bash", &bash("gh pr list")).await.is_err());
+        assert_eq!(refusing.keychain_given("gh pr list"), None);
+    }
+
+    #[tokio::test]
+    async fn only_an_owners_rule_naming_a_program_and_its_sub_command_gives_the_keychain_unasked() {
+        let asker = Arc::new(KeychainAsks(Mutex::new(Vec::new())));
+        for (rule, asked) in [
+            ("Bash(git *)", true),
+            ("Bash(gh *)", true),
+            ("Bash(git:*)", true),
+            ("Bash(gh p*)", true),
+            ("Bash(git push *)", false),
+            ("Bash(git push:*)", false),
+            ("Bash(gh pr *)", false),
+        ] {
+            let gate = Gate::new(rules(&[rule], &[], &[]), Mode::Default, asker.clone());
+            let command = if rule.contains("gh") {
+                "gh pr list"
+            } else {
+                "git push origin main"
+            };
+            assert!(gate.judge("bash", &bash(command)).await.is_ok(), "{rule}");
+            let was = asker.0.lock().unwrap().pop();
+            assert_eq!(was, asked.then_some(true), "{rule}");
+        }
+    }
+
+    #[test]
+    fn a_setting_given_to_git_for_one_call_makes_the_command_opaque() {
+        assert!(analyze("git -c credential.helper=x push").is_opaque());
+        assert!(analyze("git -c color.ui=false log").is_opaque());
+        assert!(analyze("git --config-env=core.pager=X log").is_opaque());
+        assert!(
+            !analyze("git log -c").is_opaque(),
+            "a sub-command's own -c is no setting"
+        );
+    }
+
+    #[test]
+    fn a_keychain_ask_offers_no_whole_program() {
+        let access = bash("gh pr create -t x");
+        let wide: Vec<String> = scopes("bash", &access, false)
+            .into_iter()
+            .map(|scope| scope.label)
+            .collect();
+        let narrow: Vec<String> = scopes("bash", &access, true)
+            .into_iter()
+            .map(|scope| scope.label)
+            .collect();
+        assert!(wide.len() > narrow.len(), "{wide:?} {narrow:?}");
+        assert!(!narrow.is_empty());
+        assert!(narrow.iter().all(|label| label != "gh *"), "{narrow:?}");
     }
 
     #[tokio::test]
@@ -2155,7 +2359,7 @@ mod tests {
             change: "write /h/.glut/hooks.json (90 bytes)".into(),
         };
         assert!(
-            scopes("glut_file", &change).is_empty(),
+            scopes("glut_file", &change, false).is_empty(),
             "no \"always\" for it"
         );
         // An allow rule does not stand in for the ask.
@@ -2233,7 +2437,7 @@ mod tests {
         };
         assert_eq!(describe(&told), "to pane 2: the parser is done");
         assert_eq!(
-            scopes("tell", &told).len(),
+            scopes("tell", &told, false).len(),
             1,
             "an \"always\" for the session"
         );
@@ -2378,7 +2582,7 @@ mod tests {
 
     /// The first rule an "always" adds.
     fn always_rule(tool: &str, access: &Access) -> Option<Rule> {
-        scopes(tool, access)
+        scopes(tool, access, false)
             .into_iter()
             .next()?
             .rules
@@ -2693,7 +2897,7 @@ mod tests {
     #[test]
     fn the_scopes_offered_go_from_the_command_to_its_program_for_every_part_at_once() {
         let labels = |command: &str| {
-            scopes("bash", &bash(command))
+            scopes("bash", &bash(command), false)
                 .into_iter()
                 .map(|scope| scope.label)
                 .collect::<Vec<_>>()

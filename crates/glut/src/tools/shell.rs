@@ -36,6 +36,15 @@ use crate::sandbox::proxy::Proxy;
 /// `glut mcp login|…`) refuse under it — the Keychain is reached past the sandbox, so a model must not drive them.
 /// A speed bump, not a barrier: a command can unset it; the owner's word stays the gate's.
 pub const SANDBOXED_ENV: &str = "GLUT_SANDBOXED";
+
+/// What a command given the Keychain runs with (T74b): git finds no bare repository by itself — one a model made in the
+/// project (`x.git`, its config and hooks its own) would run them with the Keychain open; the project's own `.git` is
+/// the sandbox's to keep.
+const KEYCHAIN_GIT: [(&str, &str); 3] = [
+    ("GIT_CONFIG_COUNT", "1"),
+    ("GIT_CONFIG_KEY_0", "safe.bareRepository"),
+    ("GIT_CONFIG_VALUE_0", "explicit"),
+];
 /// A command's time limit when the model names none.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
 /// The longest time limit the model may ask for.
@@ -428,6 +437,7 @@ impl Session {
             Sandboxing::On(gate, _) => gate.as_ref().is_none_or(|gate| gate.role_reaches_network()),
             Sandboxing::Off => true,
         };
+        let mut keychain_open = false;
         let (sandbox, given_keychain) = match sandbox {
             Sandboxing::On(gate, keychain) => (self.sandbox(gate).await, keychain),
             Sandboxing::Off => (None, false),
@@ -446,6 +456,7 @@ impl Session {
                     policy.proxy_port = None;
                 }
                 policy.keychain = given_keychain || self.keychain.is_open();
+                keychain_open = policy.keychain;
                 // The scratch folder holds the profile snapshot every later command sources: a command that wrote
                 // there would run its code inside the next one — one given the Keychain too. Only its own note of
                 // where it ended stays writable.
@@ -469,6 +480,15 @@ impl Session {
             .env("AXH_CWD", cwd)
             .env("AXH_SNAPSHOT", snapshot.as_deref().unwrap_or(Path::new("")))
             .env("AXH_CWD_FILE", cwd_file.unwrap_or(Path::new("")))
+            .envs(
+                if keychain_open {
+                    KEYCHAIN_GIT.as_slice()
+                } else {
+                    &[]
+                }
+                .iter()
+                .copied(),
+            )
             .current_dir(&self.root)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -1309,8 +1329,13 @@ impl Tool for Bash {
             let keychain = context
                 .gate
                 .as_ref()
-                .and_then(|gate| gate.keychain_wants(&args.command));
+                .and_then(|gate| gate.keychain_given(&args.command));
             let shut_keychain = keychain.is_none() && !self.0.keychain.is_open();
+            // T74b: a listed program in a chain with other commands runs with it shut; a failure says why.
+            let chained = keychain
+                .is_none()
+                .then(|| self.0.keychain.listed_in(&args.command))
+                .flatten();
             let sandbox = if args.dangerously_disable_sandbox {
                 Sandboxing::Off
             } else {
@@ -1346,10 +1371,13 @@ impl Tool for Bash {
             match ran {
                 Err(text) if sandboxed && shut_keychain => {
                     match crate::keychain::blocked_program(&args.command, &text) {
-                        Some(program) => Err(format!(
-                            "{text}\n{}",
-                            crate::keychain::blocked_note(&program)
-                        )),
+                        Some(program) => {
+                            let note = match &chained {
+                                Some(listed) => crate::keychain::chain_note(listed),
+                                None => crate::keychain::blocked_note(&program),
+                            };
+                            Err(format!("{text}\n{note}"))
+                        }
                         None => Err(text),
                     }
                 }
@@ -1533,9 +1561,21 @@ mod tests {
             text.contains("/keychain add git credential-osxkeychain"),
             "Glut's note names how the owner opens it: {text}"
         );
+        let (_, plain) = bash(&tools, "printf '[%s]' \"$GIT_CONFIG_KEY_0\"").await;
+        assert!(plain.contains("[]"), "{plain}");
         keychain.set_session_open(true);
         let (ok, text) = bash(&tools, ask).await;
         assert!(ok && !text.contains("-50"), "{text}");
+        // With the Keychain open git finds no bare repository by itself (T74b).
+        let (_, guarded) = bash(
+            &tools,
+            "printf '[%s]' \"$GIT_CONFIG_KEY_0=$GIT_CONFIG_VALUE_0\"",
+        )
+        .await;
+        assert!(
+            guarded.contains("[safe.bareRepository=explicit]"),
+            "{guarded}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

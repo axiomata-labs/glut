@@ -1217,7 +1217,24 @@ pub fn clean(text: &str) -> String {
 pub(crate) fn hides(c: char) -> bool {
     matches!(
         c,
-        '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{2069}' | '\u{feff}'
+        '\u{200b}'..='\u{200f}'
+            | '\u{202a}'..='\u{202e}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{2069}'
+            | '\u{feff}'
+            // T74b: drawn as nothing too, or as a blank — a 🔑 card's command shows every character it holds.
+            | '\u{00ad}'
+            | '\u{034f}'
+            | '\u{061c}'
+            | '\u{115f}'
+            | '\u{1160}'
+            | '\u{180e}'
+            | '\u{2028}'
+            | '\u{2029}'
+            | '\u{2800}'
+            | '\u{3164}'
+            | '\u{ffa0}'
+            | '\u{e0000}'..='\u{e007f}'
     )
 }
 

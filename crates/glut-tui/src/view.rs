@@ -258,13 +258,14 @@ fn draw_in(frame: &mut Frame, app: &mut App, area: Rect, chrome: &Chrome) {
     let input_height = rows.len().clamp(1, INPUT_ROWS) as u16 + 1;
     // The plan's ask is its dialog over the stream (T19), not a card below it.
     let plan_asking = app.plan_asks();
-    let ask_rows = app.ask.as_ref().filter(|_| !plan_asking).map(|open| {
+    let ask_rows = app.ask.as_mut().filter(|_| !plan_asking).map(|open| {
         let most = usize::from(area.height / 3).clamp(3, ASK_ROWS);
-        asked_rows(
-            &open.request.target,
-            usize::from(area.width.saturating_sub(4 + ask_glimm_width(area.width))),
-            most,
-        )
+        let width = usize::from(area.width.saturating_sub(4 + ask_glimm_width(area.width)));
+        if open.request.keychain {
+            keychain_rows(open, width, most)
+        } else {
+            asked_rows(&open.request.target, width, most)
+        }
     });
     // The target, then a row per choice: once, each scope, refuse — at least as tall as the waiting Glimm beside it.
     let ask_height = ask_rows
@@ -1106,6 +1107,42 @@ fn asked_rows(target: &str, width: usize, most: usize) -> Vec<String> {
     let mut shown: Vec<String> = rows[..head].to_vec();
     shown.push(tr!(more_rows, n = rows.len() - head - tail));
     shown.extend_from_slice(&rows[rows.len() - tail..]);
+    shown
+}
+
+/// A 🔑 card's command (T74b): all of it, never its middle left out — a window of `most` rows the owner moves with
+/// ↑↓, a last row saying where it stands; the card marks when the window has reached the end.
+pub(crate) fn keychain_rows(
+    open: &mut crate::app::OpenAsk,
+    width: usize,
+    most: usize,
+) -> Vec<String> {
+    let rows = wrap(&open.request.target, width);
+    // Wrapped anew (the window resized): what was seen counts afresh.
+    if rows.len() != open.rows {
+        open.rows = rows.len();
+        open.seen_rows = 0;
+    }
+    if rows.len() <= most {
+        open.window = rows.len();
+        open.seen_rows = rows.len();
+        return rows;
+    }
+    let window = most.saturating_sub(1).max(1);
+    open.window = window;
+    let last_start = rows.len() - window;
+    open.scroll = open.scroll.min(last_start);
+    // Only rows read in order count: a jump past unseen rows leaves them unseen.
+    if open.scroll <= open.seen_rows {
+        open.seen_rows = open.seen_rows.max(open.scroll + window);
+    }
+    let mut shown: Vec<String> = rows[open.scroll..open.scroll + window].to_vec();
+    shown.push(tr!(
+        ask_scroll,
+        from = open.scroll + 1,
+        to = open.scroll + window,
+        total = rows.len()
+    ));
     shown
 }
 
