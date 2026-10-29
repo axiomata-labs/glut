@@ -27,6 +27,7 @@ mod key;
 mod layout;
 mod linebreak;
 mod links;
+mod live;
 pub mod log;
 mod login;
 mod looping;

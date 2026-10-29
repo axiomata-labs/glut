@@ -282,18 +282,26 @@ fn draw_in(frame: &mut Frame, app: &mut App, area: Rect, chrome: &Chrome) {
         });
     let waiting = waiting_lines(app, usize::from(area.width));
     let (side_lines, side_height) = side_rows(app, area);
-    let [header, stream, side, ask, queue, input, keys] = Layout::vertical([
+    // A short pane keeps its rows for the stream and the input (T75): the line needs room beyond them — the header,
+    // the keys' row and a few rows of the stream.
+    let room = input_height + ask_height + side_height + waiting.len() as u16 + LIVE_ROOM;
+    let live = live_line(app, usize::from(area.width)).filter(|_| area.height >= room);
+    let [header, stream, side, ask, queue, live_row, input, keys] = Layout::vertical([
         Constraint::Length(if chrome.alone() { 1 } else { 0 }),
         Constraint::Min(1),
         Constraint::Length(side_height),
         Constraint::Length(ask_height),
         Constraint::Length(waiting.len() as u16),
+        Constraint::Length(u16::from(live.is_some())),
         Constraint::Length(input_height),
         Constraint::Length(1),
     ])
     .areas(area);
     if !waiting.is_empty() {
         frame.render_widget(Paragraph::new(waiting), queue);
+    }
+    if let Some(live) = live {
+        frame.render_widget(Paragraph::new(live), live_row);
     }
     if chrome.alone() {
         draw_header(frame, app, header);
@@ -732,6 +740,38 @@ fn waiting_lines(app: &App, width: usize) -> Vec<Line<'static>> {
         )));
     }
     lines
+}
+
+/// The rows a pane keeps beside its input, its card, its panel and its queue before the live line shows (T75): the
+/// header, the keys' row, the line itself and three of the stream.
+const LIVE_ROOM: u16 = 6;
+
+/// The live line of the turn under way (T75): above the input while Glut works, `None` at rest.
+fn live_line(app: &App, width: usize) -> Option<Line<'static>> {
+    if !app.turn_runs() {
+        return None;
+    }
+    let said = crate::live::Said {
+        time: app
+            .busy_since
+            .map(|since| since.elapsed())
+            .unwrap_or_default(),
+        tokens: app.live.tokens(),
+        rate: app.meter.live_rate(),
+        effort: app.engine.endpoint.effort.map(|effort| effort.to_string()),
+        asking: app.waits_for_owner(),
+        frame: (!crate::motion::still()).then_some(app.frame),
+    };
+    let text = crate::live::line(&app.live, &said, width.saturating_sub(1));
+    // The reader mode reads keys as words (`⌃C` as "control C").
+    let text = crate::motion::spoken_keys(&text).into_owned();
+    // The mark before the time glows as Glimm does; the rest is quiet beside the input.
+    let mut chars = text.chars();
+    let mark: String = chars.by_ref().take(1).collect();
+    Some(Line::from(vec![
+        Span::styled(mark, theme::glow()),
+        Span::styled(chars.collect::<String>(), theme::quiet()),
+    ]))
 }
 
 /// How many cells `spans` take.
@@ -1400,26 +1440,10 @@ fn draw_keys(frame: &mut Frame, app: &App, area: Rect, branch: Option<String>, c
         context.text.push_str(if warm { " ●" } else { " ○" });
     }
     segments.push(context);
-    // Held still (TUI9b), "working" counts its seconds where the flame would flicker.
-    if crate::motion::still()
-        && let Some(since) = app.busy_since.filter(|_| app.working())
-    {
-        // After a pane's number, before everything else.
-        segments.insert(
-            usize::from(chrome.number.is_some()),
-            Segment::marked(
-                tr!(working_secs, n = since.elapsed().as_secs()),
-                theme::c().glow,
-                0,
-            ),
-        );
-    }
-    // TUI10: how fast the model writes — live while its answer streams (guessed from its characters), the last
-    // turn's own count once it rests.
+    // TUI10: how fast the model wrote at the last turn — while one works, the live line above the input (T75) counts
+    // its time and its speed.
     let rate = if app.working() {
-        app.meter
-            .live_rate()
-            .map(|rate| format!("~{rate:.0} tok/s"))
+        None
     } else {
         app.meter.last_rate().map(|rate| format!("{rate:.0} tok/s"))
     };
@@ -2392,6 +2416,39 @@ mod tests {
             color(spot.x + 2, spot.y),
             color(spot.x, spot.y - 1),
         )
+    }
+
+    /// T75: while a turn works its live line stands right above the input, saying what it does; at rest it is gone.
+    #[tokio::test]
+    async fn a_working_turn_has_its_live_line_above_the_input() {
+        let mut app = app();
+        app.working_for_tests();
+        app.live.take(&glut::Event::ToolCall {
+            turn: 1,
+            id: "c".into(),
+            name: "bash".into(),
+            arguments: r#"{"command": "cargo test"}"#.into(),
+        });
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 24)).unwrap();
+        terminal.draw(|frame| super::draw(frame, &mut app)).unwrap();
+        let (spot, ..) = app.input_spot.expect("the input was drawn");
+        let buffer = terminal.backend().buffer();
+        let row = |y: u16| {
+            (0..100)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+        };
+        // The rule above the input, and the live line above it.
+        let live = row(spot.y - 2);
+        assert!(
+            live.contains("running: cargo test") && live.contains("⌃C stops"),
+            "{live}"
+        );
+        assert!(
+            super::live_line(&super::tests::app(), 100).is_none(),
+            "at rest: no line"
+        );
     }
 
     /// A key the terminal sent, as the app takes it.

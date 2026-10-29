@@ -127,8 +127,6 @@ glut::catalog! {
         matches: &'static str,
         /// Before the search's query.
         search_label: &'static str,
-        /// The footer's count while the screen holds still: `{n}` seconds.
-        working_secs: &'static str,
         /// The footer while the input is a `!!` command.
         hint_shell_alone: &'static str,
         /// The footer while the input is a `!` command.
@@ -2044,6 +2042,20 @@ glut::catalog! {
         ask_scroll: &'static str,
         /// An allow key on a 🔑 card not yet read to its end (T74b).
         ask_read_first: &'static str,
+        /// The live line (T75): the model thinks, or waits for its first word.
+        live_thinking: &'static str,
+        /// The live line: the model writes its answer.
+        live_writing: &'static str,
+        /// The live line: a command runs, `{what}`.
+        live_running: &'static str,
+        /// The live line: a file is read, `{what}`.
+        live_reading: &'static str,
+        /// The live line: a question waits for the owner.
+        live_asking: &'static str,
+        /// The live line: the turn's tokens so far, `{n}` short (8.3k).
+        live_tokens: &'static str,
+        /// The live line's last piece: the key that stops the turn.
+        live_stop: &'static str,
     }
 }
 

@@ -450,6 +450,8 @@ pub struct App {
     pub picture_view: Option<glut::images::Image>,
     /// Since when Glut works (TUI9b): what the footer counts while the screen holds still.
     pub busy_since: Option<Instant>,
+    /// What the turn under way does, for the live line above the input (T75).
+    pub live: crate::live::Live,
     /// Since when Glut has worked without a rest (T53): a chain of queued turns counts as one for a notification.
     pub working_since: Option<Instant>,
     /// The state last seen (TUI9b): the reader mode says each change in a line of its own.
@@ -675,6 +677,7 @@ impl App {
             cache_seen: false,
             held_since: None,
             busy_since: None,
+            live: crate::live::Live::default(),
             working_since: None,
             images_given: 0,
             attaching: 0,
@@ -859,6 +862,11 @@ impl App {
     /// Whether Glut works on something: a turn, a summary, a switch of model.
     pub fn working(&self) -> bool {
         self.busy.is_some()
+    }
+
+    /// Whether a turn of the model runs — not a compaction, a handoff or a switch, which ⌃C does not stop (T75).
+    pub fn turn_runs(&self) -> bool {
+        self.busy == Some(Busy::Turn)
     }
 
     /// Whether the welcome is up: before the first message only notes are in the stream (the guides read, …).
@@ -1563,6 +1571,8 @@ impl App {
         let cancel = Cancel::new();
         self.running = Some(cancel.clone());
         self.busy = Some(Busy::Turn);
+        // T75: the live line starts empty — not with the last turn's tokens and tool until this run's `Started`.
+        self.live = crate::live::Live::default();
         let inbox = glut::Inbox::default();
         self.steering = Some(inbox.clone());
         // What waits for the model (a `/secrets` change, a review comment) goes before this message, not after it.
@@ -1607,6 +1617,8 @@ impl App {
         let cancel = Cancel::new();
         self.running = Some(cancel.clone());
         self.busy = Some(Busy::Turn);
+        // T75: the live line starts empty — not with the last turn's tokens and tool until this run's `Started`.
+        self.live = crate::live::Live::default();
         let inbox = glut::Inbox::default();
         self.steering = Some(inbox.clone());
         session::turn(
@@ -1778,6 +1790,7 @@ impl App {
                 }
                 self.watch.take(&event);
                 self.meter.take(&event, self.engine.prices);
+                self.live.take(&event);
                 self.transcript.take(&event);
                 if matches!(&event, Event::ToolCall { name, .. } if name == "task") {
                     self.second_agent_opens_tab();
