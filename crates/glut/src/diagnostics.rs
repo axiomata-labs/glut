@@ -945,8 +945,8 @@ mod tests {
         let mut ask = |op: Op, line: u32, symbol: &str| {
             servers
                 .ask("src/main.rs", op.method(), |uri, text| {
-                    let position = lsp::position(text, line, symbol, 1)?;
-                    Ok(lsp::params(op, uri, position, Some("Note")))
+                    let spot = lsp::position(text, line, symbol, 1, false)?;
+                    Ok(lsp::params(op, uri, spot.position, Some("Note")))
                 })
                 .unwrap()
         };

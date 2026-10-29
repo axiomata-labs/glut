@@ -2936,10 +2936,13 @@ impl<'a, M: ChatModel> Loop<'a, M> {
         let answer = self
             .with_servers(move |servers| {
                 let root = servers.root().to_owned();
+                let moved = std::cell::Cell::new(None);
                 let mut question = |op: Op| {
                     servers.ask(&asked, op.method(), |uri, text| {
-                        let position = lsp::position(text, line, &symbol, occurrence)?;
-                        Ok(lsp::params(op, uri, position, new_name.as_deref()))
+                        let spot =
+                            lsp::position(text, line, &symbol, occurrence, op != Op::Rename)?;
+                        moved.set(spot.moved_to);
+                        Ok(lsp::params(op, uri, spot.position, new_name.as_deref()))
                     })
                 };
                 let answer = question(op)?;
@@ -2949,10 +2952,10 @@ impl<'a, M: ChatModel> Loop<'a, M> {
                 } else {
                     None
                 };
-                Ok::<_, String>((answer, defined, root))
+                Ok::<_, String>((answer, defined, root, moved.get()))
             })
             .await;
-        let (answer, defined, root) = match answer {
+        let (answer, defined, root, moved) = match answer {
             Some(Ok(answered)) => answered,
             Some(Err(reason)) => return (false, format!("error: {reason}")),
             None => {
@@ -2962,6 +2965,27 @@ impl<'a, M: ChatModel> Loop<'a, M> {
                 );
             }
         };
+        // Said first, so the model knows which `symbol` was asked about.
+        let note = moved.map(|at| {
+            format!(
+                "(`{}` is not on line {line}; asked about it on line {at})\n",
+                args.symbol.trim()
+            )
+        });
+        let (ok, text) = self.answer_code(op, &args, answer, defined, root).await;
+        (ok, format!("{}{text}", note.unwrap_or_default()))
+    }
+
+    /// [`Self::run_code`]'s answer shaped for the model.
+    async fn answer_code(
+        &mut self,
+        op: crate::lsp::Op,
+        args: &crate::lsp::Args,
+        answer: Value,
+        defined: Option<Result<Value, String>>,
+        root: PathBuf,
+    ) -> (bool, String) {
+        use crate::lsp::{self, Op};
         let gate = self.tools.gate().cloned();
         let shown = move |rel: &str| crate::tools::files::shown(gate.as_deref(), rel);
         let symbol = args.symbol.clone();

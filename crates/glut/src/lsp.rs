@@ -187,23 +187,55 @@ pub(crate) fn renames(arguments: &str) -> bool {
     parse(arguments).is_ok_and(|args| args.op == Op::Rename)
 }
 
+/// Where a question asks: the LSP position, and the 1-based line Glut took the symbol from where it was not on the
+/// line named.
+#[derive(Debug)]
+pub(crate) struct Spot {
+    pub position: Value,
+    pub moved_to: Option<usize>,
+}
+
 /// The LSP position of the `occurrence`-th `symbol` on 1-based `line` of `text`: 0-based line, UTF-16 column. A
-/// whole word is preferred to a part of one (`id` in `id + valid_id`).
+/// whole word is preferred to a part of one (`id` in `id + valid_id`). Not on that line, the whole word nearest to it
+/// in the file is taken where `nearest` (a weak model guesses a line before it reads one) — never for a rename, which
+/// must change the very symbol the model saw.
 ///
 /// # Errors
 ///
-/// A line past the file's end, or a symbol not on it.
+/// A symbol not on the line (nor, with `nearest`, in the file), or not that often on it.
 pub(crate) fn position(
     text: &str,
     line: u32,
     symbol: &str,
     occurrence: u32,
-) -> Result<Value, String> {
-    let index = usize::try_from(line - 1).map_err(|_| "line too large".to_owned())?;
-    let Some(row) = text.lines().nth(index) else {
+    nearest: bool,
+) -> Result<Spot, String> {
+    let symbol = symbol.trim();
+    let index = usize::try_from(line - 1).unwrap_or(usize::MAX);
+    let row = text.lines().nth(index);
+    let on_line = row.is_some_and(|row| !whole_words(row, symbol).is_empty());
+    if !on_line && nearest {
+        let found = text
+            .lines()
+            .enumerate()
+            .filter_map(|(at, row)| {
+                whole_words(row, symbol)
+                    .first()
+                    .map(|column| (at, row, *column))
+            })
+            .min_by_key(|(at, _, _)| at.abs_diff(index));
+        if let Some((at, row, column)) = found {
+            let column: usize = row[..column].chars().map(char::len_utf16).sum();
+            return Ok(Spot {
+                position: json!({ "line": at, "character": column }),
+                moved_to: Some(at + 1),
+            });
+        }
+        return Err(format!("`{symbol}` is nowhere in the file as a whole word"));
+    }
+    let Some(row) = row else {
         return Err(format!("the file has no line {line}"));
     };
-    let symbol = symbol.trim();
     let all: Vec<usize> = row.match_indices(symbol).map(|(at, _)| at).collect();
     let word = |at: &usize| {
         let before = row[..*at].chars().next_back();
@@ -219,7 +251,22 @@ pub(crate) fn position(
         });
     };
     let column: usize = row[..at].chars().map(char::len_utf16).sum();
-    Ok(json!({ "line": index, "character": column }))
+    Ok(Spot {
+        position: json!({ "line": index, "character": column }),
+        moved_to: None,
+    })
+}
+
+/// Where `symbol` stands in `row` as a whole word, by byte.
+fn whole_words(row: &str, symbol: &str) -> Vec<usize> {
+    row.match_indices(symbol)
+        .map(|(at, _)| at)
+        .filter(|at| {
+            let before = row[..*at].chars().next_back();
+            let after = row[at + symbol.len()..].chars().next();
+            !before.is_some_and(is_word) && !after.is_some_and(is_word)
+        })
+        .collect()
 }
 
 fn is_word(c: char) -> bool {
@@ -485,33 +532,52 @@ mod tests {
     fn a_symbol_is_found_by_its_line_and_name_as_a_whole_word_first() {
         let text = "fn main() {\n    let valid_id = id + id;\n}\n";
         assert_eq!(
-            position(text, 2, "id", 1).unwrap(),
+            position(text, 2, "id", 1, false).unwrap().position,
             json!({ "line": 1, "character": 19 })
         );
         assert_eq!(
-            position(text, 2, "id", 2).unwrap(),
+            position(text, 2, "id", 2, false).unwrap().position,
             json!({ "line": 1, "character": 24 })
         );
         assert!(
-            position(text, 2, "id", 3)
+            position(text, 2, "id", 3, false)
                 .unwrap_err()
                 .contains("2 time(s)")
         );
         assert!(
-            position(text, 2, "nothing", 1)
+            position(text, 2, "nothing", 1, false)
                 .unwrap_err()
                 .contains("not on line 2")
         );
         assert!(
-            position(text, 9, "id", 1)
+            position(text, 9, "id", 1, false)
                 .unwrap_err()
                 .contains("no line 9")
         );
         // UTF-16 columns: an emoji before the symbol counts two.
         assert_eq!(
-            position("// 🔥 x\n", 1, "x", 1).unwrap(),
+            position("// 🔥 x\n", 1, "x", 1, false).unwrap().position,
             json!({ "line": 0, "character": 6 })
         );
+    }
+
+    #[test]
+    fn a_symbol_not_on_its_line_is_taken_from_the_nearest_line_except_for_a_rename() {
+        let text = "fn a() {}\nimpl Link {\n\n    fn send(&self) {}\n}\nfn send() {}\n";
+        let spot = position(text, 2, "send", 1, true).unwrap();
+        assert_eq!(spot.position, json!({ "line": 3, "character": 7 }));
+        assert_eq!(spot.moved_to, Some(4));
+        assert_eq!(
+            position(text, 99, "send", 1, true).unwrap().moved_to,
+            Some(6),
+            "past the end: the last"
+        );
+        assert!(
+            position(text, 2, "send", 1, false).is_err(),
+            "a rename takes no other line"
+        );
+        assert!(position(text, 2, "nowhere", 1, true).is_err());
+        assert_eq!(position(text, 4, "send", 1, true).unwrap().moved_to, None);
     }
 
     #[test]
