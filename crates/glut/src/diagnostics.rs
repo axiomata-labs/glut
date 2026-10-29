@@ -51,6 +51,13 @@ const FIRST_SETTLE: Duration = Duration::from_secs(3);
 const STALE_PROGRESS: Duration = Duration::from_secs(120);
 /// How long a server silent after edits is not waited for: it still gets each edit's text.
 const SILENT_PAUSE: Duration = Duration::from_secs(300);
+/// LSP's errors for a question overtaken by a change or cancelled by the server: asked again, they are answered.
+const CONTENT_MODIFIED: i64 = -32801;
+const REQUEST_CANCELLED: i64 = -32800;
+/// How often a question overtaken that way is asked again.
+const ASK_AGAIN: usize = 3;
+/// What [`Server::ask`] says of a question overtaken.
+const OVERTAKEN: &str = "the server's view changed while it answered; ask again in a moment";
 /// How often the waits look at the server's messages.
 const LOOK_EVERY: Duration = Duration::from_millis(250);
 
@@ -427,6 +434,12 @@ impl Server {
                     if message.get("id") == Some(&json!(id)) && message.get("method").is_none() =>
                 {
                     if let Some(error) = message.get("error") {
+                        if matches!(
+                            error["code"].as_i64(),
+                            Some(CONTENT_MODIFIED | REQUEST_CANCELLED)
+                        ) {
+                            return Err(OVERTAKEN.into());
+                        }
                         return Err(format!(
                             "the server could not answer: {}",
                             error["message"].as_str().unwrap_or("no reason given")
@@ -711,7 +724,18 @@ impl Diagnostics {
                 ));
             }
             running.asked = true;
-            running.ask(method, params(&uri, &text)?)
+            let params = params(&uri, &text)?;
+            // A document just handed over may overtake the question (rust-analyzer: content modified): the server is
+            // given its moment and asked again, so the model never sees what is Glut's to settle.
+            let mut answer = running.ask(method, params.clone());
+            for _ in 0..ASK_AGAIN {
+                if !answer.as_ref().is_err_and(|reason| reason == OVERTAKEN) {
+                    break;
+                }
+                running.wait_ready(READY_LIMIT)?;
+                answer = running.ask(method, params.clone());
+            }
+            answer
         })();
         // A server that ended or stopped listening is not asked again; a question it could not answer leaves it be.
         if answer.is_err() && running.ended() {
