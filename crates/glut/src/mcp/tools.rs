@@ -126,11 +126,13 @@ impl Tool for McpTool {
     fn call(&self, arguments: Value, context: CallContext) -> ToolFuture<'_> {
         let client = Arc::clone(&self.client);
         let tool = self.tool.clone();
+        // A question the server asks while its tool runs goes to the owner through the run's gate (T67).
+        let gate = context.gate.clone();
         Box::pin(async move {
             // The guard lives in this block so the call outlives the lock it took; the boxed future is what
             // gets dropped when a stop ends the wait.
             let mut guard = client.lock().await;
-            let mut answer = Box::pin(guard.call(&tool, arguments));
+            let mut answer = Box::pin(guard.call_asking(&tool, arguments, gate));
             loop {
                 tokio::select! {
                     result = &mut answer => {

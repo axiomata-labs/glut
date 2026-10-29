@@ -485,7 +485,11 @@ pub const PAGES: [(&str, &str); 59] = [
          /mcp remove <name> — takes it out of `~/.glut/mcp.json` and out of the session\n\
          \n\
          A server that offers no sign-in Glut can use asks for a token, typed hidden. A project's own servers are the \
-         project's to change: /mcp remove takes only yours. `glut mcp` does the same outside a session.",
+         project's to change: /mcp remove takes only yours. `glut mcp` does the same outside a session.\n\
+         \n\
+         While one of its tools runs, a server may ask you: a form (⇥ ↑↓ between the fields, space ticks, ⏎ sends, \
+         Esc closes, ⌃D declines) or a page to open (o). Only you answer it, never the model; a form that asks for a \
+         password or a key is declined, and with nobody there every question is declined.",
     ),
     (
         "images",

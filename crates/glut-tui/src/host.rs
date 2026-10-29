@@ -231,6 +231,17 @@ pub trait Host: Send + Sync + 'static {
         on_screen
     }
 
+    /// A server's question while its tool runs (T67): a form or a page. `on_screen` is the screen's card; a host may
+    /// race it with an answer of its own — only ever the owner's, never a model's.
+    fn fill<'a>(
+        &'a self,
+        asked: &'a glut::mcp::elicit::Asked,
+        on_screen: glut::mcp::elicit::ReplyFuture<'a>,
+    ) -> glut::mcp::elicit::ReplyFuture<'a> {
+        let _ = asked;
+        on_screen
+    }
+
     /// Every step of a turn, the streamed pieces too.
     fn event(&self, event: &Event) {
         let _ = event;

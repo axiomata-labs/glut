@@ -2058,6 +2058,60 @@ glut::catalog! {
         live_tokens: &'static str,
         /// The live line's last piece: the key that stops the turn.
         live_stop: &'static str,
+        /// A server's card (T67): `{server}` asks.
+        form_title: &'static str,
+        /// A server's card during a subagent's call: `{from}` the subagent, `{server}` asks.
+        form_title_from: &'static str,
+        /// A page card's key `o`.
+        page_open_key: &'static str,
+        /// A required field left empty: `{field}`.
+        form_required: &'static str,
+        /// A text shorter than the server takes: `{field}`, `{n}` characters.
+        form_too_short: &'static str,
+        /// A text longer than the server takes: `{field}`, `{n}` characters.
+        form_too_long: &'static str,
+        /// A field that wants an e-mail address: `{field}`.
+        form_not_email: &'static str,
+        /// A field that wants an address: `{field}`.
+        form_not_uri: &'static str,
+        /// A field that wants a date: `{field}`.
+        form_not_date: &'static str,
+        /// A field that wants a date and time: `{field}`.
+        form_not_date_time: &'static str,
+        /// A field that wants a number: `{field}`.
+        form_not_number: &'static str,
+        /// A field that wants a whole number: `{field}`.
+        form_not_integer: &'static str,
+        /// A number below the least: `{field}`, `{n}`.
+        form_below: &'static str,
+        /// A number above the most: `{field}`, `{n}`.
+        form_above: &'static str,
+        /// Too few options picked: `{field}`, `{n}`.
+        form_too_few: &'static str,
+        /// Too many options picked: `{field}`, `{n}`.
+        form_too_many: &'static str,
+        /// The owner sent a server's form: `{server}`.
+        form_sent: &'static str,
+        /// The owner declined a server's form or page: `{server}`.
+        form_declined: &'static str,
+        /// A server's card closed without an answer: `{server}`.
+        form_cancelled: &'static str,
+        /// A form asking a secret, declined unshown: `{server}`, `{field}` the field.
+        form_secret: &'static str,
+        /// A server's page opened in the browser: `{server}`, `{host}`.
+        page_opened: &'static str,
+        /// A page Glut could not open (over SSH): `{server}`, `{url}` whole.
+        page_open_yourself: &'static str,
+        /// The keys of a server's form.
+        hint_form: &'static str,
+        /// The keys of a server's page.
+        hint_page: &'static str,
+        /// ⏎ on a form with a field not yet on the screen: it goes there.
+        form_see_all: &'static str,
+        /// The keys of a server's form before the owner began.
+        hint_form_begin: &'static str,
+        /// The reader mode: a server's form waits, `{server}`.
+        state_asks_form: &'static str,
     }
 }
 

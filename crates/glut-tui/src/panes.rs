@@ -377,6 +377,7 @@ impl Tiled {
     fn of(report: &Report) -> Option<Tiled> {
         match report {
             Report::Ask(request, _) => Some(Tiled::Asks(request.target.clone())),
+            Report::Form(asked, _) => Some(Tiled::Asks(format!("⬡ {}", asked.server))),
             Report::Done(outcome, _) if outcome.reason != glut::FinishReason::Cancelled => {
                 Some(Tiled::Ended {
                     answered: outcome.reason == glut::FinishReason::Answered,
@@ -1077,6 +1078,10 @@ impl Panes {
         let occasion = match report {
             Report::Ask(request, _) => crate::notify::Occasion::Asks {
                 tool: request.tool.clone(),
+            },
+            // Named by its server alone: what the form asks may be the owner's to keep.
+            Report::Form(asked, _) => crate::notify::Occasion::Asks {
+                tool: glut::mcp::tools::model_name(&asked.server, ""),
             },
             Report::Done(outcome, _) if outcome.reason != glut::FinishReason::Cancelled => {
                 crate::notify::Occasion::Ended {

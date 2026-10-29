@@ -16,7 +16,8 @@ htmd.workspace = true
 # `signal`: a run ends cleanly on Ctrl-C/SIGTERM/SIGHUP; `net`: the sandbox's network proxy (HS3b).
 tokio = { workspace = true, features = ["signal", "net"] }
 serde.workspace = true
-serde_json.workspace = true
+# The fields of a server's form keep the order it named them in (T67, `mcp::elicit`).
+serde_json = { workspace = true, features = ["preserve_order"] }
 thiserror.workspace = true
 globset.workspace = true
 # A skill's `SKILL.md` frontmatter, like the roster's `AGENT.md` (HS6, K3).

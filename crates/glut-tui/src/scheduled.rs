@@ -971,6 +971,9 @@ async fn attempt(home: &Path, plan: &Plan, cancel: glut::Cancel) -> Attempt {
             Report::Ask(_, reply) => {
                 let _ = reply.send(Answer::Deny);
             }
+            Report::Form(_, reply) => {
+                let _ = reply.send(glut::mcp::elicit::Reply::Decline);
+            }
             Report::PickModel(reply) => {
                 let _ = reply.send(None);
             }

@@ -503,7 +503,12 @@ pub const PAGES: [(&str, &str); 59] = [
          \n\
          Um servidor que não oferece um login que o Glut possa usar pede um token, digitado oculto. Os servidores \
          próprios de um projeto são do projeto para mudar: /mcp remove tira só os seus. `glut mcp` faz o mesmo fora de \
-         uma sessão.",
+         uma sessão.\n\
+         \n\
+         Enquanto uma das suas ferramentas corre, um servidor pode perguntar-lhe: um formulário (⇥ ↑↓ entre os \
+         campos, espaço marca, ⏎ envia, Esc fecha, ⌃D recusa) ou uma página a abrir (o). Só você responde, nunca o \
+         modelo; um formulário que pede uma palavra-passe ou uma chave é recusado e, sem ninguém presente, toda a \
+         pergunta é recusada.",
     ),
     (
         "images",

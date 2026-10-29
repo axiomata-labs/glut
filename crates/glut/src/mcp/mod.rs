@@ -9,6 +9,7 @@
 pub mod approval;
 pub mod client;
 pub mod config;
+pub mod elicit;
 pub mod keys;
 pub mod oauth;
 pub mod tools;

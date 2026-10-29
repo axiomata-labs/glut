@@ -512,7 +512,12 @@ pub const PAGES: [(&str, &str); 59] = [
          \n\
          Un serveur qui n’offre aucune connexion que Glut sache utiliser demande un token, saisi masqué. Les serveurs \
          propres à un projet sont au projet de les changer : /mcp remove ne retire que les tiens. `glut mcp` fait de \
-         même hors d’une session.",
+         même hors d’une session.\n\
+         \n\
+         Pendant qu'un de ses outils tourne, un serveur peut te demander : un formulaire (⇥ ↑↓ entre les champs, \
+         espace coche, ⏎ envoie, Esc ferme, ⌃D refuse) ou une page à ouvrir (o). Toi seul y réponds, jamais le modèle \
+         ; un formulaire qui demande un mot de passe ou une clé est refusé, et sans personne toute question est \
+         refusée.",
     ),
     (
         "images",

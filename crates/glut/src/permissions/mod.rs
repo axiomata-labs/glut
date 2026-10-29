@@ -939,6 +939,15 @@ pub trait Asker: Send + Sync {
     fn present(&self) -> bool {
         true
     }
+
+    /// Shows a server's question to the owner and returns their answer (T67) — a form to fill in, a page to open, or
+    /// a form Glut declined for asking a secret, which is only told. An asker that shows no forms declines them.
+    fn fill<'a>(
+        &'a self,
+        _asked: &'a crate::mcp::elicit::Asked,
+    ) -> crate::mcp::elicit::ReplyFuture<'a> {
+        Box::pin(async { crate::mcp::elicit::Reply::Decline })
+    }
 }
 
 /// Nobody to ask (headless): every ask is refused.
@@ -1365,6 +1374,21 @@ impl Gate {
         };
         let _one_at_a_time = self.asking.lock().await;
         self.asker.ask(&request).await
+    }
+
+    /// Puts a server's question to the owner (T67): one question at a time like every ask, declined without asking
+    /// when nobody is there, cancelled when the owner has not answered within [`crate::mcp::elicit::WAIT`]. Only the
+    /// owner answers it: the asker shows it, the model never sees it.
+    pub async fn fill(&self, mut asked: crate::mcp::elicit::Asked) -> crate::mcp::elicit::Reply {
+        use crate::mcp::elicit::{Reply, WAIT};
+        if !self.asker.present() {
+            return Reply::Decline;
+        }
+        asked.from = subagent().map(|(_, label)| label);
+        let _one_at_a_time = self.asking.lock().await;
+        tokio::time::timeout(WAIT, self.asker.fill(&asked))
+            .await
+            .unwrap_or(Reply::Cancel)
     }
 
     /// The mode as the flags and settings spell it (`plan`, `accept_edits`, …).

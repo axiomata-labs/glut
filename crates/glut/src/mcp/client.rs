@@ -12,7 +12,8 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::process::Stdio as Piped;
-use std::time::Duration;
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use reqwest::header::{ACCEPT, CONTENT_TYPE};
 use serde_json::{Value, json};
@@ -21,13 +22,15 @@ use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::time::timeout;
 
 use super::config::{ServerConfig, expand_vars};
+use super::elicit;
 use super::keys::{Keys, Signed};
 use crate::config::API_KEY_ENV;
 use crate::error::HarnessError;
+use crate::permissions::Gate;
 
-/// The protocol version the client proposes. The server answers with the one it speaks, and nothing here is
-/// version-specific, so whichever comes back is taken.
-const PROTOCOL_VERSION: &str = "2025-06-18";
+/// The protocol version the client proposes: the first with a page among the questions a server may ask (T67). The
+/// server answers with the one it speaks, and nothing here is version-specific, so whichever comes back is taken.
+const PROTOCOL_VERSION: &str = "2025-11-25";
 /// How long a server may take to start and to list its tools (M3): a handshake that hangs must not eat the
 /// run's own time limit.
 const START_TIMEOUT: Duration = Duration::from_secs(30);
@@ -46,6 +49,13 @@ const MAX_ANSWER_BYTES: usize = 16 * 1024 * 1024;
 const ERROR_BODY_CHARS: usize = 500;
 /// The header a Streamable HTTP server issues its session id with, and which every later request sends back.
 const SESSION_HEADER: &str = "mcp-session-id";
+/// JSON-RPC's code for a method nobody here answers.
+const METHOD_NOT_FOUND: i64 = -32601;
+/// The most questions a server may ask the owner during one request (T67): a tool asks what it needs, it does not
+/// keep a call alive by asking.
+const MAX_QUESTIONS: usize = 5;
+/// How often a request whose clock stands still looks whether it runs again.
+const STOPPED_POLL: Duration = Duration::from_secs(1);
 
 /// A failure of one MCP server: it is reported and left out, the run goes on without it.
 fn mcp_err(server: &str, message: impl Into<String>) -> HarnessError {
@@ -63,6 +73,167 @@ pub struct Request {
     pub params: Value,
 }
 
+/// What a request answers the server's own requests with while it waits for its answer (T67): a `ping`, and a
+/// question to the owner through the gate of the call it serves — none during the handshake, so a server asking then
+/// hears a decline. Everything else is a method Glut does not offer.
+pub struct Asks {
+    gate: Option<Arc<Gate>>,
+    clock: Clock,
+    /// How many questions the server asked so far, and whether the owner turned one down — after which every
+    /// further one of this request is declined unasked.
+    asked: std::sync::atomic::AtomicUsize,
+    refused: std::sync::atomic::AtomicBool,
+}
+
+impl Asks {
+    /// Nobody to ask: every question is declined.
+    pub fn nobody() -> Self {
+        Asks::through(None)
+    }
+
+    fn through(gate: Option<Arc<Gate>>) -> Self {
+        Asks {
+            gate,
+            clock: Clock::default(),
+            asked: std::sync::atomic::AtomicUsize::new(0),
+            refused: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    /// The response to `message` when it is the server's own request, [`None`] for anything else (a notification,
+    /// an answer).
+    async fn answer(&self, server: &str, message: &Value) -> Option<Value> {
+        let id = message
+            .get("id")
+            .filter(|id| id.is_number() || id.is_string())?
+            .clone();
+        let method = message.get("method").and_then(Value::as_str)?;
+        let outcome = match method {
+            "ping" => Ok(json!({})),
+            "elicitation/create" => Ok(self
+                .elicit(server, message.get("params").unwrap_or(&Value::Null))
+                .await),
+            _ => {
+                Err(json!({"code": METHOD_NOT_FOUND, "message": "glut does not offer this method"}))
+            }
+        };
+        Some(match outcome {
+            Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
+            Err(error) => json!({"jsonrpc": "2.0", "id": id, "error": error}),
+        })
+    }
+
+    /// The owner's answer to a server's question — a decline when it is none Glut shows, or nobody is there. The
+    /// request's clock stands still while the owner answers: a form is not the server's slowness.
+    async fn elicit(&self, server: &str, params: &Value) -> Value {
+        use std::sync::atomic::Ordering;
+        let asked = self.asked.fetch_add(1, Ordering::SeqCst) + 1;
+        if asked > MAX_QUESTIONS || self.refused.load(Ordering::SeqCst) {
+            return elicit::Reply::Decline.result();
+        }
+        let reply = match (&self.gate, elicit::parse(params)) {
+            (Some(gate), Ok(what)) => {
+                let _stopped = self.clock.stop();
+                gate.fill(elicit::Asked {
+                    server: server.to_owned(),
+                    from: None,
+                    what,
+                })
+                .await
+            }
+            _ => elicit::Reply::Decline,
+        };
+        if !matches!(reply, elicit::Reply::Accept(_)) {
+            self.refused.store(true, Ordering::SeqCst);
+        }
+        reply.result()
+    }
+}
+
+/// What a request dropped half way left unsaid to its server (T67) — a stop while it ran, or while the owner filled
+/// in a form: said before the next request goes out, so the server neither waits for ever nor carries on.
+#[derive(Default)]
+struct Owed {
+    /// The request under way: it is cancelled if it never came back.
+    open: Option<u64>,
+    /// The ids of the server's questions put to the owner and not yet answered: each hears a cancel.
+    questions: Vec<Value>,
+}
+
+impl Owed {
+    /// The messages that settle what was left: one per unanswered question, then the cancel of the request.
+    fn settle(&mut self) -> Vec<Value> {
+        let mut messages: Vec<Value> = std::mem::take(&mut self.questions)
+            .into_iter()
+            .map(|id| json!({"jsonrpc": "2.0", "id": id, "result": elicit::Reply::Cancel.result()}))
+            .collect();
+        if let Some(id) = self.open.take() {
+            messages.push(json!({
+                "jsonrpc": "2.0",
+                "method": "notifications/cancelled",
+                "params": {"requestId": id, "reason": "the run was stopped"},
+            }));
+        }
+        messages
+    }
+
+    /// The question `message` is put to the owner now, if it is one.
+    fn asking(&mut self, message: &Value) -> bool {
+        let question = message.get("method").and_then(Value::as_str) == Some("elicitation/create");
+        if let (true, Some(id)) = (question, message.get("id")) {
+            self.questions.push(id.clone());
+        }
+        question
+    }
+}
+
+/// How long a request's clock stood still for the owner (T67).
+#[derive(Default)]
+struct Clock(Mutex<Stopped>);
+
+#[derive(Default)]
+struct Stopped {
+    since: Option<Instant>,
+    before: Duration,
+}
+
+impl Clock {
+    /// Stops the clock until the guard is dropped.
+    fn stop(&self) -> Stop<'_> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner).since = Some(Instant::now());
+        Stop(self)
+    }
+
+    /// How long it stood still so far, the stop under way included.
+    fn is_stopped(&self) -> bool {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .since
+            .is_some()
+    }
+
+    fn stopped(&self) -> Duration {
+        let stopped = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        stopped.before
+            + stopped
+                .since
+                .map_or(Duration::ZERO, |since| since.elapsed())
+    }
+}
+
+/// A stopped [`Clock`]; it runs again when this is dropped.
+struct Stop<'a>(&'a Clock);
+
+impl Drop for Stop<'_> {
+    fn drop(&mut self) {
+        let mut stopped = self.0.0.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(since) = stopped.since.take() {
+            stopped.before += since.elapsed();
+        }
+    }
+}
+
 /// One answer of a transport — boxed so two very different transports still fit behind [`Transport`], the way
 /// [`crate::tools::ToolFuture`] does for the tools.
 pub type TransportFuture<'a, T> =
@@ -72,8 +243,9 @@ pub type TransportFuture<'a, T> =
 pub trait Transport: Send {
     /// Sends a request and returns the `result` of the response carrying its id. Notifications, answers to
     /// requests the harness no longer waits for and lines that are no JSON are on the way to it and skipped —
-    /// a chatty server must not be able to wedge a request.
-    fn send(&mut self, request: Request) -> TransportFuture<'_, Value>;
+    /// a chatty server must not be able to wedge a request. A request of the server's own on the way is answered
+    /// through `asks` (T67).
+    fn send<'a>(&'a mut self, request: Request, asks: &'a Asks) -> TransportFuture<'a, Value>;
     /// Sends a message nobody answers (`notifications/initialized`).
     fn notify(&mut self, method: String, params: Value) -> TransportFuture<'_, ()>;
 }
@@ -98,6 +270,7 @@ pub struct Stdio {
     child: Child,
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
+    owed: Owed,
 }
 
 impl Stdio {
@@ -137,6 +310,7 @@ impl Stdio {
             child,
             stdin,
             stdout: BufReader::new(stdout),
+            owed: Owed::default(),
         })
     }
 
@@ -223,7 +397,7 @@ impl Drop for Stdio {
 }
 
 impl Transport for Stdio {
-    fn send(&mut self, request: Request) -> TransportFuture<'_, Value> {
+    fn send<'a>(&'a mut self, request: Request, asks: &'a Asks) -> TransportFuture<'a, Value> {
         Box::pin(async move {
             let id = request.id;
             let message = json!({
@@ -232,18 +406,14 @@ impl Transport for Stdio {
                 "method": request.method,
                 "params": request.params,
             });
-            self.write(&message).await?;
-            loop {
-                let line = self.read_line().await?;
-                let Ok(response) = serde_json::from_str::<Value>(&line) else {
-                    // No JSON: something the server printed of its own accord. Read past it (M3).
-                    continue;
-                };
-                match result_for(&self.server, &response, id)? {
-                    Some(result) => return Ok(result),
-                    None => continue,
-                }
+            for settled in self.owed.settle() {
+                self.write(&settled).await?;
             }
+            self.owed.open = Some(id);
+            self.write(&message).await?;
+            let answer = self.answer_to(id, asks).await;
+            self.owed.open = None;
+            answer
         })
     }
 
@@ -252,6 +422,35 @@ impl Transport for Stdio {
             self.write(&json!({"jsonrpc": "2.0", "method": method, "params": params}))
                 .await
         })
+    }
+}
+
+impl Stdio {
+    /// Reads until the answer to `id`, answering the server's own requests on the way.
+    async fn answer_to(&mut self, id: u64, asks: &Asks) -> Result<Value, HarnessError> {
+        loop {
+            let line = self.read_line().await?;
+            let Ok(response) = serde_json::from_str::<Value>(&line) else {
+                // No JSON: something the server printed of its own accord. Read past it (M3).
+                continue;
+            };
+            // A message with a method is the server's own — never the answer, whatever its id.
+            if response.get("method").is_some() {
+                let question = self.owed.asking(&response);
+                let reply = asks.answer(&self.server, &response).await;
+                if question {
+                    self.owed.questions.pop();
+                }
+                if let Some(reply) = reply {
+                    self.write(&reply).await?;
+                }
+                continue;
+            }
+            match result_for(&self.server, &response, id)? {
+                Some(result) => return Ok(result),
+                None => continue,
+            }
+        }
     }
 }
 
@@ -290,6 +489,7 @@ pub struct Http {
     signed: Option<Signed>,
     /// Where a refreshed grant is kept.
     keys: Keys,
+    owed: Owed,
 }
 
 impl Http {
@@ -319,8 +519,10 @@ impl Http {
             })?;
             resolved.insert(name.clone(), value);
         }
+        // No time limit on the whole exchange: the client's own ([`Client::request`]) holds it, and stands still while
+        // the owner fills in a form the server asked for in the middle of a stream (T67).
         let client = reqwest::Client::builder()
-            .timeout(CALL_TIMEOUT)
+            .connect_timeout(START_TIMEOUT)
             // A redirect would carry the headers to a host the owner never named.
             .redirect(reqwest::redirect::Policy::none())
             .build()
@@ -342,6 +544,7 @@ impl Http {
             session: None,
             signed,
             keys: keys.clone(),
+            owed: Owed::default(),
         })
     }
 
@@ -510,7 +713,7 @@ fn shown_url(url: &str) -> String {
 }
 
 impl Transport for Http {
-    fn send(&mut self, request: Request) -> TransportFuture<'_, Value> {
+    fn send<'a>(&'a mut self, request: Request, asks: &'a Asks) -> TransportFuture<'a, Value> {
         Box::pin(async move {
             let id = request.id;
             let body = json!({
@@ -519,16 +722,17 @@ impl Transport for Http {
                 "method": request.method,
                 "params": request.params,
             });
-            let response = self.exchange(&body).await?;
-            let streaming = is_stream(&response);
-            if streaming {
-                return read_stream(&self.server, response, id).await;
+            // What a request dropped half way left unsaid goes first; a server that takes it no more is no reason
+            // to fail this one.
+            for settled in self.owed.settle() {
+                if let Ok(response) = self.exchange(&settled).await {
+                    let _ = read_body(&self.server, response).await;
+                }
             }
-            let text = read_body(&self.server, response).await?;
-            let value: Value = serde_json::from_str(&text)
-                .map_err(|_| mcp_err(&self.server, "its answer is no JSON"))?;
-            result_for(&self.server, &value, id)?
-                .ok_or_else(|| mcp_err(&self.server, "its answer was for another request"))
+            self.owed.open = Some(id);
+            let answer = self.answer_to(&body, id, asks).await;
+            self.owed.open = None;
+            answer
         })
     }
 
@@ -540,6 +744,31 @@ impl Transport for Http {
             let response = self.exchange(&body).await?;
             read_body(&self.server, response).await.map(|_| ())
         })
+    }
+}
+
+impl Http {
+    /// Posts `body` and reads its answer, a stream's or a plain one.
+    async fn answer_to(
+        &mut self,
+        body: &Value,
+        id: u64,
+        asks: &Asks,
+    ) -> Result<Value, HarnessError> {
+        let response = self.exchange(body).await?;
+        let streaming = is_stream(&response);
+        if streaming {
+            return self.read_stream(response, id, asks).await;
+        }
+        let text = read_body(&self.server, response).await?;
+        let value: Value = serde_json::from_str(&text)
+            .map_err(|_| mcp_err(&self.server, "its answer is no JSON"))?;
+        // A plain answer cannot ask: a message with a method is none, whatever its id.
+        if value.get("method").is_some() {
+            return Err(mcp_err(&self.server, "its answer was a request of its own"));
+        }
+        result_for(&self.server, &value, id)?
+            .ok_or_else(|| mcp_err(&self.server, "its answer was for another request"))
     }
 }
 
@@ -579,65 +808,88 @@ async fn read_body(server: &str, mut response: reqwest::Response) -> Result<Stri
     String::from_utf8(body).map_err(|_| mcp_err(server, "its answer is no UTF-8"))
 }
 
-/// Reads a `text/event-stream` answer until the response with `id` arrives (M3): a `data:` line carries part of
-/// one event, a blank line ends it. An event that does not answer this request — a server's own notification,
-/// on the way to the answer — is read and dropped.
-async fn read_stream(
-    server: &str,
-    mut response: reqwest::Response,
-    id: u64,
-) -> Result<Value, HarnessError> {
-    let mut pending: Vec<u8> = Vec::new();
-    let mut event: Vec<String> = Vec::new();
-    let mut total = 0usize;
-    loop {
-        let chunk = response.chunk().await.map_err(|err| {
-            mcp_err(
-                server,
-                format!("reading its stream failed: {}", err.without_url()),
-            )
-        })?;
-        let Some(chunk) = chunk else {
-            // The stream ended: an event without its blank line still counts, one last time.
-            let answer = event_answer(server, &event, id)?;
-            return answer.ok_or_else(|| mcp_err(server, "it ended its stream before answering"));
-        };
-        total += chunk.len();
-        if total > MAX_ANSWER_BYTES {
-            return Err(mcp_err(server, "its answer is too large"));
-        }
-        pending.extend_from_slice(&chunk);
-        while let Some(newline) = pending.iter().position(|byte| *byte == b'\n') {
-            let mut line: Vec<u8> = pending.drain(..=newline).collect();
-            line.pop();
-            if line.last() == Some(&b'\r') {
+impl Http {
+    /// Reads a `text/event-stream` answer until the response with `id` arrives (M3): a `data:` line carries part of
+    /// one event, a blank line ends it. An event that does not answer this request — a server's own notification,
+    /// on the way to the answer — is read and dropped; a request of the server's own is answered with a `POST` of its
+    /// own (T67).
+    async fn read_stream(
+        &mut self,
+        mut response: reqwest::Response,
+        id: u64,
+        asks: &Asks,
+    ) -> Result<Value, HarnessError> {
+        let mut pending: Vec<u8> = Vec::new();
+        let mut event: Vec<String> = Vec::new();
+        let mut total = 0usize;
+        loop {
+            let chunk = response.chunk().await.map_err(|err| {
+                mcp_err(
+                    &self.server,
+                    format!("reading its stream failed: {}", err.without_url()),
+                )
+            })?;
+            let Some(chunk) = chunk else {
+                // The stream ended: an event without its blank line still counts, one last time.
+                let answer = self.take_event(&event, id, asks).await?;
+                return answer
+                    .ok_or_else(|| mcp_err(&self.server, "it ended its stream before answering"));
+            };
+            total += chunk.len();
+            if total > MAX_ANSWER_BYTES {
+                return Err(mcp_err(&self.server, "its answer is too large"));
+            }
+            pending.extend_from_slice(&chunk);
+            while let Some(newline) = pending.iter().position(|byte| *byte == b'\n') {
+                let mut line: Vec<u8> = pending.drain(..=newline).collect();
                 line.pop();
-            }
-            if line.is_empty() {
-                let answer = event_answer(server, &event, id)?;
-                event.clear();
-                if let Some(answer) = answer {
-                    return Ok(answer);
+                if line.last() == Some(&b'\r') {
+                    line.pop();
                 }
-            } else if let Some(data) = data_of(&line) {
-                event.push(data);
+                if line.is_empty() {
+                    let answer = self.take_event(&event, id, asks).await?;
+                    event.clear();
+                    if let Some(answer) = answer {
+                        return Ok(answer);
+                    }
+                } else if let Some(data) = data_of(&line) {
+                    event.push(data);
+                }
+                // `event:`, `id:`, `retry:` and comments (`: …`) say nothing this waits for; HS5 reads the answer
+                // only.
             }
-            // `event:`, `id:`, `retry:` and comments (`: …`) say nothing this waits for; HS5 reads the answer
-            // only.
         }
     }
-}
 
-/// One finished event as the answer to `id`, or [`None`] when it is not that answer.
-fn event_answer(server: &str, event: &[String], id: u64) -> Result<Option<Value>, HarnessError> {
-    if event.is_empty() {
-        return Ok(None);
+    /// One finished event as the answer to `id`, or [`None`] when it is not that answer — a request of the
+    /// server's own answered on the way.
+    async fn take_event(
+        &mut self,
+        event: &[String],
+        id: u64,
+        asks: &Asks,
+    ) -> Result<Option<Value>, HarnessError> {
+        if event.is_empty() {
+            return Ok(None);
+        }
+        let Ok(value) = serde_json::from_str::<Value>(&event.join("\n")) else {
+            // Not JSON-RPC: some servers send a keep-alive as data. It is not the answer either.
+            return Ok(None);
+        };
+        if value.get("method").is_some() {
+            let question = self.owed.asking(&value);
+            let reply = asks.answer(&self.server, &value).await;
+            if question {
+                self.owed.questions.pop();
+            }
+            if let Some(reply) = reply {
+                let posted = self.exchange(&reply).await?;
+                read_body(&self.server, posted).await?;
+            }
+            return Ok(None);
+        }
+        result_for(&self.server, &value, id)
     }
-    let Ok(value) = serde_json::from_str::<Value>(&event.join("\n")) else {
-        // Not JSON-RPC: some servers send a keep-alive as data. It is not the answer either.
-        return Ok(None);
-    };
-    result_for(server, &value, id)
 }
 
 /// The payload of one SSE line, [`None`] for every line that carries no `data:`.
@@ -755,11 +1007,14 @@ impl Client {
         };
         let initialize = json!({
             "protocolVersion": PROTOCOL_VERSION,
-            "capabilities": {},
+            // A form and a page to open (T67): only the owner answers either, through the gate of the call.
+            "capabilities": {"elicitation": {"form": {}, "url": {}}},
             "clientInfo": {"name": "glut", "version": env!("CARGO_PKG_VERSION")},
         });
         let start = client.start;
-        client.request("initialize", initialize, start).await?;
+        client
+            .request("initialize", initialize, start, None)
+            .await?;
         client.notify("notifications/initialized").await?;
         let tools = client.list().await?;
         client.tools = tools;
@@ -772,7 +1027,11 @@ impl Client {
         /// A transport that answers nothing; these tests never send through it.
         struct Nowhere;
         impl Transport for Nowhere {
-            fn send(&mut self, _request: Request) -> TransportFuture<'_, Value> {
+            fn send<'a>(
+                &'a mut self,
+                _request: Request,
+                _asks: &'a Asks,
+            ) -> TransportFuture<'a, Value> {
                 Box::pin(async { Err(mcp_err("nowhere", "not connected")) })
             }
             fn notify(&mut self, _method: String, _params: Value) -> TransportFuture<'_, ()> {
@@ -794,12 +1053,14 @@ impl Client {
         &self.tools
     }
 
-    /// One request on the wire, held to `limit` (M3).
+    /// One request on the wire, held to `limit` (M3) — the time the owner takes over a question the server asks on
+    /// the way through `gate` not counted (T67).
     async fn request(
         &mut self,
         method: &str,
         params: Value,
         limit: Duration,
+        gate: Option<Arc<Gate>>,
     ) -> Result<Value, HarnessError> {
         let id = self.next_id;
         self.next_id = self.next_id.wrapping_add(1);
@@ -808,12 +1069,27 @@ impl Client {
             method: method.to_owned(),
             params,
         };
-        match timeout(limit, self.transport.send(request)).await {
-            Ok(answer) => answer,
-            Err(_) => Err(HarnessError::McpTimeout {
-                server: self.server.clone(),
-                timeout: limit,
-            }),
+        let asks = Asks::through(gate);
+        let started = Instant::now();
+        let mut answer = self.transport.send(request, &asks);
+        loop {
+            let mut deadline = started + limit + asks.clock.stopped();
+            // While the owner answers the deadline moves on with the clock: look again a while later, not at once.
+            if asks.clock.is_stopped() {
+                deadline = deadline.max(Instant::now() + STOPPED_POLL);
+            }
+            tokio::select! {
+                biased;
+                result = &mut answer => return result,
+                () = tokio::time::sleep_until(deadline.into()) => {
+                    if Instant::now() >= started + limit + asks.clock.stopped() {
+                        return Err(HarnessError::McpTimeout {
+                            server: self.server.clone(),
+                            timeout: limit,
+                        });
+                    }
+                }
+            }
         }
     }
 
@@ -840,7 +1116,7 @@ impl Client {
             if let Some(page) = &cursor {
                 params["cursor"] = Value::String(page.clone());
             }
-            let answer = self.request("tools/list", params, limit).await?;
+            let answer = self.request("tools/list", params, limit, None).await?;
             let Some(list) = answer.get("tools").and_then(Value::as_array) else {
                 return Err(mcp_err(
                     &self.server,
@@ -873,12 +1149,28 @@ impl Client {
     /// [`HarnessError::Mcp`] for a refused or broken answer, [`HarnessError::McpTimeout`] when none comes
     /// within [`CALL_TIMEOUT`].
     pub async fn call(&mut self, tool: &str, arguments: Value) -> Result<String, HarnessError> {
+        self.call_asking(tool, arguments, None).await
+    }
+
+    /// [`Self::call`] where the server may ask the owner through `gate` while its tool runs (T67): a form, a page to
+    /// open. Without a gate every such question is declined.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::call`]; the owner's time over a question does not count towards [`CALL_TIMEOUT`].
+    pub async fn call_asking(
+        &mut self,
+        tool: &str,
+        arguments: Value,
+        gate: Option<Arc<Gate>>,
+    ) -> Result<String, HarnessError> {
         let limit = self.call;
         let result = self
             .request(
                 "tools/call",
                 json!({"name": tool, "arguments": arguments}),
                 limit,
+                gate,
             )
             .await?;
         let text = result_text(&result);
@@ -1114,6 +1406,28 @@ mod tests {
                 });
                 let _ = writeln!(writer, "{notification}");
             }
+            // A tool that asks the owner first (T67): the question goes out, its answer comes back as the tool's text.
+            if method == "tools/call"
+                && message.pointer("/params/name").and_then(Value::as_str) == Some("ask")
+            {
+                let question = json!({
+                    "jsonrpc": "2.0", "id": 1, "method": "elicitation/create",
+                    "params": {"message": "Who?", "requestedSchema": {
+                        "type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}},
+                });
+                let _ = writeln!(writer, "{question}");
+                let _ = writer.flush();
+                let mut reply = String::new();
+                if reader.read_line(&mut reply).is_err() {
+                    return;
+                }
+                let reply: Value = serde_json::from_str(&reply).unwrap_or(Value::Null);
+                let text = format!("{}|{}", reply["id"], reply["result"]);
+                let answer = json!({"jsonrpc": "2.0", "id": id, "result": {"content": [{"type": "text", "text": text}]}});
+                let _ = writeln!(writer, "{answer}");
+                let _ = writer.flush();
+                continue;
+            }
             let result = match (id, method.as_str()) {
                 (Some(_), "initialize") => Some(json!({
                     "protocolVersion": PROTOCOL_VERSION,
@@ -1222,6 +1536,135 @@ mod tests {
         // A content item that is no text becomes a line naming what was left out.
         let mixed = client.call("mixed", json!({})).await.unwrap();
         assert_eq!(mixed, "one\n[image omitted]\ntwo");
+    }
+
+    /// An asker that fills every form with a name, after `delay`, and remembers what it was asked.
+    struct Fills {
+        delay: Duration,
+        asked: StdMutex<Vec<elicit::Asked>>,
+    }
+
+    impl crate::permissions::Asker for Fills {
+        fn ask<'a>(
+            &'a self,
+            _request: &'a crate::permissions::AskRequest,
+        ) -> crate::permissions::AnswerFuture<'a> {
+            Box::pin(async { crate::permissions::Answer::Deny })
+        }
+
+        fn fill<'a>(&'a self, asked: &'a elicit::Asked) -> elicit::ReplyFuture<'a> {
+            self.asked.lock().unwrap().push(asked.clone());
+            Box::pin(async move {
+                tokio::time::sleep(self.delay).await;
+                let mut content = serde_json::Map::new();
+                content.insert("name".into(), json!("Ada"));
+                elicit::Reply::Accept(content)
+            })
+        }
+    }
+
+    fn gate_filling(delay: Duration) -> (Arc<Gate>, Arc<Fills>) {
+        let fills = Arc::new(Fills {
+            delay,
+            asked: StdMutex::new(Vec::new()),
+        });
+        let gate = Gate::new(
+            crate::permissions::RuleSet::default(),
+            crate::permissions::Mode::Default,
+            Arc::clone(&fills) as Arc<dyn crate::permissions::Asker>,
+        );
+        (Arc::new(gate), fills)
+    }
+
+    #[tokio::test]
+    async fn a_servers_question_goes_to_the_owner_and_the_wait_is_not_the_servers() {
+        let config = mock("serve", None);
+        // A call may take a second; the owner takes longer over the form, which must not end it.
+        let mut client = Client::connect_within(
+            "mock",
+            &config,
+            &Keys::none(),
+            Duration::from_secs(30),
+            Duration::from_secs(1),
+        )
+        .await
+        .unwrap();
+        let (gate, fills) = gate_filling(Duration::from_millis(1_500));
+        let text = client
+            .call_asking("ask", json!({}), Some(gate))
+            .await
+            .unwrap();
+        assert_eq!(text, r#"1|{"action":"accept","content":{"name":"Ada"}}"#);
+        let asked = fills.asked.lock().unwrap().clone();
+        assert_eq!(asked.len(), 1);
+        assert_eq!(asked[0].server, "mock");
+        assert!(matches!(&asked[0].what, elicit::What::Form(form) if form.message == "Who?"));
+
+        // Without a gate nobody is asked: the server hears a decline at once.
+        let text = client.call("ask", json!({})).await.unwrap();
+        assert_eq!(text, r#"1|{"action":"decline"}"#);
+    }
+
+    #[tokio::test]
+    async fn a_request_asks_the_owner_a_few_times_at_most_and_never_after_a_no() {
+        let form = json!({"message": "m", "requestedSchema": {"type": "object", "properties": {}}});
+        let (gate, fills) = gate_filling(Duration::ZERO);
+        let asks = Asks::through(Some(gate));
+        for _ in 0..MAX_QUESTIONS + 2 {
+            asks.elicit("mock", &form).await;
+        }
+        assert_eq!(fills.asked.lock().unwrap().len(), MAX_QUESTIONS);
+
+        struct Declines(StdMutex<usize>);
+        impl crate::permissions::Asker for Declines {
+            fn ask<'a>(
+                &'a self,
+                _request: &'a crate::permissions::AskRequest,
+            ) -> crate::permissions::AnswerFuture<'a> {
+                Box::pin(async { crate::permissions::Answer::Deny })
+            }
+            fn fill<'a>(&'a self, _asked: &'a elicit::Asked) -> elicit::ReplyFuture<'a> {
+                *self.0.lock().unwrap() += 1;
+                Box::pin(async { elicit::Reply::Decline })
+            }
+        }
+        let declines = Arc::new(Declines(StdMutex::new(0)));
+        let gate = Gate::new(
+            crate::permissions::RuleSet::default(),
+            crate::permissions::Mode::Default,
+            Arc::clone(&declines) as Arc<dyn crate::permissions::Asker>,
+        );
+        let asks = Asks::through(Some(Arc::new(gate)));
+        assert_eq!(
+            asks.elicit("mock", &form).await,
+            json!({"action": "decline"})
+        );
+        assert_eq!(
+            asks.elicit("mock", &form).await,
+            json!({"action": "decline"})
+        );
+        assert_eq!(
+            *declines.0.lock().unwrap(),
+            1,
+            "the second question was declined unasked"
+        );
+    }
+
+    #[test]
+    fn what_a_dropped_request_left_is_settled_once() {
+        let mut owed = Owed {
+            open: Some(7),
+            questions: vec![json!("q1")],
+        };
+        assert_eq!(
+            owed.settle(),
+            vec![
+                json!({"jsonrpc": "2.0", "id": "q1", "result": {"action": "cancel"}}),
+                json!({"jsonrpc": "2.0", "method": "notifications/cancelled",
+                       "params": {"requestId": 7, "reason": "the run was stopped"}}),
+            ]
+        );
+        assert!(owed.settle().is_empty());
     }
 
     #[tokio::test]
@@ -1462,6 +1905,58 @@ mod tests {
             ["ping"],
             "the stream was read to its answer, not to its first event"
         );
+    }
+
+    #[tokio::test]
+    async fn a_question_in_a_stream_is_answered_with_a_post_of_its_own() {
+        let replied = Arc::new(StdMutex::new(false));
+        let replied_in_server = Arc::clone(&replied);
+        let (url, _seen) = fake_http(move |method, id| match method {
+            "tools/call" => Answer::sse(&[
+                json!({"jsonrpc": "2.0", "id": 77, "method": "elicitation/create", "params": {
+                    "mode": "url", "message": "Sign in", "url": "https://example.com/in", "elicitationId": "e"}}),
+                json!({"jsonrpc": "2.0", "id": id, "result": {"content": [{"type": "text", "text": "done"}]}}),
+            ]),
+            // The owner's answer: a message without a method, under the server's id.
+            "" if id == 77 => {
+                *replied_in_server.lock().unwrap() = true;
+                Answer {
+                    status: 202,
+                    content_type: "application/json",
+                    headers: Vec::new(),
+                    body: String::new(),
+                }
+            }
+            _ => handshake(method, id),
+        })
+        .await;
+        let config = ServerConfig::Http {
+            url,
+            headers: BTreeMap::new(),
+            oauth: None,
+        };
+        let mut client = Client::connect_within(
+            "mail",
+            &config,
+            &Keys::none(),
+            Duration::from_secs(10),
+            Duration::from_secs(10),
+        )
+        .await
+        .unwrap();
+        let (gate, fills) = gate_filling(Duration::ZERO);
+        assert_eq!(
+            client
+                .call_asking("ping", json!({}), Some(gate))
+                .await
+                .unwrap(),
+            "done"
+        );
+        assert!(*replied.lock().unwrap(), "the answer was posted back");
+        assert!(matches!(
+            &fills.asked.lock().unwrap()[0].what,
+            elicit::What::Page { url, .. } if url == "https://example.com/in"
+        ));
     }
 
     #[tokio::test]

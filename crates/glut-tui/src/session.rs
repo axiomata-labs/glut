@@ -29,6 +29,11 @@ pub enum Report {
     Event(Event),
     /// A question of the gate, waiting for the owner's answer.
     Ask(AskRequest, oneshot::Sender<Answer>),
+    /// A server's question while its tool runs (T67): a form or a page, waiting for the owner's answer.
+    Form(
+        glut::mcp::elicit::Asked,
+        oneshot::Sender<glut::mcp::elicit::Reply>,
+    ),
     /// The turn ended; the conversation goes on from `conversation`.
     Done(RunOutcome, Vec<Message>),
     /// `/compact` ended: the shorter conversation, or why there is none.
@@ -135,6 +140,29 @@ impl Asker for OnScreen {
         Box::pin(async move {
             let _waiting = Waiting::start(&self.host, &self.open);
             self.host.ask(request, on_screen).await
+        })
+    }
+
+    fn fill<'a>(
+        &'a self,
+        asked: &'a glut::mcp::elicit::Asked,
+    ) -> glut::mcp::elicit::ReplyFuture<'a> {
+        use glut::mcp::elicit::Reply;
+        let (reply, answer) = oneshot::channel();
+        let sent = self
+            .reports
+            .send(Report::Form(asked.clone(), reply))
+            .is_ok();
+        // A card the screen closed without an answer — a turn that ended, a pane that went — is a cancel.
+        let on_screen: glut::mcp::elicit::ReplyFuture<'a> = Box::pin(async move {
+            if !sent {
+                return Reply::Decline;
+            }
+            answer.await.unwrap_or(Reply::Cancel)
+        });
+        Box::pin(async move {
+            let _waiting = Waiting::start(&self.host, &self.open);
+            self.host.fill(asked, on_screen).await
         })
     }
 }

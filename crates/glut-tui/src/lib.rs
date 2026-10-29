@@ -16,6 +16,7 @@ mod export;
 mod finder;
 mod follow;
 mod footer;
+mod form;
 mod glimm;
 mod graphics;
 mod guides;

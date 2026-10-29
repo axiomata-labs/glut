@@ -344,6 +344,8 @@ pub struct App {
     /// The turn under way: its cancel.
     running: Option<Cancel>,
     pub ask: Option<OpenAsk>,
+    /// A server's question while its tool runs (T67): its card stands where the gate's would.
+    pub form: Option<crate::form::OpenForm>,
     pub usage: Usage,
     pub cost: Option<f64>,
     /// The prices of the subagents on a model of their own (T37a), by their `task` call: what their calls cost.
@@ -662,6 +664,7 @@ impl App {
             busy: None,
             running: None,
             ask: None,
+            form: None,
             usage: Usage::default(),
             cost: None,
             sub_prices: std::collections::HashMap::new(),
@@ -897,7 +900,15 @@ impl App {
                     );
                     return self.transcript.note(said, Tone::Heed);
                 }
-                None => tr!(state_asks_choose),
+                None => match &self.form {
+                    // A server's card: whose, never what it asks.
+                    Some(form) => {
+                        return self
+                            .transcript
+                            .note(tr!(state_asks_form, server = form.asked.server), Tone::Heed);
+                    }
+                    None => tr!(state_asks_choose),
+                },
             },
             State::Rests => match self.last_turn {
                 Some(true) => tr!(state_done),
@@ -1543,7 +1554,7 @@ impl App {
     /// last turn — at rest before any.
     pub fn mood(&self) -> crate::glimm::Mood {
         use crate::glimm::Mood;
-        if self.ask.is_some() {
+        if self.ask.is_some() || self.form.is_some() {
             Mood::Waiting
         } else if self.working() {
             Mood::Working
@@ -1960,6 +1971,7 @@ impl App {
                     self.second_agent_opens_tab();
                 }
             }
+            Report::Form(asked, reply) => self.open_form(asked, reply),
             Report::Ask(request, reply) => {
                 // A chord begun before the question came does not take the first key after it.
                 self.chord = false;
@@ -2076,6 +2088,7 @@ impl App {
                 }
                 // A turn that ended (cancelled, timed out) while asking dropped the question: its card goes too.
                 self.ask = None;
+                self.form = None;
                 if self.plan_view.as_ref().is_some_and(|view| view.asking) {
                     self.plan_view = None;
                 }
@@ -2187,6 +2200,7 @@ impl App {
                 self.running = None;
                 self.busy = None;
                 self.ask = None;
+                self.form = None;
                 if let Some(inbox) = self.steering.take() {
                     let mut late = inbox.take();
                     late.append(&mut self.queue);
@@ -2427,6 +2441,12 @@ impl App {
             }
             // The reading mode types nothing, a paste neither (TUI9a); a paste over the panel's keys is the input's,
             // as a key the tab does not use is (T71).
+            // A paste while a server's card is open goes into its field, never into the input under it.
+            TermEvent::Paste(text) if self.form.is_some() => {
+                if let Some(form) = &mut self.form {
+                    form.paste(&text);
+                }
+            }
             TermEvent::Paste(text)
                 if self.ask.is_none()
                     && self.picker.is_none()
@@ -2558,6 +2578,7 @@ impl App {
                 MouseEventKind::Down(MouseButton::Left)
                     if self.panel_drawn
                         && self.ask.is_none()
+                        && self.form.is_none()
                         && self.secret.is_none()
                         && self.opening.is_none()
                         && !self.plan_asks()
@@ -2680,8 +2701,11 @@ impl App {
             self.last_esc = None;
         }
         // A question or a list over the screen takes the keys from the panel for good: after it, keys type again.
-        if self.plan_asks() || self.ask.is_some() || self.picker.is_some() {
+        if self.plan_asks() || self.ask.is_some() || self.form.is_some() || self.picker.is_some() {
             self.leave_panel();
+        }
+        if self.form.is_some() {
+            return self.on_form_key(key);
         }
         if self.plan_asks() {
             return self.on_plan_key(key);
@@ -2816,6 +2840,7 @@ impl App {
             && !self.chord
             && self.picker.is_none()
             && self.ask.is_none()
+            && self.form.is_none()
         {
             let last = listing.entries.len() - 1;
             let chosen = self.path_chosen.min(last);
@@ -3082,6 +3107,7 @@ impl App {
         let text = self.input.text();
         let free = self.picker.is_none()
             && self.ask.is_none()
+            && self.form.is_none()
             && self.search.is_none()
             && self.reading.is_none()
             && !self.panel_focus
@@ -5306,6 +5332,14 @@ impl App {
     /// Closes the gate's question when its answer is no longer awaited: the host's app answered it first — or the
     /// turn was called off while it asked, which its end says itself.
     pub fn drop_answered_ask(&mut self) {
+        // A server's card whose call ended (stopped, timed out) goes with it.
+        if self
+            .form
+            .as_ref()
+            .is_some_and(crate::form::OpenForm::abandoned)
+        {
+            self.form = None;
+        }
         if self.ask.as_ref().is_some_and(|ask| ask.reply.is_closed()) {
             self.ask = None;
             if self.plan_view.as_ref().is_some_and(|view| view.asking) {
@@ -5934,6 +5968,9 @@ impl App {
         };
         if let Some(open) = &self.ask {
             return tr!(agent_asks_live, target = first_line(&open.request.target));
+        }
+        if let Some(form) = &self.form {
+            return tr!(agent_asks_live, target = format!("⬡ {}", form.asked.server));
         }
         if self.working() {
             for block in self.transcript.blocks.iter().rev() {
@@ -6872,6 +6909,9 @@ impl App {
         if let Some(open) = &mut self.ask {
             open.opened = Instant::now();
         }
+        if let Some(form) = &mut self.form {
+            form.opened = Instant::now();
+        }
         self.model_pick_opened = Instant::now();
         if let Some(picker) = &mut self.picker {
             picker.opened = Instant::now();
@@ -6881,7 +6921,9 @@ impl App {
     /// Whether this session waits for the owner's word: the gate's question, the plan's, or the model list a
     /// `glut_file` call opened — what another pane's footer points to (T36a).
     pub fn waits_for_owner(&self) -> bool {
-        self.ask.is_some() || self.picker.as_ref().is_some_and(|picker| picker.asks_model)
+        self.ask.is_some()
+            || self.form.is_some()
+            || self.picker.as_ref().is_some_and(|picker| picker.asks_model)
     }
 
     /// Whether the question open is the plan's, with its dialog on the screen.
@@ -7054,10 +7096,91 @@ impl App {
         }
     }
 
+    /// A server's question comes to the screen (T67): a form or a page as a card, a form asking a secret only told.
+    fn open_form(
+        &mut self,
+        asked: glut::mcp::elicit::Asked,
+        reply: tokio::sync::oneshot::Sender<glut::mcp::elicit::Reply>,
+    ) {
+        if let glut::mcp::elicit::What::Secret { field } = &asked.what {
+            self.transcript.note(
+                tr!(
+                    form_secret,
+                    server = crate::transcript::clean(&asked.server),
+                    field = crate::transcript::cut(&crate::transcript::clean(field), 60)
+                ),
+                Tone::Heed,
+            );
+            let _ = reply.send(glut::mcp::elicit::Reply::Decline);
+            return;
+        }
+        // A chord begun before the card came does not take the first key after it.
+        self.chord = false;
+        self.form = Some(crate::form::OpenForm::new(asked, reply));
+        self.scroll = 0;
+    }
+
+    /// The owner's keys on a server's card: only once it settled, as on the gate's.
+    fn on_form_key(&mut self, key: KeyEvent) {
+        use crate::form::Step;
+        use glut::mcp::elicit::{Reply, What};
+        let Some(form) = &mut self.form else { return };
+        if form.opened.elapsed() < ASK_SETTLE {
+            return;
+        }
+        match form.key(key) {
+            Step::Nothing => {}
+            Step::Answered(reply) => {
+                if let Some(form) = self.form.take() {
+                    self.answer_form(form, reply);
+                }
+            }
+            Step::Open => {
+                let Some(form) = self.form.take() else { return };
+                let What::Page { url, .. } = &form.asked.what else {
+                    return;
+                };
+                let server = crate::transcript::clean(&form.asked.server);
+                if glut::oauth::open_in_browser(url) {
+                    let host = glut::mcp::elicit::host_of(url);
+                    self.transcript
+                        .note(tr!(page_opened, server = server, host = host), Tone::Quiet);
+                } else {
+                    // Over SSH the owner's browser is on another machine: the address stands whole to open there.
+                    self.transcript.note(
+                        tr!(
+                            page_open_yourself,
+                            server = server,
+                            url = crate::transcript::clean(url)
+                        ),
+                        Tone::Heed,
+                    );
+                }
+                form.answer(Reply::Accept(serde_json::Map::new()));
+            }
+        }
+    }
+
+    /// Sends the owner's answer to the server and says what went: never the values, which are the owner's.
+    fn answer_form(&mut self, form: crate::form::OpenForm, reply: glut::mcp::elicit::Reply) {
+        use glut::mcp::elicit::Reply;
+        let server = crate::transcript::clean(&form.asked.server);
+        let note = match &reply {
+            Reply::Accept(_) => tr!(form_sent, server = server),
+            Reply::Decline => tr!(form_declined, server = server),
+            Reply::Cancel => tr!(form_cancelled, server = server),
+        };
+        form.answer(reply);
+        self.transcript.note(note, Tone::Quiet);
+    }
+
     /// Ctrl+C: closes a picker, clears the input, else stops the turn, else quits on a second press.
     fn interrupt(&mut self) {
         if let Some(open) = self.ask.take() {
             let _ = open.reply.send(Answer::Deny);
+        }
+        if let Some(form) = self.form.take() {
+            self.answer_form(form, glut::mcp::elicit::Reply::Cancel);
         }
         // The plan's dialog answered no with it: it goes, and the plan stands as sent back.
         if self.plan_view.as_ref().is_some_and(|view| view.asking) {
@@ -11398,6 +11521,104 @@ pub(crate) mod tests {
             open.opened = Instant::now() - ASK_SETTLE * 2;
         }
         answer
+    }
+
+    /// A server's question on the screen (T67), from `params` of its `elicitation/create`.
+    fn server_asks(
+        app: &mut App,
+        params: serde_json::Value,
+    ) -> oneshot::Receiver<glut::mcp::elicit::Reply> {
+        let (reply, answer) = oneshot::channel();
+        app.on_report(Report::Form(
+            glut::mcp::elicit::Asked {
+                server: "mail".into(),
+                from: None,
+                what: glut::mcp::elicit::parse(&params).unwrap(),
+            },
+            reply,
+        ));
+        answer
+    }
+
+    #[test]
+    fn a_servers_form_takes_the_owners_keys_once_it_settled_and_says_nothing_of_the_values() {
+        use glut::mcp::elicit::Reply;
+        let (mut app, _reports) = app();
+        let mut answer = server_asks(
+            &mut app,
+            serde_json::json!({"message": "Who?", "requestedSchema": {
+                "type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}}),
+        );
+        assert_eq!(app.mood(), crate::glimm::Mood::Waiting);
+        assert!(app.waits_for_owner());
+        // Typed for the input before the card was read: nothing lands in the form.
+        app.on_terminal(key(KeyCode::Char('x'), KeyModifiers::NONE));
+        app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(answer.try_recv().is_err());
+        app.form.as_mut().unwrap().opened -= ASK_SETTLE * 2;
+        // The owner begins with ⇥; the field was on the screen (the view marks what it draws).
+        app.on_terminal(key(KeyCode::Tab, KeyModifiers::NONE));
+        app.form.as_mut().unwrap().shown([0]);
+        // A paste goes into the field, not into the input under the card.
+        app.on_terminal(TermEvent::Paste("Ad".into()));
+        assert!(app.input.is_empty());
+        for c in "a".chars() {
+            app.on_terminal(key(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
+        let Ok(Reply::Accept(content)) = answer.try_recv() else {
+            panic!("not sent");
+        };
+        assert_eq!(content["name"], "Ada");
+        assert!(app.form.is_none());
+        assert!(!last_note(&app).contains("Ada"), "{}", last_note(&app));
+
+        // Ctrl+C closes the card without an answer.
+        let mut answer = server_asks(
+            &mut app,
+            serde_json::json!({"mode": "url", "message": "Sign in", "url": "https://example.com/"}),
+        );
+        app.on_terminal(key(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert_eq!(answer.try_recv(), Ok(Reply::Cancel));
+    }
+
+    #[test]
+    fn a_form_asking_a_secret_is_declined_unshown_and_told() {
+        let (mut app, _reports) = app();
+        let mut answer = server_asks(
+            &mut app,
+            serde_json::json!({"message": "Log in", "requestedSchema": {
+                "type": "object", "properties": {"password": {"type": "string"}}}}),
+        );
+        assert_eq!(answer.try_recv(), Ok(glut::mcp::elicit::Reply::Decline));
+        assert!(app.form.is_none());
+        assert!(last_note(&app).contains("password"), "{}", last_note(&app));
+    }
+
+    #[test]
+    fn a_turn_that_ends_takes_its_servers_card_away() {
+        let (mut app, _reports) = app();
+        let mut answer = server_asks(
+            &mut app,
+            serde_json::json!({"message": "m", "requestedSchema": {"type": "object", "properties": {}}}),
+        );
+        app.on_report(Report::Done(
+            RunOutcome {
+                reason: FinishReason::Cancelled,
+                answer: None,
+                turns: 1,
+                usage: Usage::default(),
+                refusals: 0,
+                warm: None,
+                prepared: None,
+            },
+            Vec::new(),
+        ));
+        assert!(app.form.is_none());
+        assert!(
+            answer.try_recv().is_err(),
+            "dropped: the call hears a cancel"
+        );
     }
 
     #[test]

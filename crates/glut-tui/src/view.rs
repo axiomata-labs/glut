@@ -15,6 +15,8 @@ use crate::{glimm, select, session, theme};
 const INPUT_ROWS: usize = 8;
 /// The most rows of its target an ask shows.
 const ASK_ROWS: usize = 12;
+/// The most rows a server's form takes (T67): a field per row, the focused one always in sight.
+const FORM_ROWS: usize = 16;
 /// The side panel takes this part of the screen (a third, the owner's choice), never less than its narrowest width;
 /// and the screen it needs beside the stream.
 const PANEL_SHARE: u16 = 3;
@@ -258,15 +260,47 @@ fn draw_in(frame: &mut Frame, app: &mut App, area: Rect, chrome: &Chrome) {
     let input_height = rows.len().clamp(1, INPUT_ROWS) as u16 + 1;
     // The plan's ask is its dialog over the stream (T19), not a card below it.
     let plan_asking = app.plan_asks();
-    let ask_rows = app.ask.as_mut().filter(|_| !plan_asking).map(|open| {
-        let most = usize::from(area.height / 3).clamp(3, ASK_ROWS);
+    // A server's card stands where the gate's would (T67); the gate asks one question at a time, so never both.
+    // The rows that must stay in sight are; the fields drawn count as seen — ⏎ sends only once each one was.
+    let form_lines = app.form.as_mut().map(|form| {
         let width = usize::from(area.width.saturating_sub(4 + ask_glimm_width(area.width)));
-        if open.request.keychain {
-            keychain_rows(open, width, most)
-        } else {
-            asked_rows(&open.request.target, width, most)
-        }
+        let most = usize::from(area.height / 2).clamp(3, FORM_ROWS);
+        let drawn = form.lines(width, most);
+        let first = drawn
+            .keep
+            .end
+            .saturating_sub(most)
+            .min(drawn.keep.start)
+            .min(drawn.lines.len().saturating_sub(most));
+        let window = first..first + most;
+        form.shown(
+            drawn
+                .fields
+                .iter()
+                .enumerate()
+                .filter(|(_, row)| window.contains(row))
+                .map(|(at, _)| at),
+        );
+        drawn
+            .lines
+            .into_iter()
+            .skip(first)
+            .take(most)
+            .collect::<Vec<_>>()
     });
+    let ask_rows = app
+        .ask
+        .as_mut()
+        .filter(|_| !plan_asking && form_lines.is_none())
+        .map(|open| {
+            let most = usize::from(area.height / 3).clamp(3, ASK_ROWS);
+            let width = usize::from(area.width.saturating_sub(4 + ask_glimm_width(area.width)));
+            if open.request.keychain {
+                keychain_rows(open, width, most)
+            } else {
+                asked_rows(&open.request.target, width, most)
+            }
+        });
     // The target, then a row per choice: once, each scope, refuse — at least as tall as the waiting Glimm beside it.
     let ask_height = ask_rows
         .as_ref()
@@ -280,6 +314,17 @@ fn draw_in(frame: &mut Frame, app: &mut App, area: Rect, chrome: &Chrome) {
             };
             inner.max(glimm) + 2
         });
+    let ask_height = match &form_lines {
+        Some(lines) => {
+            let glimm = if ask_glimm_width(area.width) > 0 {
+                glimm::cells(glimm::Size::Small).1
+            } else {
+                0
+            };
+            (lines.len() as u16).max(glimm) + 2
+        }
+        None => ask_height,
+    };
     let waiting = waiting_lines(app, usize::from(area.width));
     let (side_lines, side_height) = side_rows(app, area);
     // A short pane keeps its rows for the stream and the input (T75): the line needs room beyond them — the header,
@@ -354,6 +399,9 @@ fn draw_in(frame: &mut Frame, app: &mut App, area: Rect, chrome: &Chrome) {
     if let Some(rows) = ask_rows {
         app.ask_area = ask;
         draw_ask(frame, app, ask, rows);
+    }
+    if let Some(lines) = form_lines {
+        draw_form(frame, app, ask, lines);
     }
     draw_input(
         frame,
@@ -676,7 +724,7 @@ fn draw_agent(frame: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
-    let working = app.working() || app.ask.is_some();
+    let working = app.working() || app.ask.is_some() || app.form.is_some();
     let spark_style = if working {
         theme::glow()
     } else {
@@ -1121,6 +1169,27 @@ fn draw_ask(frame: &mut Frame, app: &App, area: Rect, rows: Vec<String>) {
     frame.render_widget(Paragraph::new(lines), text);
 }
 
+/// A server's card (T67): who asks in its title, its lines, the waiting Glimm beside them.
+fn draw_form(frame: &mut Frame, app: &App, area: Rect, lines: Vec<Line<'static>>) {
+    let Some(form) = &app.form else { return };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(theme::glow())
+        .title(Span::styled(form.title(), theme::glow()));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let beside = ask_glimm_width(area.width);
+    if beside == 0 {
+        frame.render_widget(Paragraph::new(lines), inner);
+        return;
+    }
+    let [glimm_area, text] =
+        Layout::horizontal([Constraint::Length(beside), Constraint::Min(1)]).areas(inner);
+    let glimm_lines = glimm::lines(glimm::Size::Small, glimm::Mood::Waiting, app.frame);
+    frame.render_widget(Paragraph::new(glimm_lines), glimm_area);
+    frame.render_widget(Paragraph::new(lines), text);
+}
+
 /// The narrowest screen the waiting Glimm stands beside a question on; a narrower one keeps every column for the
 /// question.
 const ASK_GLIMM_MIN_SCREEN: u16 = 60;
@@ -1356,7 +1425,7 @@ fn draw_input(
         ));
     }
     frame.render_widget(Paragraph::new(lines), text);
-    if active && app.ask.is_none() && app.picker.is_none() {
+    if active && app.ask.is_none() && app.form.is_none() && app.picker.is_none() {
         frame.set_cursor_position(Position {
             x: text.x + 2 + cursor.1 as u16,
             y: text.y + (cursor.0 - first) as u16,
@@ -1473,6 +1542,14 @@ fn draw_keys(frame: &mut Frame, app: &App, area: Rect, branch: Option<String>, c
     // An open question's keys come before any toast.
     let hints = if app.chord_waits() {
         tr!(hint_chord).to_owned()
+    } else if let Some(form) = &app.form {
+        if form.is_page() {
+            tr!(hint_page).to_owned()
+        } else if !form.armed() {
+            tr!(hint_form_begin).to_owned()
+        } else {
+            tr!(hint_form).to_owned()
+        }
     } else if let Some(toast) = app.toast().filter(|_| app.ask.is_none()) {
         toast.to_owned()
     } else if let Some((alone, _)) = crate::app::owners_command(&app.input.text()) {
