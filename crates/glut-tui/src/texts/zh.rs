@@ -86,7 +86,7 @@ pub const TEXTS: Texts = Texts {
         ("swap", "主 Pane 与 Pane n（或当前这个）互换位置"),
         (
             "close",
-            "关闭此 Pane（主 Pane 除外）— 或结束一个后台代理；其会话保留供 /resume 使用",
+            "关闭此 Pane，或按编号、名称或角色关闭另一个，或结束后台代理 — 单独 /close 会列出它们；会话保留以供 /resume",
         ),
         (
             "send",
@@ -1955,6 +1955,9 @@ pub const TEXTS: Texts = Texts {
     held_window_chain: "各窗口在没有你的情况下多次互发消息 — 在此按 ⏎ 放行 {from} 的消息，Esc 丢弃",
     held_window_mode: "{from} 处于 {theirs} 模式，此 Pane 处于 {ours} 模式 — 在此按 ⏎ 放行，Esc 丢弃",
     held_window_wider: "{from} 的权限少于此 Pane（模式、规则或文件夹）— 在此按 ⏎ 放行，Esc 丢弃",
+    close_title: "关闭哪个 Pane？· ⏎ 关闭",
+    close_this: "此 Pane",
+    close_which: "{word} 对应的不是唯一的 Pane — 请选择一个",
     from_session_owner: "{session} 的所有者：{text}",
     from_session_model: "{session} 的模型（不是所有者）：{text}",
     from_session_notice: "{session}：{text}",

@@ -105,7 +105,7 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "close",
-            "この Pane を閉じる（メインを除く）、またはバックグラウンドのエージェントを終える; そのセッションは /resume 用に残る",
+            "この Pane を閉じる、番号・名前・役割で別の Pane を閉じる、またはバックグラウンドのエージェントを終了 — /close だけで一覧表示。セッションは /resume 用に残ります",
         ),
         (
             "send",
@@ -2056,6 +2056,9 @@ pub const TEXTS: Texts = Texts {
     held_window_chain: "ウィンドウ同士があなた抜きで何度もやり取りしました — ここで ⏎ で {from} のメッセージを入れ、Esc で破棄",
     held_window_mode: "{from} は {theirs} モード、この Pane は {ours} モードです — ここで ⏎ で入れ、Esc で破棄",
     held_window_wider: "{from} はこの Pane より権限が少ない（モード、ルール、フォルダ）— ここで ⏎ で入れ、Esc で破棄",
+    close_title: "どの Pane を閉じますか？· ⏎ で閉じる",
+    close_this: "この Pane",
+    close_which: "{word} は 1 つの Pane を指していません — 選んでください",
     from_session_owner: "{session} のオーナー：{text}",
     from_session_model: "{session} のモデル（オーナーではありません）：{text}",
     from_session_notice: "{session}：{text}",

@@ -308,8 +308,12 @@ pub enum Request {
         place: Place,
         role: Option<String>,
     },
-    /// Close the asking pane.
+    /// Close the asking pane (⌃X 0).
     Close,
+    /// `/close` alone: close the asking pane — or, with others to close, pick which.
+    CloseAsked,
+    /// Close the pane or background agent of this session id, picked from `/close`'s list.
+    ClosePane(u64),
     /// Close the asking pane, its worktree ending so.
     CloseAs(Leaving),
     /// The keys to the other pane.
@@ -647,6 +651,8 @@ pub struct Panes {
     notify_back: Vec<(u64, String)>,
     /// The kept window name last tried, so one another window holds is not tried at every frame.
     window_tried: Option<String>,
+    /// The pane the keys go back to once another one closed (`/close 2`): the owner stays where they were.
+    return_to: Option<u64>,
 }
 
 /// How often an open Glut looks whether a plan's run ended (T60b): a tile for it, as for an agent's end.
@@ -749,6 +755,7 @@ impl Panes {
             sessions_off: false,
             notify_back: Vec::new(),
             window_tried: None,
+            return_to: None,
         };
         (
             panes,
@@ -1742,6 +1749,8 @@ impl Panes {
                     self.focus(next);
                 }
                 Request::Close => self.close(),
+                Request::CloseAsked => self.close_asked(),
+                Request::ClosePane(id) => self.close_pane(id),
                 Request::CloseAs(leaving) => self.leave(leaving),
                 Request::Split {
                     resume,
@@ -1809,7 +1818,7 @@ impl Panes {
                 Request::Show(name) => self.show(&name),
                 Request::Hide => self.hide(),
                 Request::Peek(None) => self.close_peek(),
-                Request::End(name) => self.end_background(&name),
+                Request::End(word) => self.close_named(&word),
                 Request::Restore => self.restore(),
                 Request::LoopStart(asked) => self.start_loop(asked, host),
                 Request::LoopStop(name) => self.stop_loop(name.as_deref()),
@@ -1891,6 +1900,90 @@ impl Panes {
     }
 
     /// Closes the active pane; a turn under way is stopped — said once first. The last pane is not closed.
+    /// `/close` alone: where more than this pane could close, the list of them to pick from — this one first and
+    /// chosen, so ⏎ does what `/close` always did.
+    fn close_asked(&mut self) {
+        let closable: Vec<usize> = (0..self.list.len())
+            .filter(|at| self.list[*at].id != self.grid.main)
+            .collect();
+        if closable.iter().all(|at| *at == self.active) {
+            return self.close();
+        }
+        self.close_picker(None);
+    }
+
+    /// `/close <word>`: the pane of that number, the agent of that name, the pane playing that role — the list to pick
+    /// from where the word names no single one.
+    fn close_named(&mut self, word: &str) {
+        match self.resolve(word, usize::MAX) {
+            Some(at) => self.close_pane(self.list[at].id),
+            None => self.close_picker(Some(word)),
+        }
+    }
+
+    /// The panes and agents `/close` can close, the asking pane first; `word`: what named no single one.
+    fn close_picker(&mut self, word: Option<&str>) {
+        use crate::picker::{Item, Pick, Picker};
+        let mut order: Vec<usize> = (0..self.list.len())
+            .filter(|at| self.list[*at].id != self.grid.main)
+            .collect();
+        order.sort_by_key(|at| *at != self.active);
+        if order.is_empty() {
+            return self.active().tell(tr!(main_pane_stays));
+        }
+        let items: Vec<Item> = order
+            .iter()
+            .map(|at| {
+                let pane = &self.list[*at];
+                let mut detail = format!(
+                    "{} · {}",
+                    pane.app.role.as_deref().unwrap_or("all-rounder"),
+                    crate::transcript::clean(pane.app.engine.model_name())
+                );
+                if *at == self.active {
+                    detail = format!("{} · {detail}", tr!(close_this));
+                }
+                Item::plain(self.shown_label(*at), detail, Pick::ClosePane(pane.id))
+            })
+            .collect();
+        if let Some(word) = word {
+            let said = tr!(close_which, word = crate::transcript::clean(word));
+            self.active().say(said);
+        }
+        self.active().picker = Some(Picker::new(tr!(close_title), items, None));
+    }
+
+    /// Closes the pane or agent of session `id` without the keys going there: the owner stays in their pane — unless
+    /// the one closing asks what becomes of its worktree, which it asks where it is.
+    fn close_pane(&mut self, id: u64) {
+        let Some(at) = self.list.iter().position(|pane| pane.id == id) else {
+            return;
+        };
+        if self.list[at].background {
+            let name = self.list[at].name.clone().unwrap_or_default();
+            return self.end_background(&name);
+        }
+        if at == self.active {
+            return self.close();
+        }
+        let keys = self.list[self.active].id;
+        self.active = at;
+        self.return_to = Some(keys);
+        self.close();
+        self.return_to = None;
+        let still = self.list.iter().position(|pane| pane.id == id);
+        match still {
+            // The worktree's question stands in that pane: the keys stay there to answer it.
+            Some(at) if self.list[at].app.picker.is_some() => self.focus(at),
+            // It works: the second `/close` closes it — said where the owner is.
+            Some(_) => {
+                self.focus(self.at(keys));
+                self.active().tell(tr!(close_working));
+            }
+            None => {}
+        }
+    }
+
     fn close(&mut self) {
         if !self.split() {
             return self.active().tell(tr!(last_pane_quit));
@@ -1971,10 +2064,19 @@ impl Panes {
         pane.app.stop_turn();
         // The keys go to a pane on the screen, never to an agent in the background.
         let near = self.active.min(self.list.len() - 1);
-        let next = (0..self.list.len())
-            .filter(|at| !self.list[*at].background)
-            .min_by_key(|at| at.abs_diff(near))
-            .map_or(self.list[near].id, |at| self.list[at].id);
+        let next = self
+            .return_to
+            .filter(|id| {
+                self.list
+                    .iter()
+                    .any(|pane| pane.id == *id && !pane.background)
+            })
+            .unwrap_or_else(|| {
+                (0..self.list.len())
+                    .filter(|at| !self.list[*at].background)
+                    .min_by_key(|at| at.abs_diff(near))
+                    .map_or(self.list[near].id, |at| self.list[at].id)
+            });
         self.reorder();
         self.focus(self.at(next));
         // Alone again: the side panel comes back as the owner keeps it.
@@ -3378,6 +3480,40 @@ mod tests {
         });
         panes.on_built(Ok(session::for_tests()));
         (panes, inlets)
+    }
+
+    #[tokio::test]
+    async fn close_takes_a_pane_by_its_number_from_elsewhere_and_alone_lists_what_could_close() {
+        let host: Arc<dyn Host> = Arc::new(crate::Standalone);
+        // From the main pane, which never closes: `/close` alone lists pane 2 rather than refusing.
+        let (mut panes, _inlets) = split();
+        panes.focus(0);
+        panes.active().pane_request = Some(Request::CloseAsked);
+        panes.settle(&host);
+        assert_eq!(panes.list.len(), 2);
+        assert!(
+            panes.list[0].app.picker.is_some(),
+            "the list of what could close"
+        );
+        // `/close 2` closes it from here, and the keys stay where they were.
+        panes.list[0].app.picker = None;
+        panes.active().pane_request = Some(Request::End("2".into()));
+        panes.settle(&host);
+        assert_eq!(panes.list.len(), 1);
+        assert_eq!(panes.active, 0);
+        // A word naming no single pane opens the list too.
+        let (mut panes, _inlets) = split();
+        panes.focus(0);
+        panes.active().pane_request = Some(Request::End("all-rounder".into()));
+        panes.settle(&host);
+        assert_eq!(panes.list.len(), 2);
+        assert!(panes.list[0].app.picker.is_some());
+        // In pane 2, the only one that could close, `/close` closes it as it always did.
+        let (mut panes, _inlets) = split();
+        panes.focus(1);
+        panes.active().pane_request = Some(Request::CloseAsked);
+        panes.settle(&host);
+        assert_eq!(panes.list.len(), 1);
     }
 
     /// One pane and an agent in the background named `name`, built without starting a real session.

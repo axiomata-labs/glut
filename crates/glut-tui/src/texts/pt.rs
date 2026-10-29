@@ -116,8 +116,7 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "close",
-            "fechar este pane (não o principal) — ou encerrar um agente em segundo plano; a sessão dele fica para \
-             /resume",
+            "fechar este pane, ou outro pelo número, nome ou papel, ou terminar um agente em segundo plano — /close sozinho lista-os; as sessões ficam para /resume",
         ),
         (
             "send",
@@ -2178,6 +2177,9 @@ pub const TEXTS: Texts = Texts {
     held_window_chain: "as janelas escreveram-se muitas vezes sem si — ⏎ aqui deixa entrar a mensagem de {from}, Esc descarta-a",
     held_window_mode: "{from} trabalha no modo {theirs}, este pane no modo {ours} — ⏎ aqui deixa-a entrar, Esc descarta-a",
     held_window_wider: "{from} pode menos do que este pane (modo, regras ou pasta) — ⏎ aqui deixa-a entrar, Esc descarta-a",
+    close_title: "Fechar que pane? · ⏎ fecha",
+    close_this: "este pane",
+    close_which: "{word} não nomeia um só pane — escolha um",
     from_session_owner: "o dono de {session}: {text}",
     from_session_model: "o modelo de {session} (não o dono): {text}",
     from_session_notice: "{session}: {text}",

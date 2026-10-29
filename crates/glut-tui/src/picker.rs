@@ -55,6 +55,8 @@ pub enum Pick {
     TodoClean,
     /// `/skill` (T37c): a skill to start, by its name.
     Skill(String),
+    /// `/close`'s list: the pane or agent of this session id to close.
+    ClosePane(u64),
     /// `/sessions` (T83): a pane of another Glut window, `/send <address> ` put into the input.
     WriteTo(String),
     /// `/login` (PV4): a subscription to sign in to, or out of, by its provider id.

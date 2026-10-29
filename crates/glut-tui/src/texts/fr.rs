@@ -121,7 +121,7 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "close",
-            "fermer ce pane (pas le principal) — ou arrêter un agent en arrière-plan ; sa session reste pour /resume",
+            "fermer ce pane, ou un autre par son numéro, son nom ou son rôle, ou arrêter un agent en arrière-plan — /close seul les liste ; les sessions restent pour /resume",
         ),
         (
             "send",
@@ -2226,6 +2226,9 @@ pub const TEXTS: Texts = Texts {
     held_window_chain: "les fenêtres se sont souvent écrit sans toi — ⏎ ici laisse entrer le message de {from}, Esc le jette",
     held_window_mode: "{from} travaille en mode {theirs}, ce pane en mode {ours} — ⏎ ici le laisse entrer, Esc le jette",
     held_window_wider: "{from} a moins de droits que ce pane (mode, règles ou dossier) — ⏎ ici le laisse entrer, Esc le jette",
+    close_title: "Fermer quel pane ? · ⏎ ferme",
+    close_this: "ce pane",
+    close_which: "{word} ne désigne aucun pane unique — choisis-en un",
     from_session_owner: "le propriétaire de {session} : {text}",
     from_session_model: "le modèle de {session} (pas le propriétaire) : {text}",
     from_session_notice: "{session} : {text}",

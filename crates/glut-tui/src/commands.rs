@@ -239,8 +239,8 @@ pub const COMMANDS: [Command; 61] = [
     command(
         Topic::Panes,
         "close",
-        "[name]",
-        "close this pane (not the main one) — or end a background agent; its session stays for /resume",
+        "[n|name|role]",
+        "close this pane, or another by its number, name or role, or end a background agent — /close alone lists them; the sessions stay for /resume",
     ),
     command(
         Topic::Panes,

@@ -282,6 +282,9 @@ pub const PAGES: [(&str, &str); 61] = [
          /close — schließt dieses Pane (nie das Haupt-Pane); arbeitet es noch, hält ein zweites /close es an und \
          schließt es\n\
          /close <name> — beendet diesen Hintergrund-Agenten, sein Turn wird angehalten\n\
+         /close <n> — schließt Pane n von dort, wo du bist, über Nummer, Name oder Rolle; du bleibst in deinem Pane\n\
+         /close allein, wenn mehr als dieses Pane zu schließen ist — eine Liste davon, dieses Pane zuerst: ⏎ schließt \
+         das gewählte\n\
          \n\
          Die Session bleibt für /resume erhalten. Ein Pane in einem Worktree fragt, wie der Worktree endet: behalten \
          samt Branch, übernehmen (in den Branch mergen, auf dem du bist) oder verwerfen. ⌃X 0 schließt dieses Pane \

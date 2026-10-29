@@ -282,6 +282,9 @@ pub const PAGES: [(&str, &str); 61] = [
          /close — ferme ce pane (jamais le principal) ; pendant qu’il travaille, un second /close l’arrête et le \
          ferme\n\
          /close <name> — termine cet agent en arrière-plan, son tour arrêté\n\
+         /close <n> — ferme le pane n depuis là où tu es, par son numéro, son nom ou son rôle ; tu restes dans ton \
+         pane\n\
+         /close seul, s'il y a plus que ce pane à fermer — une liste, ce pane en premier : ⏎ ferme celui choisi\n\
          \n\
          La session est gardée pour /resume. Un pane dans un Worktree demande comment le Worktree se termine : le \
          garder avec sa branche, le reprendre (le fusionner dans la branche où tu es) ou l’abandonner. ⌃X 0 ferme \

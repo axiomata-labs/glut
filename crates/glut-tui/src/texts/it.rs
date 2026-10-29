@@ -120,8 +120,7 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "close",
-            "chiudere questo pane (non il principale) — o terminare un agente in background; la sua sessione resta \
-             per /resume",
+            "chiudi questo pane, o un altro per numero, nome o ruolo, o termina un agente in background — /close da solo li elenca; le sessioni restano per /resume",
         ),
         (
             "send",
@@ -2213,6 +2212,9 @@ pub const TEXTS: Texts = Texts {
     held_window_chain: "le finestre si sono scritte spesso senza di te — ⏎ qui fa entrare il messaggio di {from}, Esc lo scarta",
     held_window_mode: "{from} lavora in modalità {theirs}, questo pane in modalità {ours} — ⏎ qui lo fa entrare, Esc lo scarta",
     held_window_wider: "{from} può meno di questo pane (modalità, regole o cartella) — ⏎ qui lo fa entrare, Esc lo scarta",
+    close_title: "Chiudere quale pane? · ⏎ chiude",
+    close_this: "questo pane",
+    close_which: "{word} non indica un solo pane — scegline uno",
     from_session_owner: "il proprietario di {session}: {text}",
     from_session_model: "il modello di {session} (non il proprietario): {text}",
     from_session_notice: "{session}: {text}",

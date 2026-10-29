@@ -269,6 +269,8 @@ pub const PAGES: [(&str, &str); 61] = [
          \n\
          /close — closes this pane (never the main one); while it works, a second /close stops it and closes it\n\
          /close <name> — ends that background agent, its turn stopped\n\
+         /close <n> — closes pane n from where you are, by its number, name or role; you stay in your pane\n\
+         /close alone, with more than this pane to close — a list of them, this pane first: ⏎ closes the one chosen\n\
          \n\
          The session is kept for /resume. A pane in a Worktree asks how the Worktree ends: keep it and its branch, \
          take it over (merge it into the branch you are on) or discard it. ⌃X 0 closes this pane too.",

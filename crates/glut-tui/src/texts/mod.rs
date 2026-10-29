@@ -2121,6 +2121,12 @@ glut::catalog! {
         held_window_mode: &'static str,
         /// Why a message of another window waits: its pane may do less than this one (Q6b); `{from}`.
         held_window_wider: &'static str,
+        /// `/close`'s list of the panes and agents to close.
+        close_title: &'static str,
+        /// Beside the asking pane in `/close`'s list.
+        close_this: &'static str,
+        /// `/close <word>` named no single pane: `{word}`.
+        close_which: &'static str,
         /// A message of another window's owner: `{session}`, `{text}`.
         from_session_owner: &'static str,
         /// A message of another window's model: `{session}`, `{text}`.

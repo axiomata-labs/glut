@@ -3774,7 +3774,9 @@ impl App {
                 Ok(request) => self.pane_request = Some(request),
                 Err(reason) => self.transcript.note(reason, Tone::Fault),
             },
-            "close" if rest.is_empty() => self.pane_request = Some(crate::panes::Request::Close),
+            "close" if rest.is_empty() => {
+                self.pane_request = Some(crate::panes::Request::CloseAsked);
+            }
             "close" => self.pane_request = Some(crate::panes::Request::End(rest.to_owned())),
             "loop" => self.loop_command(rest),
             "schedule" => self.schedule_command(rest),
@@ -5968,6 +5970,9 @@ impl App {
                         }
                     }
                     Some(Pick::Skill(name)) => self.input.insert_text(&format!("/skill {name} ")),
+                    Some(Pick::ClosePane(id)) => {
+                        self.pane_request = Some(crate::panes::Request::ClosePane(id));
+                    }
                     Some(Pick::WriteTo(address)) => {
                         self.input.clear();
                         self.input.insert_text(&format!("/send {address} "));
