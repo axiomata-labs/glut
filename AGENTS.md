@@ -119,6 +119,11 @@ scripts/install.sh               # glut for every terminal: ~/.cargo/bin, linked
   kept off the list, `$` only the loop's own variable, nothing written, nested or protected, no Read rule) and only where
   the mode alone would ask — never past a rule, a heavy kind, the Keychain or plan mode. Widen that filter only with
   an audit: the judge sees text the model wrote and can be talked round.
+- **An editor shows Glut's questions, it never decides them** (T64, `crates/glut-tui/src/acp.rs`, `glut acp`): the
+  Agent Client Protocol's permission answer is only Glut's ask answered elsewhere — anything but allow refuses, and
+  "always" is the narrowest scope; Glut never uses the editor's `fs/*` or `terminal/*` (they would run past the sandbox,
+  the gate and the snapshots) nor the MCP servers it names. A new kind of update must not carry anything the
+  transcript would not show.
 - **The TUI never lets a key answer a question it did not show** (`crates/glut-tui/src/app.rs` `on_ask_key`): plain
   keys only, no repeat, nothing in the first 400 ms; a turn that ends drops its open card; an ask shows the head and
   the tail of a long target. Model and tool text goes through `transcript::wrap`/`clean` (control characters as

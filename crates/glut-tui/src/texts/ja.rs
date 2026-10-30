@@ -1509,6 +1509,10 @@ pub const TEXTS: Texts = Texts {
             "モードだけが確認を求めるコマンドが読み取りだけかを判定するモデル: off、session、<provider> <model>（指定がなければ /classifier が書く ~/.glut/classifier.json、それもなければセッションのモデル）",
         ),
         (
+            "Serve an editor over the Agent Client Protocol on stdin and stdout (Zed, JetBrains, Neovim, Emacs): the owner's own Glut session in the folder the editor names, its gate asking through the editor",
+            "stdin と stdout で Agent Client Protocol を通じてエディタに応答（Zed、JetBrains、Neovim、Emacs）: エディタが指定するフォルダでのオーナー自身の Glut セッション、その gate はエディタ経由で確認",
+        ),
+        (
             "Never compact the conversation automatically (`\"compact\": {\"auto\": false}` in ~/.glut/settings.json)",
             "会話を自動で圧縮しない（~/.glut/settings.json の `\"compact\": {\"auto\": false}`）",
         ),

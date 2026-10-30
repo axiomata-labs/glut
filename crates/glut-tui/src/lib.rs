@@ -4,6 +4,7 @@
 
 #[macro_use]
 mod texts;
+mod acp;
 mod agents;
 mod app;
 mod background;
@@ -69,6 +70,7 @@ mod warm;
 mod watch;
 mod worktree;
 
+pub use acp::serve as acp_serve;
 pub use clean::{
     Command as CleanCommand, auto as clean_auto, freed as clean_freed, headless as clean_headless,
 };

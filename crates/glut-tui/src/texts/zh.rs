@@ -1417,6 +1417,10 @@ pub const TEXTS: Texts = Texts {
             "判断仅由模式询问的命令是否只读取的模型：off、session 或 <provider> <model>（否则为 /classifier 写入的 ~/.glut/classifier.json，再否则为会话的模型）",
         ),
         (
+            "Serve an editor over the Agent Client Protocol on stdin and stdout (Zed, JetBrains, Neovim, Emacs): the owner's own Glut session in the folder the editor names, its gate asking through the editor",
+            "通过 stdin 和 stdout 上的 Agent Client Protocol 为编辑器提供服务（Zed、JetBrains、Neovim、Emacs）：在编辑器指定的文件夹中运行所有者自己的 Glut 会话，其 gate 通过编辑器询问",
+        ),
+        (
             "Never compact the conversation automatically (`\"compact\": {\"auto\": false}` in ~/.glut/settings.json)",
             "从不自动压缩对话（~/.glut/settings.json 中的 `\"compact\": {\"auto\": false}`）",
         ),

@@ -1592,6 +1592,10 @@ usos e renomeações",
             "Que modelo julga um comando sobre o qual só o modo perguntaria, se apenas lê: off, session ou <provider> <model> (senão ~/.glut/classifier.json, que /classifier escreve, senão o da sessão)",
         ),
         (
+            "Serve an editor over the Agent Client Protocol on stdin and stdout (Zed, JetBrains, Neovim, Emacs): the owner's own Glut session in the folder the editor names, its gate asking through the editor",
+            "Servir um editor pelo Agent Client Protocol em stdin e stdout (Zed, JetBrains, Neovim, Emacs): a própria sessão Glut do dono na pasta que o editor indica, o seu gate pergunta através do editor",
+        ),
+        (
             "Never compact the conversation automatically (`\"compact\": {\"auto\": false}` in ~/.glut/settings.json)",
             "Nunca compactar a conversa automaticamente (`\"compact\": {\"auto\": false}` em ~/.glut/settings.json)",
         ),

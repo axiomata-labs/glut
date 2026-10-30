@@ -1622,6 +1622,10 @@ usi e rinomine",
             "Quale modello giudica un comando per cui solo la modalità chiederebbe, se legge soltanto: off, session o <provider> <model> (altrimenti ~/.glut/classifier.json, che /classifier scrive, altrimenti quello della sessione)",
         ),
         (
+            "Serve an editor over the Agent Client Protocol on stdin and stdout (Zed, JetBrains, Neovim, Emacs): the owner's own Glut session in the folder the editor names, its gate asking through the editor",
+            "Servire un editor tramite l’Agent Client Protocol su stdin e stdout (Zed, JetBrains, Neovim, Emacs): la sessione Glut del proprietario nella cartella indicata dall’editor, il suo gate chiede tramite l’editor",
+        ),
+        (
             "Never compact the conversation automatically (`\"compact\": {\"auto\": false}` in ~/.glut/settings.json)",
             "Non compattare mai la conversazione automaticamente (`\"compact\": {\"auto\": false}` in \
              ~/.glut/settings.json)",

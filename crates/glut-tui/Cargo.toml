@@ -25,7 +25,7 @@ rustix = { workspace = true, features = ["process", "event"] }
 ratatui.workspace = true
 crossterm.workspace = true
 # Unix sockets: Glut windows on this machine talk to each other (T83, `sessions.rs`).
-tokio = { workspace = true, features = ["net"] }
+tokio = { workspace = true, features = ["net", "io-std"] }
 clap.workspace = true
 serde.workspace = true
 chrono.workspace = true

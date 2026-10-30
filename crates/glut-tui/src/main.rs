@@ -104,6 +104,9 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Serve an editor over the Agent Client Protocol on stdin and stdout (Zed, JetBrains, Neovim, Emacs): the
+    /// owner's own Glut session in the folder the editor names, its gate asking through the editor.
+    Acp,
     #[command(flatten)]
     Headless(glut::cli::Command),
 }
@@ -180,6 +183,7 @@ fn main() -> std::process::ExitCode {
                 (glut_tui::search_headless(&words, all, &cli.cwd), None)
             }
             Some(Command::Schedule { what }) => (glut_tui::schedule_headless(what).await, None),
+            Some(Command::Acp) => (glut_tui::acp_serve().await, None),
             Some(Command::Clean {
                 what,
                 dry_run,

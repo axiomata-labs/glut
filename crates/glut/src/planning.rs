@@ -127,7 +127,7 @@ pub(crate) fn parse_todos(arguments: &str) -> Result<Vec<TodoItem>, String> {
 }
 
 /// The mark of Glut's own lines to the model (T73).
-pub(crate) const MARK: &str = "[glut]";
+pub const MARK: &str = "[glut]";
 
 /// What quoting puts after a mark's `[`: `[glut]` becomes `[quoted glut]`.
 const QUOTE: &str = "quoted ";
