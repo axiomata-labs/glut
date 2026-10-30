@@ -346,6 +346,8 @@ pub struct RunConfig {
     pub agents: std::sync::Arc<crate::agents::Catalog>,
     /// What builds the model of an agent that names its own; `None`: such an agent's calls fail.
     pub models: Option<crate::agents::Models>,
+    /// Which model judges a command only the mode would ask about (T52); it needs [`Self::models`] to build one.
+    pub classifier: crate::classifier::Choice,
     /// Whether the run offers `glut_file` from its start (TUI T37b): a turn that starts with a maker skill. Else it
     /// is offered from the moment the model loads one.
     pub glut_files: bool,
@@ -480,6 +482,7 @@ impl RunConfig {
             parallel_subagents: DEFAULT_PARALLEL_SUBAGENTS,
             agents: std::sync::Arc::default(),
             models: None,
+            classifier: crate::classifier::Choice::Session,
             glut_files: false,
             pane_tools: false,
             loop_tool: false,

@@ -891,6 +891,10 @@ pub fn turn(
                 "{base}\n\n## Your role in this pane: {name}\n\n{prompt}"
             ));
         }
+        // T52: the owner's choice of the second model that judges commands, read at every turn as `/classifier` left it.
+        // A file it cannot read judges nothing: `/classifier` says why.
+        config.classifier =
+            glut::classifier::Choice::load(&parts.home).unwrap_or(glut::classifier::Choice::Off);
         // A named agent's own model is built like the session's (T37a): the providers, their keys, the model list.
         config.models = Some(glut::agents::Models(Arc::new(SessionModels {
             parts: Arc::clone(&parts),

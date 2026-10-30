@@ -441,7 +441,10 @@ impl Transcript {
                         if !allowed {
                             *state = ToolState::Refused;
                             *gate = Some(reason.clone());
-                        } else if reason.contains("owner") || reason.contains("asked") {
+                        } else if reason.contains("owner")
+                            || reason.contains("asked")
+                            || reason.starts_with(glut::permissions::JUDGED_READING)
+                        {
                             *gate = Some(reason.clone());
                         }
                     }

@@ -585,6 +585,18 @@ glut::catalog! {
         turn_ended_go_on: &'static str,
         /// The host a router names for the answers changed to `{host}` (T88).
         served_by: &'static str,
+        /// `/classifier` alone: `{choice}` judges (T52).
+        classifier_now: &'static str,
+        /// `/classifier` alone or `off`: none judges.
+        classifier_off_now: &'static str,
+        /// `/classifier <choice>` kept.
+        classifier_set: &'static str,
+        /// The session's own model as a choice.
+        classifier_session: &'static str,
+        /// `/classifier` given something it cannot read.
+        classifier_usage: &'static str,
+        /// What the second model said, under an ask's command: `{note}`.
+        ask_judged: &'static str,
         /// `/maxsteps` alone: `{n}`.
         steps_now: &'static str,
         /// `/maxsteps` kept `{n}`.

@@ -165,6 +165,10 @@ pub const TEXTS: Texts = Texts {
             "Glut 运行的命令的钥匙串 — 除列表中的程序外都关闭，这些程序每次都会请求；/keychain add|remove <program>，/keychain open|close 用于本会话",
         ),
         (
+            "classifier",
+            "判断仅由模式询问的命令的第二个模型：若只读取，便像已知的读取命令一样在沙箱中运行 — off 每次询问你，session 使用会话的模型",
+        ),
+        (
             "clean",
             "Glut 在 ~/.glut 中保存的内容，以及按你的期限可清理的部分；/clean now 立即清理，/clean keep <kind> <days>d 设置期限",
         ),
@@ -261,6 +265,7 @@ pub const TEXTS: Texts = Texts {
         ("notify", "通知"),
         ("secrets", "对模型隐藏的密钥"),
         ("keychain", "命令使用的钥匙串"),
+        ("classifier", "第二个模型判断命令"),
         ("clean", "整理 ~/.glut"),
         ("motion", "屏幕的动画程度"),
         ("rule", "本会话的规则"),
@@ -606,6 +611,12 @@ pub const TEXTS: Texts = Texts {
     steps_reached: "回合在 {n} 步的上限处停下 — 在空输入上按 ⏎ 从停下处继续；/maxsteps 修改上限",
     turn_ended_go_on: "本轮已结束：{reason} — 在空输入上按 ⏎ 从停下处继续",
     served_by: "回答现在来自 {host}",
+    classifier_now: "仅由模式询问的命令由 {choice} 判断：只读取的命令会在沙箱中运行 — /classifier off|session|<provider> <model>",
+    classifier_off_now: "没有第二个模型判断命令：每次都会询问你 — /classifier session|<provider> <model>",
+    classifier_set: "从下一轮起，由 {choice} 判断命令是否只读取",
+    classifier_session: "会话的模型",
+    classifier_usage: "/classifier 接受 off、session 或 <provider> <model>",
+    ask_judged: "第二个模型：{note}",
     steps_now: "一个回合最多 {n} 步 — /maxsteps <n> 可修改",
     steps_set: "从现在起一个回合最多 {n} 步",
     steps_bad: "/maxsteps 需要 1 到 {most} 之间的数字",
@@ -1400,6 +1411,10 @@ pub const TEXTS: Texts = Texts {
             "End the run before its next model call once it has cost this many USD, at the model's `prices` in \
              ~/.glut/settings.json (without them a run has no budget in money, and says so)",
             "花费达到这么多美元后，在下一次调用模型前结束运行，按 ~/.glut/settings.json 中模型的 `prices` 计算（没有价格时运行没有金额预算，并会说明）",
+        ),
+        (
+            "Which model judges a command only the mode would ask about, whether it only reads: off, session or <provider> <model> (else ~/.glut/classifier.json, which /classifier writes, else the session's)",
+            "判断仅由模式询问的命令是否只读取的模型：off、session 或 <provider> <model>（否则为 /classifier 写入的 ~/.glut/classifier.json，再否则为会话的模型）",
         ),
         (
             "Never compact the conversation automatically (`\"compact\": {\"auto\": false}` in ~/.glut/settings.json)",

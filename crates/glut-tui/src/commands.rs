@@ -102,7 +102,7 @@ const fn command(
 }
 
 /// Every command, grouped by topic in [`Topic::ALL`]'s order, the most used first inside a topic.
-pub const COMMANDS: [Command; 62] = [
+pub const COMMANDS: [Command; 63] = [
     command(Topic::Session, "clear", "", "start a new session"),
     command(
         Topic::Session,
@@ -389,6 +389,13 @@ pub const COMMANDS: [Command; 62] = [
         "[add|remove <program>|open|close]",
         "the Keychain for the commands Glut runs — shut but to the listed programs, which ask each time; /keychain \
          add|remove <program>, /keychain open|close for this session",
+    ),
+    command(
+        Topic::Settings,
+        "classifier",
+        "[off|session|<provider> <model>]",
+        "the second model that judges a command only the mode would ask about: when it only reads, it runs like a \
+         listed reader, in the sandbox — off asks you each time, session takes the session's model",
     ),
     command(
         Topic::Settings,
@@ -1377,7 +1384,15 @@ mod tests {
     fn a_typed_part_takes_the_names_first_then_what_they_do() {
         assert_eq!(
             names(&fitting("c")),
-            ["clear", "compact", "context", "close", "clean", "cache"]
+            [
+                "clear",
+                "compact",
+                "context",
+                "close",
+                "classifier",
+                "clean",
+                "cache"
+            ]
         );
         assert_eq!(names(&fitting("hook")), ["skill"]);
         let con = fitting("con");

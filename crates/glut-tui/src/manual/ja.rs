@@ -1,7 +1,7 @@
 //! The commands' manual pages in Japanese (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 62] = [
+pub const PAGES: [(&str, &str); 63] = [
     (
         "clear",
         "このフォルダーで、空の新しいセッションを始めます。\n\
@@ -560,6 +560,19 @@ pub const PAGES: [(&str, &str); 62] = [
          \n\
          リストは `~/.glut/keychain.json` に保たれます。`glut keychain open` \
          はセッションをまたいでキーチェーンを開いたままにし、`glut keychain close` は永久に閉じます。",
+    ),
+    (
+        "classifier",
+        "モードだけが確認を求めるコマンドを、第二のモデルに判定させます。\n\
+         \n\
+         /classifier — どのモデルが判定するか、または判定しないこと\n\
+         /classifier session — セッションのモデルが判定（何も設定しない間）\n\
+         /classifier <provider> <model> — 専用のモデル、速いもので十分（openrouter deepseek/deepseek-v4.1-flash）\n\
+         /classifier off — 判定しない: 毎回確認します\n\
+         \n\
+         Glut は読み取りだけのコマンド（ls、grep、git status など）を多く知っており、どのモードでも実行します。それらのループやパイプライン（for f in *.md; do grep -c x \"$f\"; done）はテキストだけでは判定できないため確認します。第二のモデルはそのコマンドとフォルダだけを見て — 会話、ファイル、出力は決して見ません — READS か CHANGES と答えます。READS のときだけ、コマンドは既知の読み取りコマンドとしてサンドボックス内で実行されます。それ以外、または数秒以内に明確な答えがない場合は従来どおり確認し、その意見をコマンドの下に示します。あなたのルール、重いコマンド、キーチェーン、サンドボックスはそのままです。同じコマンドはセッション内で二度判定されません。\n\
+         \n\
+         通したコマンドにはその旨が横に表示されます。選択は `~/.glut/classifier.json` に保存され、次のターンから有効です。`glut run --classifier` で一回の実行に設定できます。",
     ),
     (
         "clean",

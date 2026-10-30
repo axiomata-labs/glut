@@ -169,6 +169,11 @@ pub struct RunArgs {
     #[arg(long)]
     #[serde(default)]
     max_usd: Option<f64>,
+    /// Which model judges a command only the mode would ask about, whether it only reads: off, session or
+    /// <provider> <model> (else ~/.glut/classifier.json, which /classifier writes, else the session's).
+    #[arg(long)]
+    #[serde(default)]
+    classifier: Option<String>,
     /// Never compact the conversation automatically (`"compact": {"auto": false}` in ~/.glut/settings.json).
     #[arg(long)]
     #[serde(default)]
@@ -580,6 +585,7 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
         max_turns,
         timeout_secs,
         context_window,
+        classifier,
         no_auto_compact,
         no_mask,
         no_lsp,
@@ -711,6 +717,15 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
         .filter(|home| home.is_absolute())
     else {
         return fail("HOME is not set to an absolute folder".into());
+    };
+    // T52: the flag's judge, else the owner's file's.
+    config.classifier = match classifier.as_deref().map(crate::classifier::Choice::parse) {
+        Some(Ok(choice)) => choice,
+        Some(Err(why)) => return fail(format!("--classifier: {why}")),
+        None => match crate::classifier::Choice::load(&home) {
+            Ok(choice) => choice,
+            Err(err) => return fail(err.to_string()),
+        },
     };
     // T58: the owner's own formats and values let through; the run's key is found exactly wherever it shows.
     config.masks = match crate::masks::Owner::load(&home) {

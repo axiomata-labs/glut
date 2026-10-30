@@ -1,7 +1,7 @@
 //! The commands' manual pages in French (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 62] = [
+pub const PAGES: [(&str, &str); 63] = [
     (
         "clear",
         "Commencer une nouvelle session vide dans ce dossier.\n\
@@ -625,6 +625,19 @@ pub const PAGES: [(&str, &str); 62] = [
          \n\
          La liste est gardée dans `~/.glut/keychain.json` ; `glut keychain open` garde le trousseau ouvert d'une \
          session à l'autre, `glut keychain close` le ferme pour de bon.",
+    ),
+    (
+        "classifier",
+        "Laisse un second modèle juger les commandes sur lesquelles seul le mode t’interrogerait.\n\
+         \n\
+         /classifier — quel modèle juge, ou qu’aucun ne le fait\n\
+         /classifier session — le modèle de la session juge (tant que tu n’en fixes aucun)\n\
+         /classifier <provider> <model> — un modèle à part, un rapide suffit (openrouter deepseek/deepseek-v4.1-flash)\n\
+         /classifier off — aucun ne juge : on te demande à chaque fois\n\
+         \n\
+         Glut connaît beaucoup de commandes qui ne font que lire (ls, grep, git status, …) et les exécute dans tous les modes. Une boucle ou un pipeline de celles-ci (for f in *.md; do grep -c x \"$f\"; done), il ne peut pas en juger par son seul texte, alors il demande. Le second modèle voit cette commande et son dossier — jamais la conversation, un fichier ou une sortie — et répond READS ou CHANGES. Seulement sur READS la commande s’exécute comme une commande de lecture connue, dans le bac à sable ; tout le reste, ou aucune réponse claire en quelques secondes, te demande comme avant, son avis sous la commande. Une règle à toi, une commande lourde, le trousseau et le bac à sable restent tels quels ; la même commande n’est pas jugée deux fois dans une session.\n\
+         \n\
+         Une commande qu’il a laissé passer le dit à côté. Le choix est gardé dans `~/.glut/classifier.json` et vaut dès le prochain tour ; `glut run --classifier` le fixe pour une exécution.",
     ),
     (
         "clean",

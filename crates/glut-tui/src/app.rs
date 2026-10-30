@@ -1134,6 +1134,36 @@ impl App {
         self.exported(written);
     }
 
+    /// `/classifier`: which model judges a command only the mode would ask about (T52), kept in
+    /// `~/.glut/classifier.json` for every session from its next turn.
+    fn classifier_command(&mut self, rest: &str) {
+        use glut::classifier::Choice;
+        let home = self.parts.home.clone();
+        let shown = |choice: &Choice| match choice {
+            Choice::Session => tr!(classifier_session).to_owned(),
+            other => other.text(),
+        };
+        if rest.trim().is_empty() {
+            let said = match Choice::load(&home) {
+                Ok(Choice::Off) => tr!(classifier_off_now).to_string(),
+                Ok(choice) => tr!(classifier_now, choice = shown(&choice)).to_string(),
+                Err(err) => return self.transcript.note(err.to_string(), Tone::Fault),
+            };
+            return self.tell(said);
+        }
+        let choice = match Choice::parse(rest) {
+            Ok(choice) => choice,
+            Err(_) => return self.transcript.note(tr!(classifier_usage), Tone::Fault),
+        };
+        if let Err(err) = choice.save(&home) {
+            return self.transcript.note(err.to_string(), Tone::Fault);
+        }
+        self.tell(match choice {
+            Choice::Off => tr!(classifier_off_now).to_string(),
+            choice => tr!(classifier_set, choice = shown(&choice)).to_string(),
+        });
+    }
+
     /// `/secrets` (T58): what was hidden from the model in this session; `on|off`, `allow <n> [always]`,
     /// `add <name> <regex>`, `remove <name>` change the rules every pane masks by, kept in `~/.glut/secrets.json`.
     fn secrets_command(&mut self, rest: &str) {
@@ -3892,6 +3922,7 @@ impl App {
             },
             "notify" => self.notify_command(rest),
             "secrets" => self.secrets_command(rest),
+            "classifier" => self.classifier_command(rest),
             "folder" => self.folder_command(rest),
             "export" => self.export_command(rest),
             "links" => match crate::links::Links::parse(rest) {
@@ -9652,6 +9683,7 @@ pub(crate) mod tests {
                 scopes: Vec::new(),
                 from: None,
                 keychain: false,
+                note: None,
             },
             reply,
         ));
@@ -10943,6 +10975,7 @@ pub(crate) mod tests {
                 scopes: Vec::new(),
                 from: None,
                 keychain: false,
+                note: None,
             },
             reply,
         ));
@@ -11371,6 +11404,7 @@ pub(crate) mod tests {
                 scopes: vec!["accept_edits".into(), "auto".into(), "default".into()],
                 from: None,
                 keychain: false,
+                note: None,
             },
             reply,
         ));
@@ -11481,6 +11515,7 @@ pub(crate) mod tests {
                 scopes: vec!["accept_edits".into()],
                 from: None,
                 keychain: false,
+                note: None,
             },
             reply,
         ));
@@ -11635,6 +11670,7 @@ pub(crate) mod tests {
                 ],
                 from: None,
                 keychain: false,
+                note: None,
             },
             reply,
         ));
@@ -11893,7 +11929,15 @@ pub(crate) mod tests {
                 .iter()
                 .map(|command| command.name)
                 .collect::<Vec<_>>(),
-            ["clear", "compact", "context", "close", "clean", "cache"]
+            [
+                "clear",
+                "compact",
+                "context",
+                "close",
+                "classifier",
+                "clean",
+                "cache"
+            ]
         );
         app.on_terminal(key(KeyCode::Down, KeyModifiers::NONE));
         app.on_terminal(key(KeyCode::Tab, KeyModifiers::NONE));
@@ -12499,6 +12543,7 @@ pub(crate) mod tests {
                 scopes: vec!["gh pr *".into()],
                 from: None,
                 keychain: true,
+                note: None,
             },
             reply,
         ));
@@ -12793,6 +12838,7 @@ pub(crate) mod tests {
                         scopes: vec!["git push origin main".into(), "git push *".into()],
                         from: None,
                         keychain: false,
+                        note: None,
                     },
                     reply,
                 ));

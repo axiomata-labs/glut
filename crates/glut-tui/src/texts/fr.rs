@@ -228,6 +228,10 @@ pub const TEXTS: Texts = Texts {
              chaque fois ; /keychain add|remove <program>, /keychain open|close pour cette session",
         ),
         (
+            "classifier",
+            "le second modèle qui juge une commande sur laquelle seul le mode interrogerait : si elle ne fait que lire, elle s’exécute comme une commande de lecture connue, dans le bac à sable — off te demande à chaque fois, session prend le modèle de la session",
+        ),
+        (
             "clean",
             "ce que Glut garde dans ~/.glut et ce qui peut partir selon vos délais ; /clean now nettoie, /clean keep \
              <kind> <days>d fixe un délai",
@@ -333,6 +337,7 @@ pub const TEXTS: Texts = Texts {
         ("notify", "notifications"),
         ("secrets", "clés cachées au modèle"),
         ("keychain", "le trousseau pour les commandes"),
+        ("classifier", "un second modèle juge les commandes"),
         ("clean", "ranger ~/.glut"),
         ("motion", "combien l'écran bouge"),
         ("rule", "une règle pour cette session"),
@@ -748,6 +753,12 @@ pub const TEXTS: Texts = Texts {
                     arrêté ; /maxsteps change la limite",
     turn_ended_go_on: "le tour s’est terminé : {reason} — ⏎ sur la saisie vide reprend là où il s’est arrêté",
     served_by: "les réponses viennent maintenant de {host}",
+    classifier_now: "les commandes sur lesquelles seul le mode interrogerait sont jugées par {choice} : celle qui ne fait que lire s’exécute, dans le bac à sable — /classifier off|session|<provider> <model>",
+    classifier_off_now: "aucun second modèle ne juge les commandes : on te demande à chaque fois — /classifier session|<provider> <model>",
+    classifier_set: "dès le prochain tour, {choice} juge si une commande ne fait que lire",
+    classifier_session: "le modèle de la session",
+    classifier_usage: "/classifier prend off, session ou <provider> <model>",
+    ask_judged: "second modèle : {note}",
     steps_now: "un tour fait au plus {n} étapes — /maxsteps <n> le change",
     steps_set: "un tour fait désormais au plus {n} étapes",
     steps_bad: "/maxsteps prend un nombre de 1 à {most}",
@@ -1614,6 +1625,10 @@ code",
             "Terminer l’exécution avant son prochain appel au modèle une fois qu’elle a coûté autant d’USD, aux \
              `prices` du modèle dans ~/.glut/settings.json (sans eux, une exécution n’a pas de budget en argent, et \
              le dit)",
+        ),
+        (
+            "Which model judges a command only the mode would ask about, whether it only reads: off, session or <provider> <model> (else ~/.glut/classifier.json, which /classifier writes, else the session's)",
+            "Quel modèle juge une commande sur laquelle seul le mode interrogerait, si elle ne fait que lire : off, session ou <provider> <model> (sinon ~/.glut/classifier.json, qu’écrit /classifier, sinon celui de la session)",
         ),
         (
             "Never compact the conversation automatically (`\"compact\": {\"auto\": false}` in ~/.glut/settings.json)",

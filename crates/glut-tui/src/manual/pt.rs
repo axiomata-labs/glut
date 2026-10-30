@@ -1,7 +1,7 @@
 //! The commands' manual pages in Portuguese (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 62] = [
+pub const PAGES: [(&str, &str); 63] = [
     (
         "clear",
         "Começa uma sessão nova e vazia nesta pasta.\n\
@@ -616,6 +616,19 @@ pub const PAGES: [(&str, &str); 62] = [
          \n\
          A lista fica em `~/.glut/keychain.json`; `glut keychain open` mantém o porta-chaves aberto de uma sessão \
          para outra, `glut keychain close` fecha-o de vez.",
+    ),
+    (
+        "classifier",
+        "Deixa um segundo modelo julgar os comandos sobre os quais só o modo te perguntaria.\n\
+         \n\
+         /classifier — que modelo julga, ou que nenhum o faz\n\
+         /classifier session — julga o modelo da sessão (enquanto não definires nenhum)\n\
+         /classifier <provider> <model> — um modelo próprio, basta um rápido (openrouter deepseek/deepseek-v4.1-flash)\n\
+         /classifier off — nenhum julga: és perguntado sempre\n\
+         \n\
+         O Glut conhece muitos comandos que apenas leem (ls, grep, git status, …) e executa-os em todos os modos. Um ciclo ou um pipeline deles (for f in *.md; do grep -c x \"$f\"; done) não o consegue julgar só pelo texto, por isso pergunta. O segundo modelo vê esse comando e a sua pasta — nunca a conversa, um ficheiro ou uma saída — e diz READS ou CHANGES. Só com READS o comando executa como um comando de leitura conhecido, na sandbox; tudo o resto, ou nenhuma resposta clara em segundos, pergunta-te como antes, com a sua opinião sob o comando. Uma regra tua, um comando pesado, o porta-chaves e a sandbox ficam como estão; o mesmo comando não é julgado duas vezes numa sessão.\n\
+         \n\
+         Um comando que deixou passar indica-o ao lado. A escolha fica em `~/.glut/classifier.json` e vale a partir do próximo turno; `glut run --classifier` define-a para uma execução.",
     ),
     (
         "clean",

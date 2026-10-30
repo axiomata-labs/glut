@@ -324,6 +324,10 @@ fn draw_in(frame: &mut Frame, app: &mut App, area: Rect, chrome: &Chrome) {
             );
             if open.request.keychain {
                 keychain_rows(open, width, most)
+            } else if let Some(note) = &open.request.note {
+                // T52: what the second model said, under the command it judged.
+                let shown = format!("{}\n{}", open.request.target, tr!(ask_judged, note = note));
+                asked_rows(&shown, width, most)
             } else {
                 asked_rows(&open.request.target, width, most)
             }

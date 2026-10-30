@@ -10,6 +10,7 @@ pub mod command;
 pub mod kinds;
 pub mod settings;
 
+use std::collections::HashMap;
 use std::fmt;
 use std::future::Future;
 use std::path::{Component, Path};
@@ -906,6 +907,9 @@ struct Weighed {
     reason: String,
     /// The program that would get the Keychain (T74), if any.
     keychain: Option<String>,
+    /// Only the mode or the rules' unsureness asks about this sandboxed command — no rule of the owner's, no heavy
+    /// kind, no Keychain: a second model may say it only reads (T52, [`Judge`]).
+    judgeable: bool,
 }
 
 /// A question to the owner.
@@ -922,6 +926,8 @@ pub struct AskRequest {
     pub from: Option<String>,
     /// The command would run with the Keychain open (T74): a listed program, the Keychain shut to every other.
     pub keychain: bool,
+    /// What the second model said of the command when it did not find it only reading (T52), to show beside it.
+    pub note: Option<String>,
 }
 
 /// The owner's answer.
@@ -957,6 +963,38 @@ pub trait Asker: Send + Sync {
         Box::pin(async { crate::mcp::elicit::Reply::Decline })
     }
 }
+
+/// A second model's word on a command the gate would otherwise ask about (T52): whether it only reads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Opinion {
+    /// It reads, lists, searches or prints and nothing else: it runs like a listed reader, in the sandbox.
+    pub reads_only: bool,
+    /// Why, in a few words.
+    pub why: String,
+    /// The model that judged, as the owner reads it.
+    pub by: String,
+}
+
+/// A [`Judge`]'s answer; `None` when it gave no clear one — the gate then asks as without it.
+pub type OpinionFuture<'a> = Pin<Box<dyn Future<Output = Option<Opinion>> + Send + 'a>>;
+
+/// What judges a command the gate cannot read as only reading (T52): it sees the command and its folder alone —
+/// never the conversation, a file or an output, so nothing a page or a file says reaches it. It can only make a
+/// command run as a reader would; a write, a heavy command, an owner's rule and the sandbox stay as they are.
+pub trait Judge: Send + Sync {
+    /// The model judging, as the owner reads it; a judge of another name forgets what the last one said.
+    fn name(&self) -> String;
+    fn judge<'a>(&'a self, command: &'a str, folder: &'a str) -> OpinionFuture<'a>;
+    /// What its calls used since last asked: the run counts it as its own, budget and all.
+    fn take_usage(&self) -> crate::model::Usage {
+        crate::model::Usage::default()
+    }
+}
+
+/// The most opinions a gate keeps; past it they start afresh.
+const MOST_OPINIONS: usize = 512;
+/// How long a judge that gave no answer is passed by: a judge that is down must not make every new command wait.
+const JUDGE_RESTS: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Nobody to ask (headless): every ask is refused.
 pub struct Nobody;
@@ -1114,6 +1152,12 @@ pub struct Gate {
     /// The commands this gate let run with the Keychain and the listed program each was judged for (T74b): the shell
     /// opens it for what was judged, not for what the list says a moment later.
     keychain_given: Mutex<Vec<(String, String)>>,
+    /// The second model that judges commands only the mode would ask about (T52); `None`: none, the owner is asked.
+    judge: Mutex<Option<Arc<dyn Judge>>>,
+    /// What it said, by folder and command: the same command again costs nothing.
+    opinions: Mutex<HashMap<(String, String), Opinion>>,
+    /// When the judge last gave no answer ([`JUDGE_RESTS`]).
+    judge_failed: Mutex<Option<std::time::Instant>>,
 }
 
 /// One `allowed-tools` list and who declared it: only the calls these rules name are judged as usual, everything
@@ -1139,7 +1183,103 @@ impl Gate {
             beside: Mutex::new(Folders::default()),
             keychain: Mutex::new(Keychain::default()),
             keychain_given: Mutex::new(Vec::new()),
+            judge: Mutex::new(None),
+            opinions: Mutex::new(HashMap::new()),
+            judge_failed: Mutex::new(None),
         }
+    }
+
+    /// The second model that judges what only the mode would ask about (T52), or none. Another judge than the last
+    /// forgets what that one said.
+    pub fn set_judge(&self, judge: Option<Arc<dyn Judge>>) {
+        let mut held = self
+            .judge
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        if held.as_ref().map(|judge| judge.name()) != judge.as_ref().map(|judge| judge.name()) {
+            self.opinions
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .clear();
+        }
+        *held = judge;
+    }
+
+    /// Whether a rule of any file asks about or refuses a read (`Read(…)`): then no judge decides a command's reads.
+    fn reads_ruled(&self) -> bool {
+        let rules = self
+            .rules
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        rules
+            .ask
+            .iter()
+            .chain(&rules.deny)
+            .any(|rule| rule.kind == RuleKind::Read)
+    }
+
+    /// The judge's word on `command` in `folder`: kept from before, or asked now.
+    async fn opinion(&self, command: &str, folder: &str) -> Option<Opinion> {
+        let key = (folder.to_owned(), command.to_owned());
+        if let Some(said) = self
+            .opinions
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .get(&key)
+        {
+            return Some(said.clone());
+        }
+        let judge = self
+            .judge
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone()?;
+        let resting = |failed: &Option<std::time::Instant>| {
+            failed.is_some_and(|at| at.elapsed() < JUDGE_RESTS)
+        };
+        if resting(
+            &self
+                .judge_failed
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner()),
+        ) {
+            return None;
+        }
+        let Some(said) = judge.judge(command, folder).await else {
+            *self
+                .judge_failed
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner()) = Some(std::time::Instant::now());
+            return None;
+        };
+        // Kept only while it is still the judge: another one set meanwhile forgot the last one's words.
+        let current = self
+            .judge
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .as_ref()
+            .is_some_and(|now| now.name() == judge.name());
+        if current {
+            let mut opinions = self
+                .opinions
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            if opinions.len() >= MOST_OPINIONS {
+                opinions.clear();
+            }
+            opinions.insert(key, said.clone());
+        }
+        Some(said)
+    }
+
+    /// What the judge's calls used since this was last asked (T52): the run counts it as its own.
+    pub fn take_judge_usage(&self) -> crate::model::Usage {
+        self.judge
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .as_ref()
+            .map(|judge| judge.take_usage())
+            .unwrap_or_default()
     }
 
     /// Asks before a listed program gets the Keychain, by `keychain`'s list and switch (T74).
@@ -1379,6 +1519,7 @@ impl Gate {
             scopes,
             from: subagent().map(|(_, label)| label),
             keychain: false,
+            note: None,
         };
         let _one_at_a_time = self.asking.lock().await;
         self.asker.ask(&request).await
@@ -1435,10 +1576,28 @@ impl Gate {
                 .retain(|(judged, _)| judged != command);
         }
         let Weighed {
-            verdict,
+            mut verdict,
             mut reason,
             keychain,
+            judgeable,
         } = self.weigh(tool, access, &target)?;
+        // T52: what only the mode would ask about, a second model may find only reading — then it runs as a listed
+        // reader does, in the sandbox; else its word goes beside the question.
+        let mut note = None;
+        if verdict == Verdict::Ask
+            && judgeable
+            && let Access::Bash {
+                command, folder, ..
+            } = access
+            && let Some(said) = self.opinion(command, folder).await
+        {
+            if said.reads_only {
+                verdict = Verdict::Allow;
+                reason = format!("{JUDGED_READING} {}: {}", said.by, said.why);
+            } else {
+                note = Some(format!("{}: {}", said.by, said.why));
+            }
+        }
         let allowed = match verdict {
             Verdict::Allow => true,
             Verdict::Deny => false,
@@ -1461,6 +1620,7 @@ impl Gate {
                     scopes: scopes.iter().map(|scope| scope.label.clone()).collect(),
                     from: subagent().map(|(_, label)| label),
                     keychain: keychain.is_some(),
+                    note,
                 };
                 let _one_at_a_time = self.asking.lock().await;
                 let answer = self.asker.ask(&request).await;
@@ -1584,6 +1744,7 @@ impl Gate {
             }
         };
         let mode = format!("mode {}", self.mode_name());
+        let mut judgeable = false;
         let (mut verdict, mut reason) = match said {
             Said::Verdict(verdict, why) => (verdict, why),
             // T74: no reader, no `auto` — the owner's word or a rule of theirs.
@@ -1596,10 +1757,26 @@ impl Gate {
             ),
             unsure_or_silent => match self.command_kind(access) {
                 Some(judged) => judged,
-                None => match unsure_or_silent {
-                    Said::Unsure(why) => (Verdict::Ask, why),
-                    _ => (self.mode().fallback(access), mode.clone()),
-                },
+                None => {
+                    // T52: only a reader a loop or a variable kept from the list, and never where a Read rule of
+                    // the owner's holds a file back — a loop's names are no paths a rule could weigh.
+                    judgeable = match access {
+                        Access::Bash {
+                            command,
+                            sandboxed: true,
+                            ..
+                        } => {
+                            self.mode() != Mode::DontAsk
+                                && kinds::judgeable(&analyze(command))
+                                && !self.reads_ruled()
+                        }
+                        _ => false,
+                    };
+                    match unsure_or_silent {
+                        Said::Unsure(why) => (Verdict::Ask, why),
+                        _ => (self.mode().fallback(access), mode.clone()),
+                    }
+                }
             },
         };
         // Plan mode writes nothing, whatever a rule says (P3) — neither with the file tools nor by a redirection.
@@ -1628,6 +1805,7 @@ impl Gate {
             verdict,
             reason,
             keychain,
+            judgeable,
         })
     }
 
@@ -1768,6 +1946,9 @@ impl Gate {
             .push((by, judged));
     }
 }
+
+/// How the reason begins where a second model let a command run as only reading (T52): a host marks such a call.
+pub const JUDGED_READING: &str = "judged to only read by";
 
 /// Why a reading command is not free in every mode: it reads out of the working folder.
 const READS_OUTSIDE: &str = "the command reads outside the working folder";
@@ -2266,6 +2447,98 @@ mod tests {
             self.0.lock().unwrap().push(request.keychain);
             Box::pin(async { Answer::Allow })
         }
+    }
+
+    /// Says READS for the commands it is given, CHANGES for the rest, and counts its judgements (T52).
+    struct Reads(Vec<&'static str>, Mutex<u32>);
+
+    impl Judge for Reads {
+        fn name(&self) -> String {
+            "judge".into()
+        }
+
+        fn judge<'a>(&'a self, command: &'a str, _folder: &'a str) -> OpinionFuture<'a> {
+            *self.1.lock().unwrap() += 1;
+            let reads_only = self.0.contains(&command);
+            Box::pin(async move {
+                Some(Opinion {
+                    reads_only,
+                    why: if reads_only { "counts" } else { "writes" }.into(),
+                    by: "judge".into(),
+                })
+            })
+        }
+    }
+
+    /// Answers yes and keeps each ask's note.
+    struct Notes(Mutex<Vec<Option<String>>>);
+
+    impl Asker for Notes {
+        fn ask<'a>(&'a self, request: &'a AskRequest) -> AnswerFuture<'a> {
+            self.0.lock().unwrap().push(request.note.clone());
+            Box::pin(async { Answer::Allow })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_second_model_lets_only_what_reads_run_and_never_over_a_rule_or_a_heavy_command() {
+        let looped = "for f in *.md; do grep -c x \"$f\"; done";
+        let asker = Arc::new(Notes(Mutex::new(Vec::new())));
+        let gate = Gate::new(
+            rules(&[], &["Bash(make *)"], &[]),
+            Mode::Default,
+            asker.clone(),
+        );
+        let judge = Arc::new(Reads(vec![looped, "make test"], Mutex::new(0)));
+        gate.set_judge(Some(judge.clone()));
+        assert!(gate.judge("bash", &bash(looped)).await.is_ok());
+        assert!(asker.0.lock().unwrap().is_empty(), "it read: nobody asked");
+        assert!(
+            gate.take_log()[0].reason.starts_with(JUDGED_READING),
+            "said as the judge's"
+        );
+        assert!(gate.judge("bash", &bash(looped)).await.is_ok());
+        assert_eq!(
+            *judge.1.lock().unwrap(),
+            1,
+            "the same command is judged once"
+        );
+        assert!(
+            gate.judge("bash", &bash("for f in *.txt; do wc -l \"$f\"; done"))
+                .await
+                .is_ok()
+        );
+        assert_eq!(
+            asker.0.lock().unwrap().pop(),
+            Some(Some("judge: writes".into())),
+            "asked, the judge's word beside it"
+        );
+        assert!(gate.judge("bash", &bash("touch a; ls")).await.is_ok());
+        assert_eq!(
+            asker.0.lock().unwrap().pop(),
+            Some(None),
+            "no reader: never judged"
+        );
+        assert!(gate.judge("bash", &bash("make test")).await.is_ok());
+        assert_eq!(
+            asker.0.lock().unwrap().pop(),
+            Some(None),
+            "an ask rule of the owner's is asked, never judged"
+        );
+        // Nobody there: what reads runs, the rest stays refused.
+        let alone = Gate::new(RuleSet::default(), Mode::Default, Arc::new(Nobody));
+        alone.set_judge(Some(judge.clone()));
+        assert!(alone.judge("bash", &bash(looped)).await.is_ok());
+        assert!(
+            alone
+                .judge("bash", &bash("for f in *.txt; do wc -l \"$f\"; done"))
+                .await
+                .is_err()
+        );
+        // In plan mode a write stays refused whatever the judge says.
+        let planning = Gate::new(RuleSet::default(), Mode::Plan, asker.clone());
+        planning.set_judge(Some(Arc::new(Reads(vec!["echo x > f"], Mutex::new(0)))));
+        assert!(planning.judge("bash", &bash("echo x > f")).await.is_err());
     }
 
     #[tokio::test]

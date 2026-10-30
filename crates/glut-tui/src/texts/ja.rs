@@ -205,6 +205,10 @@ pub const TEXTS: Texts = Texts {
              open|close はこのセッション用",
         ),
         (
+            "classifier",
+            "モードだけが確認を求めるコマンドを判定する第二のモデル: 読み取りだけなら既知の読み取りコマンドと同じくサンドボックス内で実行 — off は毎回確認、session はセッションのモデルを使用",
+        ),
+        (
             "clean",
             "Glut が ~/.glut に保存しているものと、期限に従って削除できるもの。/clean now で整理、/clean keep <kind> <days>d で期限を設定",
         ),
@@ -301,6 +305,7 @@ pub const TEXTS: Texts = Texts {
         ("notify", "通知"),
         ("secrets", "モデルに隠すキー"),
         ("keychain", "コマンド用のキーチェーン"),
+        ("classifier", "第二のモデルがコマンドを判定"),
         ("clean", "~/.glut を整理"),
         ("motion", "画面の動きの量"),
         ("rule", "このセッションのルール"),
@@ -678,6 +683,12 @@ pub const TEXTS: Texts = Texts {
     steps_reached: "ターンは上限の {n} ステップで止まりました — 空の入力で ⏎ を押すと続きから再開します。/maxsteps で上限を変更",
     turn_ended_go_on: "ターンが終了しました: {reason} — 空の入力で ⏎ を押すと続きから再開します",
     served_by: "応答は現在 {host} から届いています",
+    classifier_now: "モードだけが確認を求めるコマンドは {choice} が判定します: 読み取りだけのものはサンドボックス内で実行 — /classifier off|session|<provider> <model>",
+    classifier_off_now: "コマンドを判定する第二のモデルはありません: 毎回確認します — /classifier session|<provider> <model>",
+    classifier_set: "次のターンから {choice} がコマンドが読み取りだけかを判定します",
+    classifier_session: "セッションのモデル",
+    classifier_usage: "/classifier には off、session、<provider> <model> を指定します",
+    ask_judged: "第二のモデル: {note}",
     steps_now: "1 ターンは最大 {n} ステップです — /maxsteps <n> で変更",
     steps_set: "これから 1 ターンは最大 {n} ステップです",
     steps_bad: "/maxsteps には 1 から {most} までの数を指定します",
@@ -1492,6 +1503,10 @@ pub const TEXTS: Texts = Texts {
             "End the run before its next model call once it has cost this many USD, at the model's `prices` in \
              ~/.glut/settings.json (without them a run has no budget in money, and says so)",
             "この金額（USD）に達したら、次のモデル呼び出しの前に実行を終える。~/.glut/settings.json のモデルの `prices` で計算（それがなければ金額の予算はなく、そう伝えます）",
+        ),
+        (
+            "Which model judges a command only the mode would ask about, whether it only reads: off, session or <provider> <model> (else ~/.glut/classifier.json, which /classifier writes, else the session's)",
+            "モードだけが確認を求めるコマンドが読み取りだけかを判定するモデル: off、session、<provider> <model>（指定がなければ /classifier が書く ~/.glut/classifier.json、それもなければセッションのモデル）",
         ),
         (
             "Never compact the conversation automatically (`\"compact\": {\"auto\": false}` in ~/.glut/settings.json)",

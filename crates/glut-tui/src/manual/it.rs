@@ -1,7 +1,7 @@
 //! The commands' manual pages in Italian (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 62] = [
+pub const PAGES: [(&str, &str); 63] = [
     (
         "clear",
         "Inizia una nuova sessione vuota in questa cartella.\n\
@@ -618,6 +618,19 @@ pub const PAGES: [(&str, &str); 62] = [
          \n\
          La lista resta in `~/.glut/keychain.json`; `glut keychain open` tiene il portachiavi aperto da una sessione \
          all'altra, `glut keychain close` lo chiude per sempre.",
+    ),
+    (
+        "classifier",
+        "Lascia che un secondo modello giudichi i comandi per cui solo la modalità ti chiederebbe.\n\
+         \n\
+         /classifier — quale modello giudica, o che nessuno lo fa\n\
+         /classifier session — giudica il modello della sessione (finché non ne imposti uno)\n\
+         /classifier <provider> <model> — un modello a parte, ne basta uno veloce (openrouter deepseek/deepseek-v4.1-flash)\n\
+         /classifier off — nessuno giudica: ti viene chiesto ogni volta\n\
+         \n\
+         Glut conosce molti comandi che leggono soltanto (ls, grep, git status, …) e li esegue in ogni modalità. Un ciclo o una pipeline di essi (for f in *.md; do grep -c x \"$f\"; done) non può giudicarlo dal solo testo, quindi chiede. Il secondo modello vede quel comando e la sua cartella — mai la conversazione, un file o un output — e dice READS o CHANGES. Solo con READS il comando viene eseguito come un comando di lettura noto, nella sandbox; tutto il resto, o nessuna risposta chiara in pochi secondi, ti chiede come prima, con il suo parere sotto il comando. Una tua regola, un comando pesante, il portachiavi e la sandbox restano come sono; lo stesso comando non viene giudicato due volte in una sessione.\n\
+         \n\
+         Un comando che ha lasciato passare lo dice accanto. La scelta è salvata in `~/.glut/classifier.json` e vale dal prossimo turno; `glut run --classifier` la imposta per un'esecuzione.",
     ),
     (
         "clean",

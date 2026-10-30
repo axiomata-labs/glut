@@ -590,6 +590,18 @@ async fn run_inner<M: ChatModel>(
             }
         }
     }
+    // T52: the second model that judges what only the mode would ask about, on the run's models — at the top only, a
+    // subagent shares its parent's gate.
+    if depth == 0
+        && let Some(gate) = tools.gate()
+    {
+        gate.set_judge(
+            config
+                .models
+                .as_ref()
+                .and_then(|models| config.classifier.judge(models, model.name())),
+        );
+    }
     // SessionStart first: its context goes in behind the system prompt, and the journal must hold it there.
     if depth == 0 && !continuing {
         run.session_start(sink).await;
@@ -1369,6 +1381,7 @@ impl<'a, M: ChatModel> Loop<'a, M> {
                 let mut prepared = self.prepared.take();
                 let ran = beside(&mut prepared, self.run_calls(calls, sink)).await;
                 self.restore_prepared(prepared, sink);
+                self.count_judge(sink);
                 ran
             };
             if let Err(ending) = ended {
@@ -1661,6 +1674,17 @@ impl<'a, M: ChatModel> Loop<'a, M> {
             return;
         };
         self.count_summary(compacted.usage, sink);
+    }
+
+    /// What the second model that judged this step's commands used (T52), counted as the run's own: its budget, its
+    /// batch's, the event.
+    fn count_judge(&mut self, sink: &mut dyn EventSink) {
+        let Some(used) = self.tools.gate().map(|gate| gate.take_judge_usage()) else {
+            return;
+        };
+        if used.input_tokens + used.output_tokens > 0 {
+            self.count_summary(used, sink);
+        }
     }
 
     /// A summary's tokens, counted as the run's: its usage, its batch's budget, the event.

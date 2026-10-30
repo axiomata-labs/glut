@@ -114,6 +114,11 @@ scripts/install.sh               # glut for every terminal: ~/.cargo/bin, linked
   stands, reversibly (one `quoted ` more per mark), once on each way; Glut's own notes are added after. A new path
   of such text to the model goes through it too; a write takes the quote off again (`planning::written_marks`,
   beside the masks). The owner's own words stay.
+- **A second model may only say a reader reads** (T52, `crates/glut/src/classifier.rs`, `permissions::Judge`): the
+  gate asks it only about a sandboxed command a fixed filter lets through (`kinds::judgeable`: listed readers a loop
+  kept off the list, `$` only the loop's own variable, nothing written, nested or protected, no Read rule) and only where
+  the mode alone would ask — never past a rule, a heavy kind, the Keychain or plan mode. Widen that filter only with
+  an audit: the judge sees text the model wrote and can be talked round.
 - **The TUI never lets a key answer a question it did not show** (`crates/glut-tui/src/app.rs` `on_ask_key`): plain
   keys only, no repeat, nothing in the first 400 ms; a turn that ends drops its open card; an ask shows the head and
   the tail of a long target. Model and tool text goes through `transcript::wrap`/`clean` (control characters as

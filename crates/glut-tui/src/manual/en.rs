@@ -1,7 +1,7 @@
 //! The commands' manual pages in English (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 62] = [
+pub const PAGES: [(&str, &str); 63] = [
     (
         "clear",
         "Start a new, empty session in this folder.\n\
@@ -592,6 +592,19 @@ pub const PAGES: [(&str, &str); 62] = [
          \n\
          The list is kept in `~/.glut/keychain.json`; `glut keychain open` keeps the Keychain open across sessions, \
          `glut keychain close` shuts it for good.",
+    ),
+    (
+        "classifier",
+        "Let a second model judge the commands only the mode would ask you about.\n\
+         \n\
+         /classifier — which model judges, or that none does\n\
+         /classifier session — the session's own model judges (as long as you set none)\n\
+         /classifier <provider> <model> — a model of its own, a quick one is enough (openrouter deepseek/deepseek-v4.1-flash)\n\
+         /classifier off — none judges: you are asked each time\n\
+         \n\
+         Glut knows many commands that only read (ls, grep, git status, …) and runs them in every mode. A loop or a pipeline of them (for f in *.md; do grep -c x \"$f\"; done) it cannot judge from its text alone, so it asks. The second model sees that command and its folder — never the conversation, a file or an output — and says READS or CHANGES. Only on READS does the command run as a listed reader, in the sandbox; anything else, or no clear answer within seconds, asks you as before, its word under the command. A rule of yours, a heavy command, the Keychain and the sandbox stay as they are; the same command again is not judged twice in a session.\n\
+         \n\
+         A command it let run says so beside it. The choice is kept in `~/.glut/classifier.json` and counts from the next turn; `glut run --classifier` sets it for one run.",
     ),
     (
         "clean",
