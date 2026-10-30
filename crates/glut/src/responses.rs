@@ -593,6 +593,7 @@ impl Answer {
         Ok(Reply {
             message,
             usage: self.usage,
+            served_by: None,
         })
     }
 }

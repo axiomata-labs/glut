@@ -247,28 +247,17 @@ impl Toolbox {
     /// for a step that wants to know beforehand (Glut 2: a snapshot before a change).
     pub fn access_of(&self, name: &str, arguments: &str) -> Option<Access> {
         let tool = self.find(name)?;
-        let parsed = serde_json::from_str::<Value>(if arguments.trim().is_empty() {
-            "{}"
-        } else {
-            arguments
-        })
-        .ok()?;
-        parsed.is_object().then(|| tool.access(&parsed))
+        arguments_of(tool.as_ref(), arguments)
+            .ok()
+            .map(|parsed| tool.access(&parsed))
     }
 
     /// Whether a call of `name` with these arguments may run again after an interruption ([`Tool::replay_safe`]); an
     /// unknown tool or arguments that are no object may not.
     pub fn replay_safe(&self, name: &str, arguments: &str) -> bool {
-        let Some(tool) = self.find(name) else {
-            return false;
-        };
-        let text = if arguments.trim().is_empty() {
-            "{}"
-        } else {
-            arguments
-        };
-        serde_json::from_str::<Value>(text)
-            .is_ok_and(|parsed| parsed.is_object() && tool.replay_safe(&parsed))
+        self.find(name).is_some_and(|tool| {
+            arguments_of(tool.as_ref(), arguments).is_ok_and(|parsed| tool.replay_safe(&parsed))
+        })
     }
 
     /// Runs the tool `name` with the model's argument text. Returns whether it succeeded and its whole text; the loop
@@ -303,19 +292,11 @@ impl Toolbox {
                 "error: not permitted: this run does not offer {name}"
             ));
         }
-        // Some models send no arguments at all for a tool without required ones.
-        let arguments = if arguments.trim().is_empty() {
-            "{}"
-        } else {
-            arguments
+        let parsed = match arguments_of(tool.as_ref(), arguments) {
+            Ok(parsed) => parsed,
+            Err(text) => return refused(text),
         };
-        let parsed = match serde_json::from_str::<Value>(arguments) {
-            Ok(value @ Value::Object(_)) => value,
-            Ok(_) => return refused("error: the arguments must be a JSON object".into()),
-            Err(err) => {
-                return refused(format!("error: the arguments are not valid JSON: {err}"));
-            }
-        };
+        // The gate judges the arguments as the tool will read them: after `unquoted`, never before.
         if let Some(gate) = &self.gate
             && let Err(refusal) = gate.judge(name, &tool.access(&parsed)).await
         {
@@ -366,10 +347,97 @@ pub(crate) fn as_data(text: &str, end_mark: &str) -> String {
     plain.replace(end_mark, "[…]")
 }
 
+/// A call's argument text as `tool` reads it — what the gate judges, the snapshot and the replay weigh, and the tool
+/// runs with, read one way for all of them (T88).
+///
+/// # Errors
+///
+/// The model's text: no JSON, or JSON that is no object.
+fn arguments_of(tool: &dyn Tool, arguments: &str) -> Result<Value, String> {
+    // Some models send no arguments at all for a tool without required ones.
+    let arguments = if arguments.trim().is_empty() {
+        "{}"
+    } else {
+        arguments
+    };
+    match serde_json::from_str::<Value>(arguments) {
+        Ok(value @ Value::Object(_)) => Ok(unquoted(value, &tool.spec().parameters)),
+        Ok(_) => Err("error: the arguments must be a JSON object".into()),
+        Err(err) => Err(format!("error: the arguments are not valid JSON: {err}")),
+    }
+}
+
+/// `arguments` with a list or an object the model sent as text holding its JSON read as what the schema asks for
+/// there (T88: MiMo wrote `"items": "[…]"`, as other harnesses repair too). A field the schema wants as text, or text
+/// that is no such JSON, stays as it came; a wrong field name is never guessed.
+pub(crate) fn unquoted(mut arguments: Value, schema: &Value) -> Value {
+    let Some(properties) = schema.get("properties").and_then(Value::as_object) else {
+        return arguments;
+    };
+    if let Some(fields) = arguments.as_object_mut() {
+        for (name, value) in fields.iter_mut() {
+            let wanted = properties
+                .get(name)
+                .and_then(|property| property.get("type"))
+                .and_then(Value::as_str);
+            let Value::String(text) = value else {
+                continue;
+            };
+            let Ok(inner) = serde_json::from_str::<Value>(text.trim()) else {
+                continue;
+            };
+            if matches!(
+                (wanted, &inner),
+                (Some("array"), Value::Array(_)) | (Some("object"), Value::Object(_))
+            ) {
+                *value = inner;
+            }
+        }
+    }
+    arguments
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_list_sent_as_text_is_read_where_the_schema_wants_a_list() {
+        let schema = json!({"properties": {
+            "items": {"type": "array"},
+            "options": {"type": "object"},
+            "text": {"type": "string"},
+        }});
+        let sent = json!({
+            "items": " [{\"text\": \"a\"}] ",
+            "options": "{\"deep\": true}",
+            "text": "[1, 2]",
+            "other": "[3]",
+        });
+        assert_eq!(
+            unquoted(sent, &schema),
+            json!({
+                "items": [{"text": "a"}],
+                "options": {"deep": true},
+                "text": "[1, 2]",
+                "other": "[3]",
+            }),
+            "only where the schema asks for a list or an object"
+        );
+        let broken = json!({"items": "[{\"text\": "});
+        assert_eq!(
+            unquoted(broken.clone(), &schema),
+            broken,
+            "no JSON, no change"
+        );
+        let wrong = json!({"items": "{\"a\": 1}"});
+        assert_eq!(
+            unquoted(wrong.clone(), &schema),
+            wrong,
+            "an object is no list"
+        );
+    }
 
     struct Echo;
 

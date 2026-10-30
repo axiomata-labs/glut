@@ -389,8 +389,13 @@ pub struct App {
     key_answer: Option<oneshot::Sender<bool>>,
     /// A provider's key kept while a turn ran (T70): its engine is built again as that turn ends.
     key_switch: Option<String>,
-    /// The last turn ended at the step limit (T73b): ⏎ on the empty input goes on.
+    /// The last turn ended at the step limit (T73b), or Glut ended it for a model repeating itself (T88): ⏎ on the
+    /// empty input goes on.
     go_on: bool,
+    /// The host a router last named for the answers (T88): a change is said in the transcript.
+    served: Option<String>,
+    /// The turn running now was ended by Glut for a model repeating itself (T88): its ⏎ goes on.
+    repeat_ended: bool,
     /// A switch asked for while a turn ran (T73b): provider, model, effort, and what the footer names — made as the
     /// turn ends.
     pub switch_after: Option<SwitchAfter>,
@@ -696,6 +701,8 @@ impl App {
             key_answer: None,
             key_switch: None,
             go_on: false,
+            served: None,
+            repeat_ended: false,
             switch_after: None,
             after_switch: None,
             rules: Vec::new(),
@@ -1978,6 +1985,19 @@ impl App {
                     // Held until its ask comes: a call the harness refuses (too long, from a script) asks nothing.
                     self.offered_plan = Some(crate::plan::Plan::of_call(arguments));
                 }
+                // Who serves the answers behind a router (T88), said when it changes: a host's quirk can pass for
+                // the model's.
+                if let Event::Error { message } = &event
+                    && message.starts_with(glut::planning::REPEATED_END)
+                {
+                    self.repeat_ended = true;
+                }
+                if let Event::Served { by, .. } = &event
+                    && self.served.as_ref() != Some(by)
+                {
+                    self.transcript.note(tr!(served_by, host = by), Tone::Quiet);
+                    self.served = Some(by.clone());
+                }
                 if let Event::Todo { items, .. } = &event {
                     self.todos.clone_from(items);
                     self.parts.host.todos(items);
@@ -2159,7 +2179,11 @@ impl App {
                     FinishReason::Cancelled => None,
                     _ => Some(false),
                 };
-                self.go_on = outcome.reason == FinishReason::MaxTurns;
+                // Ended by Glut at its limit or for a model repeating itself (T88): the owner's ⏎ is the word to go
+                // on. Never after the refusal ledger's end — those calls were the owner's or the sandbox's no.
+                let repeated = std::mem::take(&mut self.repeat_ended);
+                self.go_on = outcome.reason == FinishReason::MaxTurns
+                    || outcome.reason == FinishReason::Refused && repeated;
                 match outcome.reason {
                     FinishReason::Answered => {}
                     FinishReason::Cancelled => self.transcript.note(tr!(stopped), Tone::Quiet),
@@ -2167,6 +2191,10 @@ impl App {
                         self.transcript
                             .note(tr!(steps_reached, n = self.steps_now()), Tone::Heed);
                     }
+                    FinishReason::Refused if repeated => self.transcript.note(
+                        tr!(turn_ended_go_on, reason = reason(FinishReason::Refused)),
+                        Tone::Fault,
+                    ),
                     other => self
                         .transcript
                         .note(tr!(turn_ended, reason = reason(other)), Tone::Fault),

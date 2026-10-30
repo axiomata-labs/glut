@@ -671,7 +671,7 @@ pub const TEXTS: Texts = Texts {
     ended_steps: "das Limit an Schritten ist erreicht",
     ended_time: "das Zeitlimit ist abgelaufen",
     ended_failed: "die API des Modells ist fehlgeschlagen",
-    ended_refused: "zu viele abgelehnte Aufrufe",
+    ended_refused: "zu viele abgelehnte oder wiederholte Aufrufe",
     ended_budget: "das Budget ist aufgebraucht",
     paste_lost: "ein Einfügen hat durch eine Bearbeitung seine Markierung verloren und fehlt; ⌃U leert die Zeile, \
                  füge es erneut ein",
@@ -729,6 +729,8 @@ pub const TEXTS: Texts = Texts {
     reader_now: "Bildschirmleser: {reader} — /reader on oder off",
     steps_reached: "der Turn hat an seiner Grenze von {n} Schritten angehalten — ⏎ in der leeren Eingabe macht dort \
                     weiter; /maxsteps ändert die Grenze",
+    turn_ended_go_on: "der Turn ist zu Ende: {reason} — ⏎ in der leeren Eingabe macht dort weiter",
+    served_by: "die Antworten kommen jetzt von {host}",
     steps_now: "ein Turn macht höchstens {n} Schritte — /maxsteps <n> ändert das",
     steps_set: "ein Turn macht ab jetzt höchstens {n} Schritte",
     steps_bad: "/maxsteps nimmt eine Zahl von 1 bis {most}",

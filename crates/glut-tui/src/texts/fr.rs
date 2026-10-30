@@ -687,7 +687,7 @@ pub const TEXTS: Texts = Texts {
     ended_steps: "la limite d’étapes est atteinte",
     ended_time: "la limite de temps est dépassée",
     ended_failed: "l’API du modèle a échoué",
-    ended_refused: "trop d’appels refusés",
+    ended_refused: "trop d’appels refusés ou répétés",
     ended_budget: "le budget est épuisé",
     paste_lost: "un collage a perdu sa marque à cause d’une modification et est omis ; ⌃U efface la ligne, colle-le \
                  à nouveau",
@@ -746,6 +746,8 @@ pub const TEXTS: Texts = Texts {
     reader_now: "lecteur d’écran : {reader} — /reader on ou off",
     steps_reached: "le tour s'est arrêté à sa limite de {n} étapes — ⏎ sur la saisie vide reprend là où il s'est \
                     arrêté ; /maxsteps change la limite",
+    turn_ended_go_on: "le tour s’est terminé : {reason} — ⏎ sur la saisie vide reprend là où il s’est arrêté",
+    served_by: "les réponses viennent maintenant de {host}",
     steps_now: "un tour fait au plus {n} étapes — /maxsteps <n> le change",
     steps_set: "un tour fait désormais au plus {n} étapes",
     steps_bad: "/maxsteps prend un nombre de 1 à {most}",

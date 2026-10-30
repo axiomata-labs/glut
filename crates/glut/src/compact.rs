@@ -314,6 +314,7 @@ mod tests {
                     cached_input_tokens: 0,
                     output_tokens: 7,
                 },
+                served_by: None,
             })
         }
 

@@ -317,7 +317,7 @@ pub const TEXTS: Texts = Texts {
     ended_steps: "the step limit was reached",
     ended_time: "the time limit passed",
     ended_failed: "the model API failed",
-    ended_refused: "too many refused calls",
+    ended_refused: "too many refused or repeated calls",
     ended_budget: "the budget is spent",
     paste_lost: "a paste lost its mark to an edit and is left out; ⌃U clears the line, paste it again",
     image_reading: "an image is still being read — ⏎ once it is in the input",
@@ -373,6 +373,8 @@ pub const TEXTS: Texts = Texts {
     reader_now: "reader: {reader} — /reader on or off",
     steps_reached: "the turn stopped at its limit of {n} steps — ⏎ on the empty input goes on where it stopped; \
                   /maxsteps changes the limit",
+    turn_ended_go_on: "the turn ended: {reason} — ⏎ on the empty input goes on where it stopped",
+    served_by: "answers now come from {host}",
     steps_now: "a turn takes at most {n} steps — /maxsteps <n> changes it",
     steps_set: "a turn takes at most {n} steps from now on",
     steps_bad: "/maxsteps takes a number from 1 to {most}",

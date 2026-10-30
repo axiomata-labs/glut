@@ -817,7 +817,11 @@ impl Answer {
             images: Vec::new(),
         };
         message.bound_reasoning();
-        Ok(Reply { message, usage })
+        Ok(Reply {
+            message,
+            usage,
+            served_by: None,
+        })
     }
 }
 

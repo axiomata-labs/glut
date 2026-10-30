@@ -376,6 +376,9 @@ pub struct Reply {
     /// The assistant message, as it goes back into the conversation.
     pub message: Message,
     pub usage: Usage,
+    /// Who served the answer behind a router, as it says (OpenRouter's `provider`): one model id there comes from
+    /// several hosts, in different builds and quantizations, and a model's fault may be one host's (T88).
+    pub served_by: Option<String>,
 }
 
 /// One piece of a streaming answer.
@@ -908,7 +911,24 @@ fn parse_reply(text: &str) -> Result<Reply, HarnessError> {
     Ok(Reply {
         message,
         usage: usage_of(&value),
+        served_by: served_by_of(&value),
     })
+}
+
+/// The longest host name a reply's `provider` is kept with: it comes from the network and goes into events.
+const MAX_SERVED_BY_CHARS: usize = 64;
+
+/// The host a router names in an answer or a stream's piece (OpenRouter's `provider`), as plain text.
+fn served_by_of(value: &Value) -> Option<String> {
+    let name: String = value
+        .get("provider")?
+        .as_str()?
+        .chars()
+        .filter(|c| !(c.is_control() || crate::permissions::is_invisible(*c)))
+        .take(MAX_SERVED_BY_CHARS)
+        .collect();
+    let name = name.trim();
+    (!name.is_empty()).then(|| name.to_owned())
 }
 
 /// The `usage` of an answer or of a stream's last piece (zero where it says nothing).
@@ -1042,6 +1062,7 @@ struct Stream {
     /// The tool calls in the order they began.
     calls: Vec<CallSlot>,
     usage: Usage,
+    served_by: Option<String>,
     /// Whether any piece held a choice: a stream without one has no answer.
     answered: bool,
     /// Whether the stream said it was done — its end mark or a `finish_reason`; one that just stops was cut off.
@@ -1082,6 +1103,9 @@ impl Stream {
         let usage = usage_of(&piece);
         if usage.input_tokens + usage.output_tokens > 0 {
             self.usage = usage;
+        }
+        if let Some(host) = served_by_of(&piece) {
+            self.served_by = Some(host);
         }
         let Some(choice) = piece.pointer("/choices/0") else {
             return Ok(false);
@@ -1222,6 +1246,7 @@ impl Stream {
         Ok(Reply {
             message,
             usage: self.usage,
+            served_by: self.served_by,
         })
     }
 }
@@ -2095,6 +2120,39 @@ mod tests {
             counted.line(line, &mut quiet).unwrap();
         }
         assert_eq!(counted.finish().unwrap().usage.input_tokens, 9);
+    }
+
+    /// T88: the host a router names comes back with the answer, plain and short, in a body and in a stream.
+    #[test]
+    fn the_host_a_router_names_comes_back_plain() {
+        let body = parse_reply(
+            r#"{"provider":"Xiaomi","choices":[{"message":{"role":"assistant","content":"ok"}}]}"#,
+        )
+        .unwrap();
+        assert_eq!(body.served_by.as_deref(), Some("Xiaomi"));
+        let unnamed =
+            parse_reply(r#"{"choices":[{"message":{"role":"assistant","content":"ok"}}]}"#)
+                .unwrap();
+        assert_eq!(unnamed.served_by, None);
+
+        let mut quiet = |_: Piece<'_>| {};
+        let mut stream = Stream::default();
+        let long = "N".repeat(200);
+        let pieces = [
+            r#"data: {"provider":"Novita","choices":[{"delta":{"content":"o"}}]}"#.to_owned(),
+            format!(
+                r#"data: {{"provider":"Deep\u001b[31mInfra{long}","choices":[{{"delta":{{"content":"k"}},"finish_reason":"stop"}}]}}"#
+            ),
+        ];
+        for piece in &pieces {
+            stream.line(piece.as_bytes(), &mut quiet).unwrap();
+        }
+        let host = stream.finish().unwrap().served_by.unwrap();
+        assert!(
+            host.starts_with("Deep[31mInfra"),
+            "no control characters: {host}"
+        );
+        assert_eq!(host.chars().count(), MAX_SERVED_BY_CHARS, "kept short");
     }
 
     /// The CP5 review: a provider that does not stream still answers in one body, and one that streams under another

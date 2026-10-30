@@ -33,19 +33,58 @@ pub const MAX_CALLS_PER_TURN: usize = 16;
 /// A step's calls by tool and arguments, in a fixed order and with the arguments' JSON written alike — what tells
 /// one batch from the same batch again (T73b).
 fn batch_of(calls: &[ToolCall]) -> Vec<(String, String)> {
-    let mut batch: Vec<(String, String)> = calls
-        .iter()
-        .map(|call| {
-            let arguments = serde_json::from_str::<Value>(&call.function.arguments).map_or_else(
-                |_| call.function.arguments.clone(),
-                |value| value.to_string(),
-            );
-            (call.function.name.clone(), arguments)
-        })
-        .collect();
+    let mut batch: Vec<(String, String)> = calls.iter().map(call_key).collect();
     batch.sort();
     batch
 }
+
+/// A call by tool and arguments, the arguments' JSON written alike whatever order the model sent its fields in —
+/// what tells a call from the same call again.
+fn call_key(call: &ToolCall) -> (String, String) {
+    let arguments = serde_json::from_str::<Value>(&call.function.arguments).map_or_else(
+        |_| call.function.arguments.clone(),
+        |value| sorted(value).to_string(),
+    );
+    (call.function.name.clone(), arguments)
+}
+
+/// `value` with every object's fields in name order: Glut keeps the order a model sent (`preserve_order`).
+fn sorted(value: Value) -> Value {
+    match value {
+        Value::Object(fields) => {
+            let mut fields: Vec<(String, Value)> = fields.into_iter().collect();
+            fields.sort_by(|(a, _), (b, _)| a.cmp(b));
+            Value::Object(
+                fields
+                    .into_iter()
+                    .map(|(name, value)| (name, sorted(value)))
+                    .collect(),
+            )
+        }
+        Value::Array(items) => Value::Array(items.into_iter().map(sorted).collect()),
+        other => other,
+    }
+}
+
+/// A step's answers as one number, Glut's own `[glut]` notes after them left out ([`planning::unforged`] keeps any
+/// other line from starting so): what tells a step that read the same from one that read anew.
+fn results_of(answers: &[Message]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for answer in answers {
+        let text = answer.content.as_deref().unwrap_or_default();
+        let own = text
+            .find(&format!("\n\n{}", planning::MARK))
+            .unwrap_or(text.len());
+        text[..own].hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+/// Steps in a row with exactly the same calls before Glut tells the model it repeats itself, and before it ends the
+/// run (T88): Cline's soft and hard thresholds, OpenCode and Roo ask at three.
+const SAME_STEPS_TO_TELL: u32 = 3;
+const SAME_STEPS_TO_END: u32 = 5;
 
 /// Steps in a row that only read before Glut tells the model so, once a run (T73b: MiMo read for forty).
 const READING_HINT_AT: u32 = 25;
@@ -462,6 +501,10 @@ async fn run_inner<M: ChatModel>(
         nudged: false,
         last_batch: None,
         refused_before_batch: 0,
+        same_steps: 0,
+        repeat_note: None,
+        last_results: None,
+        served_by: None,
         streamed: false,
         reading_steps: 0,
         reading_told: false,
@@ -861,6 +904,14 @@ struct Loop<'a, M: ChatModel> {
     last_batch: Option<Vec<(String, String)>>,
     /// The refusals counted when the last step began: a step the gate refused in is not guarded against.
     refused_before_batch: u32,
+    /// How many steps in a row, the last one included, asked for exactly the same calls and read the same (T88).
+    same_steps: u32,
+    /// The last step's answers as one number ([`results_of`]).
+    last_results: Option<u64>,
+    /// Glut's word that the model repeats itself, for the step's first result (T88).
+    repeat_note: Option<String>,
+    /// The host a router last named for the model's answers (T88): told again only when it changes.
+    served_by: Option<String>,
     /// Whether the last model call streamed anything before it ended.
     streamed: bool,
     /// Steps in a row that only read (T73b), and whether the model was told so — once a run.
@@ -1406,6 +1457,12 @@ impl<'a, M: ChatModel> Loop<'a, M> {
             cached_input_tokens: reply.usage.cached_input_tokens,
             output_tokens: reply.usage.output_tokens,
         });
+        if let Some(host) = reply.served_by
+            && self.served_by.as_ref() != Some(&host)
+        {
+            self.served_by = Some(host.clone());
+            sink.emit(Event::Served { turn, by: host });
+        }
         // K1: the provider's own count of this prompt; what is added after it is estimated.
         self.last_prompt = (reply.usage.input_tokens > 0)
             .then_some((reply.usage.input_tokens, self.messages.len()));
@@ -1803,19 +1860,49 @@ impl<'a, M: ChatModel> Loop<'a, M> {
         } else {
             0
         };
-        // The same calls as the step before, once more (T73b: MiMo sent one batch of sixteen thirty times): not run
-        // again. A single call sent again is a retry, and one the gate refused is the refusal ledger's to end.
+        // The same calls as the step before (T73b, T88), counted in a row the way other harnesses count identical
+        // calls — told at the third, ended at the fifth — but only while their results stay the same too: a poll
+        // of a background job (`bash_output`) or a log asks alike and reads anew. A step the gate refused in is the
+        // refusal ledger's to end.
         let batch = batch_of(&calls);
-        let repeated = batch.len() > 1
-            && self.last_batch.as_ref() == Some(&batch)
+        let same = self.last_batch.as_ref() == Some(&batch)
             && self.refusals.total() == self.refused_before_batch;
+        let several = batch.len() > 1;
         self.last_batch = Some(batch);
         self.refused_before_batch = self.refusals.total();
-        if repeated {
+        if !same {
+            self.same_steps = 0;
+        }
+        let place = self.same_steps + 1;
+        if same && place >= SAME_STEPS_TO_END {
+            let message = planning::repeated_end(place);
+            for call in calls {
+                sink.emit(Event::tool_call(
+                    self.turns,
+                    &call.id,
+                    &call.function.name,
+                    &call.function.arguments,
+                ));
+                let output = format!("error: not run, the run is ending — {message}");
+                self.answer_call(call, false, output, sink);
+            }
+            self.flush_journal(sink);
+            sink.emit(Event::Error { message });
+            return Err(FinishReason::Refused);
+        }
+        let tell = same && place == SAME_STEPS_TO_TELL;
+        if tell {
+            self.repeat_note = Some(planning::repeating(place));
+        }
+        // A set of calls sent again is not run: their results are above. A single call sent again is a retry.
+        if same && several || tell {
             sink.emit(Event::Nudged {
                 turn: self.turns,
                 kind: NudgeKind::Repeated,
             });
+        }
+        let first_answer = self.messages.len();
+        if same && several {
             for call in calls {
                 sink.emit(Event::tool_call(
                     self.turns,
@@ -1825,8 +1912,28 @@ impl<'a, M: ChatModel> Loop<'a, M> {
                 ));
                 self.answer_call(call, false, planning::REPEATED.to_owned(), sink);
             }
-            return Ok(());
+        } else {
+            self.run_step(calls, sink).await?;
         }
+        let results = results_of(&self.messages[first_answer..]);
+        self.same_steps = if same && self.last_results == Some(results) {
+            place
+        } else {
+            1
+        };
+        self.last_results = Some(results);
+        Ok(())
+    }
+
+    /// The calls of one step, one after the other ([`Self::run_calls`]).
+    async fn run_step(
+        &mut self,
+        calls: Vec<ToolCall>,
+        sink: &mut dyn EventSink,
+    ) -> Result<(), FinishReason> {
+        // The calls of this reply since its last change, each with its number (T88): one sent again before anything
+        // changed would only repeat its result — MiMo sent one read seven times in a reply, one edit four times.
+        let mut since_change: HashMap<(String, String), usize> = HashMap::new();
         let mut calls = calls.into_iter().enumerate().peekable();
         while let Some((index, call)) = calls.next() {
             sink.emit(Event::tool_call(
@@ -1844,6 +1951,18 @@ impl<'a, M: ChatModel> Loop<'a, M> {
                 self.answer_call(call, false, output, sink);
                 continue;
             }
+            // Subagents side by side are the gate's and the owner's to weigh, never skipped as copies — and one may
+            // change any file.
+            let key = (call.function.name != crate::task::NAME).then(|| call_key(&call));
+            if let Some(first) = key.as_ref().and_then(|key| since_change.get(key)) {
+                let output = planning::same_in_reply(first + 1);
+                self.answer_call(call, false, output, sink);
+                continue;
+            }
+            if key.is_none() || !only_reads(&call) {
+                since_change.clear();
+            }
+            let answered = self.messages.len();
             let ran = if self.offer_task && call.function.name == crate::task::NAME {
                 let mut batch = vec![call];
                 while let Some((_, next)) = calls.next_if(|(index, next)| {
@@ -1874,6 +1993,18 @@ impl<'a, M: ChatModel> Loop<'a, M> {
                     self.answer_not_run(calls.by_ref().map(|(_, call)| call), sink);
                 }
                 return Err(ending);
+            }
+            // Kept as answered only when it was: a copy of a call that failed or was refused may be meant as a retry.
+            let failed = self.messages[answered..].iter().any(|message| {
+                message
+                    .content
+                    .as_deref()
+                    .is_some_and(|text| text.starts_with("error"))
+            });
+            if let Some(key) = key
+                && !failed
+            {
+                since_change.insert(key, index);
             }
             self.flush_journal(sink);
         }
@@ -2456,6 +2587,9 @@ impl<'a, M: ChatModel> Loop<'a, M> {
         let mut output = planning::unforged(output);
         if let Some(hint) = self.lsp_hint.take() {
             output = format!("{output}\n\n{hint}");
+        }
+        if let Some(note) = self.repeat_note.take() {
+            output = format!("{output}\n\n{note}");
         }
         // Long reading without a change (T73b): said once, at the first result of the step that reaches the mark.
         if self.reading_steps >= READING_HINT_AT && !self.reading_told && self.depth == 0 {
@@ -4371,6 +4505,7 @@ mod tests {
                 cached_input_tokens: 0,
                 output_tokens: 2,
             },
+            served_by: None,
         }
     }
 
@@ -4401,6 +4536,7 @@ mod tests {
                 cached_input_tokens: 0,
                 output_tokens: 1,
             },
+            served_by: None,
         }
     }
 
@@ -4452,6 +4588,28 @@ mod tests {
 
         fn call(&self, arguments: Value, _context: crate::tools::CallContext) -> ToolFuture<'_> {
             Box::pin(async move { Ok(arguments["text"].as_str().unwrap_or_default().to_owned()) })
+        }
+    }
+
+    /// A poll whose answer moves on each time, as `bash_output` does (T88's review).
+    struct Tick(std::sync::atomic::AtomicU32);
+
+    impl Tool for Tick {
+        fn spec(&self) -> ToolSpec {
+            ToolSpec {
+                name: "tick".into(),
+                description: "t".into(),
+                parameters: json!({"type": "object"}),
+            }
+        }
+
+        fn access(&self, _arguments: &Value) -> crate::permissions::Access {
+            crate::permissions::Access::Other
+        }
+
+        fn call(&self, _arguments: Value, _context: crate::tools::CallContext) -> ToolFuture<'_> {
+            let n = self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Box::pin(async move { Ok(format!("tick {n}")) })
         }
     }
 
@@ -6215,6 +6373,141 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn a_call_sent_again_in_its_reply_runs_only_after_a_change() {
+        let reply = [
+            ("a", "echo", r#"{"text":"x","n":1}"#),
+            ("b", "echo", r#"{"n":1, "text":"x"}"#),
+            ("c", "echo", r#"{"text":"y"}"#),
+            ("d", "echo", r#"{"text":"x","n":1}"#),
+        ];
+        let model = Script::new(vec![Ok(calls(&reply)), Ok(text("done"))]);
+        let mut events = Vec::new();
+        run(
+            &RunConfig {
+                remind: false,
+                ..RunConfig::new("/w")
+            },
+            &model,
+            &toolbox(),
+            "go",
+            &mut events,
+            &Cancel::new(),
+        )
+        .await;
+        let answers: Vec<String> = model.seen.lock().unwrap()[1]
+            .iter()
+            .filter(|m| m.role == Role::Tool)
+            .filter_map(|m| m.content.clone())
+            .collect();
+        assert_eq!(
+            answers,
+            [
+                "x".to_owned(),
+                crate::planning::same_in_reply(1),
+                "y".to_owned(),
+                "x".to_owned(),
+            ],
+            "the copy in another field order is not run; after another change it is"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_poll_that_reads_anew_each_time_is_no_repetition() {
+        let poll = || Ok(calls(&[("p", "tick", "{}")]));
+        let model = Script::new(vec![
+            poll(),
+            poll(),
+            poll(),
+            poll(),
+            poll(),
+            poll(),
+            Ok(text("done")),
+        ]);
+        let mut tools = Toolbox::new();
+        tools.extend([Box::new(Tick(Default::default())) as Box<dyn Tool>]);
+        let mut events = Vec::new();
+        let outcome = run(
+            &RunConfig {
+                remind: false,
+                ..RunConfig::new("/w")
+            },
+            &model,
+            &tools,
+            "go",
+            &mut events,
+            &Cancel::new(),
+        )
+        .await;
+        assert_eq!(outcome.reason, FinishReason::Answered);
+        assert!(nudges(&events).is_empty(), "{:?}", nudges(&events));
+    }
+
+    #[test]
+    fn a_steps_answers_are_compared_without_glut_s_own_notes() {
+        let plain = [Message::tool("a", "x")];
+        let noted = [Message::tool(
+            "a",
+            format!("x\n\n{}", crate::planning::repeating(3)),
+        )];
+        let other = [Message::tool("a", "y")];
+        assert_eq!(results_of(&plain), results_of(&noted));
+        assert_ne!(results_of(&plain), results_of(&other));
+    }
+
+    #[tokio::test]
+    async fn the_same_step_is_told_at_the_third_time_and_ended_at_the_fifth() {
+        let step = || Ok(calls(&[("a", "echo", r#"{"text":"x"}"#)]));
+        let model = Script::new(vec![
+            step(),
+            step(),
+            step(),
+            step(),
+            step(),
+            Ok(text("done")),
+        ]);
+        let mut events = Vec::new();
+        let outcome = run(
+            &RunConfig {
+                remind: false,
+                ..RunConfig::new("/w")
+            },
+            &model,
+            &toolbox(),
+            "go",
+            &mut events,
+            &Cancel::new(),
+        )
+        .await;
+        assert_eq!(outcome.reason, FinishReason::Refused);
+        assert_eq!(
+            nudges(&events),
+            [NudgeKind::Repeated],
+            "told once, at the third"
+        );
+        let ran = events
+            .iter()
+            .filter(|e| matches!(e, Event::ToolResult { ok: true, .. }))
+            .count();
+        assert_eq!(
+            ran, 4,
+            "a single call sent again is a retry, until the fifth"
+        );
+        let third: Vec<String> = model.seen.lock().unwrap()[3]
+            .iter()
+            .filter(|m| m.role == Role::Tool)
+            .filter_map(|m| m.content.clone())
+            .collect();
+        assert_eq!(
+            third.last().unwrap(),
+            &format!("x\n\n{}", crate::planning::repeating(3))
+        );
+        assert!(events.iter().any(|e| matches!(
+            e,
+            Event::Error { message } if *message == crate::planning::repeated_end(5)
+        )));
+    }
+
     /// An edit-like tool: Plan mode does not offer it.
     struct Write;
 
@@ -6395,7 +6688,9 @@ mod tests {
 
     /// `echo` with a long text: one step of about 4,000 tokens (the call's arguments and its result).
     fn echo_long(id: &str, prompt_tokens: u64) -> Reply {
-        let arguments = json!({ "text": "e".repeat(8_000) }).to_string();
+        // Each its own text: five same calls in a row would end the run (T88).
+        let arguments =
+            json!({ "text": format!("{id}{}", "e".repeat(8_000 - id.len())) }).to_string();
         let mut reply = calls(&[(id, "echo", arguments.as_str())]);
         reply.usage.input_tokens = prompt_tokens;
         reply

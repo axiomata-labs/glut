@@ -671,7 +671,7 @@ pub const TEXTS: Texts = Texts {
     ended_steps: "o limite de passos foi atingido",
     ended_time: "o limite de tempo passou",
     ended_failed: "a API do modelo falhou",
-    ended_refused: "chamadas recusadas demais",
+    ended_refused: "chamadas recusadas ou repetidas demais",
     ended_budget: "o orçamento acabou",
     paste_lost: "uma colagem perdeu a marca por uma edição e ficou de fora; ⌃U limpa a linha, cole de novo",
     image_reading: "uma imagem ainda está sendo lida — ⏎ quando ela estiver na entrada",
@@ -728,6 +728,8 @@ pub const TEXTS: Texts = Texts {
     reader_now: "leitor de tela: {reader} — /reader on ou off",
     steps_reached: "o turno parou no seu limite de {n} passos — ⏎ na entrada vazia continua de onde parou; /maxsteps \
                   muda o limite",
+    turn_ended_go_on: "o turno terminou: {reason} — ⏎ na entrada vazia continua de onde parou",
+    served_by: "as respostas agora vêm de {host}",
     steps_now: "um turno dá no máximo {n} passos — /maxsteps <n> muda isso",
     steps_set: "um turno dá a partir de agora no máximo {n} passos",
     steps_bad: "/maxsteps recebe um número de 1 a {most}",

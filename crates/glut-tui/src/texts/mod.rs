@@ -581,6 +581,10 @@ glut::catalog! {
         reader_now: &'static str,
         /// A turn stopped at the step limit `{n}` (T73b).
         steps_reached: &'static str,
+        /// A turn ended by `{reason}` that ⏎ goes on from: Glut stopped a model repeating itself (T88).
+        turn_ended_go_on: &'static str,
+        /// The host a router names for the answers changed to `{host}` (T88).
+        served_by: &'static str,
         /// `/maxsteps` alone: `{n}`.
         steps_now: &'static str,
         /// `/maxsteps` kept `{n}`.

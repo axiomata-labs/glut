@@ -133,6 +133,12 @@ pub enum Event {
         cached_input_tokens: u64,
         output_tokens: u64,
     },
+    /// Who served the model's answers behind a router (OpenRouter's `provider`, T88): said when it changes, for
+    /// one model id there comes from several hosts, in different builds — a model's fault may be one host's.
+    Served {
+        turn: u32,
+        by: String,
+    },
     /// How a tool call was judged (P8): allowed or refused, and why — a rule, the mode, the owner's answer.
     Permission {
         turn: u32,

@@ -101,9 +101,12 @@ pub(crate) fn parse_todos(arguments: &str) -> Result<Vec<TodoItem>, String> {
     struct Args {
         items: Vec<TodoItem>,
     }
-    let args: Args = serde_json::from_str(arguments).map_err(|err| {
+    let wrong = |err: serde_json::Error| {
         format!("the arguments must be {{\"items\": [{{\"text\", \"status\"}}]}}: {err}")
-    })?;
+    };
+    let sent: Value = serde_json::from_str(arguments).map_err(wrong)?;
+    let args: Args = serde_json::from_value(crate::tools::unquoted(sent, &todo_spec().parameters))
+        .map_err(wrong)?;
     if args.items.len() > MAX_ITEMS {
         return Err(format!("at most {MAX_ITEMS} items"));
     }
@@ -243,6 +246,31 @@ pub(crate) fn reading_hint(steps: u32) -> String {
 pub(crate) const REPEATED: &str = "error: not run — [glut] these are exactly the calls of your last step; their \
      results are above. Take the next step instead, or say what blocks you.";
 
+/// Glut's answer to a call sent again in the same reply with nothing changed since (T88).
+pub(crate) fn same_in_reply(first: usize) -> String {
+    format!(
+        "error: not run — [glut] the same call as number {first} of this reply, and nothing changed since; its \
+         result is above."
+    )
+}
+
+/// Glut's word when the model sent exactly the same calls `steps` steps in a row (T88).
+pub(crate) fn repeating(steps: u32) -> String {
+    format!(
+        "[glut] You sent exactly the same calls {steps} steps in a row; their results are above and did not change. \
+         Take a different step, or say in one line what blocks you."
+    )
+}
+
+/// How the error that ends a run repeating itself begins: a host tells that end from the refusal ledger's by it
+/// (T88), and only after it the owner's ⏎ goes on.
+pub const REPEATED_END: &str = "stopped: the same calls";
+
+/// Why a run ends that sent exactly the same calls `steps` steps in a row (T88).
+pub(crate) fn repeated_end(steps: u32) -> String {
+    format!("{REPEATED_END} {steps} steps in a row")
+}
+
 /// Glut's one question when a run ends announcing a next step (T73).
 pub(crate) const ANNOUNCED_NUDGE: &str = "[glut] You ended with an announcement of your next step. Do that step \
      now. If the task is done, say so in one line.";
@@ -368,7 +396,15 @@ mod tests {
         );
         assert!(parse_todos(r#"{"items":[{"text":"x","status":"later"}]}"#).is_err());
         assert!(parse_todos(r#"{"items":[{"text":" ","status":"done"}]}"#).is_err());
-        assert!(parse_todos(r#"{"todos":[]}"#).is_err());
+        assert!(
+            parse_todos(r#"{"todos":[]}"#).is_err(),
+            "a wrong name is not guessed"
+        );
+        assert_eq!(
+            parse_todos(r#"{"items":"[{\"text\":\"read\",\"status\":\"done\"}]"}"#).unwrap(),
+            items[..1],
+            "a list sent as text is read (T88)"
+        );
         let many = format!(
             r#"{{"items":[{}]}}"#,
             vec![r#"{"text":"a","status":"done"}"#; MAX_ITEMS + 1].join(",")
