@@ -84,6 +84,16 @@ crate::catalog! {
         key_not_needed: &'static str,
         /// A provider signed in to with an account (PV4).
         key_signed_in: &'static str,
+        /// `glut providers list` where `credentialStore` is "file" but this build reads the Keychain (T87).
+        store_file_ignored: &'static str,
+        /// `glut providers store` to where the keys already are: `{place}`.
+        store_already: &'static str,
+        /// `glut providers store` done: `{count}` keys, `{place}` the new store.
+        store_moved: &'static str,
+        /// After the keys went to the file: who can read it.
+        store_file_note: &'static str,
+        /// The keys are back in the Keychain, but the file could not be emptied: `{reason}`.
+        store_file_left: &'static str,
         /// A catalog provider the owner signs in to.
         catalog_sign_in: &'static str,
         /// Above the sign-in's address: `{host}`.

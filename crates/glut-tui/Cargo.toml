@@ -11,6 +11,10 @@ path = "src/main.rs"
 # The binary shares its name with the harness crate: no second set of docs under the same name.
 doc = false
 
+[features]
+# T87: see the glut crate's feature of the same name.
+dev-keys = ["glut/dev-keys"]
+
 [dependencies]
 glut = { path = "../glut" }
 # The folder's files for the `@` finder, walked as the file tools walk them (`.gitignore` kept).
@@ -43,3 +47,8 @@ tree-sitter-css.workspace = true
 tree-sitter-html.workspace = true
 tree-sitter-yaml.workspace = true
 tree-sitter-svelte-ng.workspace = true
+
+[dev-dependencies]
+# T87: the tests keep their secrets in a scratch home's file — never the owner's Keychain, which a build without the
+# feature would read instead.
+glut = { path = "../glut", features = ["dev-keys"] }

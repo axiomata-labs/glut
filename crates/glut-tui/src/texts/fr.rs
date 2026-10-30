@@ -1279,6 +1279,11 @@ code",
              sont. La clé est lue sans écho et vérifiée par un petit appel avant de remplacer l’ancienne",
         ),
         (
+            "While Glut is developed: moves every key to the file ~/.glut/credentials.json, so a new build asks the Keychain nothing, or back to the Keychain",
+            "Pendant le développement de Glut : déplace chaque clé dans le fichier ~/.glut/credentials.json, pour qu'une nouvelle version ne demande rien au trousseau, ou la remet dans le trousseau",
+        ),
+        ("file or keychain", "file ou keychain"),
+        (
             "The provider whose key is changed",
             "Le fournisseur dont on change la clé",
         ),

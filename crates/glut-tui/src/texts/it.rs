@@ -1274,6 +1274,11 @@ usi e rinomine",
              vecchia",
         ),
         (
+            "While Glut is developed: moves every key to the file ~/.glut/credentials.json, so a new build asks the Keychain nothing, or back to the Keychain",
+            "Mentre Glut è in sviluppo: sposta ogni chiave nel file ~/.glut/credentials.json, così una nuova build non chiede nulla al portachiavi, o di nuovo nel portachiavi",
+        ),
+        ("file or keychain", "file o keychain"),
+        (
             "The provider whose key is changed",
             "Il provider di cui si cambia la chiave",
         ),

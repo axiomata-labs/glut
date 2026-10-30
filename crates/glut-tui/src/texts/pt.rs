@@ -1248,6 +1248,11 @@ usos e renomeações",
              lida sem eco e verificada com uma pequena chamada antes de substituir a antiga",
         ),
         (
+            "While Glut is developed: moves every key to the file ~/.glut/credentials.json, so a new build asks the Keychain nothing, or back to the Keychain",
+            "Enquanto o Glut é desenvolvido: move cada chave para o arquivo ~/.glut/credentials.json, para que uma nova compilação não pergunte nada às Chaves, ou de volta às Chaves",
+        ),
+        ("file or keychain", "file ou keychain"),
+        (
             "The provider whose key is changed",
             "O provider cuja chave é mudada",
         ),

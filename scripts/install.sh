@@ -14,9 +14,11 @@ bin="${CARGO_INSTALL_ROOT:-${CARGO_HOME:-$HOME/.cargo}}/bin"
 installed="$bin/glut"
 link=/usr/local/bin/glut
 
-# The release build first: the owner also starts target/release/glut, and `cargo install` then only copies it.
-cargo build --release --locked -p glut-tui
-cargo install --path crates/glut-tui --locked --quiet
+# The release build first: the owner also starts target/release/glut, and `cargo install` then only copies it. Both
+# with `dev-keys` while Glut is developed (T87): `glut providers store file` keeps the keys out of the Keychain, which
+# asks again after every new build — a build for others leaves the feature out.
+cargo build --release --locked -p glut-tui --features dev-keys
+cargo install --path crates/glut-tui --locked --quiet --features dev-keys
 echo "installed: $installed ($("$installed" --version))"
 
 found="$(command -v glut || true)"

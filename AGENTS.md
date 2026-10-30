@@ -87,7 +87,9 @@ scripts/install.sh               # glut for every terminal: ~/.cargo/bin, linked
   `crates/glut/src/providers/`): providers live in `~/.glut/providers.json` (a file of their own — Glut rewrites it,
   never the owner's `settings.json`), keys in the Keychain or `~/.glut/credentials.json` (0600 from the first byte,
   `write_replacing`) under the account `<id>@<host>`, so a root changed in the file finds no key instead of sending
-  the old one elsewhere. `GLUT_API_KEY` belongs to a one-off `--base-url` (and to hosts like Axiomata) only. Every
+  the old one elsewhere. `GLUT_API_KEY` belongs to a one-off `--base-url` (and to hosts like Axiomata) only. On macOS
+  the file store is read only by a build with the feature `dev-keys` (T87, `secrets::FILE_ALLOWED`; `scripts/install.sh`
+  sets it, `glut providers store file|keychain` moves the keys): a build for others keeps the Keychain alone. Every
   provider key variable — the catalog's and the owner's `keyEnv` — is kept out of MCP headers' `${…}`
   (`mcp::client::header_value`); a new catalog entry gets a variable of its own (a coding plan's key is not its
   pay-as-you-go key). `ModelEndpoint.versioned`: a provider's root already holds its version.

@@ -72,6 +72,13 @@ pub enum ProvidersCommand {
         /// The provider.
         id: String,
     },
+    /// While Glut is developed: moves every key to the file ~/.glut/credentials.json, so a new build asks the
+    /// Keychain nothing, or back to the Keychain.
+    #[cfg(all(feature = "dev-keys", target_os = "macos"))]
+    Store {
+        /// file or keychain.
+        place: StorePlace,
+    },
     /// One tiny call to the provider's model, to see that endpoint, key and model work.
     Test {
         /// The provider; the default one when left out.
@@ -80,6 +87,15 @@ pub enum ProvidersCommand {
         #[arg(long)]
         model: Option<String>,
     },
+}
+
+/// Where `glut providers store` moves the keys (T87): `~/.glut/credentials.json` or the login Keychain.
+#[cfg(all(feature = "dev-keys", target_os = "macos"))]
+#[derive(Clone, Copy, clap::ValueEnum)]
+pub enum StorePlace {
+    // Named without doc comments: clap would turn them into a long help of its own, untranslated.
+    File,
+    Keychain,
 }
 
 /// Runs one `glut providers` command.
@@ -129,6 +145,8 @@ pub async fn run(command: ProvidersCommand) -> ExitCode {
         ProvidersCommand::Test { id, model } => test(&home, id.as_deref(), model.as_deref()).await,
         ProvidersCommand::Login { id } => login(&home, &id, false).await,
         ProvidersCommand::Logout { id } => logout(&home, &id).await,
+        #[cfg(all(feature = "dev-keys", target_os = "macos"))]
+        ProvidersCommand::Store { place } => move_store(&home, place),
     };
     match outcome {
         Ok(()) => ExitCode::SUCCESS,
@@ -152,6 +170,9 @@ fn list(home: &Path) -> Result<(), String> {
         return Ok(());
     }
     let store = providers.store(home).map_err(|err| err.to_string())?;
+    if crate::providers::secrets::file_ignored(providers.credential_store) {
+        println!("{}", say!(store_file_ignored));
+    }
     for (id, entry) in &providers.providers {
         let mark = if providers.default.as_deref() == Some(id.as_str()) {
             "*"
@@ -180,6 +201,73 @@ fn list(home: &Path) -> Result<(), String> {
         println!("  {:<16} {}", "", entry.root());
     }
     Ok(())
+}
+
+/// `glut providers store` (T87): every key copied to the place named, the choice saved, then — back in the Keychain
+/// — the file emptied, again on every later call while it holds any; the Keychain's own keys stay where they are when
+/// the file takes over (Q3).
+#[cfg(all(feature = "dev-keys", target_os = "macos"))]
+fn move_store(home: &Path, place: StorePlace) -> Result<(), String> {
+    use crate::providers::secrets::{self, StoreChoice};
+    owners_home(home)?;
+    let mut providers = load(home)?;
+    let open = |choice| secrets::open(choice, home).map_err(|err| err.to_string());
+    let (file, keychain) = (open(StoreChoice::File)?, open(StoreChoice::Keyring)?);
+    let to_file = matches!(place, StorePlace::File);
+    let already = (providers.credential_store == StoreChoice::File) == to_file;
+    let (from, to) = if to_file {
+        (&keychain, &file)
+    } else {
+        (&file, &keychain)
+    };
+    let moved = if already {
+        println!("{}", say!(store_already, place = to.place()));
+        None
+    } else {
+        let copied =
+            secrets::copy_secrets(from.as_ref(), to.as_ref()).map_err(|err| err.to_string())?;
+        providers.credential_store = if to_file {
+            StoreChoice::File
+        } else {
+            StoreChoice::Auto
+        };
+        providers.save(home).map_err(|err| err.to_string())?;
+        Some(copied)
+    };
+    if !to_file {
+        // Also where the keys were already back: a cleanup that failed before is done now.
+        secrets::forget_all(file.as_ref()).map_err(|err| say!(store_file_left, reason = err))?;
+    }
+    if let Some(count) = moved {
+        println!("{}", say!(store_moved, count = count, place = to.place()));
+        if to_file {
+            println!("{}", say!(store_file_note));
+        }
+    }
+    Ok(())
+}
+
+/// Refuses a home other than the owner's own (T87, security audit): `GLUT_HOME` or `HOME` are a command's to set, and
+/// a sandboxed command pointing them at a folder it may read would get every key copied there — the sandbox only
+/// keeps it from the real `~/.glut`. The account's home comes from the system's user database, never the environment.
+#[cfg(all(feature = "dev-keys", target_os = "macos"))]
+fn owners_home(home: &Path) -> Result<(), String> {
+    // `id -P`: the current user's passwd line, its ninth field the home folder.
+    let out = std::process::Command::new("/usr/bin/id")
+        .arg("-P")
+        .output()
+        .map_err(|err| err.to_string())?;
+    let line = String::from_utf8_lossy(&out.stdout);
+    let owners = line
+        .trim_end()
+        .split(':')
+        .nth(8)
+        .filter(|dir| dir.starts_with('/'));
+    let real = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    match owners {
+        Some(dir) if real(Path::new(dir)) == real(home) => Ok(()),
+        _ => Err(say!(owners_only).to_owned()),
+    }
 }
 
 fn print_catalog() {

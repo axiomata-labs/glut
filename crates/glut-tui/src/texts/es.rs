@@ -1257,6 +1257,11 @@ definiciones, usos y renombres",
              sin eco y se comprueba con una pequeña llamada antes de reemplazar la antigua",
         ),
         (
+            "While Glut is developed: moves every key to the file ~/.glut/credentials.json, so a new build asks the Keychain nothing, or back to the Keychain",
+            "Mientras se desarrolla Glut: mueve cada clave al archivo ~/.glut/credentials.json, para que una nueva compilación no pregunte nada al llavero, o de vuelta al llavero",
+        ),
+        ("file or keychain", "file o keychain"),
+        (
             "The provider whose key is changed",
             "El proveedor cuya clave se cambia",
         ),

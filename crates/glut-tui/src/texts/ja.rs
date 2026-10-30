@@ -1179,6 +1179,11 @@ pub const TEXTS: Texts = Texts {
              古いものを置き換える前に小さな呼び出しで確認します",
         ),
         (
+            "While Glut is developed: moves every key to the file ~/.glut/credentials.json, so a new build asks the Keychain nothing, or back to the Keychain",
+            "Glut の開発中: すべてのキーをファイル ~/.glut/credentials.json に移し、新しいビルドがキーチェーンに何も尋ねないようにします。またはキーチェーンに戻します",
+        ),
+        ("file or keychain", "file または keychain"),
+        (
             "The provider whose key is changed",
             "キーを変更するプロバイダー",
         ),

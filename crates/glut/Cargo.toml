@@ -5,6 +5,11 @@ edition.workspace = true
 license.workspace = true
 description = "Glut, an agent harness: a lean tool-calling loop over an OpenAI-compatible model API, with guarded file tools, an OS sandbox and a network gate. Grown inside Axiomata-OS (its plans: docs/plans/harness.md there), an app of its own since 2026-10-21."
 
+[features]
+# T87: the secrets file read on macOS too (crates/glut/src/providers/secrets.rs `FILE_ALLOWED`) — the owner's builds
+# while Glut is developed (scripts/install.sh, the bench); a build that goes to others keeps the Keychain alone.
+dev-keys = []
+
 [dependencies]
 # The guarded file service the file tools go through, shared with the other Axiomata apps (Axiomata-Foundation).
 axiomata-files.workspace = true

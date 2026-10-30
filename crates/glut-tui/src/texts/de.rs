@@ -1260,6 +1260,11 @@ einen",
              Schlüssel wird ohne Echo gelesen und vor dem Ersetzen des alten mit einem kleinen Aufruf geprüft",
         ),
         (
+            "While Glut is developed: moves every key to the file ~/.glut/credentials.json, so a new build asks the Keychain nothing, or back to the Keychain",
+            "Während Glut entwickelt wird: zieht jeden Schlüssel in die Datei ~/.glut/credentials.json um, damit ein neuer Build den Schlüsselbund nichts fragt, oder zurück in den Schlüsselbund",
+        ),
+        ("file or keychain", "file oder keychain"),
+        (
             "The provider whose key is changed",
             "Der Provider, dessen Schlüssel geändert wird",
         ),

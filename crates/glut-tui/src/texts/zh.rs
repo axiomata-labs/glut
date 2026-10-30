@@ -1101,6 +1101,11 @@ pub const TEXTS: Texts = Texts {
              echo and checked with one small call before the old one is replaced",
             "单独更改提供商的密钥 — 其模型、keyEnv 和根地址保持不变。密钥以无回显方式读取，并在替换旧密钥之前用一次小调用检查",
         ),
+        (
+            "While Glut is developed: moves every key to the file ~/.glut/credentials.json, so a new build asks the Keychain nothing, or back to the Keychain",
+            "Glut 开发期间：把每个密钥移到文件 ~/.glut/credentials.json，使新构建不再询问钥匙串；或移回钥匙串",
+        ),
+        ("file or keychain", "file 或 keychain"),
         ("The provider whose key is changed", "要更改其密钥的提供商"),
         (
             "Signs in in the browser — your ChatGPT Plus or Pro plan (glut providers login chatgpt), or OpenRouter for \

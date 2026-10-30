@@ -18,6 +18,13 @@ pub const FILE: &str = "credentials.json";
 /// A credentials file larger than this is none.
 const MAX_FILE_BYTES: u64 = 64 * 1024;
 
+/// Whether this build reads secrets from the file where the system has a store of its own (T87, owner 2026-10-30):
+/// on macOS only a build with the feature `dev-keys` (`scripts/install.sh`, the bench) — every new build is a new
+/// program to the Keychain, which asks again and leaves an unattended run hanging while Glut is developed; a build
+/// that goes to others keeps the Keychain as the one place of truth. Elsewhere the file is the only store yet. Tests
+/// keep theirs in a scratch home's file, never in the owner's Keychain.
+pub const FILE_ALLOWED: bool = cfg!(any(not(target_os = "macos"), feature = "dev-keys", test));
+
 /// Which store the owner chose (`credentialStore` in `~/.glut/providers.json`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -53,6 +60,51 @@ pub trait SecretStore: Send + Sync {
     fn delete(&self, account: &str) -> Result<(), HarnessError>;
     /// Where the secrets are, for `glut providers list`.
     fn place(&self) -> String;
+    /// Every account that has a secret here, for moving them to another store (T87).
+    ///
+    /// # Errors
+    ///
+    /// [`HarnessError::Settings`] when the store cannot be read.
+    fn accounts(&self) -> Result<Vec<String>, HarnessError>;
+}
+
+/// Whether the owner chose the file and this build reads the system's store instead ([`FILE_ALLOWED`]).
+pub fn file_ignored(choice: StoreChoice) -> bool {
+    ignored_where(choice, FILE_ALLOWED)
+}
+
+/// [`file_ignored`] with the build's allowance handed in, so a test sees both builds.
+fn ignored_where(choice: StoreChoice, allowed: bool) -> bool {
+    choice == StoreChoice::File && !allowed
+}
+
+/// Copies every secret of `from` into `to` and returns how many (T87): the source keeps them, so a failure loses
+/// nothing — [`forget_all`] empties it once the new place is the one in use.
+///
+/// # Errors
+///
+/// [`HarnessError::Settings`] when either store cannot be read or written.
+pub fn copy_secrets(from: &dyn SecretStore, to: &dyn SecretStore) -> Result<usize, HarnessError> {
+    let mut copied = 0;
+    for account in from.accounts()? {
+        if let Some(secret) = from.get(&account)? {
+            to.set(&account, &secret)?;
+            copied += 1;
+        }
+    }
+    Ok(copied)
+}
+
+/// Takes every secret out of `store`.
+///
+/// # Errors
+///
+/// [`HarnessError::Settings`] when the store cannot be read or written.
+pub fn forget_all(store: &dyn SecretStore) -> Result<(), HarnessError> {
+    store
+        .accounts()?
+        .iter()
+        .try_for_each(|account| store.delete(account))
 }
 
 /// The store `choice` names, for the home folder `home`.
@@ -61,9 +113,19 @@ pub trait SecretStore: Send + Sync {
 ///
 /// [`HarnessError::Settings`] for `keyring` on a system Glut has no store for yet.
 pub fn open(choice: StoreChoice, home: &Path) -> Result<Box<dyn SecretStore>, HarnessError> {
+    open_where(choice, home, FILE_ALLOWED)
+}
+
+/// [`open`] with the build's allowance handed in.
+fn open_where(
+    choice: StoreChoice,
+    home: &Path,
+    allowed: bool,
+) -> Result<Box<dyn SecretStore>, HarnessError> {
     let file =
         || Box::new(FileStore::new(home.join(super::DIR).join(FILE))) as Box<dyn SecretStore>;
     match choice {
+        StoreChoice::File if ignored_where(choice, allowed) => Ok(system().unwrap_or_else(file)),
         StoreChoice::File => Ok(file()),
         StoreChoice::Auto => Ok(system().unwrap_or_else(file)),
         StoreChoice::Keyring => system().ok_or_else(|| HarnessError::Settings {
@@ -130,6 +192,29 @@ impl SecretStore for Keychain {
 
     fn place(&self) -> String {
         format!("the Keychain (service {SERVICE})")
+    }
+
+    fn accounts(&self) -> Result<Vec<String>, HarnessError> {
+        use security_framework::item::{ItemClass, ItemSearchOptions, Limit};
+        // Attributes only: the names come without the secrets, so listing them asks the owner nothing.
+        let found = match ItemSearchOptions::new()
+            .class(ItemClass::generic_password())
+            .service(SERVICE)
+            .load_attributes(true)
+            .limit(Limit::All)
+            .search()
+        {
+            Ok(found) => found,
+            Err(err) if err.code() == Self::NOT_FOUND => return Ok(Vec::new()),
+            Err(err) => return Err(Self::fail(&err)),
+        };
+        let mut accounts: Vec<String> = found
+            .iter()
+            .filter_map(|item| item.simplify_dict()?.remove("acct"))
+            .collect();
+        accounts.sort();
+        accounts.dedup();
+        Ok(accounts)
     }
 }
 
@@ -244,6 +329,10 @@ impl SecretStore for FileStore {
     fn place(&self) -> String {
         format!("{} (mode 0600)", self.path.display())
     }
+
+    fn accounts(&self) -> Result<Vec<String>, HarnessError> {
+        Ok(self.load()?.secrets.into_keys().collect())
+    }
 }
 
 #[cfg(test)]
@@ -292,5 +381,42 @@ mod tests {
         let linked = FileStore::new(dir.join("linked.json"));
         std::os::unix::fs::symlink(&elsewhere, &linked.path).unwrap();
         assert!(linked.get("x").is_err(), "a link is not followed");
+    }
+
+    #[test]
+    fn secrets_are_copied_whole_and_the_source_kept_until_forgotten() {
+        let dir = scratch("move");
+        let (file, other) = (
+            FileStore::new(dir.join(FILE)),
+            FileStore::new(dir.join("other.json")),
+        );
+        file.set("openrouter@openrouter.ai", "sk-1").unwrap();
+        file.set("mcp-oauth", "t-2").unwrap();
+        assert_eq!(copy_secrets(&file, &other).unwrap(), 2);
+        assert_eq!(
+            copy_secrets(&FileStore::new(dir.join("none.json")), &other).unwrap(),
+            0
+        );
+        assert_eq!(other.get("mcp-oauth").unwrap().as_deref(), Some("t-2"));
+        assert_eq!(
+            other.get("openrouter@openrouter.ai").unwrap().as_deref(),
+            Some("sk-1")
+        );
+        assert_eq!(file.accounts().unwrap().len(), 2, "the source kept");
+        forget_all(&file).unwrap();
+        assert!(file.accounts().unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_file_is_read_only_where_this_build_allows_it() {
+        assert_eq!(file_ignored(StoreChoice::File), !FILE_ALLOWED);
+        assert!(!file_ignored(StoreChoice::Auto) && !file_ignored(StoreChoice::Keyring));
+        let store = open(StoreChoice::File, &scratch("open")).unwrap();
+        assert_eq!(
+            store.place().contains(FILE),
+            FILE_ALLOWED,
+            "{}",
+            store.place()
+        );
     }
 }

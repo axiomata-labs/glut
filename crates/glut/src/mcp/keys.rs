@@ -287,6 +287,9 @@ pub(crate) mod tests {
         fn place(&self) -> String {
             "memory".into()
         }
+        fn accounts(&self) -> Result<Vec<String>, HarnessError> {
+            Ok(self.0.lock().unwrap().keys().cloned().collect())
+        }
     }
 
     pub(crate) fn grant(access: &str) -> Grant {
