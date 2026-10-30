@@ -70,7 +70,8 @@ pub fn offered(
             server: server.to_owned(),
             tool: remote.name.clone(),
             name,
-            description: match &remote.description {
+            // A server's own words: never Glut's (T89).
+            description: crate::planning::unforged(match &remote.description {
                 Some(text) if text.chars().count() > MAX_DESCRIPTION_CHARS => {
                     let mut cut: String = text.chars().take(MAX_DESCRIPTION_CHARS).collect();
                     cut.push('…');
@@ -78,8 +79,12 @@ pub fn offered(
                 }
                 Some(text) => text.clone(),
                 None => format!("A tool of the MCP server {server}."),
-            },
-            schema: remote.input_schema.clone(),
+            }),
+            // Its fields' descriptions too: a mark quoted inside a JSON string leaves the JSON whole.
+            schema: serde_json::from_str(&crate::planning::unforged(
+                remote.input_schema.to_string(),
+            ))
+            .unwrap_or_else(|_| remote.input_schema.clone()),
             read_only: remote.read_only,
             client: Arc::clone(&client),
         }) as Box<dyn Tool>);

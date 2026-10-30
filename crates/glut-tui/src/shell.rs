@@ -147,7 +147,8 @@ fn joined(out: &(Vec<u8>, bool), err: &(Vec<u8>, bool), ending: &str) -> String 
 /// fence.
 pub fn for_the_model(command: &str, ran: &Ran) -> String {
     let state = if ran.ok { "" } else { " (it failed)" };
-    let output = redacted(ran.output.trim_end());
+    // The owner ran it, but its output is a program's or a file's: it never speaks as Glut (T89).
+    let output = glut::planning::unforged(redacted(ran.output.trim_end()));
     let longest = output.split(|c| c != '`').map(str::len).max().unwrap_or(0);
     let fence = "`".repeat(longest.max(2) + 1);
     format!("I ran `{command}` myself{state}. Its output:\n{fence}\n{output}\n{fence}")

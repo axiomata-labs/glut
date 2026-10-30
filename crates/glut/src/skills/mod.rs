@@ -170,7 +170,8 @@ impl Skill {
             out.push_str(&blocks);
         }
         out.push_str(&self.body);
-        Ok(out)
+        // A skill is a file, a project's or a download's, as its prepended files are: it never speaks as Glut (T89).
+        Ok(crate::planning::unforged(out))
     }
 
     /// Everything a skill run takes from the skill (K1.1 + K5): its instructions in the run's config (after the

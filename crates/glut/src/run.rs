@@ -1292,8 +1292,10 @@ impl<'a, M: ChatModel> Loop<'a, M> {
             .fire(HookEvent::SessionStart, "startup", payload, None, sink)
             .await
             .unwrap_or_default();
+        // A hook's program may pass on text from anywhere: it never speaks as Glut (T89).
         if let Some(context) = outcome.context {
-            self.messages.insert(1, Message::system(context));
+            self.messages
+                .insert(1, Message::system(planning::unforged(context)));
         }
     }
 
@@ -1834,7 +1836,7 @@ impl<'a, M: ChatModel> Loop<'a, M> {
         if !outcome.blocked {
             return Ok(Ending::Done);
         }
-        let reason = refusal(outcome, "a hook refused to end the run");
+        let reason = planning::unforged(refusal(outcome, "a hook refused to end the run"));
         self.messages.push(Message::user(format!(
             "A Stop hook blocked ending the run: {reason}\nContinue, and address what it asked for."
         )));
@@ -2891,26 +2893,34 @@ impl<'a, M: ChatModel> Loop<'a, M> {
     /// hidden value somewhere new.
     async fn unmasked(&self, call: &ToolCall) -> Result<String, String> {
         let arguments = &call.function.arguments;
-        let Some(masks) = self
+        let masks = self
             .config
             .masks
             .clone()
-            .filter(|_| arguments.contains(crate::masks::OPEN))
-        else {
+            .filter(|_| arguments.contains(crate::masks::OPEN));
+        // A mark the model read quoted goes back as the file has it (T89), as a hidden value does.
+        let quoted = arguments.to_ascii_lowercase().contains("[quoted ");
+        if masks.is_none() && !quoted {
             return Ok(arguments.clone());
-        };
+        }
         let Some(Access::Edit { path }) = self.tools.access_of(&call.function.name, arguments)
         else {
             return Ok(arguments.clone());
         };
         let (cwd, arguments) = (self.config.cwd.clone(), arguments.clone());
         let beside = self.tools.folders().clone();
-        // The file is read only when a value is to go back, and off the runtime: it is the model's to name.
+        // The file is read only when something is to go back, and off the runtime: it is the model's to name.
         let job = tokio::task::spawn_blocking(move || {
             let held = std::cell::OnceCell::new();
-            masks.unmask(&arguments, |value| {
-                held.get_or_init(|| held_text(&cwd, &beside, &path))
-                    .contains(value)
+            let held = || held.get_or_init(|| held_text(&cwd, &beside, &path));
+            let arguments = match masks {
+                Some(masks) => masks.unmask(&arguments, |value| held().contains(value))?,
+                None => arguments,
+            };
+            Ok(if quoted {
+                planning::written_marks(&arguments)
+            } else {
+                arguments
             })
         });
         let deadline = self.deadline;
@@ -3876,10 +3886,12 @@ impl<M: ChatModel> Place<'_, M> {
             id: task.id.clone(),
         };
         let cancel = self.cancel.subagent(&task.id);
+        // The parent model wrote it, maybe from what it read: it never speaks as Glut to the subagent (T89).
+        let prompt = planning::unforged(task.prompt.clone());
         let run = async {
             let opening = Opening::Fresh {
                 earlier: Vec::new(),
-                prompt: &task.prompt,
+                prompt: &prompt,
             };
             let (outcome, _) = match &task.model {
                 Some(model) => {

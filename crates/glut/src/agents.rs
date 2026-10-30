@@ -167,10 +167,17 @@ impl Catalog {
         let mut notes = Vec::new();
         catalog.read(&home.join(settings::USER_DIR).join(AGENTS_DIR), &mut notes);
         if trusted {
-            catalog.read(
+            let mut theirs = Catalog::default();
+            theirs.read(
                 &project.join(settings::PROJECT_DIR).join(AGENTS_DIR),
                 &mut notes,
             );
+            // The project's files, a cloned repository's too: their words never speak as Glut (T89).
+            for mut agent in theirs.agents {
+                agent.prompt = crate::planning::unforged(agent.prompt);
+                agent.description = crate::planning::unforged(agent.description);
+                catalog.put(agent);
+            }
         }
         catalog.agents.sort_by(|a, b| a.name.cmp(&b.name));
         (catalog, notes)

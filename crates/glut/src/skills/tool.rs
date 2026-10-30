@@ -50,6 +50,8 @@ impl SkillTool {
                 skill.name,
                 cut(&skill.description, DESCRIPTION_CHARS)
             );
+            // A skill's file, a project's or a download's: its words never speak as Glut (T89).
+            let line = crate::planning::unforged(line);
             if out.chars().count() + line.chars().count() > LIST_CHARS {
                 break;
             }

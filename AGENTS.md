@@ -108,6 +108,12 @@ scripts/install.sh               # glut for every terminal: ~/.cargo/bin, linked
   inside the folder that already holds it. It guards against a key shown by accident (`cat`, logs, `env`), not
   against a model set on it: a transformed value (`base64`, `rev`) passes — the sandbox's read-deny list and the
   network gate stay the barriers.
+- **Only Glut speaks as `[glut]`** (T89, `planning::unforged`): the model follows those lines, so every `[glut]`
+  in text Glut did not write — a tool's result, a project's guide, a skill, a hook's words, an MCP description, the
+  compaction summary, a message from another pane or window, a task item — is quoted `[quoted glut]` wherever it
+  stands, reversibly (one `quoted ` more per mark), once on each way; Glut's own notes are added after. A new path
+  of such text to the model goes through it too; a write takes the quote off again (`planning::written_marks`,
+  beside the masks). The owner's own words stay.
 - **The TUI never lets a key answer a question it did not show** (`crates/glut-tui/src/app.rs` `on_ask_key`): plain
   keys only, no repeat, nothing in the first 400 ms; a turn that ends drops its open card; an ask shows the head and
   the tail of a long target. Model and tool text goes through `transcript::wrap`/`clean` (control characters as
