@@ -18,6 +18,7 @@ pub mod commands;
 pub mod compact;
 pub mod config;
 pub(crate) mod diagnostics;
+pub mod editor;
 pub mod error;
 pub mod event;
 pub mod folders;

@@ -145,6 +145,8 @@ pub struct Toolbox {
     folders: crate::folders::Folders,
     /// The Keychain's list and switch (T74), shared by the gate and the shell.
     keychain: crate::keychain::Keychain,
+    /// The editor the file tools ask about its open files (T64b), when Glut is an editor's agent.
+    editor: crate::editor::Editor,
 }
 
 impl Toolbox {
@@ -162,6 +164,12 @@ impl Toolbox {
     /// The folders beside the working one (T60c): what is added here, every tool of the box reaches at its next call.
     pub fn folders(&self) -> &crate::folders::Folders {
         &self.folders
+    }
+
+    /// The editor the file tools ask about its open files (T64b): set here, every file tool of the box asks it at its
+    /// next call.
+    pub fn editor(&self) -> &crate::editor::Editor {
+        &self.editor
     }
 
     /// The Keychain's list and switch (T74): what is changed here, the gate and the shell see at their next call.

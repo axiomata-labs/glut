@@ -119,10 +119,13 @@ scripts/install.sh               # glut for every terminal: ~/.cargo/bin, linked
   kept off the list, `$` only the loop's own variable, nothing written, nested or protected, no Read rule) and only where
   the mode alone would ask — never past a rule, a heavy kind, the Keychain or plan mode. Widen that filter only with
   an audit: the judge sees text the model wrote and can be talked round.
-- **An editor shows Glut's questions, it never decides them** (T64, `crates/glut-tui/src/acp.rs`, `glut acp`): the
+- **An editor shows Glut's questions, it never decides them** (T64, `crates/glut-tui/src/acp/`, `glut acp`): the
   Agent Client Protocol's permission answer is only Glut's ask answered elsewhere — anything but allow refuses, and
-  "always" is the narrowest scope; Glut never uses the editor's `fs/*` or `terminal/*` (they would run past the sandbox,
-  the gate and the snapshots) nor the MCP servers it names. A new kind of update must not carry anything the
+  "always" is the narrowest scope; Glut never writes through the editor's `fs/*` nor runs its `terminal/*` (they would
+  run past the sandbox, the gate and the snapshots), nor uses the MCP servers it names. It reads an open tab through
+  `fs/read_text_file` (`glut::editor`) only for a path `Root::resolve` itself takes, with no link on any level, after
+  the gate and the guard — never widen that: the containment check lives in `axiomata-files`, and the editor opens
+  any path it is handed. A file whose tab holds unsaved changes is not changed. A new kind of update must not carry anything the
   transcript would not show. Its pickers (`acp/options.rs`) take only values they offered; its slash commands
   (`acp/commands.rs`) run only from a lone text block of the editor's prompt — never from an attachment, a tool result
   or the model — and share their logic with the TUI through `said.rs`: change a command there, not twice. Glut speaks

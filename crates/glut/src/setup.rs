@@ -54,6 +54,7 @@ pub async fn toolbox(
         cwd,
         SkillRoots::new(&catalog.folders()),
         beside.clone(),
+        tools.editor().clone(),
     )?);
     // The web is part of the core (docs/plans/glut-round.md): no MCP server to set up for a page.
     tools.extend([Box::new(crate::tools::web::WebFetch) as Box<dyn Tool>]);

@@ -175,6 +175,7 @@ pub fn file_tools(
     cwd: &std::path::Path,
     skills: SkillRoots,
     beside: Folders,
+    editor: crate::editor::Editor,
 ) -> Result<Vec<Box<dyn Tool>>, HarnessError> {
     let working = Root::dir(cwd, LinkPolicy::Contained).map_err(|err| HarnessError::Workspace {
         path: cwd.display().to_string(),
@@ -184,6 +185,7 @@ pub fn file_tools(
         working,
         skills,
         beside,
+        editor,
     };
     Ok([
         Kind::Read,
@@ -209,6 +211,8 @@ struct Places {
     working: Root,
     skills: SkillRoots,
     beside: Folders,
+    /// The editor whose open files a read sees and an edit of an unsaved one goes through (T64b).
+    editor: crate::editor::Editor,
 }
 
 /// Where a path the model wrote leads: the root it goes through, the path inside that root, how the root's paths are
@@ -563,6 +567,46 @@ fn parse<T: for<'de> Deserialize<'de>>(arguments: Value) -> Result<T, String> {
     serde_json::from_value(arguments).map_err(|err| format!("bad arguments: {err}"))
 }
 
+/// Where the editor would find `path` of `root`: its full path, only where the root itself takes the path — relative,
+/// inside the folder, a regular file that is there — and no link lies on the way, neither the file nor a folder above
+/// it. Anything else is the disk's alone, through the root's guard: the editor opens a path as it likes and follows
+/// links, so it is never handed one the root did not judge.
+fn plain_path(root: &Root, path: &str) -> Option<std::path::PathBuf> {
+    let target = root.resolve(path).ok()?;
+    let full = root.path().join(path);
+    let plain = target == full && full.canonicalize().ok()? == full;
+    let file = full.symlink_metadata().is_ok_and(|meta| meta.is_file());
+    (plain && file).then_some(full)
+}
+
+/// Whether two texts are the same file to the owner: an editor may hold `\r\n` as `\n`, or a last line without its
+/// line break — no unsaved change for that.
+fn same_text(a: &str, b: &str) -> bool {
+    let plain = |text: &str| text.replace("\r\n", "\n").trim_end_matches('\n').to_owned();
+    a == b || plain(a) == plain(b)
+}
+
+/// The text of `path` as the editor holds it, where Glut is an editor's agent and the root takes the path; called
+/// after every check of the caller. A text that is no text (a NUL in it) or too long is the disk's to judge.
+fn held(places: &Places, root: &Root, path: &str) -> Option<String> {
+    let files = places.editor.get()?;
+    let full = plain_path(root, path)?;
+    files
+        .read(&full)
+        .filter(|text| text.len() as u64 <= MAX_READ_BYTES && !text.contains('\0'))
+}
+
+/// Refuses a change of `path` while the editor's tab holds unsaved changes of `disk` (the owner's word, T64b): the
+/// file is the disk's alone to change, and the owner's unsaved text is neither overwritten nor saved by it.
+fn refuse_unsaved(places: &Places, root: &Root, path: &str, disk: &str) -> Result<(), String> {
+    match held(places, root, path) {
+        Some(tab) if !same_text(&tab, disk) => Err(format!(
+            "{path} has unsaved changes in the owner's editor: ask them to save it, then read it again"
+        )),
+        _ => Ok(()),
+    }
+}
+
 /// A path as the model writes it, as the root wants it: `./a` and `a` alike, `.` and `""` for the folder itself.
 fn rel(path: &str) -> &str {
     let path = path.trim();
@@ -604,13 +648,17 @@ fn read(places: &Places, args: ReadArgs, report: &super::Report) -> Result<Strin
         report.image(bytes);
         return Ok(format!("an image, {width}×{height}: {path}"));
     }
-    let file = read_text(root, path, MAX_READ_BYTES).map_err(describe)?;
+    // The root's verdict on the path first, as ever; then the editor's tab, unsaved changes too (T64b).
+    let disk = read_text(root, path, MAX_READ_BYTES)
+        .map_err(describe)?
+        .content;
+    let content = held(places, root, path).unwrap_or(disk);
     if args.outline {
-        return super::outline::of(std::path::Path::new(&args.path), &file.content);
+        return super::outline::of(std::path::Path::new(&args.path), &content);
     }
     let first = args.offset.unwrap_or(1).max(1);
     let limit = args.limit.unwrap_or(DEFAULT_READ_LINES).max(1);
-    let lines: Vec<&str> = file.content.lines().collect();
+    let lines: Vec<&str> = content.lines().collect();
     if lines.is_empty() {
         return Ok("(empty file)".into());
     }
@@ -647,6 +695,9 @@ fn write(places: &Places, args: WriteArgs) -> Result<String, String> {
     guard_resolved(root, path, &PROTECTED_DIRS, &PROTECTED_FILES)?;
     refuse_hard_links(root, path)?;
     make_parents(root, path)?;
+    if let Ok(disk) = read_text(root, path, MAX_READ_BYTES) {
+        refuse_unsaved(places, root, path, &disk.content)?;
+    }
     write_text(root, path, &args.content, None, MAX_WRITE_BYTES).map_err(describe)?;
     Ok(format!(
         "wrote {} bytes to {}",
@@ -710,6 +761,7 @@ fn edit(places: &Places, args: EditArgs) -> Result<String, String> {
         return Err("old_string and new_string are the same".into());
     }
     let file = read_text(root, path, MAX_READ_BYTES).map_err(describe)?;
+    refuse_unsaved(places, root, path, &file.content)?;
     let count = file.content.matches(&args.old_string).count();
     let changed = match count {
         0 => return Err(format!("old_string was not found in {path}")),
@@ -983,7 +1035,15 @@ mod tests {
             folders.push((name.to_string(), folder));
         }
         let mut toolbox = Toolbox::new();
-        toolbox.extend(file_tools(&dir, SkillRoots::new(&folders), Default::default()).unwrap());
+        toolbox.extend(
+            file_tools(
+                &dir,
+                SkillRoots::new(&folders),
+                Default::default(),
+                Default::default(),
+            )
+            .unwrap(),
+        );
         (dir, toolbox)
     }
 
@@ -1039,6 +1099,7 @@ mod tests {
                     working: Root::dir(&dir, LinkPolicy::Contained).unwrap(),
                     skills: SkillRoots::new(&[]),
                     beside: Folders::default(),
+                    editor: Default::default(),
                 },
                 "News/KI.md"
             ),
@@ -1070,6 +1131,128 @@ mod tests {
             .call_reporting("read_file", r#"{"path":"fake.png"}"#, &stop)
             .await;
         assert!(!called.ok && called.images.is_empty());
+    }
+
+    /// An editor whose tabs hold `tabs`, every other file as the disk does.
+    struct Tabs(std::sync::Mutex<std::collections::HashMap<std::path::PathBuf, String>>);
+
+    impl crate::editor::EditorFiles for Tabs {
+        fn read(&self, path: &std::path::Path) -> Option<String> {
+            let tabs = self.0.lock().unwrap();
+            tabs.get(path)
+                .cloned()
+                .or_else(|| std::fs::read_to_string(path).ok())
+        }
+    }
+
+    /// An editor that answers every path it is asked — the whole disk — and records what it was asked.
+    struct Everything(std::sync::Mutex<Vec<std::path::PathBuf>>);
+
+    impl crate::editor::EditorFiles for Everything {
+        fn read(&self, path: &std::path::Path) -> Option<String> {
+            self.0.lock().unwrap().push(path.to_owned());
+            std::fs::read_to_string(path).ok()
+        }
+    }
+
+    #[tokio::test]
+    async fn an_editors_unsaved_tab_is_read_and_a_change_waits_until_it_is_saved() {
+        let (dir, _) = setup();
+        let dir = dir.canonicalize().unwrap();
+        std::fs::write(dir.join("a.txt"), "hello world\n").unwrap();
+        std::fs::write(dir.join("b.txt"), "b\r\n").unwrap();
+        std::os::unix::fs::symlink(dir.join("a.txt"), dir.join("link.txt")).unwrap();
+        let editor = crate::editor::Editor::default();
+        let mut tools = Toolbox::new();
+        tools.extend(
+            file_tools(
+                &dir,
+                SkillRoots::default(),
+                Default::default(),
+                editor.clone(),
+            )
+            .unwrap(),
+        );
+        let tabs = std::sync::Arc::new(Tabs(Default::default()));
+        tabs.0
+            .lock()
+            .unwrap()
+            .insert(dir.join("a.txt"), "hello world\nunsaved\n".into());
+        // Only its line ends differ from the disk: no unsaved change.
+        tabs.0.lock().unwrap().insert(dir.join("b.txt"), "b".into());
+        editor.set(Some(tabs.clone()));
+        let (ok, text) = tools.call("read_file", r#"{"path":"a.txt"}"#).await;
+        assert!(ok && text.contains("unsaved"), "the tab is read: {text}");
+        // Through a link the disk alone answers: the editor is asked only where the path leads nowhere else.
+        let (ok, text) = tools.call("read_file", r#"{"path":"link.txt"}"#).await;
+        assert!(ok && !text.contains("unsaved"), "{text}");
+        let (ok, text) = tools
+            .call(
+                "edit_file",
+                r#"{"path":"a.txt","old_string":"world","new_string":"Glut"}"#,
+            )
+            .await;
+        assert!(!ok && text.contains("unsaved changes"), "{text}");
+        let (ok, text) = tools
+            .call("write_file", r#"{"path":"a.txt","content":"x"}"#)
+            .await;
+        assert!(!ok && text.contains("unsaved changes"), "{text}");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("a.txt")).unwrap(),
+            "hello world\n"
+        );
+        let (ok, text) = tools
+            .call(
+                "edit_file",
+                r#"{"path":"b.txt","old_string":"b","new_string":"B"}"#,
+            )
+            .await;
+        assert!(ok, "{text}");
+        assert_eq!(std::fs::read_to_string(dir.join("b.txt")).unwrap(), "B\r\n");
+    }
+
+    #[tokio::test]
+    async fn the_editor_is_asked_only_of_a_path_the_folder_takes() {
+        let (dir, _) = setup();
+        let dir = dir.canonicalize().unwrap();
+        let outside = dir.with_extension("outside");
+        std::fs::write(&outside, "secret\n").unwrap();
+        std::fs::write(dir.join("a.txt"), "a\n").unwrap();
+        std::fs::create_dir(dir.join("real")).unwrap();
+        std::fs::write(dir.join("real/c.txt"), "c\n").unwrap();
+        std::os::unix::fs::symlink(dir.join("real"), dir.join("linked")).unwrap();
+        let editor = crate::editor::Editor::default();
+        let mut tools = Toolbox::new();
+        tools.extend(
+            file_tools(
+                &dir,
+                SkillRoots::default(),
+                Default::default(),
+                editor.clone(),
+            )
+            .unwrap(),
+        );
+        let everything = std::sync::Arc::new(Everything(Default::default()));
+        editor.set(Some(everything.clone()));
+        let absolute = format!(r#"{{"path":"{}"}}"#, outside.display());
+        let (ok, text) = tools.call("read_file", &absolute).await;
+        assert!(
+            !ok && !text.contains("secret"),
+            "an absolute path is the root's to refuse: {text}"
+        );
+        for path in ["linked/c.txt", "real/../a.txt", "a.txt/"] {
+            tools
+                .call("read_file", &format!(r#"{{"path":"{path}"}}"#))
+                .await;
+        }
+        let asked = everything.0.lock().unwrap();
+        assert!(
+            asked
+                .iter()
+                .all(|asked| asked != &outside && !asked.ends_with("linked/c.txt")),
+            "{asked:?}"
+        );
+        let _ = std::fs::remove_file(&outside);
     }
 
     #[tokio::test]
@@ -1205,7 +1388,8 @@ mod tests {
             file_tools(
                 std::path::Path::new("/definitely/not/here"),
                 SkillRoots::default(),
-                Folders::default()
+                Folders::default(),
+                Default::default()
             ),
             Err(HarnessError::Workspace { .. })
         ));
@@ -1372,7 +1556,15 @@ mod tests {
         std::fs::hard_link(dir.join("a.txt"), dir.join("b.txt")).unwrap();
         // Without a gate, so the write reaches the tool and its own refusal is what answers.
         let mut plain = crate::tools::Toolbox::new();
-        plain.extend(file_tools(&dir, SkillRoots::default(), Default::default()).unwrap());
+        plain.extend(
+            file_tools(
+                &dir,
+                SkillRoots::default(),
+                Default::default(),
+                Default::default(),
+            )
+            .unwrap(),
+        );
         let (ok, text) = plain
             .call("write_file", r#"{"path":"b.txt","content":"x"}"#)
             .await;
@@ -1480,7 +1672,15 @@ mod tests {
         std::fs::write(vault.join("note.md"), "first line\n").unwrap();
         let mut tools = Toolbox::new();
         let beside = tools.folders().clone();
-        tools.extend(file_tools(&work, SkillRoots::default(), beside.clone()).unwrap());
+        tools.extend(
+            file_tools(
+                &work,
+                SkillRoots::default(),
+                beside.clone(),
+                Default::default(),
+            )
+            .unwrap(),
+        );
         let call = |tool: &'static str, args: Value| {
             let tools = &tools;
             async move { tools.call(tool, &args.to_string()).await }

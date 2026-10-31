@@ -8649,8 +8649,13 @@ mod tests {
         ]);
         let mut tools = Toolbox::new();
         tools.extend(
-            crate::tools::files::file_tools(dir.path(), Default::default(), Default::default())
-                .unwrap(),
+            crate::tools::files::file_tools(
+                dir.path(),
+                Default::default(),
+                Default::default(),
+                Default::default(),
+            )
+            .unwrap(),
         );
         let config = RunConfig::new(dir.path());
         let mut events = Vec::new();
@@ -8690,8 +8695,13 @@ mod tests {
         ]);
         let mut tools = Toolbox::new();
         tools.extend(
-            crate::tools::files::file_tools(dir.path(), Default::default(), Default::default())
-                .unwrap(),
+            crate::tools::files::file_tools(
+                dir.path(),
+                Default::default(),
+                Default::default(),
+                Default::default(),
+            )
+            .unwrap(),
         );
         let config = RunConfig {
             masks: None,

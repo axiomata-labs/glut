@@ -19,6 +19,7 @@
 //! where the editor said it reads them, as Glut's lines in the chat otherwise.
 
 mod commands;
+mod files;
 mod forms;
 mod options;
 mod sessions;
@@ -214,6 +215,8 @@ struct Reads {
     pages: bool,
     /// A terminal it opens to run Glut's own sign-in.
     terminal: bool,
+    /// Its files (v1 only): a file's text as it holds it.
+    file_reads: bool,
 }
 
 impl Peer {
@@ -465,6 +468,10 @@ async fn handle(
                 pages: named("/elicitation/url"),
                 terminal: caps
                     .and_then(|caps| caps.pointer("/auth/terminal"))
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                file_reads: caps
+                    .and_then(|caps| caps.pointer("/fs/readTextFile"))
                     .and_then(Value::as_bool)
                     .unwrap_or(false),
             };
@@ -1149,6 +1156,16 @@ async fn open(
         compactions: AtomicU32::new(0),
         closed: tokio::sync::Notify::new(),
     });
+    // Where the editor offers its files, the tools read an open tab — unsaved changes too — after their own checks,
+    // always; a tab with unsaved changes is not changed until the owner saved it (T64b).
+    if peer.reads().file_reads {
+        live.parts.tools.editor().set(Some(Arc::new(files::Files {
+            peer: Arc::clone(peer),
+            session: live.id.clone(),
+            runtime: tokio::runtime::Handle::current(),
+            silent: AtomicBool::new(false),
+        })));
+    }
     sessions
         .lock()
         .unwrap_or_else(|poison| poison.into_inner())
