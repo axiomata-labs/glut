@@ -102,7 +102,7 @@ const fn command(
 }
 
 /// Every command, grouped by topic in [`Topic::ALL`]'s order, the most used first inside a topic.
-pub const COMMANDS: [Command; 63] = [
+pub const COMMANDS: [Command; 64] = [
     command(Topic::Session, "clear", "", "start a new session"),
     command(
         Topic::Session,
@@ -396,6 +396,13 @@ pub const COMMANDS: [Command; 63] = [
         "[off|session|<provider> <model>]",
         "the second model that judges a command only the mode would ask about: when it only reads, it runs like a \
          listed reader, in the sandbox — off asks you each time, session takes the session's model",
+    ),
+    command(
+        Topic::Settings,
+        "ide",
+        "[on|off]",
+        "your editor beside Glut (Neovim with glut.nvim): which one Glut is connected to and which fit — Glut knows \
+         its active file and selection there and shows changes as diffs; /ide on connects, /ide off disconnects",
     ),
     command(
         Topic::Settings,

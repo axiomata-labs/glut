@@ -56,6 +56,12 @@ pub async fn toolbox(
         beside.clone(),
         tools.editor().clone(),
     )?);
+    // T64c: the owner's editor, offered while one that says what is open in it is connected.
+    tools.extend([Box::new(crate::tools::editor::EditorTool::new(
+        cwd,
+        beside.clone(),
+        tools.editor().clone(),
+    )) as Box<dyn Tool>]);
     // The web is part of the core (docs/plans/glut-round.md): no MCP server to set up for a page.
     tools.extend([Box::new(crate::tools::web::WebFetch) as Box<dyn Tool>]);
     // `web_search` only for a caller that set up its providers and budget (glut-round CP3); none: no search offered.

@@ -847,6 +847,9 @@ glut::catalog! {
         /// Setting a provider up from an editor, in a terminal it opens (T64b).
         acp_setup_name: &'static str,
         acp_setup_detail: &'static str,
+        /// What the owner's editor said with a message (T64c).
+        editor_selected: &'static str,
+        editor_active: &'static str,
         /// Providers whose model list is not kept yet: `{providers}`.
         models_missing: &'static str,
         /// A project with no session yet.
@@ -2058,6 +2061,14 @@ glut::catalog! {
         ask_keychain: &'static str,
         /// The footer while the Keychain is open to every command.
         keychain_footer: &'static str,
+        /// The connection to the owner's editor (T64c, `/ide`).
+        ide_connected: &'static str,
+        ide_none: &'static str,
+        ide_failed: &'static str,
+        ide_off: &'static str,
+        ide_now: &'static str,
+        ide_title: &'static str,
+        ide_footer: &'static str,
         /// The kinds of `glut clean`'s report (T82), in `clean::ITEMS`' order.
         clean_names: &'static [&'static str],
         /// A line of `/clean` and `glut clean` (T82): `{name}` the kind, `{bytes}` its size.

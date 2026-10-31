@@ -1,7 +1,7 @@
 //! The commands' manual pages in German (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 63] = [
+pub const PAGES: [(&str, &str); 64] = [
     (
         "clear",
         "Eine neue, leere Session in diesem Ordner beginnen.\n\
@@ -643,6 +643,21 @@ pub const PAGES: [(&str, &str); 63] = [
          Glut kennt viele Befehle, die nur lesen (ls, grep, git status, …), und führt sie in jedem Modus aus. Eine Schleife oder eine Pipeline daraus (for f in *.md; do grep -c x \"$f\"; done) kann es an ihrem Text allein nicht beurteilen, also fragt es. Das zweite Modell sieht diesen Befehl und seinen Ordner — nie das Gespräch, eine Datei oder eine Ausgabe — und sagt READS oder CHANGES. Nur bei READS läuft der Befehl wie ein gelisteter Lesebefehl, in der Sandbox; alles andere, oder keine klare Antwort binnen Sekunden, fragt dich wie bisher, sein Wort unter dem Befehl. Eine Regel von dir, ein heftiger Befehl, der Schlüsselbund und die Sandbox bleiben, wie sie sind; derselbe Befehl wird in einer Session nicht zweimal beurteilt.\n\
          \n\
          Ein Befehl, den es laufen ließ, sagt das neben sich. Die Wahl steht in `~/.glut/classifier.json` und gilt ab dem nächsten Turn; `glut run --classifier` setzt sie für einen Lauf.",
+    ),
+    (
+        "ide",
+        "Dein Editor neben Glut: Neovim mit dem Plugin glut.nvim (weitere folgen).\n\
+         \n\
+         /ide — mit welchem Editor Glut verbunden ist, und welche passen\n\
+         /ide on — verbinden (fragt, wenn mehrere passen)\n\
+         /ide off — für diese Session trennen\n\
+         \n\
+         Verbunden trägt jede deiner Nachrichten die aktive Datei und die Markierung mit (⧉ darunter), solange keine \
+         Leseregel die Datei zurückhält; das Modell kann fragen, welche Dateien offen sind und was die Sprachserver \
+         sagen; Glut liest einen Buffer so, wie der Editor ihn hält, auch Ungespeichertes, und eine Frage des Gates \
+         zu einer Änderung erscheint auch als Diff im Editor — die erste Antwort zählt. Glut verbindet sich beim \
+         Start selbst, wo ein Editor passt: der, der Glut gestartet hat, sonst der, dessen Ordner Glut's Ordner \
+         enthält. \"⧉\" in der Fußzeile zeigt die Verbindung.",
     ),
     (
         "clean",

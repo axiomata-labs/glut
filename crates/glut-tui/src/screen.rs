@@ -157,6 +157,8 @@ async fn run_switching(
     };
     linked(HostLink(reports.clone()));
     let mut app = App::new(parts, engine, reports);
+    // T64c: the owner's editor, where one fits — the window's first pane alone.
+    app.ide_start();
     let offer_layout =
         open.continue_last && open.prompt.is_none() && !open.pick && open.lost_turn.is_none();
     if open.continue_last {

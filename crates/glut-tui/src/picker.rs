@@ -12,6 +12,8 @@ use crate::finder::Corpus;
 /// What picking an entry does.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Pick {
+    /// `/ide`'s list (T64c): the editor on this port.
+    Ide(u16),
     Model {
         provider: String,
         model: String,

@@ -1,7 +1,7 @@
 //! The commands' manual pages in Spanish (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 63] = [
+pub const PAGES: [(&str, &str); 64] = [
     (
         "clear",
         "Empieza una sesión nueva y vacía en esta carpeta.\n\
@@ -629,6 +629,21 @@ pub const PAGES: [(&str, &str); 63] = [
          Glut conoce muchos comandos que solo leen (ls, grep, git status, …) y los ejecuta en todos los modos. Un bucle o una tubería de ellos (for f in *.md; do grep -c x \"$f\"; done) no puede juzgarlo solo por su texto, así que pregunta. El segundo modelo ve ese comando y su carpeta — nunca la conversación, un archivo ni una salida — y dice READS o CHANGES. Solo con READS el comando se ejecuta como un comando de lectura conocido, en el sandbox; cualquier otra cosa, o ninguna respuesta clara en segundos, te pregunta como antes, con su opinión bajo el comando. Una regla tuya, un comando pesado, el llavero y el sandbox quedan como están; el mismo comando no se juzga dos veces en una sesión.\n\
          \n\
          Un comando que dejó pasar lo indica a su lado. La elección se guarda en `~/.glut/classifier.json` y vale desde el próximo turno; `glut run --classifier` la fija para una ejecución.",
+    ),
+    (
+        "ide",
+        "Tu editor junto a Glut: Neovim con el plugin glut.nvim (vendrán otros).\n\
+         \n\
+         /ide — a qué editor está conectado Glut y cuáles encajan\n\
+         /ide on — conectar (pregunta si encajan varios)\n\
+         /ide off — desconectar en esta sesión\n\
+         \n\
+         Conectado, cada mensaje tuyo lleva el archivo activo y la selección (⧉ debajo), mientras ninguna regla de \
+         lectura retenga el archivo; el modelo puede preguntar qué archivos están abiertos y qué dicen los servidores \
+         de lenguaje; Glut lee un búfer como lo tiene el editor, también lo no guardado, y una pregunta del gate \
+         sobre un cambio aparece también como diff en el editor — cuenta la primera respuesta. Glut se conecta solo \
+         al arrancar donde encaja un editor: el que arrancó Glut, si no aquel cuya carpeta contiene la de Glut. \"⧉\" \
+         en el pie dice que está conectado.",
     ),
     (
         "clean",

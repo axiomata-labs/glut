@@ -521,10 +521,22 @@ impl Http {
         }
         // No time limit on the whole exchange: the client's own ([`Client::request`]) holds it, and stands still while
         // the owner fills in a form the server asked for in the middle of a stream (T67).
-        let client = reqwest::Client::builder()
+        let mut builder = reqwest::Client::builder()
             .connect_timeout(START_TIMEOUT)
             // A redirect would carry the headers to a host the owner never named.
-            .redirect(reqwest::redirect::Policy::none())
+            .redirect(reqwest::redirect::Policy::none());
+        // A server on this machine is reached directly: a proxy of the environment would carry its token and what is
+        // said to it off the machine (T64c's audit).
+        let loopback = reqwest::Url::parse(url).is_ok_and(|parsed| {
+            matches!(
+                parsed.host_str(),
+                Some("127.0.0.1" | "localhost" | "[::1]" | "::1")
+            )
+        });
+        if loopback {
+            builder = builder.no_proxy();
+        }
+        let client = builder
             .build()
             .map_err(|err| mcp_err(server, err.to_string()))?;
         // The owner's own header says how to sign in; only without one is a kept sign-in looked up.
@@ -1046,6 +1058,12 @@ impl Client {
             start: START_TIMEOUT,
             call: CALL_TIMEOUT,
         }
+    }
+
+    /// Lets one tool call take up to `limit`: a call that waits for the owner on the server's side (an editor's diff,
+    /// T64c) takes as long as a question of the gate may.
+    pub fn set_call_timeout(&mut self, limit: Duration) {
+        self.call = limit;
     }
 
     /// The tools this server advertised.

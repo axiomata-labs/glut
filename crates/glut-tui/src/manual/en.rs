@@ -1,7 +1,7 @@
 //! The commands' manual pages in English (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 63] = [
+pub const PAGES: [(&str, &str); 64] = [
     (
         "clear",
         "Start a new, empty session in this folder.\n\
@@ -605,6 +605,21 @@ pub const PAGES: [(&str, &str); 63] = [
          Glut knows many commands that only read (ls, grep, git status, …) and runs them in every mode. A loop or a pipeline of them (for f in *.md; do grep -c x \"$f\"; done) it cannot judge from its text alone, so it asks. The second model sees that command and its folder — never the conversation, a file or an output — and says READS or CHANGES. Only on READS does the command run as a listed reader, in the sandbox; anything else, or no clear answer within seconds, asks you as before, its word under the command. A rule of yours, a heavy command, the Keychain and the sandbox stay as they are; the same command again is not judged twice in a session.\n\
          \n\
          A command it let run says so beside it. The choice is kept in `~/.glut/classifier.json` and counts from the next turn; `glut run --classifier` sets it for one run.",
+    ),
+    (
+        "ide",
+        "Your editor beside Glut: Neovim with the plugin glut.nvim (others to come).\n\
+         \n\
+         /ide — which editor Glut is connected to, and which fit\n\
+         /ide on — connect (asks when several fit)\n\
+         /ide off — disconnect for this session\n\
+         \n\
+         Connected, every message of yours carries the active file and the selection (⧉ under it), as long as no read \
+         rule holds the file back; the model can ask which files are open and what the language servers say; Glut \
+         reads a buffer as the editor holds it, unsaved changes too, and a question of the gate about an edit shows \
+         as a diff in the editor too — the first answer counts. Glut connects by itself as it starts where one editor \
+         fits: the one that started Glut, else the one whose folder holds Glut's. \"⧉\" in the footer says it is \
+         connected.",
     ),
     (
         "clean",

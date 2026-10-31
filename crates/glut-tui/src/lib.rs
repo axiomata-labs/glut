@@ -24,6 +24,7 @@ mod guides;
 mod helpbox;
 mod highlight;
 pub mod host;
+mod ide;
 mod input;
 mod key;
 mod layout;

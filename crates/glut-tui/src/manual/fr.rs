@@ -1,7 +1,7 @@
 //! The commands' manual pages in French (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 63] = [
+pub const PAGES: [(&str, &str); 64] = [
     (
         "clear",
         "Commencer une nouvelle session vide dans ce dossier.\n\
@@ -638,6 +638,21 @@ pub const PAGES: [(&str, &str); 63] = [
          Glut connaît beaucoup de commandes qui ne font que lire (ls, grep, git status, …) et les exécute dans tous les modes. Une boucle ou un pipeline de celles-ci (for f in *.md; do grep -c x \"$f\"; done), il ne peut pas en juger par son seul texte, alors il demande. Le second modèle voit cette commande et son dossier — jamais la conversation, un fichier ou une sortie — et répond READS ou CHANGES. Seulement sur READS la commande s’exécute comme une commande de lecture connue, dans le bac à sable ; tout le reste, ou aucune réponse claire en quelques secondes, te demande comme avant, son avis sous la commande. Une règle à toi, une commande lourde, le trousseau et le bac à sable restent tels quels ; la même commande n’est pas jugée deux fois dans une session.\n\
          \n\
          Une commande qu’il a laissé passer le dit à côté. Le choix est gardé dans `~/.glut/classifier.json` et vaut dès le prochain tour ; `glut run --classifier` le fixe pour une exécution.",
+    ),
+    (
+        "ide",
+        "Ton éditeur à côté de Glut : Neovim avec le plugin glut.nvim (d'autres suivront).\n\
+         \n\
+         /ide — à quel éditeur Glut est relié, et lesquels conviennent\n\
+         /ide on — relier (demande si plusieurs conviennent)\n\
+         /ide off — couper pour cette session\n\
+         \n\
+         Relié, chacun de tes messages porte le fichier actif et la sélection (⧉ en dessous), tant qu'aucune règle de \
+         lecture ne retient le fichier ; le modèle peut demander quels fichiers sont ouverts et ce que disent les \
+         serveurs de langage ; Glut lit un tampon tel que l'éditeur le tient, non enregistré compris, et une question \
+         du gate sur une modification s'affiche aussi en diff dans l'éditeur — la première réponse compte. Glut se \
+         relie seul au démarrage là où un éditeur convient : celui qui a lancé Glut, sinon celui dont le dossier \
+         contient celui de Glut. « ⧉ » dans le pied dit qu'il est relié.",
     ),
     (
         "clean",

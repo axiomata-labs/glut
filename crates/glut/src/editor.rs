@@ -5,7 +5,9 @@
 //! Commands see the disk. What stays open: the editor opens the path itself, outside the sandbox — a link swapped in
 //! between Glut's check and its read would be followed (the owner took that, 2026-10-31).
 //!
-//! v1 only: the protocol's draft v2 drops the editor's files, and with it this way.
+//! T64c: an editor plugin of Glut's own (`docs/editor-protocol.md`) says more — the file, the cursor and the selection
+//! the owner works on, the open files, a file's diagnostics — and hands over a buffer only as the editor holds it,
+//! never opening a path itself.
 
 use std::path::Path;
 use std::sync::{Arc, RwLock};
@@ -15,6 +17,67 @@ pub trait EditorFiles: Send + Sync {
     /// The text of `path` (absolute) as the editor holds it, an open tab's unsaved changes too; `None` where it cannot
     /// say. Called off the runtime's workers: it may wait for the editor.
     fn read(&self, path: &Path) -> Option<String>;
+
+    /// Where the owner works now: the active file, the cursor, a selection — `None` where the editor does not say.
+    fn context(&self) -> Option<Context> {
+        None
+    }
+
+    /// Whether the editor says what is open in it and a file's diagnostics: the `editor` tool is offered only then.
+    /// Asked whenever the tools are listed, so it answers at once, without asking the editor.
+    fn offers_tools(&self) -> bool {
+        false
+    }
+
+    /// The files open in the editor, the active first — `None` where it does not say.
+    fn open_files(&self) -> Option<Vec<OpenFile>> {
+        None
+    }
+
+    /// The editor's diagnostics of `path` (absolute), as its language servers see the buffer — `None` where it does
+    /// not say.
+    fn diagnostics(&self, _path: &Path) -> Option<Vec<Diagnostic>> {
+        None
+    }
+}
+
+/// Where the owner works in the editor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Context {
+    /// The active file, absolute.
+    pub path: std::path::PathBuf,
+    /// The cursor, 1-based.
+    pub line: u32,
+    pub character: u32,
+    /// The selected lines (1-based, inclusive) and their text, cut by the editor.
+    pub selection: Option<Selection>,
+}
+
+/// A selection in the active file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Selection {
+    pub start_line: u32,
+    pub end_line: u32,
+    pub text: String,
+}
+
+/// A file open in the editor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenFile {
+    pub path: std::path::PathBuf,
+    pub active: bool,
+    /// Whether its buffer holds unsaved changes.
+    pub dirty: bool,
+}
+
+/// One diagnostic of a file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Diagnostic {
+    pub line: u32,
+    pub character: u32,
+    pub severity: String,
+    pub message: String,
+    pub source: Option<String>,
 }
 
 /// The editor a toolbox's file tools ask, if any: set by the host that serves one, shared by every tool of the box

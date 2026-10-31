@@ -1,7 +1,7 @@
 //! The commands' manual pages in Chinese (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 63] = [
+pub const PAGES: [(&str, &str); 64] = [
     (
         "clear",
         "在此文件夹中开始一个新的空会话。\n\
@@ -551,6 +551,20 @@ pub const PAGES: [(&str, &str); 63] = [
          Glut 认识许多只读取的命令（ls、grep、git status 等），并在任何模式下运行它们。由它们组成的循环或管道（for f in *.md; do grep -c x \"$f\"; done）无法仅凭文本判断，所以会询问。第二个模型只看到该命令及其文件夹 — 从不看到对话、文件或输出 — 并回答 READS 或 CHANGES。只有 READS 时，命令才会像已知的读取命令一样在沙箱中运行；其他情况，或几秒内没有明确答案，则照常询问你，并在命令下方附上它的意见。你的规则、重型命令、钥匙串和沙箱保持不变；同一命令在一个会话中不会被判断两次。\n\
          \n\
          它放行的命令会在旁边注明。选择保存在 `~/.glut/classifier.json`，从下一轮起生效；`glut run --classifier` 可为一次运行设置。",
+    ),
+    (
+        "ide",
+        "Glut 旁边的编辑器：装了 glut.nvim 插件的 Neovim（其他的以后）。\n\
+         \n\
+         /ide — Glut 连着哪个编辑器，哪些合适\n\
+         /ide on — 连接（有多个合适时会询问）\n\
+         /ide off — 在本次会话中断开\n\
+         \n\
+         连接后，你的每条消息都会带上当前文件和选区（下方显示 \
+         ⧉），只要没有读取规则拦下该文件；模型可以询问打开了哪些文件、语言服务器怎么说；Glut \
+         按编辑器所持的样子读取缓冲区（包括未保存的），关于改动的 gate 询问也会在编辑器中以差异显示 — \
+         以先到的回答为准。启动时若有合适的编辑器，Glut 会自动连接：启动 Glut 的那个，否则是文件夹包含 Glut \
+         文件夹的那个。页脚的“⧉”表示已连接。",
     ),
     (
         "clean",

@@ -1554,6 +1554,15 @@ fn draw_keys(frame: &mut Frame, app: &App, area: Rect, branch: Option<String>, c
     if let (None, Some(role)) = (chrome.number, &role) {
         segments.push(Segment::hued(role.clone(), theme::c().syntax.kind, 0));
     }
+    // T64c: the owner's editor Glut is connected to.
+    if let Some(bridge) = &app.ide {
+        let name = crate::transcript::clean(&bridge.found.ide).to_lowercase();
+        segments.push(Segment::hued(
+            tr!(ide_footer, ide = name),
+            theme::c().fine,
+            1,
+        ));
+    }
     // T74: the Keychain open to every command stands beside the mode, in the fault colour, as long as it is.
     if app.parts.tools.keychain().is_open() {
         segments.push(Segment::marked(tr!(keychain_footer), theme::c().fault, 0));

@@ -75,6 +75,14 @@ pub enum Delivered {
 }
 
 /// A question of the gate on the screen.
+/// The editor's diff of a question of the gate (T64c): its id, when it opened, and the question it shows.
+struct OpenDiff {
+    id: String,
+    opened: Instant,
+    tool: String,
+    target: String,
+}
+
 pub struct OpenAsk {
     pub request: AskRequest,
     reply: oneshot::Sender<Answer>,
@@ -371,6 +379,16 @@ pub struct App {
     pub switch_after: Option<SwitchAfter>,
     /// A switch made as a turn ended (T73b): what follows that turn waits for the new engine — `Some(answered)`.
     after_switch: Option<bool>,
+    /// The owner's editor Glut is connected to (T64c, `/ide`).
+    pub ide: Option<Arc<crate::ide::Bridge>>,
+    /// Whether a connection under way may still take effect: `/ide off` lets go of one too.
+    ide_wanted: bool,
+    /// The turn's file changes by their call, as the model sent them: a question of the gate about one shows as the
+    /// editor's diff, and a file written is the editor's to read again (T64c).
+    changes: std::collections::HashMap<String, (String, String)>,
+    /// The editor's diff of the question open now, and how many there were.
+    diff: Option<OpenDiff>,
+    diffs: u32,
     /// The owner's rules for this session (T73b, `/rule`): with every turn's instructions, kept across `/clear`.
     pub rules: Vec<String>,
     /// A sign-in's address, waiting for the owner's ⏎ to open it in the browser (T56).
@@ -675,6 +693,11 @@ impl App {
             repeat_ended: false,
             switch_after: None,
             after_switch: None,
+            ide: None,
+            ide_wanted: true,
+            changes: std::collections::HashMap::new(),
+            diff: None,
+            diffs: 0,
             rules: Vec::new(),
             opening: None,
             mcp_waiting: std::collections::HashMap::new(),
@@ -1090,6 +1113,218 @@ impl App {
             crate::export::write(&path, &text, &home).map(|()| path)
         });
         self.exported(written);
+    }
+
+    /// T64c: what the editor follows of a turn's step — a file change the model sends is kept by its call, so a
+    /// question about it can show as a diff; a file written is the editor's to read again.
+    fn editor_follows(&mut self, event: &Event) {
+        match event {
+            Event::Sub { event, .. } => self.editor_follows(event),
+            Event::ToolCall {
+                id,
+                name,
+                arguments,
+                ..
+            } if matches!(name.as_str(), "edit_file" | "write_file") => {
+                self.changes
+                    .insert(id.clone(), (name.clone(), arguments.clone()));
+            }
+            Event::ToolResult { id, ok, .. } => {
+                let change = self.changes.remove(id);
+                if let (true, Some((_, arguments)), Some(bridge)) = (*ok, change, &self.ide) {
+                    let path = serde_json::from_str::<serde_json::Value>(&arguments)
+                        .ok()
+                        .and_then(|args| args.get("path")?.as_str().map(str::to_owned));
+                    if let Some(path) = path {
+                        let (bridge, full) = (Arc::clone(bridge), self.parts.config.cwd.join(path));
+                        tokio::spawn(async move { bridge.changed(&[full]).await });
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// T64c: the question just opened as the editor's diff, where it is about one change of a file the editor can
+    /// show: the call it is about found by its tool and its path — exactly one, or none is shown —, the file read as
+    /// `edit_file` reads it (inside the working folder, through its guard, never through a link, no larger than a read
+    /// may be, held back by no read rule). The TUI's card stays; the first answer counts.
+    fn diff_of(&mut self, request: &AskRequest) {
+        use axiomata_files::{LinkPolicy, MAX_READ_BYTES, Root};
+        let Some(bridge) = self.ide.clone() else {
+            return;
+        };
+        if !matches!(request.tool.as_str(), "edit_file" | "write_file") {
+            return;
+        }
+        let plain = |path: &str| path.trim().trim_start_matches("./").to_owned();
+        let matching: Vec<serde_json::Value> = self
+            .changes
+            .values()
+            .filter(|(name, _)| *name == request.tool)
+            .filter_map(|(_, arguments)| serde_json::from_str::<serde_json::Value>(arguments).ok())
+            .filter(|args| {
+                args.get("path")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|path| plain(path) == request.target)
+            })
+            .collect();
+        let [args] = matching.as_slice() else { return };
+        let held = self
+            .parts
+            .tools
+            .gate()
+            .is_some_and(|gate| gate.read_held_back(&request.target));
+        if held || request.target.starts_with('/') || request.target.starts_with('~') {
+            return;
+        }
+        let Ok(root) = Root::dir(&self.parts.config.cwd, LinkPolicy::Contained) else {
+            return;
+        };
+        let text = |field: &str| {
+            args.get(field)
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        };
+        let old = match axiomata_files::read_text(&root, &request.target, MAX_READ_BYTES) {
+            Ok(file) => Some(file.content),
+            Err(axiomata_files::FilesError::NotFound { .. }) if request.tool == "write_file" => {
+                None
+            }
+            Err(_) => return,
+        };
+        // What the tool would write, by its own rule: one match, or every one where it is asked to.
+        let new = if request.tool == "write_file" {
+            text("content")
+        } else {
+            (|| {
+                let (from, to, base) = (text("old_string")?, text("new_string")?, old.as_ref()?);
+                let all = args
+                    .get("replace_all")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false);
+                match base.matches(&from).count() {
+                    0 => None,
+                    1 => Some(base.replacen(&from, &to, 1)),
+                    _ if all => Some(base.replace(&from, &to)),
+                    _ => None,
+                }
+            })()
+        };
+        let Some(new) = new else { return };
+        self.diffs += 1;
+        // Unique across panes and windows: two Glut sessions may share one editor.
+        let id = format!("{}-{}-{}", std::process::id(), self.session.id, self.diffs);
+        self.diff = Some(OpenDiff {
+            id: id.clone(),
+            opened: Instant::now(),
+            tool: request.tool.clone(),
+            target: request.target.clone(),
+        });
+        let title = match &request.from {
+            Some(from) => format!(
+                "{} · {}",
+                crate::transcript::clean(from),
+                crate::transcript::clean(&request.target)
+            ),
+            None => crate::transcript::clean(&request.target).to_string(),
+        };
+        let full = self.parts.config.cwd.join(&request.target);
+        let reports = self.reports.clone();
+        tokio::spawn(async move {
+            let outcome = bridge
+                .open_diff(&id, &full, old.as_deref(), &new, &title)
+                .await;
+            let _ = reports.send(Report::EditorDiff(id, outcome));
+        });
+    }
+
+    /// T64c: a diff whose question was answered here (or went) closes in the editor.
+    fn settle_diff(&mut self) {
+        if self.ask.is_some() {
+            return;
+        }
+        if let (Some(diff), Some(bridge)) = (self.diff.take(), &self.ide) {
+            let bridge = Arc::clone(bridge);
+            tokio::spawn(async move { bridge.close_diff(&diff.id).await });
+        }
+    }
+
+    /// T64c: the owner's editor as the window starts — the one that started Glut, else the one whose folder holds
+    /// Glut's; several are asked about once, none is nothing to say.
+    pub fn ide_start(&mut self) {
+        let mut fitting = crate::ide::fitting(&self.parts.home, &self.parts.config.cwd);
+        match fitting.len() {
+            0 => {}
+            1 => self.ide_connect(fitting.remove(0)),
+            _ => self.picker = Some(self.ide_picker(fitting)),
+        }
+    }
+
+    /// Connects to the editor `found` in the background; the outcome comes back as a report.
+    fn ide_connect(&mut self, found: crate::ide::Found) {
+        self.ide_wanted = true;
+        let reports = self.reports.clone();
+        let name = found.ide.clone();
+        tokio::spawn(async move {
+            let made = crate::ide::Bridge::connect(found).await.map_err(|reason| {
+                tr!(
+                    ide_failed,
+                    ide = name,
+                    reason = crate::transcript::clean(&reason)
+                )
+                .to_string()
+            });
+            let _ = reports.send(Report::Ide(made));
+        });
+    }
+
+    fn ide_picker(&self, fitting: Vec<crate::ide::Found>) -> Picker {
+        let items = fitting
+            .into_iter()
+            .map(|found| {
+                let folders = found
+                    .folders
+                    .iter()
+                    .map(|folder| crate::projects::shown_path(folder, &self.parts.home))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                Item::plain(
+                    format!("{} :{}", crate::transcript::clean(&found.ide), found.port),
+                    crate::transcript::clean(&folders),
+                    Pick::Ide(found.port),
+                )
+            })
+            .collect();
+        Picker::new(tr!(ide_title), items, None)
+    }
+
+    /// `/ide` (T64c): alone with which editor Glut is connected, `on` connects (asking among several), `off` lets go
+    /// for this session — the file tools and the turns are the disk's and the owner's words alone again.
+    fn ide_command(&mut self, rest: &str) {
+        match rest.trim() {
+            "off" => {
+                self.ide_wanted = false;
+                self.parts.tools.editor().set(None);
+                self.ide = None;
+                self.tell(tr!(ide_off));
+            }
+            "on" => {
+                let mut fitting = crate::ide::fitting(&self.parts.home, &self.parts.config.cwd);
+                match fitting.len() {
+                    0 => self.tell(tr!(ide_none)),
+                    1 => self.ide_connect(fitting.remove(0)),
+                    _ => self.picker = Some(self.ide_picker(fitting)),
+                }
+            }
+            _ => match &self.ide {
+                Some(bridge) => {
+                    let name = crate::transcript::clean(&bridge.found.ide).to_string();
+                    self.tell(tr!(ide_now, ide = name));
+                }
+                None => self.tell(tr!(ide_none)),
+            },
+        }
     }
 
     /// `/classifier`: which model judges a command only the mode would ask about (T52), kept in
@@ -1638,6 +1873,7 @@ impl App {
     /// A step of the run, a question, or the end of something that ran in the background.
     pub fn on_report(&mut self, report: Report) {
         self.handle(report);
+        self.settle_diff();
         if !self.working() {
             self.lent = None;
         }
@@ -1814,6 +2050,7 @@ impl App {
         self.settle_model_pick();
         match report {
             Report::Event(event) => {
+                self.editor_follows(&event);
                 if let Event::Usage {
                     input_tokens,
                     cached_input_tokens,
@@ -1956,6 +2193,7 @@ impl App {
                         Tone::Heed,
                     );
                 }
+                let request_for_diff = request.clone();
                 self.ask = Some(OpenAsk {
                     request,
                     reply,
@@ -1966,8 +2204,47 @@ impl App {
                     window: 0,
                 });
                 self.scroll = 0;
+                self.diff_of(&request_for_diff);
             }
+            // T64c: the owner answered in the editor — only the question still open, by the diff it showed.
+            Report::EditorDiff(id, outcome) => {
+                let Some(diff) = self.diff.take_if(|diff| diff.id == id) else {
+                    return;
+                };
+                // Only the question the diff was opened for; an accept sooner than a person reads is no person's.
+                let same = self.ask.as_ref().is_some_and(|open| {
+                    open.request.tool == diff.tool && open.request.target == diff.target
+                });
+                let answer = match outcome {
+                    crate::ide::Outcome::Accepted if diff.opened.elapsed() < ASK_SETTLE => {
+                        Some(Answer::Deny)
+                    }
+                    crate::ide::Outcome::Accepted => Some(Answer::Allow),
+                    crate::ide::Outcome::Rejected => Some(Answer::Deny),
+                    crate::ide::Outcome::Closed => None,
+                };
+                if same
+                    && let Some(answer) = answer
+                    && let Some(open) = self.ask.take()
+                {
+                    let _ = open.reply.send(answer);
+                }
+            }
+            // T64c: what went along from the owner's editor, quiet under their message.
+            Report::Editor(said) => self.transcript.note(said, Tone::Quiet),
+            Report::Ide(Ok(_)) if !self.ide_wanted => {}
+            Report::Ide(Ok(bridge)) => {
+                let name = crate::transcript::clean(&bridge.found.ide).to_string();
+                self.parts.tools.editor().set(Some(
+                    Arc::clone(&bridge) as Arc<dyn glut::editor::EditorFiles>
+                ));
+                self.ide = Some(bridge);
+                self.say(tr!(ide_connected, ide = name));
+            }
+            Report::Ide(Err(reason)) => self.transcript.note(reason, Tone::Fault),
             Report::Done(outcome, conversation) => {
+                // A change of this turn that never ran is no change to show in a later one (T64c).
+                self.changes.clear();
                 // The images the turn's tools showed, under their calls (T46).
                 for message in &conversation {
                     if let Some(call) = &message.tool_call_id
@@ -2376,6 +2653,7 @@ impl App {
             TermEvent::Key(key) if key.kind != KeyEventKind::Release => {
                 self.on_key(key);
                 self.settle_model_pick();
+                self.settle_diff();
                 self.refresh_paths();
                 // The `/` list Esc closed comes back once the text it closed over changed.
                 if self
@@ -3768,6 +4046,7 @@ impl App {
             "notify" => self.notify_command(rest),
             "secrets" => self.secrets_command(rest),
             "classifier" => self.classifier_command(rest),
+            "ide" => self.ide_command(rest),
             "folder" => self.folder_command(rest),
             "export" => self.export_command(rest),
             "links" => match crate::links::Links::parse(rest) {
@@ -5790,6 +6069,12 @@ impl App {
                         self.input.insert_text(&format!("/send {address} "));
                     }
                     Some(Pick::Login(id)) => self.login(id),
+                    Some(Pick::Ide(port)) => {
+                        let fitting = crate::ide::fitting(&self.parts.home, &self.parts.config.cwd);
+                        if let Some(found) = fitting.into_iter().find(|found| found.port == port) {
+                            self.ide_connect(found);
+                        }
+                    }
                     Some(Pick::Logout(id)) => {
                         crate::login::sign_out(&self.parts, id, self.reports.clone())
                     }

@@ -130,6 +130,13 @@ scripts/install.sh               # glut for every terminal: ~/.cargo/bin, linked
   (`acp/commands.rs`) run only from a lone text block of the editor's prompt — never from an attachment, a tool result
   or the model — and share their logic with the TUI through `said.rs`: change a command there, not twice. Glut speaks
   each editor's protocol version whole (v1 or, once built, v2), never a mix; what v1 alone has is marked `v1 only`.
+- **An editor plugin tells, Glut decides** (T64c, `crates/glut-tui/src/ide.rs`, `docs/editor-protocol.md`,
+  `glut.nvim`): the plugin listens on loopback behind a token in `~/.glut/ide/<port>.json`; Glut sends the token only
+  after `lsof` shows the file's own process listening, and never through a proxy. What the editor says goes into the
+  owner's message only for a file in the run's folders no read rule or read-deny path holds back (judged on the real
+  path), masked, quoted (T89) and framed as data — and never into a `/loop` round. A diff in the editor answers only
+  the one question it was opened for (one exact call, never sooner than 400 ms), read through the folder's guard;
+  an answer about a file the editor did not echo is no answer. Keep every new editor path behind these checks.
 - **The TUI never lets a key answer a question it did not show** (`crates/glut-tui/src/app.rs` `on_ask_key`): plain
   keys only, no repeat, nothing in the first 400 ms; a turn that ends drops its open card; an ask shows the head and
   the tail of a long target. Model and tool text goes through `transcript::wrap`/`clean` (control characters as

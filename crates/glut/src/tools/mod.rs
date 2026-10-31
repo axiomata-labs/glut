@@ -3,6 +3,7 @@
 //! A tool answers with text either way: what it found, or what went wrong. An error is not the end of the run —
 //! it goes back to the model, which can correct its call (a wrong path, an ambiguous edit).
 
+pub mod editor;
 pub mod files;
 pub mod glut_files;
 pub mod memory;
@@ -121,6 +122,11 @@ pub trait Tool: Send + Sync {
     /// at all (glut-round CP4): by default a call without arguments — its kind of access, with no path or host.
     fn offered_as(&self) -> Access {
         self.access(&Value::Object(Default::default()))
+    }
+    /// Whether the tool is shown to the model now: one that needs something not always there (an editor, T64c) says
+    /// no while it is missing.
+    fn offered_now(&self) -> bool {
+        true
     }
     /// Whether a call with these arguments may run again after the run was interrupted while it ran (durable runs,
     /// `docs/plans/durable.md` D4): by default only what reads — a file below the folder, a page on the web.
@@ -246,9 +252,11 @@ impl Toolbox {
     }
 
     fn offers(&self, tool: &dyn Tool) -> bool {
-        self.gate
-            .as_ref()
-            .is_none_or(|gate| gate.offers(&tool.spec().name, &tool.offered_as()))
+        tool.offered_now()
+            && self
+                .gate
+                .as_ref()
+                .is_none_or(|gate| gate.offers(&tool.spec().name, &tool.offered_as()))
     }
 
     /// What a call of `name` with these arguments would touch, when the tool exists and the arguments are an object —
