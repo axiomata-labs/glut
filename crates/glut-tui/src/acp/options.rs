@@ -159,6 +159,33 @@ fn effort_option(home: &Path, engine: &Engine) -> Option<Value> {
     }))
 }
 
+/// The values of picker `id` in its order, each with what the owner reads: a list `/model` and `/effort` number for
+/// an editor that shows no pickers (JetBrains shows them only for its own agent).
+pub async fn values(live: &Live, id: &str) -> Vec<(String, String)> {
+    let options = list(live).await;
+    let Some(option) = options
+        .as_array()
+        .and_then(|options| options.iter().find(|option| option["id"] == id))
+    else {
+        return Vec::new();
+    };
+    let entries = option["options"].as_array().cloned().unwrap_or_default();
+    entries
+        .iter()
+        .flat_map(
+            |entry| match entry.get("options").and_then(Value::as_array) {
+                Some(grouped) => grouped.clone(),
+                None => vec![entry.clone()],
+            },
+        )
+        .filter_map(|entry| {
+            let value = entry["value"].as_str()?.to_owned();
+            let name = entry["name"].as_str().unwrap_or(&value).to_owned();
+            Some((value, name))
+        })
+        .collect()
+}
+
 /// Whether `value` is one of the picker's own: an editor may only pick what it was offered.
 fn offered(options: &Value, id: &str, value: &str) -> bool {
     let Some(option) = options

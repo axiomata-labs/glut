@@ -194,16 +194,31 @@ async fn model(peer: &Peer, live: &Live, rest: &str) -> Ran {
             .unwrap_or_else(|poison| poison.into_inner());
         (engine.provider.clone(), engine.endpoint.effort)
     };
+    // Alone the list to pick from by number; a number picks: no editor needs to know a model's name.
+    let listed = options::values(live, options::MODEL).await;
     if rest.is_empty() {
-        let model = live
+        let now = live
             .engine
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
             .model_name()
             .to_owned();
-        return Ran::Said(vec![
-            tr!(model_now, provider = provider, model = model).to_string(),
-        ]);
+        let current = options::model_value(&provider, &now);
+        return Ran::Said(vec![numbered(&listed, &current, "/model <n>")]);
+    }
+    let picked = rest
+        .parse::<usize>()
+        .ok()
+        .and_then(|n| n.checked_sub(1))
+        .and_then(|at| listed.get(at));
+    if let Some((value, _)) = picked {
+        let (provider, model) = value.split_once(' ').unwrap_or((value.as_str(), ""));
+        return switched(
+            peer,
+            live,
+            options::switch(live, provider, model, Some(effort)).await,
+        )
+        .await;
     }
     let known = |id: &str| {
         glut::providers::Providers::load(&live.parts.home)
@@ -234,20 +249,18 @@ async fn effort(peer: &Peer, live: &Live, rest: &str) -> Ran {
             engine.endpoint.effort,
         )
     };
+    let listed = options::values(live, options::EFFORT).await;
+    let picked = rest
+        .parse::<usize>()
+        .ok()
+        .and_then(|n| n.checked_sub(1))
+        .and_then(|at| listed.get(at))
+        .map(|(value, _)| value.clone());
+    let rest = picked.as_deref().unwrap_or(rest);
     let effort = match rest {
         "" => {
-            let level = now.map_or_else(
-                || tr!(effort_default).to_owned(),
-                |effort| effort.to_string(),
-            );
-            return Ran::Said(vec![
-                tr!(
-                    model_now,
-                    provider = provider,
-                    model = format!("{model} · {level}")
-                )
-                .to_string(),
-            ]);
+            let current = now.map_or("default", glut::Effort::as_str);
+            return Ran::Said(vec![numbered(&listed, current, "/effort <n>")]);
         }
         "default" => None,
         level => match glut::Effort::parse_or_explain(level) {
@@ -261,6 +274,25 @@ async fn effort(peer: &Peer, live: &Live, rest: &str) -> Ran {
         options::switch(live, &provider, &model, Some(effort)).await,
     )
     .await
+}
+
+/// A picker's values as a numbered list, the one in use marked, with how to pick.
+fn numbered(listed: &[(String, String)], current: &str, how: &str) -> String {
+    let mut lines: Vec<String> = listed
+        .iter()
+        .enumerate()
+        .map(|(at, (value, name))| {
+            let mark = if value == current { "●" } else { " " };
+            // A model is shown with its provider: the same id may come from two.
+            let shown = match value.split_once(' ') {
+                Some((provider, _)) if value != name => format!("{name} ({provider})"),
+                _ => name.clone(),
+            };
+            format!("{mark} {}. {shown}", at + 1)
+        })
+        .collect();
+    lines.push(how.to_owned());
+    lines.join("\n")
 }
 
 /// A switch's notes, and the editor's pickers told the new values.
