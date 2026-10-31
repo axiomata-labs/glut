@@ -43,6 +43,7 @@ pub async fn first_provider(home: &Path) -> Result<bool, String> {
         key_env: None,
         key: None,
         windows: Default::default(),
+        routing: Default::default(),
     };
     let store = list.store(home).map_err(|err| err.to_string())?;
     let account = providers::account(known.id, &entry);

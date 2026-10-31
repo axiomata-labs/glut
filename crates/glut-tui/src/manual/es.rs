@@ -1,7 +1,7 @@
 //! The commands' manual pages in Spanish (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 64] = [
+pub const PAGES: [(&str, &str); 65] = [
     (
         "clear",
         "Empieza una sesión nueva y vacía en esta carpeta.\n\
@@ -180,6 +180,27 @@ pub const PAGES: [(&str, &str); 64] = [
          \n\
          Más esfuerzo suele significar mejores respuestas en trabajo difícil, más lentas y de mayor coste. No todos \
          los modelos conocen todos los niveles. El contador (⌃N) muestra el nivel en uso.",
+    ),
+    (
+        "route",
+        "Qué hosts sirven el modelo en OpenRouter (otros sirven cada modelo desde un solo host).\n\
+         \n\
+         /route — el orden que Glut envía ahora, cada host con su motivo, precio y velocidad\n\
+         /route prefer <hosts> — estos primero, en este orden (xiaomi deepinfra)\n\
+         /route avoid <hosts> — estos nunca\n\
+         /route quant <levels> — solo estas cuantizaciones (fp8 bf16)\n\
+         /route strict on|off — solo los hosts preferidos, ningún otro de respaldo\n\
+         /route off — las fijaciones de este modelo se van\n\
+         /route rule on|off — la regla para todos los modelos\n\
+         /route rule margin|uptime|speed|wait <n> — sus números\n\
+         \n\
+         OpenRouter sirve un modelo desde muchos hosts, con cuantizaciones, precios y velocidades distintos. Glut lee \
+         los hosts de un modelo una vez al día y los ordena según su regla: precisión completa (bf16, fp16) antes que \
+         fp8 salvo que cueste más de un 40 % más, un host que no indica cuantización entre fp8 y fp4 — el del \
+         fabricante del modelo como completo —, fp4 solo si nadie más lo sirve; un host con menos de 95 % de \
+         disponibilidad, menos de 30 tokens por segundo o más de 10 segundos hasta el primer token va al final. El \
+         orden va con cada petición con respaldo permitido, así que ninguna petición falla por la regla. Las \
+         fijaciones de un modelo van antes que la regla. Todo se guarda en `~/.glut/providers.json`.",
     ),
     (
         "context",

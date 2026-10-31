@@ -102,7 +102,7 @@ const fn command(
 }
 
 /// Every command, grouped by topic in [`Topic::ALL`]'s order, the most used first inside a topic.
-pub const COMMANDS: [Command; 64] = [
+pub const COMMANDS: [Command; 65] = [
     command(Topic::Session, "clear", "", "start a new session"),
     command(
         Topic::Session,
@@ -181,6 +181,14 @@ pub const COMMANDS: [Command; 64] = [
         "effort",
         "[level]",
         "how hard the model thinks, or /effort <level>",
+    ),
+    command(
+        Topic::Model,
+        "route",
+        "[prefer|avoid|quant|strict|off|rule]",
+        "which hosts serve the model on OpenRouter: the order Glut sends by its rule (full precision unless 40 % \
+         dearer than fp8, fp4 last, slow or unreliable hosts to the end) and this model's pins — prefer|avoid <hosts>, \
+         quant <levels>, strict on|off, off; rule on|off, rule margin|uptime|speed|wait <n>",
     ),
     command(
         Topic::Model,
@@ -1259,6 +1267,7 @@ mod tests {
                 "allow",
                 "as",
                 "asks",
+                "avoid",
                 "blocks",
                 "budget",
                 "calm",
@@ -1290,13 +1299,17 @@ mod tests {
                 "plain",
                 "plan",
                 "powerline",
+                "prefer",
+                "quant",
                 "read",
                 "remove",
                 "resume",
                 "rounds",
+                "rule",
                 "run",
                 "session",
                 "stop",
+                "strict",
                 "system",
                 "tiles",
                 "tokens",

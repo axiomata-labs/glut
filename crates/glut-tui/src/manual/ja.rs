@@ -1,7 +1,7 @@
 //! The commands' manual pages in Japanese (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 64] = [
+pub const PAGES: [(&str, &str); 65] = [
     (
         "clear",
         "このフォルダーで、空の新しいセッションを始めます。\n\
@@ -153,6 +153,26 @@ pub const PAGES: [(&str, &str); 64] = [
          /effort default — プロバイダーが決めます\n\
          \n\
          難しい作業では、通常は労力が大きいほど答えが良くなりますが、遅くなりコストも上がります。すべてのモデルがすべてのレベルに対応するわけではありません。使用中のレベルはメーター（⌃N）に表示されます。",
+    ),
+    (
+        "route",
+        "OpenRouter でモデルを提供するホスト（他のプロバイダーは各モデルを一つのホストで提供します）。\n\
+         \n\
+         /route — Glut がいま送る順序。各ホストに理由・価格・速度\n\
+         /route prefer <hosts> — これらを先に、この順で（xiaomi deepinfra）\n\
+         /route avoid <hosts> — これらは使わない\n\
+         /route quant <levels> — これらの量子化だけ（fp8 bf16）\n\
+         /route strict on|off — 優先ホストだけ。ほかを予備にしない\n\
+         /route off — このモデルの固定を外す\n\
+         /route rule on|off — すべてのモデルのルール\n\
+         /route rule margin|uptime|speed|wait <n> — ルールの数値\n\
+         \n\
+         OpenRouter は一つのモデルを多くのホストで、量子化・価格・速度を変えて提供します。Glut \
+         はモデルのホストを一日一回読み、ルールで並べます：フル精度（bf16、fp16）を fp8 より先に、ただし 40 % \
+         以上高ければ fp8。量子化を明かさないホストは fp8 と fp4 の間（モデル製作者自身のホストはフル扱い）、fp4 \
+         はほかに提供者がいないときだけ。稼働率 95 % 未満、毎秒 30 トークン未満、最初の Token まで 10 \
+         秒超のホストは最後へ。順序は予備を許して毎回のリクエストに付くので、ルールのせいで失敗することはありません。\
+         モデルの固定はルールより優先されます。すべて `~/.glut/providers.json` に保存されます。",
     ),
     (
         "context",

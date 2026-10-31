@@ -662,6 +662,8 @@ pub async fn engine(
     let prices = prices.filter(|_| plan.is_none());
     let model =
         Model::signed(endpoint.clone(), protocol, credential).map_err(|err| err.to_string())?;
+    // T90: which hosts OpenRouter may serve the model from, by the owner's rule and the model's pins.
+    model.set_routing(providers::routing::for_endpoint(&parts.home, &resolved.id, &endpoint).await);
     Ok((
         Engine {
             provider: resolved.id,
@@ -1662,6 +1664,7 @@ mod tests {
             key_env: None,
             key: None,
             windows: Default::default(),
+            routing: Default::default(),
         };
         let mut list = Providers::default();
         list.providers.insert("test".into(), entry("old/model"));

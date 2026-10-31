@@ -13,13 +13,14 @@ use super::{Live, Peer, options};
 use crate::session::{self, Report};
 
 /// The commands an editor offers, in the TUI's order.
-pub const OFFERED: [&str; 18] = [
+pub const OFFERED: [&str; 19] = [
     "compact",
     "handoff",
     "export",
     "folder",
     "model",
     "effort",
+    "route",
     "context",
     "steps",
     "diff",
@@ -110,6 +111,7 @@ pub async fn run(
             said(crate::said::context(parts, &mut engine, used, rest))
         }
         "gate" => Ran::Said(vec![gate(live)]),
+        "route" => route(live, rest).await,
         "model" => model(peer, live, rest).await,
         "effort" => effort(peer, live, rest).await,
         "compact" => compact(peer, live, cancel).await,
@@ -301,6 +303,30 @@ async fn switched(peer: &Peer, live: &Live, notes: Result<Vec<String>, String>) 
         Ok(notes) => {
             super::options_changed(peer, live).await;
             Ran::Said(notes)
+        }
+        Err(reason) => Ran::Said(vec![format!("⚠ {reason}")]),
+    }
+}
+
+/// `/route` (T90): which hosts serve the model on OpenRouter; a change sets the model's routing anew.
+async fn route(live: &Live, rest: &str) -> Ran {
+    let engine = live
+        .engine
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .clone();
+    match crate::said::route(&live.parts.home, &engine.provider, &engine.endpoint, rest) {
+        Ok((said, changed)) => {
+            if changed {
+                let routing = glut::providers::routing::for_endpoint(
+                    &live.parts.home,
+                    &engine.provider,
+                    &engine.endpoint,
+                )
+                .await;
+                engine.model.set_routing(routing);
+            }
+            Ran::Said(vec![said])
         }
         Err(reason) => Ran::Said(vec![format!("⚠ {reason}")]),
     }

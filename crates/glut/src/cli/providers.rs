@@ -322,6 +322,12 @@ fn add(home: &Path, added: Added) -> Result<(), String> {
             .get(&id)
             .map(|old| old.windows.clone())
             .unwrap_or_default(),
+        // And the hosts the owner chose for them (T90).
+        routing: providers
+            .providers
+            .get(&id)
+            .map(|old| old.routing.clone())
+            .unwrap_or_default(),
     };
     // The same checks a load makes, before anything is asked or stored.
     entry.check()?;
@@ -764,6 +770,7 @@ mod tests {
             key_env: None,
             key: None,
             windows: std::collections::BTreeMap::new(),
+            routing: Default::default(),
         }
     }
 

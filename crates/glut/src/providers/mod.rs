@@ -5,6 +5,7 @@
 pub mod catalog;
 pub mod models;
 pub mod openrouter;
+pub mod routing;
 pub mod secrets;
 
 use std::collections::BTreeMap;
@@ -70,6 +71,9 @@ pub struct Entry {
     /// with these, over `contextWindow` in `settings.json` and over the provider's list.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub windows: BTreeMap<String, u32>,
+    /// Which hosts serve its models (T90, `/route`): OpenRouter's alone; the owner's rule and a model's pins.
+    #[serde(default, skip_serializing_if = "routing::Routing::is_default")]
+    pub routing: routing::Routing,
 }
 
 impl Providers {
@@ -293,7 +297,7 @@ impl Entry {
         {
             return Err(format!("keyEnv {name:?} is no environment variable's name"));
         }
-        Ok(())
+        self.routing.check()
     }
 
     /// The API's root.
@@ -684,6 +688,7 @@ pub fn signing(home: &Path, id: &str) -> Result<String, String> {
             key_env: None,
             key: None,
             windows: BTreeMap::default(),
+            routing: Default::default(),
         };
         let first = providers.providers.is_empty();
         providers.providers.insert(id.to_owned(), entry);
@@ -768,6 +773,7 @@ pub fn keep_signed_key(home: &Path, id: &str, key: &str) -> Result<(String, bool
                 key_env: None,
                 key: None,
                 windows: BTreeMap::default(),
+                routing: Default::default(),
             },
         );
         if first || providers.default.is_none() {
@@ -921,6 +927,7 @@ mod tests {
             key_env: None,
             key: None,
             windows: BTreeMap::new(),
+            routing: Default::default(),
         }
     }
 

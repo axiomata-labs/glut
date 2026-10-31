@@ -911,10 +911,18 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
     })));
     // The model is built after the command and the skill: either may name its own (C2, K5).
     let credential = provider.as_ref().and_then(|from| from.credential.clone());
+    let routing = match (&provider, crate::permissions::settings::home_dir()) {
+        (Some(from), Ok(home)) => {
+            crate::providers::routing::for_endpoint(&home, &from.id, &endpoint).await
+        }
+        _ => None,
+    };
     let model = match Model::signed(endpoint, protocol, credential) {
         Ok(model) => model,
         Err(err) => return fail(err.to_string()),
     };
+    // T90: which hosts OpenRouter may serve the model from.
+    model.set_routing(routing);
     // MCP servers (HS5, M1–M3). `glut` has no terminal, so a project's server nobody approved is left out and said
     // so on stderr rather than asked about (M2).
     // A named file stands for the two places; whoever names it stands for what it starts.

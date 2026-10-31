@@ -1250,6 +1250,32 @@ impl App {
         }
     }
 
+    /// `/route` (T90): which hosts serve the model on OpenRouter; a change sets the model's routing anew.
+    fn route_command(&mut self, rest: &str) {
+        let said = crate::said::route(
+            &self.parts.home,
+            &self.engine.provider,
+            &self.engine.endpoint,
+            rest,
+        );
+        match said {
+            Ok((said, changed)) => {
+                // From the hosts read when the model was made: the next message already goes by the new pins.
+                if changed {
+                    self.engine
+                        .model
+                        .set_routing(glut::providers::routing::kept_for_endpoint(
+                            &self.parts.home,
+                            &self.engine.provider,
+                            &self.engine.endpoint,
+                        ));
+                }
+                self.tell(said);
+            }
+            Err(reason) => self.transcript.note(reason, Tone::Fault),
+        }
+    }
+
     /// T64c: the owner's editor as the window starts — the one that started Glut, else the one whose folder holds
     /// Glut's; several are asked about once, none is nothing to say.
     pub fn ide_start(&mut self) {
@@ -3873,6 +3899,7 @@ impl App {
                 },
             },
             "context" => self.context(rest),
+            "route" => self.route_command(rest),
             "compact" if self.refused_spend() => {}
             "compact" => {
                 // One summary at a time: what typing began goes (T63).

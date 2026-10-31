@@ -850,6 +850,14 @@ glut::catalog! {
         /// What the owner's editor said with a message (T64c).
         editor_selected: &'static str,
         editor_active: &'static str,
+        /// `/route` (T90).
+        route_not_here: &'static str,
+        route_rule_now: &'static str,
+        route_pins: &'static str,
+        route_head: &'static str,
+        route_none_read: &'static str,
+        route_set: &'static str,
+        route_usage: &'static str,
         /// Providers whose model list is not kept yet: `{providers}`.
         models_missing: &'static str,
         /// A project with no session yet.

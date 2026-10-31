@@ -487,6 +487,9 @@ fn window_in_list(list: &Value, model: &str) -> Option<u32> {
 #[derive(Debug, Clone)]
 pub struct OpenAiCompat {
     endpoint: ModelEndpoint,
+    /// The hosts OpenRouter may serve it from (T90): the `provider` object every request carries; `None`: OpenRouter
+    /// chooses alone.
+    routing: std::sync::Arc<std::sync::Mutex<Option<Value>>>,
     client: reqwest::Client,
     /// [`STALL_LIMIT`]; shorter in the tests.
     stall: Duration,
@@ -514,6 +517,7 @@ impl OpenAiCompat {
             .map_err(|err| HarnessError::Transport(err.to_string()))?;
         Ok(OpenAiCompat {
             endpoint,
+            routing: Default::default(),
             client,
             stall: STALL_LIMIT,
         })
@@ -555,6 +559,14 @@ impl OpenAiCompat {
         }
         if let Some(effort) = self.endpoint.effort {
             put_effort(&mut body, &self.endpoint.base_url, effort);
+        }
+        if let Some(routing) = self
+            .routing
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone()
+        {
+            body["provider"] = routing;
         }
         body
     }
@@ -655,6 +667,29 @@ pub enum Model {
 }
 
 impl Model {
+    /// Which hosts OpenRouter may serve this model from (T90): the `provider` object every request carries from now
+    /// on; other providers have no hosts to choose, so it changes nothing there.
+    pub fn set_routing(&self, routing: Option<Value>) {
+        if let Model::OpenAi(model) = self {
+            *model
+                .routing
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner()) = routing;
+        }
+    }
+
+    /// The `provider` object requests carry now, if any.
+    pub fn routing(&self) -> Option<Value> {
+        match self {
+            Model::OpenAi(model) => model
+                .routing
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .clone(),
+            _ => None,
+        }
+    }
+
     /// Asks Anthropic to keep this model's cache for an hour instead of five minutes (TUI T36e, `/cache 1h`); other
     /// providers set their own lifetime, so it changes nothing there.
     pub fn set_cache_hour(&self, hour: bool) {
