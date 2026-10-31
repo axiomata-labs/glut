@@ -170,6 +170,8 @@ pub async fn serve(setup: bool) -> ExitCode {
                     }
                     if let Some(live) = opened {
                         commands(&peer, &live).await;
+                        // The pickers again as an update: an editor may read them only so (JetBrains does).
+                        options_changed(&peer, &live).await;
                         titled(&peer, &live, false).await;
                         take_folders(&peer, &live).await;
                     }
@@ -789,12 +791,27 @@ fn beside(live: &Live, params: &Value) {
 /// The editor's other folders, asked about through its dialog and taken as `/folder add` takes one (T60c: the
 /// owner's word — a workspace file of a cloned project can name folders too, so the owner sees them first).
 async fn take_folders(peer: &Peer, live: &Live) {
-    let offered = std::mem::take(
+    let named = std::mem::take(
         &mut *live
             .offered_folders
             .lock()
             .unwrap_or_else(|poison| poison.into_inner()),
     );
+    // Only what `/folder add` would take is asked about: an editor may name a folder of its own (JetBrains names a
+    // cache under ~/Library), which is no question for the owner.
+    let deny = live
+        .parts
+        .config
+        .sandbox
+        .as_ref()
+        .map(|sandbox| sandbox.deny_read.clone())
+        .unwrap_or_default();
+    let offered: Vec<String> = named
+        .into_iter()
+        .filter(|path| {
+            glut::folders::check(path, &live.parts.config.cwd, &live.parts.home, &deny).is_ok()
+        })
+        .collect();
     if offered.is_empty() {
         return;
     }
