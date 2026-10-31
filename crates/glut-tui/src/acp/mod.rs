@@ -1111,6 +1111,7 @@ async fn open(
     // The editor is no terminal: no `!cmd`, no switching projects.
     launch.owner_shell = false;
     launch.projects = false;
+    launch.screen = crate::host::Screen::Editor;
     let (reports, inbox) = mpsc::unbounded_channel();
     let (parts, engine) = session::build(launch, Arc::new(EditorHost), reports.clone())
         .await
@@ -1399,6 +1400,9 @@ async fn run_prompt(
         cancel.cancel();
     }
     live.streamed.store(false, Ordering::SeqCst);
+    // The session's event log, as the TUI writes it (`glut watch`, and what was asked and allowed afterwards).
+    live.parts.log.follow(&live.id);
+    live.parts.log.owner(&text);
     let (before, engine) = {
         let mut kept = live
             .kept

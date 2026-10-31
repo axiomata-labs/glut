@@ -64,6 +64,18 @@ pub struct Launch {
     /// The language the host shows its own app in (T48): Glut's owner's `/language` wins over it, and it over the
     /// system's. `None` for Glut on its own.
     pub language: Option<glut::lang::Lang>,
+    /// Where the owner sees the session: what the model is told of it (T64b: in an editor it sees no tab).
+    pub screen: Screen,
+}
+
+/// Where the owner sees a session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Screen {
+    /// Glut's own terminal, or a host's pane of it.
+    #[default]
+    Terminal,
+    /// An editor's agent panel (`glut acp`).
+    Editor,
 }
 
 impl Launch {
@@ -92,6 +104,7 @@ impl Launch {
             log: Log::Sessions,
             projects: true,
             language: None,
+            screen: Screen::Terminal,
         }
     }
 }

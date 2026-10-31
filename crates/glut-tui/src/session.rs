@@ -357,6 +357,10 @@ pub async fn build(
     let mut memory = None;
     let mut guide_chars = 0;
     let mut guide_paths = Vec::new();
+    let note = match launch.screen {
+        crate::host::Screen::Terminal => SESSION_NOTE,
+        crate::host::Screen::Editor => EDITOR_NOTE,
+    };
     config.instructions = Some(match launch.instructions {
         Instructions::Guides => {
             // T24: the owner's and the project's guides, read by Glut itself.
@@ -388,11 +392,11 @@ pub async fn build(
                 notes.push(tr!(guides_read, guides = read.join(", ")));
             }
             match glut::guide::instructions(&guides, &home) {
-                Some(guides) => format!("{SESSION_NOTE}\n\n{map}\n\n{guides}"),
-                None => format!("{SESSION_NOTE}\n\n{map}"),
+                Some(guides) => format!("{note}\n\n{map}\n\n{guides}"),
+                None => format!("{note}\n\n{map}"),
             }
         }
-        Instructions::Given(text) => format!("{SESSION_NOTE}\n\n{text}"),
+        Instructions::Given(text) => format!("{note}\n\n{text}"),
     });
     if let Some(dirs) = launch.skill_dirs {
         config.skill_dirs = dirs;
@@ -1103,6 +1107,17 @@ const SESSION_NOTE: &str = "You run in Glut's terminal session. Handoffs between
     conversation (and moves the file aside, so it is read once). They are kept in ~/.glut/handoffs, Glut's own \
     folder, which is not yours to read. If the owner asks about a handoff and none is in this conversation, do not \
     search for it: tell them to load it with /handoff read.";
+
+/// What an editor's session's model is told about where it runs (T64b): it sees no tab, cursor or selection — the
+/// owner's after "what is in this tab?" (2026-10-31): asked so, a model searched other programs' state instead.
+const EDITOR_NOTE: &str = "You run as the agent of the owner's code editor (Zed, a JetBrains IDE, Neovim, Emacs), \
+    connected over the Agent Client Protocol. You cannot see which file or tab is open in it, nor the cursor or a \
+    selection: what the owner shows you comes in their message — a file they @-mention arrives as its path or as an \
+    <attached> block, a selection as an attached block. Asked about \"the open file\", \"this tab\" or \"the \
+    selection\" with nothing attached, ask the owner to @-mention it; never search the disk, the editor's settings or \
+    another program's state for it. read_file shows a file as the editor holds it, unsaved changes too; a file whose \
+    tab holds unsaved changes cannot be changed until the owner saved it. Handoffs between sessions are the owner's \
+    commands (/handoff write, /handoff read), kept where no tool reaches.";
 
 /// What the model is asked for a handoff (T33).
 const HANDOFF_PROMPT: &str = "Write a handoff for the next session that works in this folder, from this conversation \
