@@ -741,6 +741,8 @@ pub const TEXTS: Texts = Texts {
     acp_folders_title: "编辑器还打开了其他文件夹——在本次会话中把它们加在工作文件夹旁边？{folders}",
     acp_folders_yes: "是，本次会话",
     acp_folders_no: "否，只用工作文件夹",
+    acp_setup_name: "设置 Glut",
+    acp_setup_detail: "在 Glut 自己的终端中选择提供方及其模型",
     models_missing: "尚无列表：{providers} — glut models refresh",
     no_session_yet: "还没有会话",
     this_one: "当前",
@@ -1423,6 +1425,10 @@ pub const TEXTS: Texts = Texts {
         (
             "Serve an editor over the Agent Client Protocol on stdin and stdout (Zed, JetBrains, Neovim, Emacs): the owner's own Glut session in the folder the editor names, its gate asking through the editor",
             "通过 stdin 和 stdout 上的 Agent Client Protocol 为编辑器提供服务（Zed、JetBrains、Neovim、Emacs）：在编辑器指定的文件夹中运行所有者自己的 Glut 会话，其 gate 通过编辑器询问",
+        ),
+        (
+            "Set a provider up in this terminal as Glut's first start does, then end — what an editor runs to sign in",
+            "像 Glut 首次启动那样在此终端中设置提供方，然后结束——编辑器为登录而运行它",
         ),
         (
             "Never compact the conversation automatically (`\"compact\": {\"auto\": false}` in ~/.glut/settings.json)",

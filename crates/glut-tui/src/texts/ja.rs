@@ -814,6 +814,8 @@ pub const TEXTS: Texts = Texts {
     acp_folders_title: "エディターで他のフォルダーも開いています。このセッションで作業フォルダーの横に加えますか？ {folders}",
     acp_folders_yes: "はい、このセッションで",
     acp_folders_no: "いいえ、作業フォルダーだけ",
+    acp_setup_name: "Glut を設定",
+    acp_setup_detail: "Glut のターミナルでプロバイダーとモデルを選ぶ",
     models_missing: "一覧なし: {providers} — glut models refresh",
     no_session_yet: "まだセッションなし",
     this_one: "現在",
@@ -1515,6 +1517,10 @@ pub const TEXTS: Texts = Texts {
         (
             "Serve an editor over the Agent Client Protocol on stdin and stdout (Zed, JetBrains, Neovim, Emacs): the owner's own Glut session in the folder the editor names, its gate asking through the editor",
             "stdin と stdout で Agent Client Protocol を通じてエディタに応答（Zed、JetBrains、Neovim、Emacs）: エディタが指定するフォルダでのオーナー自身の Glut セッション、その gate はエディタ経由で確認",
+        ),
+        (
+            "Set a provider up in this terminal as Glut's first start does, then end — what an editor runs to sign in",
+            "Glut の初回起動と同じようにこのターミナルでプロバイダーを設定して終了します。エディターがサインインのために実行します",
         ),
         (
             "Never compact the conversation automatically (`\"compact\": {\"auto\": false}` in ~/.glut/settings.json)",

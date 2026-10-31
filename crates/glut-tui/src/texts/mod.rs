@@ -844,6 +844,9 @@ glut::catalog! {
         acp_folders_title: &'static str,
         acp_folders_yes: &'static str,
         acp_folders_no: &'static str,
+        /// Setting a provider up from an editor, in a terminal it opens (T64b).
+        acp_setup_name: &'static str,
+        acp_setup_detail: &'static str,
         /// Providers whose model list is not kept yet: `{providers}`.
         models_missing: &'static str,
         /// A project with no session yet.

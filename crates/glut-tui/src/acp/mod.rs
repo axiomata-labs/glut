@@ -19,6 +19,7 @@
 //! where the editor said it reads them, as Glut's lines in the chat otherwise.
 
 mod commands;
+mod forms;
 mod options;
 mod sessions;
 
@@ -62,6 +63,8 @@ const MOST_FOLDERS: usize = 8;
 const INVALID_PARAMS: i64 = -32602;
 const METHOD_NOT_FOUND: i64 = -32601;
 const INTERNAL_ERROR: i64 = -32603;
+/// ACP's own: the agent wants a sign-in first.
+const AUTH_REQUIRED: i64 = -32000;
 
 /// The modes the editor may pick, as Glut names them, with what each lets through.
 pub(super) const MODES: [(Mode, &str, &str); 4] = [
@@ -79,8 +82,22 @@ pub(super) const MODES: [(Mode, &str, &str); 4] = [
     ),
 ];
 
-/// Serves the editor on stdin and stdout until it closes stdin.
-pub async fn serve() -> ExitCode {
+/// Serves the editor on stdin and stdout until it closes stdin; with `setup`, sets a provider up instead.
+pub async fn serve(setup: bool) -> ExitCode {
+    // `glut acp --setup`: what the editor runs in a terminal to sign in (ACP's terminal method appends the method's
+    // arguments to the agent's own command) — Glut's first start, then the end.
+    if setup {
+        let Ok(home) = glut::permissions::settings::home_dir() else {
+            return ExitCode::FAILURE;
+        };
+        return match crate::setup::first_provider(&home).await {
+            Ok(_) => ExitCode::SUCCESS,
+            Err(reason) => {
+                eprintln!("glut acp: {reason}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     let peer = Arc::new(Peer::default());
     let sessions: Sessions = Arc::default();
     let mut input = BufReader::new(tokio::io::stdin());
@@ -135,6 +152,11 @@ pub async fn serve() -> ExitCode {
                     live.call_off(&peer);
                 }
             }
+            // `initialize` in order too: what the editor reads is known before any request after it is handled.
+            (Some(method), Some(id)) if method == "initialize" => {
+                let said = handle(&peer, &sessions, &method, params).await;
+                peer.respond(id, said.map(|(result, _)| result)).await;
+            }
             (Some(method), id) => {
                 let (peer, sessions) = (Arc::clone(&peer), Arc::clone(&sessions));
                 // Each on its own: a prompt runs for minutes while the answers to its questions come.
@@ -187,6 +209,11 @@ struct Peer {
 struct Reads {
     notices: bool,
     compaction: bool,
+    /// A server's form, and a page it wants opened (T67).
+    forms: bool,
+    pages: bool,
+    /// A terminal it opens to run Glut's own sign-in.
+    terminal: bool,
 }
 
 impl Peer {
@@ -423,13 +450,25 @@ async fn handle(
                     .and_then(|session| session.get(what))
                     .is_some_and(Value::is_object)
             };
+            let caps = params.get("clientCapabilities");
+            let named = |path: &str| {
+                caps.and_then(|caps| caps.pointer(path))
+                    .is_some_and(Value::is_object)
+            };
             *peer
                 .reads
                 .lock()
                 .unwrap_or_else(|poison| poison.into_inner()) = Reads {
                 notices: names("notices"),
                 compaction: names("compaction"),
+                forms: named("/elicitation/form"),
+                pages: named("/elicitation/url"),
+                terminal: caps
+                    .and_then(|caps| caps.pointer("/auth/terminal"))
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
             };
+            let methods = sign_in_methods(peer.reads());
             plain(json!({
             "protocolVersion": PROTOCOL_VERSION,
             "agentCapabilities": {
@@ -441,12 +480,16 @@ async fn handle(
                 },
             },
             "agentInfo": {"name": "glut", "title": "Glut", "version": env!("CARGO_PKG_VERSION")},
-            "authMethods": [],
+            "authMethods": methods,
             }))
         }
         "authenticate" => plain(json!({})),
         "session/new" => {
             let cwd = folder_of(&params)?;
+            // No provider yet: the editor is told to sign in, with the method `initialize` offered.
+            if !set_up() && peer.reads().terminal {
+                return Err((AUTH_REQUIRED, "Glut has no provider yet: set one up".into()));
+            }
             let live = open(peer, sessions, cwd, None).await?;
             beside(&live, &params);
             Ok((session_result(&live).await, Some(live)))
@@ -649,6 +692,35 @@ impl Drop for Opening {
             .unwrap_or_else(|poison| poison.into_inner())
             .retain(|id| *id != self.0);
     }
+}
+
+/// Whether the owner has a provider set up: none, and a session could not start.
+fn set_up() -> bool {
+    // A file that cannot be read is not "none": the session's start then says what is wrong with it.
+    glut::permissions::settings::home_dir()
+        .ok()
+        .and_then(|home| {
+            glut::providers::Providers::load(&home)
+                .ok()
+                .map(|list| !list.providers.is_empty())
+                .or(Some(true))
+        })
+        .unwrap_or(true)
+}
+
+/// The editor's ways to sign in: Glut's own first start (`glut acp --setup`) in a terminal the editor opens, offered only while no
+/// provider is set up and only to an editor that runs one — no key ever passes through the chat.
+fn sign_in_methods(reads: Reads) -> Value {
+    if !reads.terminal || set_up() {
+        return json!([]);
+    }
+    json!([{
+        "id": "glut-setup",
+        "name": tr!(acp_setup_name),
+        "description": tr!(acp_setup_detail),
+        "type": "terminal",
+        "args": ["--setup"],
+    }])
 }
 
 /// A kept session opened again in the folder it worked in, and the folders the editor names beside it.
@@ -1487,8 +1559,12 @@ async fn carry(peer: Arc<Peer>, live: Arc<Live>, mut inbox: mpsc::UnboundedRecei
                     let _ = reply.send(answer);
                 });
             }
-            Report::Form(_, reply) => {
-                let _ = reply.send(glut::mcp::elicit::Reply::Decline);
+            Report::Form(asked, reply) => {
+                let (peer, live) = (Arc::clone(&peer), Arc::clone(&live));
+                tokio::spawn(async move {
+                    let answer = filled(&peer, &live, asked).await;
+                    let _ = reply.send(answer);
+                });
             }
             Report::PickModel(reply) => {
                 let _ = reply.send(None);
@@ -1501,6 +1577,83 @@ async fn carry(peer: Arc<Peer>, live: Arc<Live>, mut inbox: mpsc::UnboundedRecei
             _ => {}
         }
     }
+}
+
+/// A server's question (T67) through the editor's own form or page, where it said it shows them; declined where it
+/// cannot, as where nobody is there. A form that reads like it asks a secret is declined unshown, and said.
+async fn filled(
+    peer: &Peer,
+    live: &Live,
+    asked: glut::mcp::elicit::Asked,
+) -> glut::mcp::elicit::Reply {
+    use glut::mcp::elicit::{Reply, What};
+    let reads = peer.reads();
+    let server = crate::transcript::clean(&asked.server).to_string();
+    // A subagent's call is named as the TUI's card names it.
+    let asking = match &asked.from {
+        Some(from) => tr!(
+            form_title_from,
+            from = crate::transcript::cut(&crate::transcript::clean(from), 60),
+            server = server
+        )
+        .to_string(),
+        None => server.clone(),
+    };
+    let params = match &asked.what {
+        What::Secret { field } => {
+            let field = crate::transcript::cut(&crate::transcript::clean(field), 60);
+            let said = tr!(form_secret, server = server, field = field).to_string();
+            note(peer, live, &said, crate::transcript::Tone::Heed).await;
+            return Reply::Decline;
+        }
+        What::Form(form) if reads.forms => json!({
+            "sessionId": live.id,
+            "mode": "form",
+            "message": format!("{asking}: {}", forms::one_line(&form.message)),
+            "requestedSchema": forms::request(form),
+        }),
+        What::Page { .. } if reads.pages => {
+            let id = format!(
+                "{}-page-{}",
+                live.id,
+                live.asks.fetch_add(1, Ordering::SeqCst)
+            );
+            let mut params = forms::page_request(&asking, &asked.what, &id).unwrap_or(Value::Null);
+            params["sessionId"] = json!(live.id);
+            params
+        }
+        _ => return Reply::Decline,
+    };
+    let answered = tokio::time::timeout(
+        glut::mcp::elicit::WAIT,
+        peer.request("elicitation/create", params, |id| {
+            live.asking
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .push(id);
+        }),
+    )
+    .await
+    .ok()
+    .flatten();
+    let reply = match &asked.what {
+        What::Form(form) => forms::reply(form, answered.as_ref()),
+        _ => forms::page_reply(answered.as_ref()),
+    };
+    // Said as the TUI says it: a form the editor's answer did not fit is no answer, and the owner learns so.
+    let said = match (&reply, &asked.what) {
+        (Reply::Accept(_), What::Page { url, .. }) => tr!(
+            page_opened,
+            server = server,
+            host = glut::mcp::elicit::host_of(url)
+        )
+        .to_string(),
+        (Reply::Accept(_), _) => tr!(form_sent, server = server).to_string(),
+        (Reply::Decline, _) => tr!(form_declined, server = server).to_string(),
+        (Reply::Cancel, _) => tr!(form_cancelled, server = server).to_string(),
+    };
+    note(peer, live, &said, crate::transcript::Tone::Quiet).await;
+    reply
 }
 
 /// The turn's end, to the prompt that waits for it.

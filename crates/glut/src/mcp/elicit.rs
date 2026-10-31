@@ -220,6 +220,10 @@ pub fn parse(params: &Value) -> Result<What, String> {
             if !matches!(parsed.scheme(), "https" | "http") || parsed.host_str().is_none() {
                 return Err("an address not of the web".into());
             }
+            // `https://known.example@other.example/` reads as the first host and opens the second (T64b's audit).
+            if !parsed.username().is_empty() || parsed.password().is_some() {
+                return Err("an address with a name before its host".into());
+            }
             Ok(What::Page {
                 message,
                 url: parsed.to_string(),
