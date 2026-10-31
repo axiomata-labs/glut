@@ -494,42 +494,17 @@ impl Transcript {
                     block.touch();
                 }
             }
-            Event::Compacted {
-                before_tokens,
-                after_tokens,
-                prepared,
-                ..
-            } => self.note(
-                format!(
-                    "{}{}",
-                    tr!(
-                        compacted_tokens,
-                        before = before_tokens / 1000,
-                        after = after_tokens / 1000
-                    ),
-                    if *prepared {
-                        tr!(compacted_prepared)
-                    } else {
-                        ""
-                    }
-                ),
-                Tone::Quiet,
-            ),
-            // Glut spoke to the model in its own words (T73): a quiet line, so the owner knows why it went on.
-            Event::Nudged { kind, .. } if depth == 0 => self.note(
-                match kind {
-                    glut::NudgeKind::Reminder => tr!(nudged_reminder),
-                    glut::NudgeKind::NoList => tr!(nudged_no_list),
-                    glut::NudgeKind::Pressed => tr!(nudged_pressed),
-                    glut::NudgeKind::OpenItems => tr!(nudged_open),
-                    glut::NudgeKind::Announced => tr!(nudged_announced),
-                    glut::NudgeKind::Repeated => tr!(nudged_repeated),
-                    glut::NudgeKind::Reading => tr!(nudged_reading),
-                },
-                Tone::Quiet,
-            ),
-            Event::Error { message } if depth == 0 => self.note(message.clone(), Tone::Fault),
-            Event::ModeChanged { mode, .. } => self.note(tr!(mode_now, mode = mode), Tone::Fine),
+            Event::Nudged { .. } | Event::Error { .. } if depth == 0 => {
+                if let Some((text, tone)) = glut_note(event) {
+                    self.note(text, tone);
+                }
+            }
+            // A summary and a mode are said at any depth, as they always were.
+            Event::Compacted { .. } | Event::ModeChanged { .. } => {
+                if let Some((text, tone)) = glut_note(event) {
+                    self.note(text, tone);
+                }
+            }
             // A subagent's step goes to its tile; one with no tile to go to (none runs) stands indented here.
             Event::Sub {
                 depth: inner,
@@ -1260,6 +1235,51 @@ fn parts(line: &str) -> Vec<&str> {
         parts.push(&line[start..]);
     }
     parts
+}
+
+/// What Glut itself says of a step of the run, as a line in the stream: a summary made, a word to the model, an
+/// error, a mode left — shared with an editor's session (T64b), which says the same.
+pub fn glut_note(event: &Event) -> Option<(String, Tone)> {
+    Some(match event {
+        Event::Compacted {
+            before_tokens,
+            after_tokens,
+            prepared,
+            ..
+        } => (
+            format!(
+                "{}{}",
+                tr!(
+                    compacted_tokens,
+                    before = before_tokens / 1000,
+                    after = after_tokens / 1000
+                ),
+                if *prepared {
+                    tr!(compacted_prepared)
+                } else {
+                    ""
+                }
+            ),
+            Tone::Quiet,
+        ),
+        // Glut spoke to the model in its own words (T73): a quiet line, so the owner knows why it went on.
+        Event::Nudged { kind, .. } => (
+            match kind {
+                glut::NudgeKind::Reminder => tr!(nudged_reminder),
+                glut::NudgeKind::NoList => tr!(nudged_no_list),
+                glut::NudgeKind::Pressed => tr!(nudged_pressed),
+                glut::NudgeKind::OpenItems => tr!(nudged_open),
+                glut::NudgeKind::Announced => tr!(nudged_announced),
+                glut::NudgeKind::Repeated => tr!(nudged_repeated),
+                glut::NudgeKind::Reading => tr!(nudged_reading),
+            }
+            .to_owned(),
+            Tone::Quiet,
+        ),
+        Event::Error { message } => (message.clone(), Tone::Fault),
+        Event::ModeChanged { mode, .. } => (tr!(mode_now, mode = mode).to_string(), Tone::Fine),
+        _ => return None,
+    })
 }
 
 #[cfg(test)]

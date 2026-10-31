@@ -14,9 +14,13 @@
 //! T64b: the session's mode, model and thinking level are the editor's pickers ([`options`]), the TUI's commands whose
 //! answer is text its slash commands ([`commands`]). What v1 alone has and v2's draft drops — the modes beside the
 //! pickers, `session/load` with its replay — is marked `v1 only` where it stands, to go when Glut speaks v2.
+//! The owner's sessions are listed, resumed, closed and deleted from the editor ([`sessions`]); a session's title,
+//! context and cost, Glut's notes and its summaries are told as they happen — as notices and compaction updates
+//! where the editor said it reads them, as Glut's lines in the chat otherwise.
 
 mod commands;
 mod options;
+mod sessions;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -51,6 +55,8 @@ const MOST_IMAGES: usize = 8;
 const READ_AT_LEAST: Duration = Duration::from_millis(400);
 /// How long a turn under way may take to end when the editor leaves, so its conversation is kept.
 const ENDING_GRACE: Duration = Duration::from_secs(5);
+/// How many of the editor's other workspace folders one session is offered: a workspace, not a disk.
+const MOST_FOLDERS: usize = 8;
 
 /// JSON-RPC's own error codes.
 const INVALID_PARAMS: i64 = -32602;
@@ -141,6 +147,8 @@ pub async fn serve() -> ExitCode {
                     }
                     if let Some(live) = opened {
                         commands(&peer, &live).await;
+                        titled(&peer, &live, false).await;
+                        take_folders(&peer, &live).await;
                     }
                 });
             }
@@ -170,9 +178,25 @@ struct Peer {
     out: tokio::sync::Mutex<Option<tokio::io::Stdout>>,
     next_id: AtomicU64,
     waiting: Mutex<HashMap<u64, oneshot::Sender<Value>>>,
+    /// What the editor said at `initialize` it can show beyond the baseline.
+    reads: Mutex<Reads>,
+}
+
+/// The editor's own capabilities Glut uses: each `false` until `initialize` names it.
+#[derive(Default, Clone, Copy)]
+struct Reads {
+    notices: bool,
+    compaction: bool,
 }
 
 impl Peer {
+    fn reads(&self) -> Reads {
+        *self
+            .reads
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+    }
+
     async fn send(&self, message: Value) {
         let mut line = message.to_string();
         line.push('\n');
@@ -277,6 +301,19 @@ struct Live {
     rules: Mutex<Vec<String>>,
     /// How much of the window the last call read, for `/context`.
     context_used: AtomicU64,
+    /// The editor's other workspace folders, asked about once the editor knows the session.
+    offered_folders: Mutex<Vec<String>>,
+    /// Deleted by the editor: nothing of it is saved again.
+    deleted: AtomicBool,
+    /// A summary the last turn made ahead and never put in (T63): it goes in before the next one.
+    ahead: Mutex<Option<glut::Ahead>>,
+    /// The host behind the router said last (T88): a change is said, not every answer.
+    served: Mutex<Option<String>>,
+    /// The summary under way, by the id the editor knows it by, and how many there were.
+    compacting: Mutex<Option<String>>,
+    compactions: AtomicU32,
+    /// Ends the carrying of the session's reports when the editor closes it.
+    closed: tokio::sync::Notify,
 }
 
 impl Live {
@@ -309,6 +346,9 @@ impl Live {
 
     /// Keeps the session as it is now, off the runtime's workers.
     async fn save(&self) {
+        if self.deleted.load(Ordering::SeqCst) {
+            return;
+        }
         let kept = self
             .kept
             .lock()
@@ -323,6 +363,26 @@ impl Live {
         if let Ok(Err(reason)) = saved {
             eprintln!("glut acp: {reason}");
         }
+    }
+
+    /// The editor closed the session: its turn is called off and its reports are no longer carried, so it goes once
+    /// the turn has ended. Until then its id stays held: a resume meanwhile would open it twice.
+    fn close(self: &Arc<Self>, peer: &Peer) {
+        self.call_off(peer);
+        self.closed.notify_one();
+        OPENING
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .push(self.id.clone());
+        let live = Arc::clone(self);
+        tokio::spawn(async move {
+            let held = Opening(live.id.clone());
+            let until = Instant::now() + ENDING_GRACE;
+            while live.busy.load(Ordering::SeqCst) && Instant::now() < until {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            drop(held);
+        });
     }
 
     /// Calls off the turn under way — or the next to begin, when the cancel came first — and its open questions.
@@ -356,47 +416,164 @@ async fn handle(
 ) -> Result<(Value, Option<Arc<Live>>), (i64, String)> {
     let plain = |result: Value| Ok((result, None));
     match method {
-        "initialize" => plain(json!({
+        "initialize" => {
+            let session = params.pointer("/clientCapabilities/session");
+            let names = |what: &str| {
+                session
+                    .and_then(|session| session.get(what))
+                    .is_some_and(Value::is_object)
+            };
+            *peer
+                .reads
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner()) = Reads {
+                notices: names("notices"),
+                compaction: names("compaction"),
+            };
+            plain(json!({
             "protocolVersion": PROTOCOL_VERSION,
             "agentCapabilities": {
                 "loadSession": true,
                 "promptCapabilities": {"image": true, "audio": false, "embeddedContext": true},
                 "mcpCapabilities": {"http": false, "sse": false},
+                "sessionCapabilities": {
+                    "list": {}, "resume": {}, "close": {}, "delete": {}, "additionalDirectories": {},
+                },
             },
             "agentInfo": {"name": "glut", "title": "Glut", "version": env!("CARGO_PKG_VERSION")},
             "authMethods": [],
-        })),
+            }))
+        }
         "authenticate" => plain(json!({})),
         "session/new" => {
             let cwd = folder_of(&params)?;
             let live = open(peer, sessions, cwd, None).await?;
+            beside(&live, &params);
             Ok((session_result(&live).await, Some(live)))
         }
+        // v1 only: v2 resumes with a replay of its own.
         "session/load" => {
-            let cwd = folder_of(&params)?;
+            let live = open_kept(peer, sessions, &params).await?;
+            replay(peer, &live).await;
+            Ok((session_result(&live).await, Some(live)))
+        }
+        "session/resume" => {
+            let live = open_kept(peer, sessions, &params).await?;
+            Ok((session_result(&live).await, Some(live)))
+        }
+        "session/list" => {
+            let home = glut::permissions::settings::home_dir().map_err(|err| internal(&err))?;
+            let cwd = params.get("cwd").and_then(Value::as_str).map(|cwd| {
+                Path::new(cwd)
+                    .canonicalize()
+                    .unwrap_or_else(|_| PathBuf::from(cwd))
+            });
+            let cursor = params
+                .get("cursor")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            let page = tokio::task::spawn_blocking(move || {
+                sessions::page(&home, cwd.as_deref(), cursor.as_deref())
+            })
+            .await
+            .map_err(|err| internal(&err))?
+            .map_err(|reason| (INVALID_PARAMS, reason))?;
+            plain(page)
+        }
+        "session/close" => {
+            // Closing one that is not open is no fault: the editor may close twice.
             let id = params
                 .get("sessionId")
                 .and_then(Value::as_str)
                 .ok_or_else(|| invalid("sessionId"))?;
-            if sessions
+            let live = sessions
                 .lock()
                 .unwrap_or_else(|poison| poison.into_inner())
-                .contains_key(id)
-            {
-                return Err((INVALID_PARAMS, format!("the session {id} is open already")));
+                .remove(id);
+            if let Some(live) = live {
+                live.close(peer);
             }
+            plain(json!({}))
+        }
+        "session/delete" => {
+            let id = params
+                .get("sessionId")
+                .and_then(Value::as_str)
+                .ok_or_else(|| invalid("sessionId"))?
+                .to_owned();
             let home = glut::permissions::settings::home_dir().map_err(|err| internal(&err))?;
-            let kept = store::Session::load(&home, id).map_err(|err| (INVALID_PARAMS, err))?;
-            let worked = kept.cwd.canonicalize().unwrap_or_else(|_| kept.cwd.clone());
-            if worked != cwd {
+            let doomed = {
+                let (home, id) = (home.clone(), id.clone());
+                tokio::task::spawn_blocking(move || store::Session::load(&home, &id))
+                    .await
+                    .map_err(|err| internal(&err))?
+                    .map_err(|reason| (INVALID_PARAMS, reason))?
+            };
+            // Asked as `/resume`'s ⌫ asks, in a session of its folder the editor has open: no other way to ask it.
+            let open: Vec<Arc<Live>> = sessions
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .values()
+                .cloned()
+                .collect();
+            let worked = doomed
+                .cwd
+                .canonicalize()
+                .unwrap_or_else(|_| doomed.cwd.clone());
+            let Some(asker) = open
+                .iter()
+                .find(|live| live.id != id && live.parts.config.cwd == worked)
+                .or_else(|| open.iter().find(|live| live.id == id))
+            else {
                 return Err((
                     INVALID_PARAMS,
-                    format!("the session worked in {}, not here", kept.cwd.display()),
+                    "open a chat in the session's folder to delete it".into(),
                 ));
+            };
+            let title = match crate::transcript::clean(&doomed.title) {
+                title if title.trim().is_empty() => format!("({})", tr!(no_message)),
+                title => title.to_string(),
+            };
+            let asked = confirm(
+                peer,
+                asker,
+                &format!("{} {}", tr!(delete_title), tr!(delete_detail)),
+                &tr!(delete_yes, title = title),
+                tr!(delete_no),
+            )
+            .await;
+            if asked != Some(true) {
+                return Err((INVALID_PARAMS, tr!(delete_no).to_string()));
             }
-            let live = open(peer, sessions, cwd, Some(kept)).await?;
-            replay(peer, &live).await;
-            Ok((session_result(&live).await, Some(live)))
+            // An open one is closed first and saves nothing more: its next save would bring the file back.
+            let live = sessions
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .remove(&id);
+            if let Some(live) = live {
+                live.deleted.store(true, Ordering::SeqCst);
+                live.close(peer);
+            }
+            // The images the open sessions hold stay, as the TUI keeps those its screen holds.
+            let keep: Vec<PathBuf> = open
+                .iter()
+                .filter(|live| live.id != id)
+                .flat_map(|live| {
+                    live.kept
+                        .lock()
+                        .unwrap_or_else(|poison| poison.into_inner())
+                        .images()
+                        .map(|image| image.path.clone())
+                        .collect::<Vec<_>>()
+                })
+                .collect();
+            // Glut's own way, as `/resume`'s ⌫ deletes one: by its id alone, its long results and its images no other
+            // session holds going with it — never a path the editor names.
+            tokio::task::spawn_blocking(move || store::Session::delete(&home, &id, &keep))
+                .await
+                .map_err(|err| internal(&err))?
+                .map_err(|reason| (INVALID_PARAMS, reason))?;
+            plain(json!({}))
         }
         "session/prompt" => {
             let live = session_of(sessions, &params)?;
@@ -421,7 +598,7 @@ async fn handle(
             let warning = set_mode(&live, mode).map_err(|reason| (INVALID_PARAMS, reason))?;
             mode_changed(peer, &live).await;
             if let Some(warning) = warning {
-                say(peer, &live, &warning).await;
+                note(peer, &live, &warning, crate::transcript::Tone::Heed).await;
             }
             plain(json!({}))
         }
@@ -456,6 +633,112 @@ async fn handle(
             plain(json!({"configOptions": options::list(&live).await}))
         }
         _ => Err((METHOD_NOT_FOUND, format!("Glut does not know {method}"))),
+    }
+}
+
+/// The ids of kept sessions being opened now: a second open of one waits for no build, it is refused.
+static OPENING: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Holds an id in [`OPENING`] while its session opens.
+struct Opening(String);
+
+impl Drop for Opening {
+    fn drop(&mut self) {
+        OPENING
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .retain(|id| *id != self.0);
+    }
+}
+
+/// A kept session opened again in the folder it worked in, and the folders the editor names beside it.
+async fn open_kept(
+    peer: &Arc<Peer>,
+    sessions: &Sessions,
+    params: &Value,
+) -> Result<Arc<Live>, (i64, String)> {
+    let cwd = folder_of(params)?;
+    let id = params
+        .get("sessionId")
+        .and_then(Value::as_str)
+        .ok_or_else(|| invalid("sessionId"))?;
+    // Checked and held at once: two opens of one id never both pass while the first builds.
+    let _opening = {
+        let mut opening = OPENING.lock().unwrap_or_else(|poison| poison.into_inner());
+        let open = sessions
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .contains_key(id);
+        if open || opening.iter().any(|known| known == id) {
+            return Err((INVALID_PARAMS, format!("the session {id} is open already")));
+        }
+        opening.push(id.to_owned());
+        Opening(id.to_owned())
+    };
+    let home = glut::permissions::settings::home_dir().map_err(|err| internal(&err))?;
+    let kept = store::Session::load(&home, id).map_err(|err| (INVALID_PARAMS, err))?;
+    let worked = kept.cwd.canonicalize().unwrap_or_else(|_| kept.cwd.clone());
+    if worked != cwd {
+        return Err((
+            INVALID_PARAMS,
+            format!("the session worked in {}, not here", kept.cwd.display()),
+        ));
+    }
+    let live = open(peer, sessions, cwd, Some(kept)).await?;
+    beside(&live, params);
+    Ok(live)
+}
+
+/// The editor's other workspace folders, kept to be asked about: absolute ones only, a few at most.
+fn beside(live: &Live, params: &Value) {
+    let named: Vec<String> = params
+        .get("additionalDirectories")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter(|path| Path::new(path).is_absolute())
+        .take(MOST_FOLDERS)
+        .map(str::to_owned)
+        .collect();
+    *live
+        .offered_folders
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner()) = named;
+}
+
+/// The editor's other folders, asked about through its dialog and taken as `/folder add` takes one (T60c: the
+/// owner's word — a workspace file of a cloned project can name folders too, so the owner sees them first).
+async fn take_folders(peer: &Peer, live: &Live) {
+    let offered = std::mem::take(
+        &mut *live
+            .offered_folders
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()),
+    );
+    if offered.is_empty() {
+        return;
+    }
+    let listed = offered
+        .iter()
+        .map(|path| crate::transcript::clean(path).to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let asked = confirm(
+        peer,
+        live,
+        &tr!(acp_folders_title, folders = listed),
+        tr!(acp_folders_yes),
+        tr!(acp_folders_no),
+    )
+    .await;
+    if asked != Some(true) {
+        return;
+    }
+    for path in offered {
+        let said = crate::said::add_folder(&live.parts, &path)
+            .unwrap_or_else(|reason| format!("⚠ {reason}"));
+        say(peer, live, &said).await;
     }
 }
 
@@ -551,6 +834,143 @@ async fn confirm(peer: &Peer, live: &Live, title: &str, yes: &str, no: &str) -> 
         Some("no") => Some(false),
         _ => None,
     }
+}
+
+/// One of Glut's own notes — a word to the model, an error, the host behind the router: a notice where the editor
+/// reads them, Glut's line in the chat otherwise; never the model's.
+async fn note(peer: &Peer, live: &Live, text: &str, tone: crate::transcript::Tone) {
+    use crate::transcript::Tone;
+    let text = crate::transcript::clean(text);
+    if !peer.reads().notices || text.trim().is_empty() {
+        // A paragraph of its own: the model's text may stop mid-line.
+        let marked = if matches!(tone, Tone::Fault) {
+            "⚠ "
+        } else {
+            ""
+        };
+        return say(peer, live, &format!("\n\n{marked}{text}")).await;
+    }
+    let severity = match tone {
+        Tone::Fault => "error",
+        Tone::Heed => "warning",
+        _ => "info",
+    };
+    let (title, description) = match text.split_once('\n') {
+        Some((title, rest)) => (title.to_owned(), Some(rest.to_owned())),
+        None => (text.to_string(), None),
+    };
+    peer.update(
+        &live.id,
+        json!({"sessionUpdate": "notice", "severity": severity, "title": title, "description": description}),
+    )
+    .await;
+}
+
+/// Where a summary of the conversation stands.
+enum Compaction {
+    Begun,
+    /// Made, with what Glut says of it.
+    Done(Option<String>),
+    Failed(String),
+}
+
+/// A summary begun, made or failed: a compaction update where the editor reads them, Glut's line otherwise — one
+/// begun is said only there.
+async fn compaction(peer: &Peer, live: &Live, step: Compaction) {
+    let id = {
+        let mut compacting = live
+            .compacting
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let id = compacting.clone().unwrap_or_else(|| {
+            format!(
+                "compaction-{}",
+                live.compactions.fetch_add(1, Ordering::SeqCst)
+            )
+        });
+        *compacting = matches!(step, Compaction::Begun).then(|| id.clone());
+        id
+    };
+    if !peer.reads().compaction {
+        return match step {
+            Compaction::Begun => {}
+            Compaction::Done(said) => {
+                if let Some(said) = said {
+                    say(peer, live, &said).await;
+                }
+            }
+            Compaction::Failed(reason) => say(peer, live, &format!("⚠ {reason}")).await,
+        };
+    }
+    let update = match step {
+        Compaction::Begun => {
+            json!({"sessionUpdate": "compaction_update", "compactionId": id, "status": "in_progress"})
+        }
+        Compaction::Done(_) => {
+            json!({"sessionUpdate": "compaction_update", "compactionId": id, "status": "completed"})
+        }
+        Compaction::Failed(reason) => json!({
+            "sessionUpdate": "compaction_update", "compactionId": id, "status": "failed",
+            "error": crate::transcript::clean(&reason),
+        }),
+    };
+    peer.update(&live.id, update).await;
+}
+
+/// How full the window is and what the session cost: the editor's meter. A subscription's session says no price,
+/// as the TUI's footer says "plan".
+async fn used(peer: &Peer, live: &Live) {
+    let (window, plan) = {
+        let engine = live
+            .engine
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        (
+            engine.window.map(|(tokens, _)| tokens),
+            engine.plan.is_some(),
+        )
+    };
+    let Some(window) = window else { return };
+    let cost = live
+        .kept
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .cost;
+    let mut update = json!({
+        "sessionUpdate": "usage_update",
+        "used": live.context_used.load(Ordering::SeqCst),
+        "size": window,
+    });
+    if let Some(cost) = cost.filter(|_| !plan) {
+        update["cost"] = json!({"amount": cost, "currency": "USD"});
+    }
+    peer.update(&live.id, update).await;
+}
+
+/// The session's title and last change, for the editor's list of chats.
+async fn titled(peer: &Peer, live: &Live, changed: bool) {
+    let (title, updated) = {
+        let kept = live
+            .kept
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        // A turn that ended changed it now; a session opened was changed when it was last saved.
+        (
+            kept.title.clone(),
+            if changed {
+                chrono::Utc::now()
+            } else {
+                kept.updated
+            },
+        )
+    };
+    let mut update =
+        json!({"sessionUpdate": "session_info_update", "updatedAt": updated.to_rfc3339()});
+    // No title is said by leaving it out: a null would clear one the editor holds.
+    if !title.is_empty() {
+        update["title"] = json!(crate::transcript::clean(&title));
+    }
+    peer.update(&live.id, update).await;
 }
 
 fn invalid(field: &str) -> (i64, String) {
@@ -649,6 +1069,13 @@ async fn open(
         streamed: AtomicBool::new(false),
         rules: Mutex::new(Vec::new()),
         context_used: AtomicU64::new(0),
+        offered_folders: Mutex::new(Vec::new()),
+        deleted: AtomicBool::new(false),
+        ahead: Mutex::new(None),
+        served: Mutex::new(None),
+        compacting: Mutex::new(None),
+        compactions: AtomicU32::new(0),
+        closed: tokio::sync::Notify::new(),
     });
     sessions
         .lock()
@@ -736,6 +1163,42 @@ async fn replay(peer: &Peer, live: &Live) {
             }
             _ => {}
         }
+    }
+}
+
+/// The summary the last turn made ahead (T63), put in before the next message where the conversation still begins
+/// with what it was made of — what came since follows it whole.
+async fn summary_ahead(peer: &Peer, live: &Live) {
+    let ahead = live
+        .ahead
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .take();
+    let Some(ahead) = ahead else { return };
+    let put_in = {
+        let mut kept = live
+            .kept
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let fits = kept.conversation.len() >= ahead.base;
+        if fits {
+            let mut conversation = ahead.conversation;
+            conversation.extend_from_slice(&kept.conversation[ahead.base..]);
+            kept.conversation = conversation;
+            for mark in &mut kept.marks {
+                mark.at = None;
+            }
+        }
+        fits
+    };
+    if put_in {
+        live.context_used.store(0, Ordering::SeqCst);
+        let said = format!(
+            "{}{}",
+            tr!(compacted, n = ahead.replaced),
+            tr!(compacted_prepared)
+        );
+        compaction(peer, live, Compaction::Done(Some(said))).await;
     }
 }
 
@@ -831,6 +1294,7 @@ async fn run_prompt(
     if text.trim().is_empty() && images.is_empty() {
         return Err((INVALID_PARAMS, "the prompt is empty".into()));
     }
+    summary_ahead(peer, live).await;
     let cancel = Cancel::new();
     let (done, ended) = oneshot::channel();
     *live
@@ -903,10 +1367,15 @@ async fn run_prompt(
         kept.conversation = conversation;
         kept.clone()
     };
+    *live
+        .ahead
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner()) = outcome.prepared.clone();
     let home = live.parts.home.clone();
+    let deleted = live.deleted.load(Ordering::SeqCst);
     let saved = tokio::task::spawn_blocking(move || {
         let mut kept = kept;
-        kept.save(&home)
+        if deleted { Ok(()) } else { kept.save(&home) }
     })
     .await;
     if let Ok(Err(reason)) = saved {
@@ -921,6 +1390,7 @@ async fn run_prompt(
     {
         eprintln!("glut acp: {reason}");
     }
+    titled(peer, live, true).await;
     let reason = match outcome.reason {
         FinishReason::Answered => "end_turn",
         FinishReason::Cancelled => "cancelled",
@@ -994,7 +1464,20 @@ fn link_text(uri: &str) -> String {
 
 /// Carries a session's reports to the editor for as long as the session lives.
 async fn carry(peer: Arc<Peer>, live: Arc<Live>, mut inbox: mpsc::UnboundedReceiver<Report>) {
-    while let Some(report) = inbox.recv().await {
+    // Closed: the turn under way was called off, and its end is still carried, so its prompt is answered.
+    let mut closing = false;
+    loop {
+        if closing && !live.busy.load(Ordering::SeqCst) {
+            break;
+        }
+        let report = tokio::select! {
+            report = inbox.recv() => report,
+            () = live.closed.notified(), if !closing => {
+                closing = true;
+                continue;
+            }
+        };
+        let Some(report) = report else { break };
         match report {
             Report::Event(event) => told(&peer, &live, &event).await,
             Report::Ask(request, reply) => {
@@ -1113,11 +1596,63 @@ async fn told(peer: &Peer, live: &Live, event: &Event) {
                     output_tokens: *output_tokens,
                 },
             );
+            used(peer, live).await;
             return;
         }
-        Event::Error { message } => {
-            json!({"sessionUpdate": "agent_message_chunk", "content": text_block(&format!("\n\n⚠ {message}\n"))})
+        Event::Error { .. } | Event::Nudged { .. } => {
+            if let Some((text, tone)) = crate::transcript::glut_note(event) {
+                note(peer, live, &text, tone).await;
+            }
+            return;
         }
+        Event::Served { by, .. } => {
+            let changed = {
+                let mut served = live
+                    .served
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner());
+                let changed = served.as_ref() != Some(by);
+                *served = Some(by.clone());
+                changed
+            };
+            if changed {
+                note(
+                    peer,
+                    live,
+                    &tr!(served_by, host = by),
+                    crate::transcript::Tone::Quiet,
+                )
+                .await;
+            }
+            return;
+        }
+        Event::McpServer {
+            name,
+            status: glut::McpStatus::Failed,
+            reason,
+            ..
+        } => {
+            // One that wants a sign-in names the command, as the TUI says it (T56).
+            let wants = live.parts.tools.servers().list().iter().any(|server| {
+                server.entry.name == *name && server.state == glut::mcp::State::SignIn
+            });
+            let (said, tone) = if wants {
+                (
+                    tr!(mcp_wants_note, name = name).to_string(),
+                    crate::transcript::Tone::Heed,
+                )
+            } else {
+                let reason = reason.clone().unwrap_or_default();
+                (
+                    tr!(mcp_not_up, name = name, reason = reason).to_string(),
+                    crate::transcript::Tone::Fault,
+                )
+            };
+            note(peer, live, &said, tone).await;
+            return;
+        }
+        // A summary begun beside the run may never be put in: only one that is, is told.
+        Event::Preparing { .. } => return,
         // The turn is known by its first snapshot, so the TUI can rewind it (`glut -r`); a compaction rewrote what
         // came before, so no mark's place holds.
         Event::Snapshot { run, .. } => {
@@ -1141,6 +1676,8 @@ async fn told(peer: &Peer, live: &Live, event: &Event) {
             {
                 mark.at = None;
             }
+            let said = crate::transcript::glut_note(event).map(|(text, _)| text);
+            compaction(peer, live, Compaction::Done(said)).await;
             return;
         }
         _ => return,

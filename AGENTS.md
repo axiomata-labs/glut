@@ -142,8 +142,8 @@ scripts/install.sh               # glut for every terminal: ~/.cargo/bin, linked
   provider goes through `providers::route` with the list — `Model::new` refuses `Gateway`. Anthropic's betas and
   fallbacks are only sent to Anthropic itself, never through the gateway.
 - **Folders beside the working one are the owner's word alone** (T60c, `crates/glut/src/folders.rs`): only
-  `glut run --folder` and `/folder add` add one, after `folders::check` — never a model, a skill or a project. One
-  `Folders` per toolbox is shared by the file tools, the gate, the shell's sandbox and the snapshots: a new place that
+  `glut run --folder`, `/folder add` and an editor's workspace folders the owner said yes to in its dialog (T64b) add
+  one, after `folders::check` — never a model, a skill or a project. One `Folders` per toolbox is shared by the file tools, the gate, the shell's sandbox and the snapshots: a new place that
   resolves a run's file path must ask it too (`Folders::place`/`full_path`), or it treats such a path as outside.
 - **A loop repeats the owner's words, never more** (T60a, `crates/glut-tui/src/looping.rs`): a round sends the task
   `/loop` was given, a command only of `looping::COMMANDS`; its agent takes the pane's mode, granted rules and folders,

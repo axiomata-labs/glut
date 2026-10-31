@@ -112,7 +112,7 @@ pub async fn run(
         "gate" => Ran::Said(vec![gate(live)]),
         "model" => model(peer, live, rest).await,
         "effort" => effort(peer, live, rest).await,
-        "compact" => compact(live, cancel).await,
+        "compact" => compact(peer, live, cancel).await,
         "handoff" => handoff(live, rest, cancel).await,
         "export" => export(live, rest).await,
         "steps" => steps(peer, live, rest).await,
@@ -275,21 +275,37 @@ async fn switched(peer: &Peer, live: &Live, notes: Result<Vec<String>, String>) 
 }
 
 /// `/compact`: the conversation summarised now, as the TUI does it.
-async fn compact(live: &Live, cancel: &Cancel) -> Ran {
+async fn compact(peer: &Peer, live: &Live, cancel: &Cancel) -> Ran {
+    use super::Compaction;
     let (engine, conversation) = live.engine_and_conversation();
+    super::compaction(peer, live, Compaction::Begun).await;
     let (reports, mut came) = mpsc::unbounded_channel();
     session::compact(engine.clone(), conversation, reports);
     let came = tokio::select! {
         came = came.recv() => came,
-        () = cancel.cancelled() => return Ran::Said(Vec::new()),
+        () = cancel.cancelled() => {
+            super::compaction(peer, live, Compaction::Failed(tr!(not_compacted, reason = "⎋").to_string())).await;
+            return Ran::Said(Vec::new());
+        }
     };
     let Some(Report::Compacted(result, _)) = came else {
-        return Ran::Said(vec![format!("⚠ {}", tr!(not_compacted, reason = "-"))]);
+        super::compaction(
+            peer,
+            live,
+            Compaction::Failed(tr!(not_compacted, reason = "-").to_string()),
+        )
+        .await;
+        return Ran::Said(Vec::new());
     };
     match result {
         Ok(compacted) => {
             live.spent(&engine, compacted.usage);
             live.context_used.store(0, Ordering::SeqCst);
+            // One made ahead is of the conversation this one replaced.
+            live.ahead
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .take();
             {
                 let mut kept = live
                     .kept
@@ -301,9 +317,15 @@ async fn compact(live: &Live, cancel: &Cancel) -> Ran {
                 }
             }
             live.save().await;
-            Ran::Said(vec![tr!(compacted, n = compacted.replaced).to_string()])
+            let said = tr!(compacted, n = compacted.replaced).to_string();
+            super::compaction(peer, live, Compaction::Done(Some(said))).await;
+            Ran::Said(Vec::new())
         }
-        Err(reason) => Ran::Said(vec![format!("⚠ {}", tr!(not_compacted, reason = reason))]),
+        Err(reason) => {
+            let said = tr!(not_compacted, reason = reason).to_string();
+            super::compaction(peer, live, Compaction::Failed(said)).await;
+            Ran::Said(Vec::new())
+        }
     }
 }
 

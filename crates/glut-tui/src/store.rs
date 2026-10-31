@@ -56,6 +56,9 @@ pub struct Session {
 /// Where and when a kept session worked, without what it said (T44).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Head {
+    /// The session's id and title (T64b: an editor lists them).
+    pub id: Option<String>,
+    pub title: Option<String>,
     pub cwd: PathBuf,
     pub updated: DateTime<Utc>,
     /// The provider and model it ended on: an editor's list of models used lately (T64b).
@@ -368,6 +371,8 @@ fn head_of(text: &str) -> Option<Head> {
             .ok()
     };
     Some(Head {
+        id: field("id"),
+        title: field("title"),
         cwd: PathBuf::from(field("cwd")?),
         updated: field("updated")?.parse().ok()?,
         provider: field("provider"),
@@ -552,6 +557,8 @@ mod tests {
         assert_eq!(
             Session::heads(&home),
             [Head {
+                id: Some(session.id.clone()),
+                title: Some(session.title.clone()),
                 cwd: PathBuf::from("/w/real"),
                 updated: session.updated,
                 provider: Some("p".into()),

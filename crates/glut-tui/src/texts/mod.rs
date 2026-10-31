@@ -840,6 +840,10 @@ glut::catalog! {
         model_title: &'static str,
         /// The mode picker's name in an editor (T64b).
         mode_title: &'static str,
+        /// An editor's other workspace folders, asked before they join the session (T64b).
+        acp_folders_title: &'static str,
+        acp_folders_yes: &'static str,
+        acp_folders_no: &'static str,
         /// Providers whose model list is not kept yet: `{providers}`.
         models_missing: &'static str,
         /// A project with no session yet.
