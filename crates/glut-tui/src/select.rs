@@ -180,7 +180,8 @@ pub fn copy(text: &str) -> Result<Copied, String> {
     .map_err(|err| format!("no clipboard took it: {err}"))
 }
 
-fn pbcopy(text: &str) -> std::io::Result<()> {
+/// Puts `text` on macOS's clipboard alone, never through the terminal (an editor's session has its protocol there).
+pub(crate) fn pbcopy(text: &str) -> std::io::Result<()> {
     // A test's copy never takes the owner's clipboard.
     if cfg!(test) {
         return Ok(());

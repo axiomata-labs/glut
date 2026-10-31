@@ -123,7 +123,10 @@ scripts/install.sh               # glut for every terminal: ~/.cargo/bin, linked
   Agent Client Protocol's permission answer is only Glut's ask answered elsewhere — anything but allow refuses, and
   "always" is the narrowest scope; Glut never uses the editor's `fs/*` or `terminal/*` (they would run past the sandbox,
   the gate and the snapshots) nor the MCP servers it names. A new kind of update must not carry anything the
-  transcript would not show.
+  transcript would not show. Its pickers (`acp/options.rs`) take only values they offered; its slash commands
+  (`acp/commands.rs`) run only from a lone text block of the editor's prompt — never from an attachment, a tool result
+  or the model — and share their logic with the TUI through `said.rs`: change a command there, not twice. Glut speaks
+  each editor's protocol version whole (v1 or, once built, v2), never a mix; what v1 alone has is marked `v1 only`.
 - **The TUI never lets a key answer a question it did not show** (`crates/glut-tui/src/app.rs` `on_ask_key`): plain
   keys only, no repeat, nothing in the first 400 ms; a turn that ends drops its open card; an ask shows the head and
   the tail of a long target. Model and tool text goes through `transcript::wrap`/`clean` (control characters as

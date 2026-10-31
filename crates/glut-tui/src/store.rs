@@ -58,6 +58,9 @@ pub struct Session {
 pub struct Head {
     pub cwd: PathBuf,
     pub updated: DateTime<Utc>,
+    /// The provider and model it ended on: an editor's list of models used lately (T64b).
+    pub provider: Option<String>,
+    pub model: Option<String>,
 }
 
 /// One of the owner's messages that started a turn: how long the conversation was before it, its first line, and the
@@ -367,6 +370,8 @@ fn head_of(text: &str) -> Option<Head> {
     Some(Head {
         cwd: PathBuf::from(field("cwd")?),
         updated: field("updated")?.parse().ok()?,
+        provider: field("provider"),
+        model: field("model"),
     })
 }
 
@@ -549,6 +554,8 @@ mod tests {
             [Head {
                 cwd: PathBuf::from("/w/real"),
                 updated: session.updated,
+                provider: Some("p".into()),
+                model: Some("m".into()),
             }]
         );
         assert_eq!(head_of("{\"id\":\"x\"}"), None);

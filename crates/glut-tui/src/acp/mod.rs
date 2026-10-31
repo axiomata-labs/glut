@@ -10,6 +10,13 @@
 //! allow everything). Glut works with its own tools alone: the editor's files and terminals are not used, so the
 //! sandbox, the snapshots and the masks see every step. MCP servers the editor names are left out: the owner's
 //! `~/.glut/mcp.json` stays the only source.
+//!
+//! T64b: the session's mode, model and thinking level are the editor's pickers ([`options`]), the TUI's commands whose
+//! answer is text its slash commands ([`commands`]). What v1 alone has and v2's draft drops — the modes beside the
+//! pickers, `session/load` with its replay — is marked `v1 only` where it stands, to go when Glut speaks v2.
+
+mod commands;
+mod options;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -51,7 +58,7 @@ const METHOD_NOT_FOUND: i64 = -32601;
 const INTERNAL_ERROR: i64 = -32603;
 
 /// The modes the editor may pick, as Glut names them, with what each lets through.
-const MODES: [(Mode, &str, &str); 4] = [
+pub(super) const MODES: [(Mode, &str, &str); 4] = [
     (Mode::Default, "Ask", "Reads free; edits and commands asked"),
     (
         Mode::AcceptEdits,
@@ -266,9 +273,58 @@ struct Live {
     images: AtomicU32,
     /// Whether the model's text of this step came in pieces: then its whole is not sent again.
     streamed: AtomicBool,
+    /// The owner's rules for this session (`/rule`, T73b), sent with every turn.
+    rules: Mutex<Vec<String>>,
+    /// How much of the window the last call read, for `/context`.
+    context_used: AtomicU64,
 }
 
 impl Live {
+    /// The engine and the conversation as they are now, for a call of their own (a summary, a handoff).
+    fn engine_and_conversation(&self) -> (Engine, Vec<Message>) {
+        let engine = self
+            .engine
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone();
+        let conversation = self
+            .kept
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .conversation
+            .clone();
+        (engine, conversation)
+    }
+
+    /// What a call on `engine` cost, counted to the session's.
+    fn spent(&self, engine: &Engine, usage: glut::Usage) {
+        if let Some(prices) = engine.prices {
+            let mut kept = self
+                .kept
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            *kept.cost.get_or_insert(0.0) += prices.cost_usd(&usage);
+        }
+    }
+
+    /// Keeps the session as it is now, off the runtime's workers.
+    async fn save(&self) {
+        let kept = self
+            .kept
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone();
+        let home = self.parts.home.clone();
+        let saved = tokio::task::spawn_blocking(move || {
+            let mut kept = kept;
+            kept.save(&home)
+        })
+        .await;
+        if let Ok(Err(reason)) = saved {
+            eprintln!("glut acp: {reason}");
+        }
+    }
+
     /// Calls off the turn under way — or the next to begin, when the cancel came first — and its open questions.
     fn call_off(&self, peer: &Peer) {
         self.called_off.store(true, Ordering::SeqCst);
@@ -314,7 +370,7 @@ async fn handle(
         "session/new" => {
             let cwd = folder_of(&params)?;
             let live = open(peer, sessions, cwd, None).await?;
-            Ok((session_result(&live), Some(live)))
+            Ok((session_result(&live).await, Some(live)))
         }
         "session/load" => {
             let cwd = folder_of(&params)?;
@@ -340,11 +396,13 @@ async fn handle(
             }
             let live = open(peer, sessions, cwd, Some(kept)).await?;
             replay(peer, &live).await;
-            Ok((session_result(&live), Some(live)))
+            Ok((session_result(&live).await, Some(live)))
         }
         "session/prompt" => {
             let live = session_of(sessions, &params)?;
-            prompt(&live, &params).await.map(|result| (result, None))
+            prompt(peer, &live, &params)
+                .await
+                .map(|result| (result, None))
         }
         "session/cancel" => {
             if let Ok(live) = session_of(sessions, &params) {
@@ -352,38 +410,146 @@ async fn handle(
             }
             plain(Value::Null)
         }
+        // v1 only: v2 sets the mode through its picker.
         "session/set_mode" => {
             let live = session_of(sessions, &params)?;
             let mode = params
                 .get("modeId")
                 .and_then(Value::as_str)
                 .and_then(Mode::parse)
-                .filter(|mode| MODES.iter().any(|(offered, ..)| offered == mode))
                 .ok_or_else(|| invalid("modeId"))?;
-            if live.parts.mode_locked {
-                return Err((INVALID_PARAMS, "this session's mode is fixed".into()));
-            }
-            if let Some(gate) = live.parts.tools.gate() {
-                gate.set_mode(mode);
-            }
-            peer.update(
-                &live.id,
-                json!({"sessionUpdate": "current_mode_update", "currentModeId": mode.name()}),
-            )
-            .await;
-            // As the TUI says when it switches: auto without the sandbox runs what it likes.
-            if mode == Mode::Auto && !session::sandboxed(&live.parts) {
-                peer.update(
-                    &live.id,
-                    json!({"sessionUpdate": "agent_message_chunk", "content": text_block(
-                        "⚠ Auto without a sandbox: every command runs on this machine as it is, unasked.\n"
-                    )}),
-                )
-                .await;
+            let warning = set_mode(&live, mode).map_err(|reason| (INVALID_PARAMS, reason))?;
+            mode_changed(peer, &live).await;
+            if let Some(warning) = warning {
+                say(peer, &live, &warning).await;
             }
             plain(json!({}))
         }
+        "session/set_config_option" => {
+            let live = session_of(sessions, &params)?;
+            let id = params
+                .get("configId")
+                .and_then(Value::as_str)
+                .ok_or_else(|| invalid("configId"))?;
+            let value = params
+                .get("value")
+                .and_then(Value::as_str)
+                .ok_or_else(|| invalid("value"))?;
+            // A turn holds the engine: a model or a level is refused while one runs, and holds the session while it is
+            // built, so no turn starts on the old one meanwhile; a mode is the gate's at once.
+            let holds = id != options::MODE;
+            if holds && live.busy.swap(true, Ordering::SeqCst) {
+                return Err((INVALID_PARAMS, tr!(command_waits, name = id).to_string()));
+            }
+            let set = options::set(&live, id, value).await;
+            if holds {
+                live.busy.store(false, Ordering::SeqCst);
+            }
+            let notes = set.map_err(|reason| (INVALID_PARAMS, reason))?;
+            if id == options::MODE {
+                // v1 only: the old modes follow the picker.
+                peer.update(&live.id, current_mode(&live)).await;
+            }
+            for note in notes {
+                say(peer, &live, &note).await;
+            }
+            plain(json!({"configOptions": options::list(&live).await}))
+        }
         _ => Err((METHOD_NOT_FOUND, format!("Glut does not know {method}"))),
+    }
+}
+
+/// Puts the session in `mode`, as the TUI does: refused where the host fixed it; auto without the sandbox comes with
+/// the TUI's warning.
+fn set_mode(live: &Live, mode: Mode) -> Result<Option<String>, String> {
+    if !MODES.iter().any(|(offered, ..)| *offered == mode) {
+        return Err(format!("no mode {}", mode.name()));
+    }
+    if live.parts.mode_locked {
+        return Err("this session's mode is fixed".into());
+    }
+    if let Some(gate) = live.parts.tools.gate() {
+        gate.set_mode(mode);
+    }
+    // As the TUI says when it switches: auto without the sandbox runs what it likes.
+    Ok(
+        (mode == Mode::Auto && !session::sandboxed(&live.parts)).then(|| {
+            "⚠ Auto without a sandbox: every command runs on this machine as it is, unasked."
+                .to_owned()
+        }),
+    )
+}
+
+/// v1 only: the mode as the old modes tell it.
+fn current_mode(live: &Live) -> Value {
+    let mode = live
+        .parts
+        .tools
+        .gate()
+        .map_or(Mode::Default, |gate| gate.mode());
+    json!({"sessionUpdate": "current_mode_update", "currentModeId": mode.name()})
+}
+
+/// The mode changed — by the editor or by Glut (a plan approved): both ways of telling it.
+async fn mode_changed(peer: &Peer, live: &Live) {
+    peer.update(&live.id, current_mode(live)).await;
+    options_changed(peer, live).await;
+}
+
+/// The pickers' values changed: the editor gets the whole list again.
+async fn options_changed(peer: &Peer, live: &Live) {
+    peer.update(
+        &live.id,
+        json!({"sessionUpdate": "config_option_update", "configOptions": options::list(live).await}),
+    )
+    .await;
+}
+
+/// A line of Glut's in the chat: never the model's, never in the conversation.
+async fn say(peer: &Peer, live: &Live, text: &str) {
+    let text = crate::transcript::clean(text);
+    peer.update(
+        &live.id,
+        json!({"sessionUpdate": "agent_message_chunk", "content": text_block(&format!("{text}\n\n"))}),
+    )
+    .await;
+}
+
+/// A yes-or-no of the owner's, through the editor's dialog; `None` when the dialog went unanswered (dismissed, a
+/// stop, the editor gone) — no word of theirs, so nothing is kept of it.
+async fn confirm(peer: &Peer, live: &Live, title: &str, yes: &str, no: &str) -> Option<bool> {
+    let card = json!({
+        "toolCallId": format!("ask-{}", live.asks.fetch_add(1, Ordering::SeqCst)),
+        "title": crate::transcript::clean(title),
+        "kind": "other",
+        "status": "pending",
+    });
+    let options = json!([
+        {"optionId": "yes", "name": crate::transcript::clean(yes), "kind": "allow_once"},
+        {"optionId": "no", "name": crate::transcript::clean(no), "kind": "reject_once"},
+    ]);
+    let answered = peer
+        .request(
+            "session/request_permission",
+            json!({"sessionId": live.id, "toolCall": card, "options": options}),
+            |id| {
+                live.asking
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner())
+                    .push(id);
+            },
+        )
+        .await;
+    let chosen = answered
+        .as_ref()
+        .and_then(|result| result.get("outcome"))
+        .filter(|outcome| outcome.get("outcome").and_then(Value::as_str) == Some("selected"))
+        .and_then(|outcome| outcome.get("optionId"))
+        .and_then(Value::as_str);
+    match chosen {
+        Some("yes") => Some(true),
+        Some("no") => Some(false),
+        _ => None,
     }
 }
 
@@ -481,6 +647,8 @@ async fn open(
         asks: AtomicU32::new(0),
         images: AtomicU32::new(images),
         streamed: AtomicBool::new(false),
+        rules: Mutex::new(Vec::new()),
+        context_used: AtomicU64::new(0),
     });
     sessions
         .lock()
@@ -490,8 +658,8 @@ async fn open(
     Ok(live)
 }
 
-/// What `session/new` and `session/load` answer: the session and its modes.
-fn session_result(live: &Live) -> Value {
+/// What `session/new` and `session/load` answer: the session, its pickers and (v1 only) its modes.
+async fn session_result(live: &Live) -> Value {
     let current = live
         .parts
         .tools
@@ -503,20 +671,14 @@ fn session_result(live: &Live) -> Value {
         .collect();
     json!({
         "sessionId": live.id,
+        "configOptions": options::list(live).await,
         "modes": {"currentModeId": current.name(), "availableModes": modes},
     })
 }
 
-/// The slash commands the editor offers: the skills, each by its name.
+/// The slash commands the editor offers: Glut's own whose answer is text, and the skills.
 async fn commands(peer: &Peer, live: &Live) {
-    let listed: Vec<Value> = live
-        .parts
-        .skills
-        .iter()
-        .map(|(name, about)| {
-            json!({"name": name, "description": about, "input": {"hint": "what for (optional)"}})
-        })
-        .collect();
+    let listed = commands::listed(live);
     peer.update(
         &live.id,
         json!({"sessionUpdate": "available_commands_update", "availableCommands": listed}),
@@ -524,7 +686,7 @@ async fn commands(peer: &Peer, live: &Live) {
     .await;
 }
 
-/// A loaded session's conversation, told to the editor as it went.
+/// v1 only (v2 resumes with a replay of its own): a loaded session's conversation, told to the editor as it went.
 async fn replay(peer: &Peer, live: &Live) {
     let conversation = live
         .kept
@@ -578,7 +740,11 @@ async fn replay(peer: &Peer, live: &Live) {
 }
 
 /// One prompt: the editor's blocks as the owner's message, the turn, and how it ended.
-async fn prompt(live: &Arc<Live>, params: &Value) -> Result<Value, (i64, String)> {
+async fn prompt(
+    peer: &Arc<Peer>,
+    live: &Arc<Live>,
+    params: &Value,
+) -> Result<Value, (i64, String)> {
     let blocks = params
         .get("prompt")
         .and_then(Value::as_array)
@@ -590,7 +756,7 @@ async fn prompt(live: &Arc<Live>, params: &Value) -> Result<Value, (i64, String)
             "a turn is already under way in this session".into(),
         ));
     }
-    let ran = run_prompt(live, blocks).await;
+    let ran = run_prompt(peer, live, blocks).await;
     live.cancel
         .lock()
         .unwrap_or_else(|poison| poison.into_inner())
@@ -600,17 +766,71 @@ async fn prompt(live: &Arc<Live>, params: &Value) -> Result<Value, (i64, String)
 }
 
 /// The turn of a prompt, the session busy with it.
-async fn run_prompt(live: &Arc<Live>, blocks: Vec<Value>) -> Result<Value, (i64, String)> {
-    // Images are decoded and kept off the runtime's workers.
-    let (home, first) = (live.parts.home.clone(), live.images.load(Ordering::SeqCst));
-    let (text, images) = tokio::task::spawn_blocking(move || message_of(&home, &blocks, first))
-        .await
-        .map_err(|err| internal(&err))?;
-    live.images.fetch_add(images.len() as u32, Ordering::SeqCst);
+async fn run_prompt(
+    peer: &Arc<Peer>,
+    live: &Arc<Live>,
+    blocks: Vec<Value>,
+) -> Result<Value, (i64, String)> {
+    // A command is the owner's typing alone: a lone text block — anything attached makes it a message.
+    let typed = match blocks.as_slice() {
+        [block] if block.get("type").and_then(Value::as_str) == Some("text") => {
+            block.get("text").and_then(Value::as_str).map(str::to_owned)
+        }
+        _ => None,
+    };
+    let command = typed
+        .as_deref()
+        .and_then(|typed| commands::parse(live, typed))
+        .map(|(name, rest)| (name.to_owned(), rest.to_owned()));
+    let mut guide = None;
+    let (text, images) = match command {
+        Some((name, rest)) => {
+            let cancel = Cancel::new();
+            *live
+                .cancel
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner()) = Some(cancel.clone());
+            if live.called_off.swap(false, Ordering::SeqCst) {
+                cancel.cancel();
+            }
+            let ran = commands::run(peer, live, &name, &rest, &cancel).await;
+            // A stop during the command was its own: the next turn is not called off by it.
+            live.called_off.store(false, Ordering::SeqCst);
+            match ran {
+                commands::Ran::Said(lines) => {
+                    for line in lines {
+                        say(peer, live, &line).await;
+                    }
+                    let reason = if cancel.is_cancelled() {
+                        "cancelled"
+                    } else {
+                        "end_turn"
+                    };
+                    return Ok(json!({"stopReason": reason}));
+                }
+                commands::Ran::Turn {
+                    prompt,
+                    guide: checked,
+                } => {
+                    guide = checked;
+                    (prompt, Vec::new())
+                }
+            }
+        }
+        None => {
+            // Images are decoded and kept off the runtime's workers.
+            let (home, first) = (live.parts.home.clone(), live.images.load(Ordering::SeqCst));
+            let (text, images) =
+                tokio::task::spawn_blocking(move || message_of(&home, &blocks, first))
+                    .await
+                    .map_err(|err| internal(&err))?;
+            live.images.fetch_add(images.len() as u32, Ordering::SeqCst);
+            (text, images)
+        }
+    };
     if text.trim().is_empty() && images.is_empty() {
         return Err((INVALID_PARAMS, "the prompt is empty".into()));
     }
-    let text = skill_or(&live.parts.skills, text);
     let cancel = Cancel::new();
     let (done, ended) = oneshot::channel();
     *live
@@ -644,10 +864,14 @@ async fn run_prompt(live: &Arc<Live>, blocks: Vec<Value>) -> Result<Value, (i64,
             session: kept.id.clone(),
             conversation: kept.conversation.clone(),
             todos: kept.todos.clone(),
-            nudge: live.parts.config.nudge,
+            nudge: crate::said::nudges(&live.parts),
             remind: live.parts.config.remind,
-            steps: live.parts.config.max_turns,
-            rules: Vec::new(),
+            steps: crate::said::steps_now(&live.parts),
+            rules: live
+                .rules
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .clone(),
             lsp: live.parts.config.diagnostics,
         };
         let engine = live
@@ -686,6 +910,15 @@ async fn run_prompt(live: &Arc<Live>, blocks: Vec<Value>) -> Result<Value, (i64,
     })
     .await;
     if let Ok(Err(reason)) = saved {
+        eprintln!("glut acp: {reason}");
+    }
+    // An `/init` turn answered: its guide is not pointed out again until it grows (T42).
+    if let Some(path) = guide
+        && outcome.reason == FinishReason::Answered
+        && let Some(bytes) = crate::guides::size(&path)
+        && let Err(reason) =
+            crate::prefs::set_guide_checked(&live.parts.home, &path.display().to_string(), bytes)
+    {
         eprintln!("glut acp: {reason}");
     }
     let reason = match outcome.reason {
@@ -757,19 +990,6 @@ fn link_text(uri: &str) -> String {
         .replace(['\n', '\r'], " ");
     let plain = crate::transcript::clean(&crate::transcript::cut(&path, 1_000));
     glut::planning::unforged(plain)
-}
-
-/// `/name what` for a skill of the session becomes the message that runs it; any other text stays as it is.
-fn skill_or(skills: &[(String, String)], text: String) -> String {
-    let Some(rest) = text.trim_start().strip_prefix('/') else {
-        return text;
-    };
-    let (name, what) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
-    if skills.iter().any(|(skill, _)| skill == name) {
-        crate::app::skill_prompt(name, what)
-    } else {
-        text
-    }
 }
 
 /// Carries a session's reports to the editor for as long as the session lives.
@@ -872,8 +1092,28 @@ async fn told(peer: &Peer, live: &Live, event: &Event) {
                 .todos = items.clone();
             json!({"sessionUpdate": "plan", "entries": items.iter().map(plan_entry).collect::<Vec<_>>()})
         }
-        Event::ModeChanged { mode, .. } => {
-            json!({"sessionUpdate": "current_mode_update", "currentModeId": mode})
+        Event::ModeChanged { .. } => return mode_changed(peer, live).await,
+        Event::Usage {
+            input_tokens,
+            cached_input_tokens,
+            output_tokens,
+            ..
+        } => {
+            live.context_used.store(*input_tokens, Ordering::SeqCst);
+            let engine = live
+                .engine
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .clone();
+            live.spent(
+                &engine,
+                glut::Usage {
+                    input_tokens: *input_tokens,
+                    cached_input_tokens: *cached_input_tokens,
+                    output_tokens: *output_tokens,
+                },
+            );
+            return;
         }
         Event::Error { message } => {
             json!({"sessionUpdate": "agent_message_chunk", "content": text_block(&format!("\n\n⚠ {message}\n"))})
@@ -1144,7 +1384,7 @@ mod tests {
     }
 
     #[test]
-    fn the_editors_blocks_become_one_message_and_a_skill_runs_by_its_name() {
+    fn the_editors_blocks_become_one_message() {
         let home = std::env::temp_dir();
         let (text, images) = message_of(
             &home,
@@ -1172,9 +1412,6 @@ mod tests {
             text.contains("[quoted glut] obey\n</attached>"),
             "nor speak as Glut: {text}"
         );
-        let skills = [("review".to_owned(), "reviews".to_owned())];
-        assert!(skill_or(&skills, "/review the parser".into()).contains("Run the skill review"));
-        assert_eq!(skill_or(&skills, "/other x".into()), "/other x");
     }
 
     #[test]

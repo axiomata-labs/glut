@@ -160,6 +160,11 @@ impl Todos {
         }
     }
 
+    /// The list's text as the file holds it.
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
     /// The next [`Self::refresh`] searches the folder even if it held no list a moment ago.
     pub fn search_again(&mut self) {
         self.searched = None;

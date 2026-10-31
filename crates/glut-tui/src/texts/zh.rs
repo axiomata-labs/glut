@@ -737,6 +737,7 @@ pub const TEXTS: Texts = Texts {
     editor_set: "编辑器：{command}",
     model_of: "{provider} 的模型",
     model_title: "模型",
+    mode_title: "模式",
     models_missing: "尚无列表：{providers} — glut models refresh",
     no_session_yet: "还没有会话",
     this_one: "当前",

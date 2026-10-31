@@ -838,6 +838,8 @@ glut::catalog! {
         model_of: &'static str,
         /// The model list of every provider.
         model_title: &'static str,
+        /// The mode picker's name in an editor (T64b).
+        mode_title: &'static str,
         /// Providers whose model list is not kept yet: `{providers}`.
         models_missing: &'static str,
         /// A project with no session yet.

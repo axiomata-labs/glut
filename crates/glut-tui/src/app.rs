@@ -37,31 +37,6 @@ type Read = (
     Box<dyn FnOnce() -> Result<Vec<u8>, String> + Send>,
 );
 
-/// `/init` in a folder without a guide (T35).
-const INIT_NEW: &str = "/init: write a short AGENTS.md for this folder, the guide every coding agent reads here. Look \
-    first — the build and test commands, how the code is laid out, what is easy to get wrong — reading only what you \
-    need. Keep it under 4 KB: commands, a few lines of layout, the traps; nothing a reader finds in a minute, nothing \
-    Glut's own conventions already say. Show the draft and ask before you write the file.";
-
-/// `/init` moving the guide `claude` (a `CLAUDE.md`) into an `AGENTS.md` beside it (T35).
-fn init_migrate(claude: &str) -> String {
-    format!(
-        "/init: move {claude} into an AGENTS.md beside it, so every harness reads one guide. Write AGENTS.md with its \
-         text — shortened where it repeats itself or says what the code shows, under 4 KB if it can be —, then leave \
-         {claude} as the single line `@AGENTS.md`, which Claude Code follows. Show both before you write them."
-    )
-}
-
-/// `/init` checking the guide `name` there is (T35).
-fn init_check(name: &str) -> String {
-    format!(
-        "/init: check the guide {name}, which every turn carries. Is it still true (commands, layout, \
-         traps)? Is anything in it that a reader finds in a minute, or that belongs in docs/ with a pointer left \
-         behind? Propose a shorter version — under 4 KB if it can be, nothing important lost — and say what you would \
-         drop or move. Show it and ask before you change the file."
-    )
-}
-
 /// The most messages of other panes' models held in one pane for the owner's Enter (T36c).
 pub const MOST_HELD: usize = 5;
 
@@ -221,11 +196,6 @@ enum State {
     Asks,
     Rests,
 }
-
-/// The most rules `/rule` keeps for a session, and the most characters of one: a few lines the model reads at
-/// every turn, not a second guide.
-const MOST_RULES: usize = 20;
-const MOST_RULE_CHARS: usize = 500;
 
 /// A switch of provider, model or effort asked for while a turn ran (T73b), made as it ends.
 #[derive(Debug, Clone)]
@@ -1074,43 +1044,31 @@ impl App {
         if self.session.conversation.is_empty() {
             return self.transcript.note(tr!(export_empty), Tone::Quiet);
         }
-        let home = self.parts.home.clone();
-        let format = if asked.copy {
-            crate::export::Format::Markdown
-        } else {
-            asked.format
-        };
-        let text = crate::export::render(
-            &crate::export::of_session(&self.session, asked.full, &home),
-            format,
-        );
         if asked.copy {
+            let text = crate::export::render(
+                &crate::export::of_session(&self.session, asked.full, &self.parts.home),
+                crate::export::Format::Markdown,
+            );
             return match crate::select::copy(&text) {
                 Ok(_) if self.masking() => self.tell(tr!(export_copied_masked)),
                 Ok(_) => self.tell(tr!(export_copied)),
                 Err(reason) => self.transcript.note(reason, Tone::Fault),
             };
         }
-        let path = match &asked.path {
-            Some(typed) => crate::export::named_path(typed, &home, &self.parts.config.cwd),
-            None => {
-                crate::export::default_path(&home, &self.session.cwd, format, chrono::Local::now())
-            }
-        };
-        self.exported(crate::export::write(&path, &text, &home).map(|()| path));
+        match crate::said::export_to_file(&self.session, &self.parts, &asked, self.masking()) {
+            Ok(said) => self.tell(said),
+            Err(reason) => self.transcript.note(reason, Tone::Fault),
+        }
     }
 
     /// What an export became, said where it stays.
     fn exported(&mut self, written: Result<std::path::PathBuf, String>) {
         match written {
-            Ok(path) => {
-                let shown = crate::projects::shown_path(&path, &self.parts.home);
-                if self.masking() {
-                    self.tell(tr!(export_written_masked, path = shown));
-                } else {
-                    self.tell(tr!(export_written, path = shown));
-                }
-            }
+            Ok(path) => self.tell(crate::said::exported(
+                &path,
+                &self.parts.home,
+                self.masking(),
+            )),
             Err(reason) => self.transcript.note(reason, Tone::Fault),
         }
     }
@@ -1137,31 +1095,10 @@ impl App {
     /// `/classifier`: which model judges a command only the mode would ask about (T52), kept in
     /// `~/.glut/classifier.json` for every session from its next turn.
     fn classifier_command(&mut self, rest: &str) {
-        use glut::classifier::Choice;
-        let home = self.parts.home.clone();
-        let shown = |choice: &Choice| match choice {
-            Choice::Session => tr!(classifier_session).to_owned(),
-            other => other.text(),
-        };
-        if rest.trim().is_empty() {
-            let said = match Choice::load(&home) {
-                Ok(Choice::Off) => tr!(classifier_off_now).to_string(),
-                Ok(choice) => tr!(classifier_now, choice = shown(&choice)).to_string(),
-                Err(err) => return self.transcript.note(err.to_string(), Tone::Fault),
-            };
-            return self.tell(said);
+        match crate::said::classifier(&self.parts.home, rest) {
+            Ok(said) => self.tell(said),
+            Err(reason) => self.transcript.note(reason, Tone::Fault),
         }
-        let choice = match Choice::parse(rest) {
-            Ok(choice) => choice,
-            Err(_) => return self.transcript.note(tr!(classifier_usage), Tone::Fault),
-        };
-        if let Err(err) = choice.save(&home) {
-            return self.transcript.note(err.to_string(), Tone::Fault);
-        }
-        self.tell(match choice {
-            Choice::Off => tr!(classifier_off_now).to_string(),
-            choice => tr!(classifier_set, choice = shown(&choice)).to_string(),
-        });
     }
 
     /// `/secrets` (T58): what was hidden from the model in this session; `on|off`, `allow <n> [always]`,
@@ -1283,59 +1220,9 @@ impl App {
     /// one added (checked: never the home folder, one holding the project or a secret) or taken away. What is added
     /// counts from the next call on: the file tools, the commands' sandbox, the gate and the snapshots share it.
     fn folder_command(&mut self, rest: &str) {
-        let folders = self.parts.tools.folders().clone();
-        let rest = rest.trim();
-        let (word, path) = rest.split_once(' ').unwrap_or((rest, ""));
-        let path = path.trim();
-        match word {
-            "" => {
-                let listed = folders.list();
-                if listed.is_empty() {
-                    return self.tell(tr!(folders_none));
-                }
-                let mut text = tr!(folders_heading).to_string();
-                for folder in listed {
-                    text.push_str("\n  ");
-                    text.push_str(folder.shown());
-                }
-                self.tell(text);
-            }
-            "add" if !path.is_empty() => {
-                let deny = self
-                    .parts
-                    .config
-                    .sandbox
-                    .as_ref()
-                    .map(|sandbox| sandbox.deny_read.clone())
-                    .unwrap_or_default();
-                match glut::folders::check(path, &self.parts.config.cwd, &self.parts.home, &deny) {
-                    Ok(folder) => {
-                        let shown = folder.shown().to_owned();
-                        match folders.add(folder) {
-                            Ok(()) => self.tell(tr!(folder_added, folder = shown)),
-                            Err(glut::folders::NotAdded::Known) => {
-                                self.tell(tr!(folder_known, folder = shown));
-                            }
-                            Err(glut::folders::NotAdded::Overlaps(other)) => self.transcript.note(
-                                tr!(folder_overlaps, folder = shown, other = other),
-                                Tone::Fault,
-                            ),
-                        }
-                    }
-                    Err(reason) => self
-                        .transcript
-                        .note(tr!(folder_refused, reason = reason), Tone::Fault),
-                }
-            }
-            "remove" if !path.is_empty() => {
-                match folders.remove(path, &self.parts.config.cwd, &self.parts.home) {
-                    Some(folder) => self.tell(tr!(folder_removed, folder = folder.shown())),
-                    None => self
-                        .transcript
-                        .note(tr!(folder_unknown, folder = path), Tone::Fault),
-                }
-            }
-            _ => self.transcript.note(tr!(folder_usage), Tone::Fault),
+        match crate::said::folder(&self.parts, rest) {
+            Ok(said) => self.tell(said),
+            Err(reason) => self.transcript.note(reason, Tone::Fault),
         }
     }
 
@@ -1526,58 +1413,18 @@ impl App {
 
     /// `/rule` (T73b): `<text>` adds a rule for this session, alone it lists them, `remove <n>` takes one back.
     fn rule_command(&mut self, rest: &str) {
-        if rest.is_empty() {
-            if self.rules.is_empty() {
-                return self.tell(tr!(rule_none));
-            }
-            let listed: Vec<String> = self
-                .rules
-                .iter()
-                .enumerate()
-                .map(|(at, rule)| format!("{}. {}", at + 1, crate::transcript::clean(rule)))
-                .collect();
-            return self.tell(format!("{}\n{}", tr!(rule_list), listed.join("\n")));
+        // A list is read in the stream, a change passes as a toast.
+        let listing = rest.is_empty();
+        match crate::said::rule(&mut self.rules, rest) {
+            Ok(said) if listing => self.tell(said),
+            Ok(said) => self.say(said),
+            Err(reason) => self.transcript.note(reason, Tone::Fault),
         }
-        if rest == "remove" {
-            return self.transcript.note(tr!(rule_bad), Tone::Fault);
-        }
-        if let Some(number) = rest.strip_prefix("remove ") {
-            return match number
-                .trim()
-                .parse::<usize>()
-                .ok()
-                .filter(|n| (1..=self.rules.len()).contains(n))
-            {
-                Some(n) => {
-                    self.rules.remove(n - 1);
-                    self.say(tr!(rule_removed, n = n));
-                }
-                None => self.transcript.note(tr!(rule_bad), Tone::Fault),
-            };
-        }
-        if self.rules.len() >= MOST_RULES {
-            return self
-                .transcript
-                .note(tr!(rule_full, most = MOST_RULES), Tone::Fault);
-        }
-        // One line a rule: a pasted heading of its own would stand as a section of the instructions.
-        let rule: String = rest
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ")
-            .chars()
-            .take(MOST_RULE_CHARS)
-            .collect();
-        self.rules.push(rule);
-        self.say(tr!(rule_added, n = self.rules.len()));
     }
 
     /// The most steps a turn takes (T73b): what `/maxsteps` kept, else the owner's `maxTurns`, else 100.
     fn steps_now(&self) -> u32 {
-        Prefs::load(&self.parts.home)
-            .steps
-            .filter(|steps| (1..=glut::config::MOST_TURNS).contains(steps))
-            .unwrap_or(self.parts.config.max_turns)
+        crate::said::steps_now(&self.parts)
     }
 
     /// Whether the language servers serve the turns (T62): what `/lsp` kept, else the owner's settings.
@@ -1608,9 +1455,7 @@ impl App {
 
     /// Whether Glut asks the model once to go on (T73): what `/nudge` kept, else the owner's settings.
     fn nudges(&self) -> bool {
-        Prefs::load(&self.parts.home)
-            .nudge
-            .unwrap_or(self.parts.config.nudge)
+        crate::said::nudges(&self.parts)
     }
 
     /// A quiet line in the stream that stays, where a toast would pass: what happened to a pane (T36a).
@@ -3957,19 +3802,10 @@ impl App {
                 }
                 None => self.tell(tr!(images_now, images = crate::pictures::drawing().label())),
             },
-            "maxsteps" if rest.is_empty() => self.tell(tr!(steps_now, n = self.steps_now())),
-            "maxsteps" => match rest
-                .parse::<u32>()
-                .ok()
-                .filter(|steps| (1..=glut::config::MOST_TURNS).contains(steps))
-            {
-                Some(steps) => match prefs::set_steps(&self.parts.home, steps) {
-                    Ok(()) => self.say(tr!(steps_set, n = steps)),
-                    Err(reason) => self.transcript.note(reason, Tone::Fault),
-                },
-                None => self
-                    .transcript
-                    .note(tr!(steps_bad, most = glut::config::MOST_TURNS), Tone::Fault),
+            "maxsteps" => match crate::said::maxsteps(&self.parts, rest) {
+                Ok(said) if rest.is_empty() => self.tell(said),
+                Ok(said) => self.say(said),
+                Err(reason) => self.transcript.note(reason, Tone::Fault),
             },
             "keychain" => self.keychain_command(rest),
             "clean" => self.clean_command(rest),
@@ -3985,16 +3821,10 @@ impl App {
                 },
                 _ => self.show_lsp(),
             },
-            "nudge" => match rest {
-                "on" | "off" => match prefs::set_nudge(&self.parts.home, rest == "on") {
-                    Ok(()) if rest == "on" => self.say(tr!(nudge_on)),
-                    Ok(()) => self.say(tr!(nudge_off)),
-                    Err(reason) => self.transcript.note(reason, Tone::Fault),
-                },
-                _ => self.tell(tr!(
-                    nudge_now,
-                    nudge = if self.nudges() { "on" } else { "off" }
-                )),
+            "nudge" => match crate::said::nudge(&self.parts, rest) {
+                Ok(said) if matches!(rest, "on" | "off") => self.say(said),
+                Ok(said) => self.tell(said),
+                Err(reason) => self.transcript.note(reason, Tone::Fault),
             },
             "reader" => match rest {
                 "on" => self.set_reader(true),
@@ -4092,51 +3922,14 @@ impl App {
 
     /// `/context`: how full the window is; `/context <tokens>` sets it for this model and keeps it.
     fn context(&mut self, rest: &str) {
-        if rest.is_empty() {
-            let text = match self.engine.window {
-                Some((window, from)) => tr!(
-                    context_known,
-                    used = self.context_used,
-                    window = window,
-                    share = self.context_used * 100 / u64::from(window.max(1)),
-                    from = match from {
-                        session::WINDOW_SET_HERE => tr!(window_set_here),
-                        session::WINDOW_FROM_LIST => tr!(window_from_list),
-                        other => other,
-                    }
-                ),
-                None => tr!(
-                    context_unknown,
-                    used = self.context_used,
-                    model = self.engine.model_name()
-                ),
-            };
-            self.transcript.note(text, Tone::Quiet);
-            // T35: the guides ride along on every turn — what they cost, so a growing one is seen.
-            if self.parts.guide_chars > 0 {
-                self.transcript.note(
-                    tr!(guides_cost, tokens = self.parts.guide_chars / 4),
-                    Tone::Quiet,
-                );
-            }
-            return;
-        }
-        let Some(tokens) = parse_tokens(rest) else {
-            self.transcript
-                .note(tr!(context_unknown_word, word = rest), Tone::Fault);
-            return;
-        };
-        match session::keep_window(&self.parts.home, &self.engine, tokens) {
-            Ok(()) => {
-                self.engine.window = Some((tokens, session::WINDOW_SET_HERE));
-                self.transcript.note(
-                    tr!(
-                        context_set,
-                        model = self.engine.model_name(),
-                        tokens = tokens
-                    ),
-                    Tone::Fine,
-                );
+        let setting = !rest.is_empty();
+        match crate::said::context(&self.parts, &mut self.engine, self.context_used, rest) {
+            Ok(said) if setting => self.transcript.note(said, Tone::Fine),
+            // The window and what the guides cost: a note each, as they always stood.
+            Ok(said) => {
+                for line in said.lines() {
+                    self.transcript.note(line.to_owned(), Tone::Quiet);
+                }
             }
             Err(reason) => self.transcript.note(reason, Tone::Fault),
         }
@@ -4145,58 +3938,29 @@ impl App {
     /// `/init` (T35): a short guide for the folder. With only a `CLAUDE.md` the owner is asked once whether it moves
     /// into `AGENTS.md` — a no is kept, and the guide checked is then `CLAUDE.md` itself; `--migrate` asks again.
     fn init(&mut self, rest: &str) {
-        let migrate = rest.trim() == "--migrate";
-        if !rest.trim().is_empty() && !migrate {
-            return self.transcript.note(tr!(init_usage), Tone::Fault);
+        match crate::said::init(&self.parts, rest) {
+            Ok(crate::said::Init::AskClaude(claude)) => {
+                self.init_claude = Some(claude);
+                self.picker = Some(Picker::new(
+                    tr!(init_claude_title),
+                    vec![
+                        Item::plain(
+                            tr!(init_claude_yes),
+                            tr!(init_claude_yes_detail),
+                            Pick::Init(true),
+                        ),
+                        Item::plain(
+                            tr!(init_claude_no),
+                            tr!(init_claude_no_detail),
+                            Pick::Init(false),
+                        ),
+                    ],
+                    None,
+                ));
+            }
+            Ok(crate::said::Init::Turn(prompt, guide)) => self.send_init(prompt, guide),
+            Err(reason) => self.transcript.note(reason, Tone::Fault),
         }
-        // The nearest guide the session read decides: an `AGENTS.md` is checked, a `CLAUDE.md` (read only where its
-        // folder has no `AGENTS.md`) is the question — none, and a new one is written in the working folder.
-        let nearest = self.parts.guide_paths.last().cloned();
-        let named =
-            |path: &std::path::Path, name: &str| path.file_name().is_some_and(|file| file == name);
-        let shown = |path: &std::path::Path| {
-            path.strip_prefix(&self.parts.config.cwd).map_or_else(
-                |_| path.display().to_string(),
-                |rel| rel.display().to_string(),
-            )
-        };
-        let claude = nearest.as_ref().filter(|path| named(path, "CLAUDE.md"));
-        let folder = claude
-            .and_then(|path| path.parent())
-            .unwrap_or(&self.parts.config.cwd)
-            .display()
-            .to_string();
-        if migrate && let Err(reason) = prefs::set_keep_claude(&self.parts.home, &folder, false) {
-            self.transcript.note(reason, Tone::Fault);
-        }
-        let kept = Prefs::load(&self.parts.home).keep_claude.contains(&folder);
-        if let Some(claude) = claude
-            && !kept
-        {
-            self.init_claude = Some(shown(claude));
-            self.picker = Some(Picker::new(
-                tr!(init_claude_title),
-                vec![
-                    Item::plain(
-                        tr!(init_claude_yes),
-                        tr!(init_claude_yes_detail),
-                        Pick::Init(true),
-                    ),
-                    Item::plain(
-                        tr!(init_claude_no),
-                        tr!(init_claude_no_detail),
-                        Pick::Init(false),
-                    ),
-                ],
-                None,
-            ));
-            return;
-        }
-        let (prompt, guide) = match nearest {
-            Some(path) => (init_check(&shown(&path)), path),
-            None => (INIT_NEW.to_owned(), self.parts.config.cwd.join("AGENTS.md")),
-        };
-        self.send_init(prompt, guide);
     }
 
     /// `/memory` (T35): the facts the project's memory keeps, each with its description — read here, no model asked;
@@ -4578,23 +4342,10 @@ impl App {
         let Some(claude) = self.init_claude.take() else {
             return;
         };
-        let claude_path = self.parts.config.cwd.join(&claude);
-        if migrate {
-            let agents = claude_path.with_file_name("AGENTS.md");
-            return self.send_init(init_migrate(&claude), agents);
+        match crate::said::init_with(&self.parts, &claude, migrate) {
+            Ok((prompt, guide)) => self.send_init(prompt, guide),
+            Err(reason) => self.transcript.note(reason, Tone::Fault),
         }
-        let folder = self
-            .parts
-            .config
-            .cwd
-            .join(&claude)
-            .parent()
-            .map(|folder| folder.display().to_string())
-            .unwrap_or_default();
-        if let Err(reason) = prefs::set_keep_claude(&self.parts.home, &folder, true) {
-            self.transcript.note(reason, Tone::Fault);
-        }
-        self.send_init(init_check(&claude), claude_path);
     }
 
     /// An `/init` turn, with the guide whose size is kept once it is answered (T42).
@@ -4813,43 +4564,18 @@ impl App {
         let Some(gate) = self.parts.tools.gate() else {
             return Picker::new(tr!(no_gate), Vec::new(), None);
         };
-        let granted = gate.granted();
+        let (granted, settings) = crate::said::gate_rules(gate);
         let mut items: Vec<Item> = granted
             .iter()
-            .map(|given| {
+            .map(|rules| {
                 // The rules, not the ask's label: reading and editing one path share a label.
                 Item::plain(
-                    format!(
-                        "allow {}",
-                        crate::transcript::clean(&given.rules.join(", "))
-                    ),
+                    format!("allow {}", crate::transcript::clean(&rules.join(", "))),
                     tr!(gate_always_detail),
-                    Pick::TakeBack(given.rules.clone()),
+                    Pick::TakeBack(rules.clone()),
                 )
             })
             .collect();
-        // An "always" rule stands in the allow list too: shown once, above, where it can be taken back.
-        let mut given: Vec<&str> = granted
-            .iter()
-            .flat_map(|given| given.rules.iter().map(String::as_str))
-            .collect();
-        let rules = gate.rules();
-        let mut settings = Vec::new();
-        for rule in rules.allow.iter().rev() {
-            if let Some(at) = given.iter().position(|text| *text == rule.text()) {
-                given.remove(at);
-            } else {
-                settings.push(("allow", rule.text().to_owned()));
-            }
-        }
-        settings.reverse();
-        settings.extend(rules.ask.iter().map(|rule| ("ask", rule.text().to_owned())));
-        settings.extend(
-            rules
-                .deny
-                .iter()
-                .map(|rule| ("deny", rule.text().to_owned())),
-        );
         items.extend(settings.into_iter().map(|(verdict, text)| {
             Item::plain(
                 format!("{verdict} {}", crate::transcript::clean(&text)),
@@ -5161,31 +4887,26 @@ impl App {
     /// The snapshot steps of this session's runs, newest first (`/steps`, T13): a step's change, or the files back
     /// to before it.
     fn steps_picker(&self) -> Picker {
-        let Some(root) = self.parts.config.snapshots.clone() else {
+        let Some(steps) = crate::said::steps(&self.parts, &self.session.marks) else {
             return Picker::new(tr!(steps_no_snapshots), Vec::new(), None);
         };
-        let runs = glut::snapshot::runs(&root, &self.parts.config.cwd);
-        let mut items = Vec::new();
-        for mark in self.session.marks.iter().rev() {
-            let Some(run) = &mark.run else { continue };
-            let Some(record) = runs.iter().find(|record| &record.run == run) else {
-                continue;
-            };
-            for step in record.steps.iter().rev() {
-                items.push(Item::plain(
+        let items: Vec<Item> = steps
+            .into_iter()
+            .map(|step| {
+                Item::plain(
                     tr!(
                         step_of,
                         turn = step.turn,
-                        prompt = crate::transcript::clean(&mark.prompt)
+                        prompt = crate::transcript::clean(&step.prompt)
                     ),
-                    &step.commit[..step.commit.len().min(8)],
+                    step.commit,
                     Pick::Step {
-                        run: run.clone(),
+                        run: step.run,
                         turn: step.turn,
                     },
-                ));
-            }
-        }
+                )
+            })
+            .collect();
         let title = if items.is_empty() {
             tr!(steps_none)
         } else {
@@ -5200,18 +4921,7 @@ impl App {
         let Some(root) = self.parts.config.snapshots.clone() else {
             return self.transcript.note(tr!(review_no_snapshots), Tone::Quiet);
         };
-        let kept = glut::snapshot::runs(&root, &self.parts.config.cwd);
-        let changed = |mark: &&crate::store::Mark| {
-            mark.run
-                .as_ref()
-                .is_some_and(|run| kept.iter().any(|record| &record.run == run))
-        };
-        let mark = match scope {
-            crate::review::Scope::Turn => self.session.marks.iter().rev().find(changed),
-            crate::review::Scope::Session => self.session.marks.iter().find(changed),
-        };
-        let Some((run, prompt)) =
-            mark.and_then(|mark| Some((mark.run.clone()?, mark.prompt.clone())))
+        let Some((run, prompt)) = crate::said::review_run(&self.parts, &self.session.marks, scope)
         else {
             return self.transcript.note(tr!(review_no_change), Tone::Quiet);
         };
@@ -8412,7 +8122,7 @@ fn model_detail(model: &models::ModelInfo, plan: bool) -> String {
 const MAX_WINDOW: u32 = 64 * 1024 * 1024;
 
 /// A token count as the owner types it: `65536`, `64k`, `1.5M` — digits and one point, a k or an M.
-fn parse_tokens(text: &str) -> Option<u32> {
+pub(crate) fn parse_tokens(text: &str) -> Option<u32> {
     let text = text.trim().to_lowercase();
     let (number, factor) = match text.strip_suffix('k') {
         Some(number) => (number, 1024.0),

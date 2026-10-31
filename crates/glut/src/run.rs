@@ -196,7 +196,8 @@ impl Cancel {
         self.flag.load(Ordering::SeqCst)
     }
 
-    async fn cancelled(&self) {
+    /// Waits until the run is called off: a caller's own wait (an editor's summary, T64b) ends with it.
+    pub async fn cancelled(&self) {
         // Registered before the flag is read, so a cancel between the two is not missed.
         let notified = self.notify.notified();
         if self.is_cancelled() {

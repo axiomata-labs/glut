@@ -810,6 +810,7 @@ pub const TEXTS: Texts = Texts {
     editor_set: "エディター: {command}",
     model_of: "{provider} のモデル",
     model_title: "モデル",
+    mode_title: "モード",
     models_missing: "一覧なし: {providers} — glut models refresh",
     no_session_yet: "まだセッションなし",
     this_one: "現在",
