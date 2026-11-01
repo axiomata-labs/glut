@@ -150,8 +150,9 @@ pub struct Bridge {
     pub found: Found,
     /// The quick questions: context, buffers, files, diagnostics.
     asks: tokio::sync::Mutex<Client>,
-    /// The diffs, which wait for the owner: a connection of their own, so a quick question never waits behind one.
-    diffs: tokio::sync::Mutex<Client>,
+    /// How a diff connects: each its own connection (T91), so a quick question never waits behind one and a rename's
+    /// files open side by side.
+    config: ServerConfig,
     /// The runtime the file tools wait on from their blocking threads.
     runtime: tokio::runtime::Handle,
     /// Questions the editor left unanswered in a row: after [`MOST_SILENCES`] it is taken for gone, and asked no more.
@@ -162,9 +163,10 @@ pub struct Bridge {
 const MOST_SILENCES: u32 = 3;
 
 /// How a diff in the editor ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
-    Accepted,
+    /// Accepted — with the owner's own text where they changed the right side (T91).
+    Accepted(Option<String>),
     Rejected,
     /// Closed without an answer, or the editor gone.
     Closed,
@@ -197,14 +199,10 @@ impl Bridge {
         let asks = Client::connect(SERVER, &config)
             .await
             .map_err(|err| err.to_string())?;
-        let mut diffs = Client::connect(SERVER, &config)
-            .await
-            .map_err(|err| err.to_string())?;
-        diffs.set_call_timeout(glut::mcp::elicit::WAIT);
         Ok(Arc::new(Bridge {
             found,
             asks: tokio::sync::Mutex::new(asks),
-            diffs: tokio::sync::Mutex::new(diffs),
+            config,
             runtime: tokio::runtime::Handle::current(),
             silences: std::sync::atomic::AtomicU32::new(0),
         }))
@@ -248,27 +246,49 @@ impl Bridge {
         old: Option<&str>,
         new: &str,
         title: &str,
+        editable: bool,
     ) -> Outcome {
         let arguments = json!({
             "id": id, "path": path.display().to_string(), "oldText": old, "newText": new, "title": title,
+            "editable": editable,
         });
-        let answer = {
-            let mut client = self.diffs.lock().await;
-            client.call("openDiff", arguments).await.ok()
+        // The file's text goes, and the owner's comes back: only to the process the lock file named, asked again now —
+        // the editor may have gone and another program taken its port.
+        let port = self.found.port;
+        let listening = tokio::task::spawn_blocking(move || listener_of(port))
+            .await
+            .ok()
+            .flatten();
+        if listening != Some(self.found.pid) {
+            return Outcome::Closed;
+        }
+        let answer = match Client::connect(SERVER, &self.config).await {
+            Ok(mut client) => {
+                client.set_call_timeout(glut::mcp::elicit::WAIT);
+                client.call("openDiff", arguments).await.ok()
+            }
+            Err(_) => None,
         };
+        let answer = answer.and_then(|text| serde_json::from_str::<Value>(&text).ok());
         let outcome = answer
-            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
-            .and_then(|value| {
-                value
-                    .get("outcome")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned)
-            });
-        match outcome.as_deref() {
-            Some("accepted") => Outcome::Accepted,
+            .as_ref()
+            .and_then(|value| value.get("outcome").and_then(Value::as_str));
+        match outcome {
+            Some("accepted") => Outcome::Accepted(
+                answer
+                    .as_ref()
+                    .and_then(|value| value.get("text").and_then(Value::as_str))
+                    .filter(|text| *text != new)
+                    .map(str::to_owned),
+            ),
             Some("rejected") => Outcome::Rejected,
             _ => Outcome::Closed,
         }
+    }
+
+    /// Tells the owner `message` in the editor (T91: a rename too large for diffs is answered in Glut).
+    pub async fn notify(&self, message: &str) {
+        let _ = self.ask("notify", json!({"message": message})).await;
     }
 
     /// Closes the diff `id`: the TUI's card answered first.
@@ -456,7 +476,16 @@ mod tests {
                                     "readBuffer" => tool(
                                         json!({"loaded": true, "path": "/w/a.rs", "text": "unsaved\n", "dirty": true}),
                                     ),
-                                    "openDiff" => tool(json!({"outcome": "accepted"})),
+                                    // As a person does: a while later — and with their own text for this one.
+                                    "openDiff" => {
+                                        tokio::time::sleep(std::time::Duration::from_millis(1500))
+                                            .await;
+                                        if message["params"]["arguments"]["newText"] == "b" {
+                                            tool(json!({"outcome": "accepted"}))
+                                        } else {
+                                            tool(json!({"outcome": "accepted", "text": "mine\n"}))
+                                        }
+                                    }
                                     _ => tool(json!({})),
                                 },
                             };
@@ -517,9 +546,29 @@ mod tests {
         );
         assert_eq!(read.as_deref(), Some("unsaved\n"));
         let outcome = bridge
-            .open_diff("ask-1", Path::new("/w/a.rs"), Some("a"), "b", "a.rs")
+            .open_diff("ask-1", Path::new("/w/a.rs"), Some("a"), "b", "a.rs", true)
             .await;
-        assert_eq!(outcome, Outcome::Accepted);
+        assert_eq!(outcome, Outcome::Accepted(None));
+        // T91: a rename's diffs wait for the owner side by side, each on its own connection; the owner's text comes
+        // back with an accept.
+        let started = std::time::Instant::now();
+        let (first, second) = tokio::join!(
+            bridge.open_diff("ask-2", Path::new("/w/a.rs"), Some("a"), "b", "a.rs", false),
+            bridge.open_diff(
+                "ask-3",
+                Path::new("/w/b.rs"),
+                Some("a"),
+                "c\n",
+                "b.rs",
+                true
+            ),
+        );
+        assert_eq!(first, Outcome::Accepted(None));
+        assert_eq!(second, Outcome::Accepted(Some("mine\n".into())));
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(2600),
+            "one after the other"
+        );
     }
 
     #[test]
@@ -601,7 +650,7 @@ mod live {
         let diff = Arc::clone(&bridge);
         let path = context.path.clone();
         let waiting = tokio::spawn(async move {
-            diff.open_diff("ask-live", &path, Some("a\n"), "b\n", "live")
+            diff.open_diff("ask-live", &path, Some("a\n"), "b\n", "live", true)
                 .await
         });
         tokio::time::sleep(Duration::from_millis(500)).await;

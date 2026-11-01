@@ -201,8 +201,20 @@ fn fit(host: &Host, rule: &Rule) -> bool {
             .is_none_or(|wait| wait <= rule.first_token_seconds)
 }
 
+/// Why a host stands where the rule put it; each side words it itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Standing {
+    /// In the tier the rule chose.
+    Chosen,
+    /// Another tier, above or below.
+    Other,
+    /// Too slow, down or unreliable now: at the end.
+    Slow,
+}
+
 /// The hosts of `model` (`author/slug`) in the order the rule gives, each with why it stands there.
-pub fn rank(hosts: &[Host], model: &str, rule: &Rule) -> Vec<(String, String)> {
+pub fn rank(hosts: &[Host], model: &str, rule: &Rule) -> Vec<(String, Standing)> {
     let maker = model.split('/').next().unwrap_or_default();
     let (fit_hosts, rest): (Vec<&Host>, Vec<&Host>) =
         hosts.iter().partition(|host| fit(host, rule));
@@ -267,15 +279,14 @@ pub fn rank(hosts: &[Host], model: &str, rule: &Rule) -> Vec<(String, String)> {
     ordered
         .into_iter()
         .map(|(host, tier, fit)| {
-            let level = host.quantization.as_deref().unwrap_or("?");
-            let why = if !fit {
-                format!("{level}, too slow or unreliable now")
+            let standing = if !fit {
+                Standing::Slow
             } else if tier == chosen {
-                format!("{level}, the tier the rule chose")
+                Standing::Chosen
             } else {
-                level.to_owned()
+                Standing::Other
             };
-            (host.tag.clone(), why)
+            (host.tag.clone(), standing)
         })
         .collect()
 }
@@ -518,6 +529,190 @@ async fn read_hosts(root: &str, key: Option<&str>, model: &str) -> Vec<Host> {
         .unwrap_or_default()
 }
 
+/// What `/route` and `glut providers route` were asked to change (T91: one reading for both).
+#[derive(Debug, Clone, PartialEq)]
+pub enum Change {
+    /// The model's pins away.
+    Off,
+    Prefer(Vec<String>),
+    Avoid(Vec<String>),
+    Quant(Vec<String>),
+    Strict(bool),
+    RuleOn(bool),
+    /// In percent, as the owner says it.
+    Margin(f64),
+    Uptime(f64),
+    Speed(f64),
+    Wait(f64),
+}
+
+/// Why a route could not be read or kept; each side words it itself.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RouteError {
+    /// The words are no change `/route` knows.
+    Usage,
+    /// A quantization OpenRouter does not take.
+    Quant,
+    /// The provider is not OpenRouter: it has no hosts to choose.
+    NotHere,
+    /// No such provider in `providers.json`.
+    NoProvider,
+    /// `providers.json` could not be read or written.
+    File(String),
+}
+
+/// Reads the words after `route`: `Ok(None)` is no change, only the showing.
+///
+/// # Errors
+///
+/// [`RouteError::Usage`] for words it does not know, [`RouteError::Quant`] for a level OpenRouter does not take.
+pub fn parse(words: &[&str]) -> Result<Option<Change>, RouteError> {
+    let names = |words: &[&str]| -> Result<Vec<String>, RouteError> {
+        words
+            .iter()
+            .map(|word| word.to_lowercase())
+            .map(|word| is_host_name(&word).then_some(word).ok_or(RouteError::Usage))
+            .collect()
+    };
+    let number = |word: &str| -> Result<f64, RouteError> {
+        word.trim_end_matches('%')
+            .parse::<f64>()
+            .ok()
+            .filter(|number| number.is_finite() && *number >= 0.0)
+            .ok_or(RouteError::Usage)
+    };
+    Ok(Some(match words {
+        [] => return Ok(None),
+        ["off"] => Change::Off,
+        ["prefer", hosts @ ..] if !hosts.is_empty() => Change::Prefer(names(hosts)?),
+        ["avoid", hosts @ ..] if !hosts.is_empty() => Change::Avoid(names(hosts)?),
+        ["quant", levels @ ..] if !levels.is_empty() => {
+            let levels = names(levels)?;
+            if levels
+                .iter()
+                .any(|level| !QUANTIZATIONS.contains(&level.as_str()))
+            {
+                return Err(RouteError::Quant);
+            }
+            Change::Quant(levels)
+        }
+        ["strict", switch @ ("on" | "off")] => Change::Strict(*switch == "on"),
+        ["rule", switch @ ("on" | "off")] => Change::RuleOn(*switch == "on"),
+        ["rule", "margin", n] => Change::Margin(number(n)?),
+        ["rule", "uptime", n] => Change::Uptime(number(n)?.min(100.0)),
+        ["rule", "speed", n] => Change::Speed(number(n)?),
+        ["rule", "wait", n] => Change::Wait(number(n)?),
+        _ => return Err(RouteError::Usage),
+    }))
+}
+
+/// One host as `/route` shows it: in the rule's order, with why it stands there.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Ranked {
+    pub tag: String,
+    /// The quantization it names, if any.
+    pub quantization: Option<String>,
+    pub standing: Standing,
+    /// USD per million tokens, where OpenRouter names a price.
+    pub price: Option<f64>,
+    pub tokens_per_second: Option<f64>,
+}
+
+/// What `/route` shows of a model: the rule, its pins and, where the hosts were read and the rule is on, their order.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Shown {
+    pub model: String,
+    pub rule: Rule,
+    pub pins: Pins,
+    /// `None`: no hosts read yet; empty: the rule is off.
+    pub hosts: Option<Vec<Ranked>>,
+}
+
+/// The provider `id`'s entry for `root`, if it is OpenRouter's.
+fn openrouter_entry<'a>(
+    list: &'a mut super::Providers,
+    id: &str,
+    root: &str,
+) -> Result<&'a mut super::Entry, RouteError> {
+    if !is_openrouter(root) {
+        return Err(RouteError::NotHere);
+    }
+    list.providers.get_mut(id).ok_or(RouteError::NoProvider)
+}
+
+/// What `/route` shows for `model` of provider `id` at `root`, from the hosts already kept.
+///
+/// # Errors
+///
+/// [`RouteError::NotHere`] off OpenRouter, [`RouteError::NoProvider`], [`RouteError::File`].
+pub fn show(home: &Path, id: &str, root: &str, model: &str) -> Result<Shown, RouteError> {
+    let mut list = super::Providers::load(home).map_err(|err| RouteError::File(err.to_string()))?;
+    let entry = openrouter_entry(&mut list, id, root)?;
+    let rule = entry.routing.rule.clone().unwrap_or_default();
+    let pins = entry.routing.models.get(model).cloned().unwrap_or_default();
+    let hosts = kept_hosts(home, model).map(|hosts| {
+        if !rule.on {
+            return Vec::new();
+        }
+        rank(&hosts, model, &rule)
+            .into_iter()
+            .map(|(tag, standing)| {
+                let host = hosts.iter().find(|host| host.tag == tag);
+                Ranked {
+                    quantization: host.and_then(|host| host.quantization.clone()),
+                    price: host.and_then(|host| host.price),
+                    tokens_per_second: host.and_then(|host| host.tokens_per_second),
+                    tag,
+                    standing,
+                }
+            })
+            .collect()
+    });
+    Ok(Shown {
+        model: model.to_owned(),
+        rule,
+        pins,
+        hosts,
+    })
+}
+
+/// Keeps `change` for `model` of provider `id` at `root` in `providers.json`; the caller sets the model's routing
+/// anew after it ([`kept_for_endpoint`]).
+///
+/// # Errors
+///
+/// [`RouteError::NotHere`] off OpenRouter, [`RouteError::NoProvider`], [`RouteError::File`].
+pub fn apply(
+    home: &Path,
+    id: &str,
+    root: &str,
+    model: &str,
+    change: Change,
+) -> Result<(), RouteError> {
+    let mut list = super::Providers::load(home).map_err(|err| RouteError::File(err.to_string()))?;
+    let entry = openrouter_entry(&mut list, id, root)?;
+    let mut rule = entry.routing.rule.clone().unwrap_or_default();
+    let pins = entry.routing.models.entry(model.to_owned()).or_default();
+    match change {
+        Change::Off => *pins = Pins::default(),
+        Change::Prefer(hosts) => pins.prefer = hosts,
+        Change::Avoid(hosts) => pins.avoid = hosts,
+        Change::Quant(levels) => pins.quant = levels,
+        Change::Strict(on) => pins.strict = on,
+        Change::RuleOn(on) => rule.on = on,
+        Change::Margin(percent) => rule.margin = percent / 100.0,
+        Change::Uptime(percent) => rule.uptime = percent,
+        Change::Speed(speed) => rule.tokens_per_second = speed,
+        Change::Wait(seconds) => rule.first_token_seconds = seconds,
+    }
+    if pins.is_empty() {
+        entry.routing.models.remove(model);
+    }
+    entry.routing.rule = (rule != Rule::default()).then_some(rule);
+    list.save(home)
+        .map_err(|err| RouteError::File(err.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -535,7 +730,7 @@ mod tests {
         }
     }
 
-    fn tags(ranked: &[(String, String)]) -> Vec<&str> {
+    fn tags(ranked: &[(String, Standing)]) -> Vec<&str> {
         ranked.iter().map(|(tag, _)| tag.as_str()).collect()
     }
 
@@ -679,5 +874,79 @@ mod tests {
             ..Rule::default()
         });
         assert!(routing.check().is_err());
+    }
+
+    #[test]
+    fn the_route_words_are_read_once_for_every_side() {
+        assert_eq!(parse(&[]), Ok(None));
+        assert_eq!(
+            parse(&["prefer", "Xiaomi", "deepinfra/fp8"]),
+            Ok(Some(Change::Prefer(vec![
+                "xiaomi".into(),
+                "deepinfra/fp8".into()
+            ])))
+        );
+        assert_eq!(
+            parse(&["quant", "fp8", "bf16"]),
+            Ok(Some(Change::Quant(vec!["fp8".into(), "bf16".into()])))
+        );
+        assert_eq!(parse(&["quant", "full"]), Err(RouteError::Quant));
+        assert_eq!(
+            parse(&["rule", "uptime", "120"]),
+            Ok(Some(Change::Uptime(100.0)))
+        );
+        assert_eq!(parse(&["rule", "margin", "-5"]), Err(RouteError::Usage));
+        assert_eq!(parse(&["prefer"]), Err(RouteError::Usage));
+        assert_eq!(parse(&["avoid", "a b;c"]), Err(RouteError::Usage));
+    }
+
+    #[test]
+    fn a_change_is_kept_for_its_model_and_off_openrouter_there_is_none() {
+        let home = std::env::temp_dir().join(format!(
+            "glut-route-{}-{}",
+            std::process::id(),
+            chrono::Local::now()
+                .timestamp_nanos_opt()
+                .unwrap_or_default()
+        ));
+        std::fs::create_dir_all(home.join(".glut")).unwrap();
+        let mut list = super::super::Providers::default();
+        list.providers.insert(
+            "openrouter".into(),
+            serde_json::from_value(json!({"kind": "openrouter", "model": "x/m"})).unwrap(),
+        );
+        list.save(&home).unwrap();
+        let root = "https://openrouter.ai/api/v1";
+        apply(
+            &home,
+            "openrouter",
+            root,
+            "x/m",
+            Change::Avoid(vec!["c".into()]),
+        )
+        .unwrap();
+        apply(&home, "openrouter", root, "x/m", Change::Margin(25.0)).unwrap();
+        let shown = show(&home, "openrouter", root, "x/m").unwrap();
+        assert_eq!(shown.pins.avoid, ["c"]);
+        assert!((shown.rule.margin - 0.25).abs() < 1e-9);
+        assert_eq!(shown.hosts, None, "nothing read yet");
+        apply(&home, "openrouter", root, "x/m", Change::Off).unwrap();
+        let kept = super::super::Providers::load(&home).unwrap();
+        assert!(kept.providers["openrouter"].routing.models.is_empty());
+        assert_eq!(
+            apply(
+                &home,
+                "openrouter",
+                "https://api.anthropic.com",
+                "x/m",
+                Change::Off
+            ),
+            Err(RouteError::NotHere)
+        );
+        assert_eq!(
+            apply(&home, "nobody", root, "x/m", Change::Off),
+            Err(RouteError::NoProvider)
+        );
+        let _ = std::fs::remove_dir_all(&home);
     }
 }

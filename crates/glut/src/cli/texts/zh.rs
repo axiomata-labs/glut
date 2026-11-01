@@ -132,4 +132,13 @@ pub const TEXTS: Texts = Texts {
     keychain_not_listed: "{program} 不在列表中。",
     keychain_opened: "钥匙串已对 Glut 运行的每个命令开放，跨会话保持 — glut keychain close 会再次关闭它。",
     keychain_closed: "钥匙串已再次对 Glut 运行的每个命令关闭；列表中的程序会请求它。",
+    route_not_here: "{provider} 每个模型只由一个主机提供：没有可选的主机（OpenRouter 有）",
+    route_rule_now: "规则 {on}：全精度，除非比 fp8 贵 {margin}% 以上；fp4 放最后；可用率低于 {uptime}%、低于 {speed} tok/s 或首个 token 超过 {wait} 秒的主机排到最后",
+    route_pins: "此模型的固定设置：{pins}",
+    route_head: "Glut 为 {model} 发送的顺序：",
+    route_none_read: "尚未读取 {model} 的主机：会随下一次请求获取",
+    route_set: "已为 {model} 保存，从下一次请求起生效",
+    route_usage: "glut providers route — 顺序与规则；glut providers route prefer|avoid <hosts>、quant <levels>、strict on|off、off；glut providers route rule on|off、rule margin|uptime|speed|wait <n>",
+    route_chosen: "规则选定的档位",
+    route_slow: "目前太慢或不可靠",
 };

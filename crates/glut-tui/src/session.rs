@@ -562,8 +562,16 @@ pub async fn build(
             prices,
             window,
         } => Engine {
+            model: {
+                let model =
+                    Model::new(endpoint.clone(), protocol).map_err(|err| err.to_string())?;
+                // T91: a host's fixed engine takes the host rule too — Glut's, from its own `providers.json`.
+                model.set_routing(
+                    providers::routing::for_endpoint(&parts.home, &provider, &endpoint).await,
+                );
+                Arc::new(model)
+            },
             provider,
-            model: Arc::new(Model::new(endpoint.clone(), protocol).map_err(|err| err.to_string())?),
             // Glut's own prices and window first (feedback "Glut standalone"), then the host's.
             prices: parts.owner_prices.get(&endpoint.model).copied().or(prices),
             window: parts

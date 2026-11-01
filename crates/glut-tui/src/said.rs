@@ -427,146 +427,96 @@ pub fn route(
     endpoint: &glut::ModelEndpoint,
     rest: &str,
 ) -> Result<(String, bool), String> {
-    use glut::providers::Providers;
-    use glut::providers::routing::{self, Rule};
-    if !routing::is_openrouter(&endpoint.base_url) {
-        return Err(tr!(route_not_here, provider = provider).to_string());
-    }
-    let model = endpoint.model.clone();
+    use glut::providers::routing::{self, RouteError};
     let words: Vec<&str> = rest.split_whitespace().collect();
-    let mut list = Providers::load(home).map_err(|err| err.to_string())?;
-    let Some(entry) = list.providers.get_mut(provider) else {
-        return Err(tr!(no_provider_entry, provider = provider).to_string());
+    let model = endpoint.model.as_str();
+    let said = |error: RouteError| match error {
+        RouteError::Usage => tr!(route_usage).to_string(),
+        RouteError::Quant => format!(
+            "{} ({})",
+            tr!(route_usage),
+            routing::QUANTIZATIONS.join(", ")
+        ),
+        RouteError::NotHere => tr!(route_not_here, provider = provider).to_string(),
+        RouteError::NoProvider => tr!(no_provider_entry, provider = provider).to_string(),
+        RouteError::File(error) => error,
     };
-    let rule = entry.routing.rule.clone().unwrap_or_default();
-    let pins = entry
-        .routing
-        .models
-        .get(&model)
-        .cloned()
-        .unwrap_or_default();
-    let host_name = |word: &str| -> Result<String, String> {
-        let word = word.to_lowercase();
-        routing::is_host_name(&word)
-            .then_some(word)
-            .ok_or_else(|| tr!(route_usage).to_string())
-    };
-    let number = |word: Option<&&str>| -> Result<f64, String> {
-        word.and_then(|word| word.trim_end_matches('%').parse::<f64>().ok())
-            .filter(|number| number.is_finite() && *number >= 0.0)
-            .ok_or_else(|| tr!(route_usage).to_string())
-    };
-    match words.as_slice() {
-        [] => {
-            let mut lines = vec![
-                tr!(
-                    route_rule_now,
-                    on = if rule.on { "on" } else { "off" },
-                    margin = (rule.margin * 100.0).round(),
-                    uptime = rule.uptime,
-                    speed = rule.tokens_per_second,
-                    wait = rule.first_token_seconds
-                )
-                .to_string(),
-            ];
-            if !pins.is_empty() {
-                let mut said = Vec::new();
-                if !pins.prefer.is_empty() {
-                    said.push(format!("prefer {}", pins.prefer.join(" ")));
-                }
-                if !pins.avoid.is_empty() {
-                    said.push(format!("avoid {}", pins.avoid.join(" ")));
-                }
-                if !pins.quant.is_empty() {
-                    said.push(format!("quant {}", pins.quant.join(" ")));
-                }
-                if pins.strict {
-                    said.push("strict".to_owned());
-                }
-                lines.push(tr!(route_pins, pins = said.join(" · ")).to_string());
-            }
-            match routing::kept_hosts(home, &model) {
-                Some(hosts) if rule.on => {
-                    lines.push(
-                        tr!(route_head, model = crate::transcript::clean(&model)).to_string(),
-                    );
-                    let hosts_by_tag: std::collections::BTreeMap<&str, &routing::Host> =
-                        hosts.iter().map(|host| (host.tag.as_str(), host)).collect();
-                    for (at, (tag, why)) in routing::rank(&hosts, &model, &rule).iter().enumerate()
-                    {
-                        let host = hosts_by_tag.get(tag.as_str());
-                        let speed = host
-                            .and_then(|host| host.tokens_per_second)
-                            .map(|speed| format!(" · {speed:.0} tok/s"))
-                            .unwrap_or_default();
-                        let price = host
-                            .and_then(|host| host.price)
-                            .map(|price| format!(" · ${price:.2}/M"))
-                            .unwrap_or_default();
-                        lines.push(format!("  {}. {tag} — {why}{price}{speed}", at + 1));
-                    }
-                }
-                Some(_) => {}
-                None => lines.push(
-                    tr!(route_none_read, model = crate::transcript::clean(&model)).to_string(),
-                ),
-            }
-            Ok((lines.join("\n"), false))
-        }
-        ["off"] => {
-            entry.routing.models.remove(&model);
-            list.save(home).map_err(|err| err.to_string())?;
+    match routing::parse(&words).map_err(said)? {
+        Some(change) => {
+            routing::apply(home, provider, &endpoint.base_url, model, change).map_err(said)?;
             Ok((tr!(route_set, model = model).to_string(), true))
         }
-        ["prefer" | "avoid" | "quant", hosts @ ..] if !hosts.is_empty() => {
-            let named: Vec<String> = hosts
-                .iter()
-                .map(|word| host_name(word))
-                .collect::<Result<_, _>>()?;
-            if words[0] == "quant"
-                && named
-                    .iter()
-                    .any(|word| !routing::QUANTIZATIONS.contains(&word.as_str()))
-            {
-                return Err(format!(
-                    "{} ({})",
-                    tr!(route_usage),
-                    routing::QUANTIZATIONS.join(", ")
+        None => {
+            let shown = routing::show(home, provider, &endpoint.base_url, model).map_err(said)?;
+            Ok((shown_route(&shown), false))
+        }
+    }
+}
+
+/// Why a host stands where it does, with its quantization: `fp8, the tier the rule chose`.
+fn standing(host: &glut::providers::routing::Ranked) -> String {
+    use glut::providers::routing::Standing;
+    let level = crate::transcript::clean(host.quantization.as_deref().unwrap_or("?"));
+    match host.standing {
+        Standing::Chosen => format!("{level}, {}", tr!(route_chosen)),
+        Standing::Slow => format!("{level}, {}", tr!(route_slow)),
+        Standing::Other => level,
+    }
+}
+
+/// `/route`'s answer without words: the rule, the model's pins and the order Glut sends.
+fn shown_route(shown: &glut::providers::routing::Shown) -> String {
+    let (rule, pins) = (&shown.rule, &shown.pins);
+    let mut lines = vec![
+        tr!(
+            route_rule_now,
+            on = if rule.on { "on" } else { "off" },
+            margin = (rule.margin * 100.0).round(),
+            uptime = rule.uptime,
+            speed = rule.tokens_per_second,
+            wait = rule.first_token_seconds
+        )
+        .to_string(),
+    ];
+    if !pins.is_empty() {
+        let mut said = Vec::new();
+        if !pins.prefer.is_empty() {
+            said.push(format!("prefer {}", pins.prefer.join(" ")));
+        }
+        if !pins.avoid.is_empty() {
+            said.push(format!("avoid {}", pins.avoid.join(" ")));
+        }
+        if !pins.quant.is_empty() {
+            said.push(format!("quant {}", pins.quant.join(" ")));
+        }
+        if pins.strict {
+            said.push("strict".to_owned());
+        }
+        lines.push(tr!(route_pins, pins = said.join(" · ")).to_string());
+    }
+    let model = crate::transcript::clean(&shown.model);
+    match &shown.hosts {
+        Some(hosts) if !hosts.is_empty() => {
+            lines.push(tr!(route_head, model = model).to_string());
+            for (at, host) in hosts.iter().enumerate() {
+                let price = host
+                    .price
+                    .map(|price| format!(" · ${price:.2}/M"))
+                    .unwrap_or_default();
+                let speed = host
+                    .tokens_per_second
+                    .map(|speed| format!(" · {speed:.0} tok/s"))
+                    .unwrap_or_default();
+                lines.push(format!(
+                    "  {}. {} — {}{price}{speed}",
+                    at + 1,
+                    crate::transcript::clean(&host.tag),
+                    standing(host)
                 ));
             }
-            let pins = entry.routing.models.entry(model.clone()).or_default();
-            match words[0] {
-                "prefer" => pins.prefer = named,
-                "avoid" => pins.avoid = named,
-                _ => pins.quant = named,
-            }
-            list.save(home).map_err(|err| err.to_string())?;
-            Ok((tr!(route_set, model = model).to_string(), true))
         }
-        ["strict", switch @ ("on" | "off")] => {
-            let pins = entry.routing.models.entry(model.clone()).or_default();
-            pins.strict = *switch == "on";
-            if pins.is_empty() {
-                entry.routing.models.remove(&model);
-            }
-            list.save(home).map_err(|err| err.to_string())?;
-            Ok((tr!(route_set, model = model).to_string(), true))
-        }
-        ["rule", what, value @ ..] => {
-            let mut rule: Rule = rule;
-            match (*what, value) {
-                ("on", []) => rule.on = true,
-                ("off", []) => rule.on = false,
-                ("margin", [n]) => rule.margin = number(Some(n))? / 100.0,
-                ("uptime", [n]) => rule.uptime = number(Some(n))?.min(100.0),
-                ("speed", [n]) => rule.tokens_per_second = number(Some(n))?,
-                ("wait", [n]) => rule.first_token_seconds = number(Some(n))?,
-                _ => return Err(tr!(route_usage).to_string()),
-            }
-            entry.routing.rule = (rule != Rule::default()).then_some(rule);
-            list.save(home).map_err(|err| err.to_string())?;
-            Ok((tr!(route_set, model = model).to_string(), true))
-        }
-        _ => Err(tr!(route_usage).to_string()),
+        Some(_) => {}
+        None => lines.push(tr!(route_none_read, model = model).to_string()),
     }
+    lines.join("\n")
 }

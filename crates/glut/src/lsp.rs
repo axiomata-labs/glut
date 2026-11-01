@@ -19,6 +19,9 @@ use serde_json::{Value, json};
 
 use crate::model::ToolSpec;
 
+/// The most files a rename shows as the editor's diffs (T91); past them only Glut's own card asks.
+pub const RENAME_DIFFS: usize = 10;
+
 pub(crate) const NAME: &str = "lsp";
 
 /// Lines shown after a definition's own.

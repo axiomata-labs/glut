@@ -139,4 +139,13 @@ pub const TEXTS: Texts = Texts {
     keychain_opened: "The Keychain is open to every command Glut runs, kept across sessions — glut keychain close \
                       shuts it again.",
     keychain_closed: "The Keychain is shut to every command Glut runs again; the listed programs ask for it.",
+    route_not_here: "{provider} serves each model from one host: there are no hosts to choose (OpenRouter has them)",
+    route_rule_now: "the rule {on}: full precision unless {margin} % dearer than fp8, fp4 last; a host under {uptime} % uptime, {speed} tok/s or over {wait} s to the first token goes to the end",
+    route_pins: "this model's pins: {pins}",
+    route_head: "the order Glut sends for {model}:",
+    route_none_read: "no hosts read for {model} yet: they come with its next request",
+    route_set: "kept for {model}, from the next request on",
+    route_usage: "glut providers route — the order and the rule; glut providers route prefer|avoid <hosts>, quant <levels>, strict on|off, off; glut providers route rule on|off, rule margin|uptime|speed|wait <n>",
+    route_chosen: "the tier the rule chose",
+    route_slow: "too slow or unreliable now",
 };

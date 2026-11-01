@@ -264,6 +264,24 @@ crate::catalog! {
         keychain_opened: &'static str,
         /// `glut keychain close`.
         keychain_closed: &'static str,
+        /// `glut providers route` for a provider off OpenRouter: `{provider}`.
+        route_not_here: &'static str,
+        /// The rule: `{on}`, `{margin}`, `{uptime}`, `{speed}`, `{wait}`.
+        route_rule_now: &'static str,
+        /// The model's pins: `{pins}`.
+        route_pins: &'static str,
+        /// Before the order: `{model}`.
+        route_head: &'static str,
+        /// No hosts read yet for `{model}`.
+        route_none_read: &'static str,
+        /// A change kept for `{model}`.
+        route_set: &'static str,
+        /// What `glut providers route` takes.
+        route_usage: &'static str,
+        /// `/route`: a host in the tier the rule chose.
+        route_chosen: &'static str,
+        /// `/route`: a host at the end, too slow or unreliable.
+        route_slow: &'static str,
     }
 }
 

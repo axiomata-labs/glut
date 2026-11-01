@@ -930,6 +930,32 @@ pub struct AskRequest {
     pub note: Option<String>,
 }
 
+/// The owner's own version of an edit asked about (T91): the whole text they let be written, and what the model
+/// proposed, for the note that tells it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnersText {
+    pub text: String,
+    pub proposed: String,
+    /// The file the diff showed the change of; `None`: there was none. The owner's text is written only over it.
+    pub based_on: Option<String>,
+}
+
+/// What an open question shows, set for as long as it is open: cleared when it ends, however it ends.
+struct Shown<'a>(&'a Mutex<Option<serde_json::Value>>);
+
+impl<'a> Shown<'a> {
+    fn set(slot: &'a Mutex<Option<serde_json::Value>>, value: Option<serde_json::Value>) -> Self {
+        *slot.lock().unwrap_or_else(|poison| poison.into_inner()) = value;
+        Shown(slot)
+    }
+}
+
+impl Drop for Shown<'_> {
+    fn drop(&mut self) {
+        *self.0.lock().unwrap_or_else(|poison| poison.into_inner()) = None;
+    }
+}
+
 /// The owner's answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Answer {
@@ -1132,6 +1158,17 @@ pub struct Gate {
     /// One question at a time: the proxy's connections can ask while a command runs, and two prompts in one terminal
     /// would mix their answers.
     asking: tokio::sync::Mutex<()>,
+    /// The whole arguments of the call the open question is about (T91), while it is open: an edit's diff in the
+    /// editor needs its text, which the call's event carries cut. Never an event's, a journal's or the model's.
+    asked_arguments: Mutex<Option<serde_json::Value>>,
+    /// What a rename's open question shows (T91): each file as it would leave it, set only by
+    /// [`Gate::judge_all_showing`] — never from a call's arguments, which the model writes.
+    asked_rename: Mutex<Option<serde_json::Value>>,
+    /// The owner's own text for the open question's edit (T91), given beside the answer ([`Gate::answer_with_text`]).
+    owners_text: Mutex<Option<OwnersText>>,
+    /// The owner's text of an edit allowed, by the call it was given for, until the toolbox takes it
+    /// ([`Gate::take_owners_text`]).
+    owners_answer: Mutex<Option<(serde_json::Value, OwnersText)>>,
     /// Each judgement under the subagent's `task` call it was made for ([`as_subagent`]); `None`: the run's own.
     log: Mutex<Vec<(Option<String>, Judgement)>>,
     /// What the owner's "always" answers allowed from then on, oldest first: the scope as the owner read it and the
@@ -1176,6 +1213,10 @@ impl Gate {
             mode: Mutex::new(mode),
             asker,
             asking: tokio::sync::Mutex::new(()),
+            asked_arguments: Mutex::new(None),
+            asked_rename: Mutex::new(None),
+            owners_text: Mutex::new(None),
+            owners_answer: Mutex::new(None),
             log: Mutex::new(Vec::new()),
             granted: Mutex::new(Vec::new()),
             narrowings: Vec::new(),
@@ -1510,6 +1551,25 @@ impl Gate {
     /// [`Self::ask_owner`] with choices beyond yes and no: [`Answer::AllowWithin`] picks one of `scopes` (`exit_plan`
     /// offers the modes to leave Plan into).
     pub async fn ask_owner_within(&self, tool: &str, target: &str, scopes: Vec<String>) -> Answer {
+        self.ask_owner_showing(tool, target, scopes, None).await
+    }
+
+    /// What a rename's open question shows, while it is open (T91).
+    pub fn asked_rename(&self) -> Option<serde_json::Value> {
+        self.asked_rename
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone()
+    }
+
+    /// [`Self::ask_owner_within`] with a rename's files to show beside its target ([`Self::asked_rename`]).
+    async fn ask_owner_showing(
+        &self,
+        tool: &str,
+        target: &str,
+        scopes: Vec<String>,
+        rename: Option<&serde_json::Value>,
+    ) -> Answer {
         if !self.asker.present() {
             return Answer::Deny;
         }
@@ -1522,6 +1582,7 @@ impl Gate {
             note: None,
         };
         let _one_at_a_time = self.asking.lock().await;
+        let _shown = Shown::set(&self.asked_rename, rename.cloned());
         self.asker.ask(&request).await
     }
 
@@ -1564,6 +1625,49 @@ impl Gate {
     /// Judges `access` of `tool`: `Ok` to run it, `Err` with the reason to refuse it. Asks the owner where the rules
     /// or the mode say so.
     pub async fn judge(&self, tool: &str, access: &Access) -> Result<(), String> {
+        self.judge_call(tool, access, None).await
+    }
+
+    /// The arguments of the call the open question is about, while one is open (T91): the screen shows an edit's
+    /// diff from them.
+    pub fn asked_arguments(&self) -> Option<serde_json::Value> {
+        self.asked_arguments
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone()
+    }
+
+    /// Gives the owner's own text for the edit the open question is about, before it is answered (T91: changed on a
+    /// diff's right side in the editor). Taken only with an allowing answer, and only while a question is open.
+    pub fn answer_with_text(&self, owners: OwnersText) {
+        if self.asked_arguments().is_some() && self.asked_rename().is_none() {
+            *self
+                .owners_text
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner()) = Some(owners);
+        }
+    }
+
+    /// The owner's text for the allowed call with `arguments`, once: the toolbox writes it instead of the model's.
+    pub fn take_owners_text(&self, arguments: &serde_json::Value) -> Option<OwnersText> {
+        let mut answer = self
+            .owners_answer
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        if answer.as_ref().is_some_and(|(asked, _)| asked == arguments) {
+            answer.take().map(|(_, owners)| owners)
+        } else {
+            None
+        }
+    }
+
+    /// [`Self::judge`] for a call whose whole `arguments` a question may show ([`Self::asked_arguments`]).
+    pub async fn judge_call(
+        &self,
+        tool: &str,
+        access: &Access,
+        arguments: Option<&serde_json::Value>,
+    ) -> Result<(), String> {
         let target = describe(access);
         if *access == Access::Own {
             return Ok(());
@@ -1623,7 +1727,32 @@ impl Gate {
                     note,
                 };
                 let _one_at_a_time = self.asking.lock().await;
-                let answer = self.asker.ask(&request).await;
+                let take = || {
+                    self.owners_text
+                        .lock()
+                        .unwrap_or_else(|poison| poison.into_inner())
+                        .take()
+                };
+                take();
+                let answer = {
+                    // Cleared when the question ends, answered or dropped with its run.
+                    let _shown = Shown::set(&self.asked_arguments, arguments.cloned());
+                    self.asker.ask(&request).await
+                };
+                let owners = take();
+                if let (Some(owners), Some(arguments)) = (owners, arguments)
+                    && matches!(
+                        answer,
+                        Answer::Allow | Answer::AllowAlways | Answer::AllowWithin(_)
+                    )
+                    && matches!(access, Access::Edit { .. })
+                {
+                    *self
+                        .owners_answer
+                        .lock()
+                        .unwrap_or_else(|poison| poison.into_inner()) =
+                        Some((arguments.clone(), owners));
+                }
                 let within = match answer {
                     Answer::AllowAlways => Some(0),
                     Answer::AllowWithin(at) => Some(usize::from(at)),
@@ -1818,6 +1947,17 @@ impl Gate {
         accesses: &[Access],
         shown: &str,
     ) -> Result<(), String> {
+        self.judge_all_showing(tool, accesses, shown, None).await
+    }
+
+    /// [`Self::judge_all`] with what its question may show beside the target (T91: a rename's files as diffs).
+    pub async fn judge_all_showing(
+        &self,
+        tool: &str,
+        accesses: &[Access],
+        shown: &str,
+        arguments: Option<&serde_json::Value>,
+    ) -> Result<(), String> {
         let mut weighed = Vec::new();
         for access in accesses {
             let target = describe(access);
@@ -1841,10 +1981,15 @@ impl Gate {
         } else if !self.asker.present() {
             Some((false, "no one to ask".to_owned()))
         } else {
-            Some(match self.ask_owner(tool, shown).await {
-                Answer::Deny => (false, "refused when asked".to_owned()),
-                _ => (true, "allowed when asked, this once".to_owned()),
-            })
+            Some(
+                match self
+                    .ask_owner_showing(tool, shown, Vec::new(), arguments)
+                    .await
+                {
+                    Answer::Deny => (false, "refused when asked".to_owned()),
+                    _ => (true, "allowed when asked, this once".to_owned()),
+                },
+            )
         };
         let allowed = asked.as_ref().is_none_or(|(allowed, _)| *allowed);
         for (target, said) in weighed {
@@ -2437,6 +2582,47 @@ mod tests {
             self.0.lock().unwrap().push(request.from.clone());
             Box::pin(async { Answer::Allow })
         }
+    }
+
+    /// Answers yes and keeps what its gate held as the asked call's arguments while it asked (T91).
+    struct SeesArguments(
+        std::sync::OnceLock<std::sync::Weak<Gate>>,
+        Mutex<Vec<Option<serde_json::Value>>>,
+    );
+
+    impl Asker for SeesArguments {
+        fn ask<'a>(&'a self, _request: &'a AskRequest) -> AnswerFuture<'a> {
+            let held = self
+                .0
+                .get()
+                .and_then(std::sync::Weak::upgrade)
+                .and_then(|gate| gate.asked_arguments());
+            self.1.lock().unwrap().push(held);
+            Box::pin(async { Answer::Allow })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_questions_whole_arguments_are_held_only_while_it_is_open() {
+        let asker = Arc::new(SeesArguments(
+            std::sync::OnceLock::new(),
+            Mutex::new(Vec::new()),
+        ));
+        let gate = Arc::new(Gate::new(RuleSet::default(), Mode::Default, asker.clone()));
+        asker.0.set(Arc::downgrade(&gate)).unwrap();
+        let long = serde_json::json!({"path": "a.txt", "content": "x".repeat(5_000)});
+        let edit = Access::Edit {
+            path: "a.txt".into(),
+        };
+        assert!(
+            gate.judge_call("write_file", &edit, Some(&long))
+                .await
+                .is_ok()
+        );
+        assert_eq!(asker.1.lock().unwrap().pop(), Some(Some(long)));
+        assert_eq!(gate.asked_arguments(), None, "gone once answered");
+        assert!(gate.judge("write_file", &edit).await.is_ok());
+        assert_eq!(asker.1.lock().unwrap().pop(), Some(None));
     }
 
     /// Answers yes and keeps whether each ask was for the Keychain.

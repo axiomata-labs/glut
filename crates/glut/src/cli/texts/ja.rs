@@ -133,4 +133,13 @@ pub const TEXTS: Texts = Texts {
     keychain_not_listed: "{program} はリストにありません。",
     keychain_opened: "キーチェーンは Glut が実行するすべてのコマンドに開いており、セッションをまたいで保持されます — glut keychain close で再び閉じます。",
     keychain_closed: "キーチェーンは Glut が実行するすべてのコマンドに対して再び閉じました。リストのプログラムはそれを求めます。",
+    route_not_here: "{provider} は各モデルを一つのホストで提供します：選べるホストはありません（OpenRouter にはあります）",
+    route_rule_now: "ルール {on}：fp8 より {margin} % 以上高くない限りフル精度、fp4 は最後。稼働率 {uptime} % 未満、{speed} tok/s 未満、最初の Token まで {wait} 秒超のホストは最後へ",
+    route_pins: "このモデルの固定：{pins}",
+    route_head: "Glut が {model} に送る順序：",
+    route_none_read: "{model} のホストはまだ読んでいません：次のリクエストで届きます",
+    route_set: "{model} 用に保存しました。次のリクエストから有効です",
+    route_usage: "glut providers route — 順序とルール。glut providers route prefer|avoid <hosts>、quant <levels>、strict on|off、off。glut providers route rule on|off、rule margin|uptime|speed|wait <n>",
+    route_chosen: "ルールが選んだ段階",
+    route_slow: "現在遅すぎるか不安定",
 };

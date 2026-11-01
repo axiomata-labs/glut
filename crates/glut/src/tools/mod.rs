@@ -107,6 +107,8 @@ pub struct Called {
     pub parts: Option<Vec<Part>>,
     /// The images the answer shows (T45), as the files' bytes.
     pub images: Vec<Vec<u8>>,
+    /// The owner wrote their own version of the edit (T91): the path and what they changed against the model's.
+    pub owners: Option<(String, String)>,
 }
 
 /// A tool the model can call.
@@ -295,6 +297,7 @@ impl Toolbox {
             text,
             parts: None,
             images: Vec::new(),
+            owners: None,
         };
         if stop.load(Ordering::SeqCst) {
             return refused("error: the run was stopped".into());
@@ -314,10 +317,48 @@ impl Toolbox {
         };
         // The gate judges the arguments as the tool will read them: after `unquoted`, never before.
         if let Some(gate) = &self.gate
-            && let Err(refusal) = gate.judge(name, &tool.access(&parsed)).await
+            && let Err(refusal) = gate
+                .judge_call(name, &tool.access(&parsed), Some(&parsed))
+                .await
         {
             return refused(format!("error: {refusal}"));
         }
+        // T91: the owner changed the edit in their editor before allowing it — their text is written, whole, and only
+        // over the file the diff showed: as an edit of all of it, which fails where the file changed meanwhile.
+        let owners = self
+            .gate
+            .as_ref()
+            .and_then(|gate| gate.take_owners_text(&parsed))
+            .zip(
+                parsed
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+            );
+        let (tool, parsed, owners) = match owners {
+            Some((owners, path)) => {
+                let changed = crate::planning::changed_lines(&owners.proposed, &owners.text);
+                let (name, arguments) = match owners.based_on.filter(|old| !old.is_empty()) {
+                    Some(old) => (
+                        "edit_file",
+                        serde_json::json!({"path": path, "old_string": old, "new_string": owners.text, "whole": true}),
+                    ),
+                    None => (
+                        "write_file",
+                        serde_json::json!({"path": path, "content": owners.text}),
+                    ),
+                };
+                match self.find(name).filter(|tool| self.offers(tool.as_ref())) {
+                    Some(tool) => (tool, arguments, Some((path, changed))),
+                    None => {
+                        return refused(format!(
+                            "error: the owner's own version of {path} was not written: this run does not offer {name}"
+                        ));
+                    }
+                }
+            }
+            None => (tool, parsed, None),
+        };
         let report = Report::default();
         let context = CallContext {
             stop: Arc::clone(stop),
@@ -328,6 +369,17 @@ impl Toolbox {
         let (ok, text, shift) = match tool.call(parsed, context).await {
             Ok(text) => (true, text, 0),
             Err(text) => (false, format!("{ERROR}{text}"), ERROR.len()),
+        };
+        // The owner's version not written (the file changed while they looked): said as such, not as the edit's own.
+        let (text, owners) = match owners {
+            Some((path, _)) if !ok => (
+                format!(
+                    "{text}\n\nThe owner changed your edit of {path} in their editor, but their version was not \
+                     written: the file changed while they looked at it. Read it again."
+                ),
+                None,
+            ),
+            owners => (text, owners),
         };
         // The parts lie in the tool's own text; an error's prefix moves them along.
         let (parts, images) = report.take();
@@ -345,6 +397,7 @@ impl Toolbox {
             text,
             parts,
             images,
+            owners,
         }
     }
 }

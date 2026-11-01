@@ -77,10 +77,16 @@ pub enum Delivered {
 /// A question of the gate on the screen.
 /// The editor's diff of a question of the gate (T64c): its id, when it opened, and the question it shows.
 struct OpenDiff {
-    id: String,
+    /// One per tab: an edit's one, a rename's one per file (T91) — an answer in any of them answers the question.
+    ids: Vec<String>,
     opened: Instant,
     tool: String,
     target: String,
+    /// The file as the model's edit would leave it: what the owner's own text is told against (T91); `None` for a
+    /// rename, whose files take no text of the owner's.
+    proposed: Option<String>,
+    /// The file the diff showed the change of, where there was one: the owner's text is written only over it.
+    based_on: Option<String>,
 }
 
 pub struct OpenAsk {
@@ -1154,21 +1160,38 @@ impl App {
         let Some(bridge) = self.ide.clone() else {
             return;
         };
+        if request.tool == "lsp" {
+            return self.rename_diffs(request, bridge);
+        }
         if !matches!(request.tool.as_str(), "edit_file" | "write_file") {
             return;
         }
         let plain = |path: &str| path.trim().trim_start_matches("./").to_owned();
-        let matching: Vec<serde_json::Value> = self
-            .changes
-            .values()
-            .filter(|(name, _)| *name == request.tool)
-            .filter_map(|(_, arguments)| serde_json::from_str::<serde_json::Value>(arguments).ok())
-            .filter(|args| {
-                args.get("path")
-                    .and_then(serde_json::Value::as_str)
-                    .is_some_and(|path| plain(path) == request.target)
-            })
-            .collect();
+        let names_target = |args: &serde_json::Value| {
+            args.get("path")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|path| plain(path) == request.target)
+        };
+        // T91: the gate holds the asked call's whole arguments while the question is open; the call's event carries
+        // them cut, so it is only the way back for a gate that holds none.
+        let asked = self
+            .parts
+            .tools
+            .gate()
+            .and_then(|gate| gate.asked_arguments())
+            .filter(|args| names_target(args));
+        let matching: Vec<serde_json::Value> = match asked {
+            Some(args) => vec![args],
+            None => self
+                .changes
+                .values()
+                .filter(|(name, _)| *name == request.tool)
+                .filter_map(|(_, arguments)| {
+                    serde_json::from_str::<serde_json::Value>(arguments).ok()
+                })
+                .filter(|args| names_target(args))
+                .collect(),
+        };
         let [args] = matching.as_slice() else { return };
         let held = self
             .parts
@@ -1216,10 +1239,12 @@ impl App {
         // Unique across panes and windows: two Glut sessions may share one editor.
         let id = format!("{}-{}-{}", std::process::id(), self.session.id, self.diffs);
         self.diff = Some(OpenDiff {
-            id: id.clone(),
+            ids: vec![id.clone()],
             opened: Instant::now(),
             tool: request.tool.clone(),
             target: request.target.clone(),
+            proposed: Some(new.clone()),
+            based_on: old.clone(),
         });
         let title = match &request.from {
             Some(from) => format!(
@@ -1233,21 +1258,95 @@ impl App {
         let reports = self.reports.clone();
         tokio::spawn(async move {
             let outcome = bridge
-                .open_diff(&id, &full, old.as_deref(), &new, &title)
+                .open_diff(&id, &full, old.as_deref(), &new, &title, true)
                 .await;
             let _ = reports.send(Report::EditorDiff(id, outcome));
         });
     }
 
-    /// T64c: a diff whose question was answered here (or went) closes in the editor.
+    /// T91: a rename's question shows each file it changes as a diff of its own — as the rename would leave it, read
+    /// through the folder's guard before the question (`Gate::asked_arguments`), none where one file is held back;
+    /// past `RENAME_DIFFS` files the editor is only told to answer in Glut.
+    fn rename_diffs(&mut self, request: &AskRequest, bridge: Arc<crate::ide::Bridge>) {
+        let Some(gate) = self.parts.tools.gate() else {
+            return;
+        };
+        let Some(shown) = gate.asked_rename() else {
+            return;
+        };
+        let Some(files) = shown.get("rename").and_then(serde_json::Value::as_array) else {
+            if shown.get("tooMany").and_then(serde_json::Value::as_bool) == Some(true) {
+                let said = tr!(ide_rename_here).to_string();
+                tokio::spawn(async move { bridge.notify(&said).await });
+            }
+            return;
+        };
+        let text = |file: &serde_json::Value, field: &str| {
+            file.get(field)
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        };
+        let mut shown_files = Vec::new();
+        for file in files {
+            let (Some(path), Some(old), Some(new)) = (
+                text(file, "path"),
+                text(file, "oldText"),
+                text(file, "newText"),
+            ) else {
+                return;
+            };
+            if gate.read_held_back(&path) || path.starts_with(['/', '~']) {
+                return;
+            }
+            shown_files.push((path, old, new));
+        }
+        self.diffs += 1;
+        let base = format!("{}-{}-{}", std::process::id(), self.session.id, self.diffs);
+        let ids: Vec<String> = (1..=shown_files.len())
+            .map(|at| format!("{base}-{at}"))
+            .collect();
+        self.diff = Some(OpenDiff {
+            ids: ids.clone(),
+            opened: Instant::now(),
+            tool: request.tool.clone(),
+            target: request.target.clone(),
+            proposed: None,
+            based_on: None,
+        });
+        for (id, (path, old, new)) in ids.into_iter().zip(shown_files) {
+            let title = format!("rename · {}", crate::transcript::clean(&path));
+            let full = self.parts.config.cwd.join(&path);
+            let (bridge, reports) = (Arc::clone(&bridge), self.reports.clone());
+            tokio::spawn(async move {
+                let outcome = bridge
+                    .open_diff(&id, &full, Some(&old), &new, &title, false)
+                    .await;
+                let _ = reports.send(Report::EditorDiff(id, outcome));
+            });
+        }
+    }
+
+    /// T64c: a diff whose question was answered here (or went) closes in the editor — every tab of it.
     fn settle_diff(&mut self) {
         if self.ask.is_some() {
             return;
         }
         if let (Some(diff), Some(bridge)) = (self.diff.take(), &self.ide) {
-            let bridge = Arc::clone(bridge);
-            tokio::spawn(async move { bridge.close_diff(&diff.id).await });
+            Self::close_diffs(bridge, diff.ids);
         }
+    }
+
+    /// Closes the editor's tabs `ids`.
+    fn close_diffs(bridge: &Arc<crate::ide::Bridge>, ids: Vec<String>) {
+        if ids.is_empty() {
+            return;
+        }
+        let bridge = Arc::clone(bridge);
+        tokio::spawn(async move {
+            for id in ids {
+                bridge.close_diff(&id).await;
+            }
+        });
     }
 
     /// `/route` (T90): which hosts serve the model on OpenRouter; a change sets the model's routing anew.
@@ -2234,18 +2333,51 @@ impl App {
             }
             // T64c: the owner answered in the editor — only the question still open, by the diff it showed.
             Report::EditorDiff(id, outcome) => {
-                let Some(diff) = self.diff.take_if(|diff| diff.id == id) else {
+                // One tab of a rename's closed unanswered: the others still ask.
+                if matches!(outcome, crate::ide::Outcome::Closed)
+                    && let Some(diff) = self.diff.as_mut()
+                    && diff.ids.len() > 1
+                    && diff.ids.contains(&id)
+                {
+                    diff.ids.retain(|other| *other != id);
+                    return;
+                }
+                let Some(mut diff) = self.diff.take_if(|diff| diff.ids.contains(&id)) else {
                     return;
                 };
+                // The question is answered by this tab: a rename's other tabs close.
+                diff.ids.retain(|other| *other != id);
+                if let Some(bridge) = &self.ide {
+                    Self::close_diffs(bridge, std::mem::take(&mut diff.ids));
+                }
                 // Only the question the diff was opened for; an accept sooner than a person reads is no person's.
                 let same = self.ask.as_ref().is_some_and(|open| {
                     open.request.tool == diff.tool && open.request.target == diff.target
                 });
                 let answer = match outcome {
-                    crate::ide::Outcome::Accepted if diff.opened.elapsed() < ASK_SETTLE => {
+                    crate::ide::Outcome::Accepted(_) if diff.opened.elapsed() < ASK_SETTLE => {
                         Some(Answer::Deny)
                     }
-                    crate::ide::Outcome::Accepted => Some(Answer::Allow),
+                    // T91: the owner changed the right side — their text is written, and the model told so.
+                    crate::ide::Outcome::Accepted(Some(text)) if same => {
+                        match (&diff.proposed, self.parts.tools.gate()) {
+                            (Some(proposed), Some(gate)) => {
+                                gate.answer_with_text(glut::permissions::OwnersText {
+                                    text,
+                                    proposed: proposed.clone(),
+                                    based_on: diff.based_on.clone(),
+                                });
+                                Some(Answer::Allow)
+                            }
+                            // A rename replaces the old name or nothing: what the owner changed is not what it would
+                            // do, so it is no yes — the card stays for the owner's answer.
+                            _ => {
+                                self.transcript.note(tr!(ide_rename_own), Tone::Fault);
+                                None
+                            }
+                        }
+                    }
+                    crate::ide::Outcome::Accepted(_) => Some(Answer::Allow),
                     crate::ide::Outcome::Rejected => Some(Answer::Deny),
                     crate::ide::Outcome::Closed => None,
                 };
@@ -8545,6 +8677,55 @@ fn extends_selection(key: KeyEvent) -> bool {
 pub(crate) mod tests {
     use super::*;
     use glut::RunOutcome;
+
+    /// T91: a rename's diffs answer together — an edited one is no yes and keeps the card, a closed one leaves the
+    /// others asking, an accept in any answers the rename.
+    #[tokio::test]
+    async fn a_renames_tabs_answer_together_and_an_edited_one_is_no_yes() {
+        let (mut app, _reports) = app();
+        let (reply, mut answer) = oneshot::channel();
+        app.on_report(Report::Ask(
+            AskRequest {
+                tool: "lsp".into(),
+                target: "rename a → b".into(),
+                scopes: Vec::new(),
+                from: None,
+                keychain: false,
+                note: None,
+            },
+            reply,
+        ));
+        let open = |ids: &[&str]| OpenDiff {
+            ids: ids.iter().map(|id| (*id).to_owned()).collect(),
+            opened: Instant::now() - ASK_SETTLE,
+            tool: "lsp".into(),
+            target: "rename a → b".into(),
+            proposed: None,
+            based_on: None,
+        };
+        app.diff = Some(open(&["r-1", "r-2", "r-3"]));
+        app.on_report(Report::EditorDiff(
+            "r-1".into(),
+            crate::ide::Outcome::Closed,
+        ));
+        assert_eq!(app.diff.as_ref().map(|diff| diff.ids.len()), Some(2));
+        app.on_report(Report::EditorDiff(
+            "r-2".into(),
+            crate::ide::Outcome::Accepted(Some("changed".into())),
+        ));
+        assert!(
+            app.ask.is_some(),
+            "the owner's lines are no yes to a rename"
+        );
+        assert!(answer.try_recv().is_err());
+        app.diff = Some(open(&["r-4", "r-5"]));
+        app.on_report(Report::EditorDiff(
+            "r-5".into(),
+            crate::ide::Outcome::Accepted(None),
+        ));
+        assert!(app.ask.is_none() && app.diff.is_none());
+        assert_eq!(answer.try_recv().ok(), Some(Answer::Allow));
+    }
 
     fn app() -> (App, mpsc::UnboundedReceiver<Report>) {
         let (parts, engine) = session::for_tests();

@@ -79,6 +79,21 @@ pub enum ProvidersCommand {
         /// file or keychain.
         place: StorePlace,
     },
+    /// Which hosts serve a model on OpenRouter — alone the order Glut sends and why; or a change: prefer|avoid
+    /// <hosts>, quant <levels>, strict on|off, off (the model's pins), rule on|off, rule margin|uptime|speed|wait <n>.
+    Route {
+        /// The provider; the default one when left out.
+        #[arg(long)]
+        provider: Option<String>,
+        /// Another model than the provider's default.
+        #[arg(long)]
+        model: Option<String>,
+        /// The rule, the pins and the order as JSON.
+        #[arg(long)]
+        json: bool,
+        /// The change; none shows.
+        words: Vec<String>,
+    },
     /// One tiny call to the provider's model, to see that endpoint, key and model work.
     Test {
         /// The provider; the default one when left out.
@@ -104,10 +119,11 @@ pub async fn run(command: ProvidersCommand) -> ExitCode {
         Ok(home) => home,
         Err(err) => return fail(&err.to_string()),
     };
-    let writes = !matches!(
-        command,
-        ProvidersCommand::List | ProvidersCommand::Catalog | ProvidersCommand::Test { .. }
-    );
+    let writes = match &command {
+        ProvidersCommand::List | ProvidersCommand::Catalog | ProvidersCommand::Test { .. } => false,
+        ProvidersCommand::Route { words, .. } => !words.is_empty(),
+        _ => true,
+    };
     if writes && std::env::var_os(crate::tools::shell::SANDBOXED_ENV).is_some() {
         return fail(say!(owners_only));
     }
@@ -142,6 +158,12 @@ pub async fn run(command: ProvidersCommand) -> ExitCode {
         ProvidersCommand::Remove { id } => remove(&home, &id),
         ProvidersCommand::Default { id } => make_default(&home, &id),
         ProvidersCommand::Key { id } => new_key(&home, &id).await,
+        ProvidersCommand::Route {
+            provider,
+            model,
+            json,
+            words,
+        } => route(&home, provider.as_deref(), model.as_deref(), json, &words),
         ProvidersCommand::Test { id, model } => test(&home, id.as_deref(), model.as_deref()).await,
         ProvidersCommand::Login { id } => login(&home, &id, false).await,
         ProvidersCommand::Logout { id } => logout(&home, &id).await,
@@ -161,6 +183,113 @@ fn fail(message: &str) -> ExitCode {
 
 fn load(home: &Path) -> Result<Providers, String> {
     Providers::load(home).map_err(|err| err.to_string())
+}
+
+/// `glut providers route` (T91): `/route` for runs without a screen, on the library's one reading of it.
+fn route(
+    home: &Path,
+    provider: Option<&str>,
+    model: Option<&str>,
+    json: bool,
+    words: &[String],
+) -> Result<(), String> {
+    use crate::providers::routing::{self, RouteError};
+    let providers = load(home)?;
+    let (id, entry) = providers.pick(provider)?;
+    let model = model
+        .or(entry.model.as_deref())
+        .ok_or_else(|| format!("no model for {id}: name one with --model"))?
+        .to_owned();
+    let (id, root) = (id.to_owned(), entry.root().to_owned());
+    let said = |error: RouteError| match error {
+        RouteError::Usage => say!(route_usage).to_owned(),
+        RouteError::Quant => format!(
+            "{} ({})",
+            say!(route_usage),
+            routing::QUANTIZATIONS.join(", ")
+        ),
+        RouteError::NotHere => say!(route_not_here, provider = id).to_string(),
+        RouteError::NoProvider => format!("no provider {id}"),
+        RouteError::File(error) => error,
+    };
+    let words: Vec<&str> = words.iter().map(String::as_str).collect();
+    if let Some(change) = routing::parse(&words).map_err(said)? {
+        routing::apply(home, &id, &root, &model, change).map_err(said)?;
+        println!("{}", say!(route_set, model = model));
+        return Ok(());
+    }
+    let shown = routing::show(home, &id, &root, &model).map_err(said)?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&shown).map_err(|err| err.to_string())?
+        );
+        return Ok(());
+    }
+    let (rule, pins) = (&shown.rule, &shown.pins);
+    println!(
+        "{}",
+        say!(
+            route_rule_now,
+            on = if rule.on { "on" } else { "off" },
+            margin = (rule.margin * 100.0).round(),
+            uptime = rule.uptime,
+            speed = rule.tokens_per_second,
+            wait = rule.first_token_seconds
+        )
+    );
+    if !pins.is_empty() {
+        let mut said = Vec::new();
+        for (word, values) in [
+            ("prefer", &pins.prefer),
+            ("avoid", &pins.avoid),
+            ("quant", &pins.quant),
+        ] {
+            if !values.is_empty() {
+                said.push(format!("{word} {}", values.join(" ")));
+            }
+        }
+        if pins.strict {
+            said.push("strict".to_owned());
+        }
+        println!("{}", say!(route_pins, pins = said.join(" · ")));
+    }
+    match &shown.hosts {
+        Some(hosts) if !hosts.is_empty() => {
+            println!("{}", say!(route_head, model = model));
+            for (at, host) in hosts.iter().enumerate() {
+                let price = host
+                    .price
+                    .map(|price| format!(" · ${price:.2}/M"))
+                    .unwrap_or_default();
+                let speed = host
+                    .tokens_per_second
+                    .map(|speed| format!(" · {speed:.0} tok/s"))
+                    .unwrap_or_default();
+                let tag: String = host
+                    .tag
+                    .chars()
+                    .filter(|c| !c.is_control() && !crate::permissions::is_invisible(*c))
+                    .collect();
+                let level: String = host
+                    .quantization
+                    .as_deref()
+                    .unwrap_or("?")
+                    .chars()
+                    .filter(|c| !c.is_control() && !crate::permissions::is_invisible(*c))
+                    .collect();
+                let why = match host.standing {
+                    routing::Standing::Chosen => format!("{level}, {}", say!(route_chosen)),
+                    routing::Standing::Slow => format!("{level}, {}", say!(route_slow)),
+                    routing::Standing::Other => level,
+                };
+                println!("  {}. {tag} — {why}{price}{speed}", at + 1);
+            }
+        }
+        Some(_) => {}
+        None => println!("{}", say!(route_none_read, model = model)),
+    }
+    Ok(())
 }
 
 fn list(home: &Path) -> Result<(), String> {

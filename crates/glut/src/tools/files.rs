@@ -747,6 +747,10 @@ struct EditArgs {
     new_string: String,
     #[serde(default)]
     replace_all: bool,
+    /// `old_string` is the whole file (T91: the owner's version of an edit, written only over the file their diff
+    /// showed). Not in the tool's schema: a model that sends it only makes its own edit stricter.
+    #[serde(default)]
+    whole: bool,
 }
 
 fn edit(places: &Places, args: EditArgs) -> Result<String, String> {
@@ -762,6 +766,11 @@ fn edit(places: &Places, args: EditArgs) -> Result<String, String> {
     }
     let file = read_text(root, path, MAX_READ_BYTES).map_err(describe)?;
     refuse_unsaved(places, root, path, &file.content)?;
+    if args.whole && file.content != args.old_string {
+        return Err(format!(
+            "{path} is no longer the file the edit was made for"
+        ));
+    }
     let count = file.content.matches(&args.old_string).count();
     let changed = match count {
         0 => return Err(format!("old_string was not found in {path}")),
@@ -1502,6 +1511,112 @@ mod tests {
             assert!(!ok && text.contains("protected"), "{path}: {text}");
         }
         assert!(!dir.join(".glut/settings.json").exists());
+    }
+
+    /// Allows, after giving the owner's own text as an editor's changed diff would (T91).
+    struct ChangesIt(
+        std::sync::OnceLock<std::sync::Weak<crate::permissions::Gate>>,
+        std::sync::atomic::AtomicBool,
+    );
+
+    impl crate::permissions::Asker for ChangesIt {
+        fn ask<'a>(
+            &'a self,
+            _request: &'a crate::permissions::AskRequest,
+        ) -> crate::permissions::AnswerFuture<'a> {
+            let first = !self.1.swap(true, std::sync::atomic::Ordering::SeqCst);
+            if first && let Some(gate) = self.0.get().and_then(std::sync::Weak::upgrade) {
+                gate.answer_with_text(crate::permissions::OwnersText {
+                    text: "one\nTWO, the owner's\nthree\n".into(),
+                    proposed: "one\ntwo\nthree\n".into(),
+                    based_on: Some("one\nzwei\nthree\n".into()),
+                });
+            }
+            Box::pin(async { crate::permissions::Answer::Allow })
+        }
+    }
+
+    #[tokio::test]
+    async fn the_owners_text_never_overwrites_a_file_changed_while_they_looked() {
+        use crate::permissions::{Gate, Mode, RuleSet};
+        let (dir, mut tools) = setup();
+        // The diff was built from `one zwei three`; someone wrote the file since.
+        std::fs::write(
+            dir.join("a.txt"),
+            "one\nzwei\nthree\nfour, added meanwhile\n",
+        )
+        .unwrap();
+        let asker = std::sync::Arc::new(ChangesIt(
+            std::sync::OnceLock::new(),
+            std::sync::atomic::AtomicBool::new(false),
+        ));
+        let gate = std::sync::Arc::new(Gate::new(RuleSet::default(), Mode::Default, asker.clone()));
+        asker.0.set(std::sync::Arc::downgrade(&gate)).unwrap();
+        tools.set_gate(gate);
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let called = tools
+            .call_reporting(
+                "edit_file",
+                r#"{"path":"a.txt","old_string":"zwei","new_string":"two"}"#,
+                &stop,
+            )
+            .await;
+        assert!(!called.ok && called.owners.is_none(), "{}", called.text);
+        assert!(
+            called.text.contains("their version was not written"),
+            "{}",
+            called.text
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("a.txt")).unwrap(),
+            "one\nzwei\nthree\nfour, added meanwhile\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_owners_own_text_is_written_instead_of_the_models_and_said() {
+        use crate::permissions::{Gate, Mode, RuleSet};
+        let (dir, mut tools) = setup();
+        std::fs::write(dir.join("a.txt"), "one\nzwei\nthree\n").unwrap();
+        let asker = std::sync::Arc::new(ChangesIt(
+            std::sync::OnceLock::new(),
+            std::sync::atomic::AtomicBool::new(false),
+        ));
+        let gate = std::sync::Arc::new(Gate::new(RuleSet::default(), Mode::Default, asker.clone()));
+        asker.0.set(std::sync::Arc::downgrade(&gate)).unwrap();
+        tools.set_gate(gate.clone());
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let called = tools
+            .call_reporting(
+                "edit_file",
+                r#"{"path":"a.txt","old_string":"zwei","new_string":"two"}"#,
+                &stop,
+            )
+            .await;
+        assert!(called.ok, "{}", called.text);
+        assert_eq!(
+            std::fs::read_to_string(dir.join("a.txt")).unwrap(),
+            "one\nTWO, the owner's\nthree\n"
+        );
+        let (path, changed) = called.owners.expect("the owner's change is reported");
+        assert_eq!(path, "a.txt");
+        assert!(
+            changed.contains("- two") && changed.contains("+ TWO, the owner's"),
+            "{changed}"
+        );
+        // Once: the next question answered without a text writes the model's own.
+        let called = tools
+            .call_reporting(
+                "write_file",
+                r#"{"path":"a.txt","content":"mine\n"}"#,
+                &stop,
+            )
+            .await;
+        assert!(called.ok && called.owners.is_none());
+        assert_eq!(
+            std::fs::read_to_string(dir.join("a.txt")).unwrap(),
+            "mine\n"
+        );
     }
 
     #[tokio::test]

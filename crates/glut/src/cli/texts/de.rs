@@ -146,4 +146,13 @@ pub const TEXTS: Texts = Texts {
                       keychain close schließt ihn wieder.",
     keychain_closed: "Der Schlüsselbund ist wieder zu für jeden Befehl, den Glut ausführt; die gelisteten Programme \
                       fragen nach ihm.",
+    route_not_here: "{provider} bedient jedes Modell von einem Host: es gibt keine Hosts zu wählen (OpenRouter hat sie)",
+    route_rule_now: "die Regel {on}: volle Genauigkeit, außer sie ist mehr als {margin} % teurer als fp8, fp4 zuletzt; ein Host unter {uptime} % Verfügbarkeit, {speed} Tok/s oder über {wait} s bis zum ersten Token kommt ans Ende",
+    route_pins: "die Festlegungen dieses Modells: {pins}",
+    route_head: "die Reihenfolge, die Glut für {model} schickt:",
+    route_none_read: "für {model} noch keine Hosts gelesen: sie kommen mit der nächsten Anfrage",
+    route_set: "für {model} gespeichert, ab der nächsten Anfrage",
+    route_usage: "glut providers route — Reihenfolge und Regel; glut providers route prefer|avoid <hosts>, quant <levels>, strict on|off, off; glut providers route rule on|off, rule margin|uptime|speed|wait <n>",
+    route_chosen: "die Stufe, die die Regel gewählt hat",
+    route_slow: "gerade zu langsam oder unzuverlässig",
 };

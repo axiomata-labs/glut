@@ -504,6 +504,7 @@ async fn run_inner<M: ChatModel>(
         refused_before_batch: 0,
         same_steps: 0,
         repeat_note: None,
+        owners_note: None,
         last_results: None,
         served_by: None,
         streamed: false,
@@ -923,6 +924,8 @@ struct Loop<'a, M: ChatModel> {
     last_results: Option<u64>,
     /// Glut's word that the model repeats itself, for the step's first result (T88).
     repeat_note: Option<String>,
+    /// Glut's word that the owner wrote their own version of the last edit (T91), added after the result is quoted.
+    owners_note: Option<String>,
     /// The host a router last named for the model's answers (T88): told again only when it changes.
     served_by: Option<String>,
     /// Whether the last model call streamed anything before it ended.
@@ -2618,6 +2621,9 @@ impl<'a, M: ChatModel> Loop<'a, M> {
         if let Some(note) = self.repeat_note.take() {
             output = format!("{output}\n\n{note}");
         }
+        if let Some(note) = self.owners_note.take() {
+            output = format!("{output}\n\n{note}");
+        }
         // Long reading without a change (T73b): said once, at the first result of the step that reaches the mark.
         if self.reading_steps >= READING_HINT_AT && !self.reading_told && self.depth == 0 {
             self.reading_told = true;
@@ -2880,6 +2886,14 @@ impl<'a, M: ChatModel> Loop<'a, M> {
             self.read_at.insert(path, version);
         }
         let mut called = called;
+        if let Some((path, changed)) = called.owners.take() {
+            // Its lines are the file's and the call's as written, hidden values put back: masked like any result.
+            let note = planning::owners_edit(&path, &changed);
+            self.owners_note = Some(match &self.config.masks {
+                Some(masks) => masks.mask(&note, &seen_at(call)).text,
+                None => note,
+            });
+        }
         if let Some((path, read)) = stale {
             let when = if read {
                 "after you last read it"
@@ -3279,6 +3293,35 @@ impl<'a, M: ChatModel> Loop<'a, M> {
         }
         let places: usize = files.iter().map(|(_, changes)| changes.len()).sum();
         let listed: Vec<String> = files.iter().map(|(rel, _)| rel.clone()).collect();
+        // T91: each file as the rename would leave it, for the editor's diffs — read only, through the folder's guard;
+        // past RENAME_DIFFS files only the count goes along. A file that cannot be read shows none at all.
+        let asks = self.tools.gate().is_some_and(|gate| gate.can_ask());
+        let preview = if asks && files.len() <= crate::lsp::RENAME_DIFFS {
+            let (cwd, old, files) = (
+                self.config.cwd.clone(),
+                symbol.trim().to_owned(),
+                files.clone(),
+            );
+            tokio::task::spawn_blocking(move || {
+                files
+                    .iter()
+                    .map(|(rel, edits)| {
+                        let opened = crate::tools::files::open_for_change(&cwd, rel).ok()?;
+                        let new = crate::lsp::apply(&opened.text, edits, Some(&old)).ok()?;
+                        Some(serde_json::json!({"path": rel, "oldText": opened.text, "newText": new}))
+                    })
+                    .collect::<Option<Vec<Value>>>()
+            })
+            .await
+            .ok()
+            .flatten()
+        } else {
+            None
+        };
+        let showing = serde_json::json!({
+            "rename": preview,
+            "tooMany": files.len() > crate::lsp::RENAME_DIFFS,
+        });
         if let Some(gate) = self.tools.gate() {
             let accesses: Vec<Access> = listed
                 .iter()
@@ -3291,7 +3334,10 @@ impl<'a, M: ChatModel> Loop<'a, M> {
                 files.len(),
                 listed.join(", ")
             );
-            if let Err(reason) = gate.judge_all(crate::lsp::NAME, &accesses, &shown).await {
+            if let Err(reason) = gate
+                .judge_all_showing(crate::lsp::NAME, &accesses, &shown, Some(&showing))
+                .await
+            {
                 return (false, format!("error: {reason}"));
             }
         }

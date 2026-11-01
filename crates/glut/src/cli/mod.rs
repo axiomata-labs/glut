@@ -465,8 +465,17 @@ impl crate::agents::ModelSource for CliModels {
                 };
             endpoint.effort = effort.or(self.effort);
             let prices = self.prices.get(&endpoint.model).copied().or(listed);
+            // T91: an agent's own model takes the host rule like the run's.
+            let routing = match crate::permissions::settings::home_dir() {
+                Ok(home) => {
+                    let id = provider.or(self.provider.as_deref()).unwrap_or_default();
+                    crate::providers::routing::for_endpoint(&home, id, &endpoint).await
+                }
+                Err(_) => None,
+            };
             let model =
                 Model::signed(endpoint, protocol, credential).map_err(|err| err.to_string())?;
+            model.set_routing(routing);
             Ok(crate::agents::Picked {
                 model: Arc::new(model),
                 prices,
@@ -911,11 +920,16 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
     })));
     // The model is built after the command and the skill: either may name its own (C2, K5).
     let credential = provider.as_ref().and_then(|from| from.credential.clone());
-    let routing = match (&provider, crate::permissions::settings::home_dir()) {
-        (Some(from), Ok(home)) => {
-            crate::providers::routing::for_endpoint(&home, &from.id, &endpoint).await
+    // A one-off `--base-url` on OpenRouter has no pins of its own, but the rule as it is by default.
+    let routing = match crate::permissions::settings::home_dir() {
+        Ok(home) => {
+            let id = provider
+                .as_ref()
+                .map(|from| from.id.as_str())
+                .unwrap_or_default();
+            crate::providers::routing::for_endpoint(&home, id, &endpoint).await
         }
-        _ => None,
+        Err(_) => None,
     };
     let model = match Model::signed(endpoint, protocol, credential) {
         Ok(model) => model,

@@ -141,4 +141,13 @@ pub const TEXTS: Texts = Texts {
                       keychain close volta a fechá-lo.",
     keychain_closed: "O porta-chaves voltou a fechar-se a todo comando que o Glut executa; os programas da lista \
                       pedem-no.",
+    route_not_here: "{provider} serve cada modelo a partir de um só host: não há hosts para escolher (o OpenRouter tem)",
+    route_rule_now: "a regra {on}: precisão total salvo se custar mais de {margin} % do que fp8, fp4 por último; um host abaixo de {uptime} % de disponibilidade, {speed} tok/s ou acima de {wait} s até ao primeiro token vai para o fim",
+    route_pins: "as fixações deste modelo: {pins}",
+    route_head: "a ordem que o Glut envia para {model}:",
+    route_none_read: "ainda não foram lidos hosts para {model}: chegam com o próximo pedido",
+    route_set: "guardado para {model}, a partir do próximo pedido",
+    route_usage: "glut providers route — a ordem e a regra; glut providers route prefer|avoid <hosts>, quant <levels>, strict on|off, off; glut providers route rule on|off, rule margin|uptime|speed|wait <n>",
+    route_chosen: "o nível que a regra escolheu",
+    route_slow: "lento ou instável demais agora",
 };

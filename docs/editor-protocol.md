@@ -73,9 +73,10 @@ Results are MCP tool results: `{"content": [{"type": "text", "text": "<JSON>"}]}
 |---|---|---|
 | `getContext` | — | `{"activeFile": {"path", "cursor": {"line", "character"}, "selection": {"start": {…}, "end": {…}, "text"} \| null} \| null}` |
 | `readBuffer` | `{"path"}` | `{"loaded": bool, "path"?, "text"?, "dirty"?}` — only a buffer of exactly that path the editor has loaded, its path echoed; it never opens a path |
-| `openDiff` | `{"id", "path", "oldText": string \| null, "newText", "title"}` | answered once decided: `{"outcome": "accepted" \| "rejected" \| "closed"}` |
+| `openDiff` | `{"id", "path", "oldText": string \| null, "newText", "title", "editable"?}` | answered once decided: `{"outcome": "accepted" \| "rejected" \| "closed", "text"?}` — `text` only with `accepted`, where the owner changed the right side: the whole file as they left it |
 | `closeDiff` | `{"id"}` | `{"closed": bool}` — the diff `id` goes; its `openDiff` answers `closed` |
 | `changed` | `{"paths": [...]}` | `{}` — Glut wrote these files: the editor reads them again where no unsaved change stands |
+| `notify` | `{"message"}` | `{}` — a word of Glut's to the owner, shown as plain text (control characters as spaces) |
 
 - `openDiff` answers only when the owner decided (accepting writes nothing — Glut writes the file after its gate
   allows it) or the diff was closed; Glut waits for it as long as for any question of its gate and closes it with
@@ -94,4 +95,13 @@ Results are MCP tool results: `{"content": [{"type": "text", "text": "<JSON>"}]}
   `/loop` round carries none.
 - `read_file` reads a loaded buffer through `readBuffer` (unsaved changes too) after every check of its own; an edit
   of a buffer with unsaved changes is refused until the owner saved it.
-- A gate's question about `edit_file` or `write_file` goes to the editor as `openDiff` beside the TUI's card.
+- A gate's question about `edit_file` or `write_file` goes to the editor as `openDiff` beside the TUI's card, with
+  the call's whole text (never cut as its event is). Accepted with a `text` of the owner's, that text is written
+  instead of the model's — the snapshot first, through the folder's guard — and the model is told so in a note of
+  Glut's with the lines the owner changed.
+- An LSP rename's question opens one `openDiff` per file (at most ten; more, and `notify` says to answer in Glut):
+  an answer in any of them answers the whole rename, all or none, and the other tabs close; a tab closed unanswered
+  leaves the others asking. Its diffs come with `"editable": false` — a rename replaces the old name or nothing, so
+  the right side takes no change; a text of the owner's on one is no yes, the card stays.
+- Each `openDiff` is a connection of its own, made after Glut sees again (`lsof`) that the port is the editor's
+  process: the file's text goes out and the owner's may come back.

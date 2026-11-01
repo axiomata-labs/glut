@@ -835,6 +835,8 @@ pub const TEXTS: Texts = Texts {
     route_none_read: "{model} のホストはまだ読んでいません：次のリクエストで届きます",
     route_set: "{model} 用に保存しました。次のリクエストから有効です",
     route_usage: "/route — 順序とルール。/route prefer|avoid <hosts>、quant <levels>、strict on|off、off。/route rule on|off、rule margin|uptime|speed|wait <n>",
+    route_chosen: "ルールが選んだ段階",
+    route_slow: "現在遅すぎるか不安定",
     models_missing: "一覧なし: {providers} — glut models refresh",
     no_session_yet: "まだセッションなし",
     this_one: "現在",
@@ -1704,6 +1706,15 @@ pub const TEXTS: Texts = Texts {
             "--provider なしで実行が使うプロバイダーにする",
         ),
         (
+            "Which hosts serve a model on OpenRouter — alone the order Glut sends and why; or a change: prefer|avoid <hosts>, quant <levels>, strict on|off, off (the model's pins), rule on|off, rule margin|uptime|speed|wait <n>",
+            "OpenRouter でどのホストがモデルを提供するか — 単独では Glut が送る順序とその理由、または変更: prefer|avoid <hosts>, quant <levels>, strict on|off, off（モデルの固定）、rule on|off, rule margin|uptime|speed|wait <n>",
+        ),
+        (
+            "The rule, the pins and the order as JSON",
+            "ルール・固定・順序を JSON で",
+        ),
+        ("The change; none shows", "変更。なければ表示"),
+        (
             "One tiny call to the provider's model, to see that endpoint, key and model work",
             "プロバイダーのモデルにごく小さな呼び出しをして、エンドポイント・キー・モデルが動くか確かめる",
         ),
@@ -2069,6 +2080,8 @@ pub const TEXTS: Texts = Texts {
     ask_keychain: "キーチェーン付き",
     keychain_footer: "🔑 開",
     ide_connected: "{ide} に接続しました — そこで作業中のものがメッセージに付きます",
+    ide_rename_here: "この名前変更はエディタが diff で示せるより多くのファイルに及びます — Glut で答えてください",
+    ide_rename_own: "名前変更の diff での自分の変更は反映されません：古い名前を置き換えるか、何もしないかです",
     ide_none: "接続できるエディターがありません：このフォルダーで glut.nvim 入りの Neovim を起動してください",
     ide_failed: "{ide} が応答しません：{reason}",
     ide_off: "このセッションではエディターから切断しました",

@@ -858,6 +858,10 @@ glut::catalog! {
         route_none_read: &'static str,
         route_set: &'static str,
         route_usage: &'static str,
+        /// `/route`: a host in the tier the rule chose.
+        route_chosen: &'static str,
+        /// `/route`: a host at the end, too slow or unreliable.
+        route_slow: &'static str,
         /// Providers whose model list is not kept yet: `{providers}`.
         models_missing: &'static str,
         /// A project with no session yet.
@@ -2071,6 +2075,10 @@ glut::catalog! {
         keychain_footer: &'static str,
         /// The connection to the owner's editor (T64c, `/ide`).
         ide_connected: &'static str,
+        /// T91: a rename too large for the editor's diffs, told there.
+        ide_rename_here: &'static str,
+        /// T91: the owner changed a rename's diff — not taken.
+        ide_rename_own: &'static str,
         ide_none: &'static str,
         ide_failed: &'static str,
         ide_off: &'static str,

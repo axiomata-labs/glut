@@ -762,6 +762,8 @@ pub const TEXTS: Texts = Texts {
     route_none_read: "尚未读取 {model} 的主机：会随下一次请求获取",
     route_set: "已为 {model} 保存，从下一次请求起生效",
     route_usage: "/route — 顺序与规则；/route prefer|avoid <hosts>、quant <levels>、strict on|off、off；/route rule on|off、rule margin|uptime|speed|wait <n>",
+    route_chosen: "规则选定的档位",
+    route_slow: "目前太慢或不可靠",
     models_missing: "尚无列表：{providers} — glut models refresh",
     no_session_yet: "还没有会话",
     this_one: "当前",
@@ -1607,6 +1609,15 @@ pub const TEXTS: Texts = Texts {
             "把某个提供商设为运行在没有 --provider 时使用的提供商",
         ),
         (
+            "Which hosts serve a model on OpenRouter — alone the order Glut sends and why; or a change: prefer|avoid <hosts>, quant <levels>, strict on|off, off (the model's pins), rule on|off, rule margin|uptime|speed|wait <n>",
+            "哪些主机在 OpenRouter 上提供某个模型——单独使用时显示 Glut 发送的顺序及原因；或一项更改：prefer|avoid <hosts>, quant <levels>, strict on|off, off（模型的固定项），rule on|off, rule margin|uptime|speed|wait <n>",
+        ),
+        (
+            "The rule, the pins and the order as JSON",
+            "以 JSON 输出规则、固定项与顺序",
+        ),
+        ("The change; none shows", "更改；不给则显示"),
+        (
             "One tiny call to the provider's model, to see that endpoint, key and model work",
             "对提供商的模型发起一次极小的调用，检查端点、密钥和模型是否可用",
         ),
@@ -1968,6 +1979,8 @@ pub const TEXTS: Texts = Texts {
     ask_keychain: "使用钥匙串",
     keychain_footer: "🔑 开放",
     ide_connected: "已连接到 {ide} — 你在那里的工作会随消息一起发送",
+    ide_rename_here: "此次重命名涉及的文件多于编辑器能以 diff 显示的数量——请在 Glut 中回答",
+    ide_rename_own: "重命名 diff 中你自己的修改不会被采用：它要么替换旧名称，要么什么也不做",
     ide_none: "没有可连接的编辑器：在此文件夹中启动装有 glut.nvim 的 Neovim",
     ide_failed: "{ide} 没有回应：{reason}",
     ide_off: "本次会话已与编辑器断开",

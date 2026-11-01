@@ -147,4 +147,13 @@ pub const TEXTS: Texts = Texts {
                       keychain close le referme.",
     keychain_closed: "Le trousseau est de nouveau fermé à toute commande que Glut exécute ; les programmes listés le \
                       demandent.",
+    route_not_here: "{provider} sert chaque modèle depuis un seul hôte : aucun hôte à choisir (OpenRouter en a)",
+    route_rule_now: "la règle {on} : pleine précision sauf si elle coûte plus de {margin} % de plus que fp8, fp4 en dernier ; un hôte sous {uptime} % de disponibilité, {speed} tok/s ou au-delà de {wait} s jusqu'au premier token passe à la fin",
+    route_pins: "les épinglages de ce modèle : {pins}",
+    route_head: "l'ordre que Glut envoie pour {model} :",
+    route_none_read: "aucun hôte lu pour {model} pour l'instant : ils viennent avec sa prochaine requête",
+    route_set: "gardé pour {model}, dès la prochaine requête",
+    route_usage: "glut providers route — l'ordre et la règle ; glut providers route prefer|avoid <hosts>, quant <levels>, strict on|off, off ; glut providers route rule on|off, rule margin|uptime|speed|wait <n>",
+    route_chosen: "le niveau choisi par la règle",
+    route_slow: "trop lent ou peu fiable en ce moment",
 };
