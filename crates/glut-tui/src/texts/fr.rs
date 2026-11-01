@@ -237,7 +237,7 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "ide",
-            "ton éditeur à côté de Glut (Neovim avec glut.nvim) : auquel Glut est relié et lesquels conviennent — Glut y connaît le fichier actif et la sélection et montre les changements en diff ; /ide on relie, /ide off coupe",
+            "ton éditeur à côté de Glut (Neovim avec glut.nvim, VS Code ou un IDE JetBrains avec le plugin de Glut) : auquel Glut est relié et lesquels conviennent — Glut y connaît le fichier actif et la sélection et montre les changements en diff ; /ide on relie, /ide off coupe",
         ),
         (
             "clean",
@@ -2260,7 +2260,7 @@ code",
     ide_connected: "relié à {ide} — ce sur quoi tu y travailles accompagne tes messages",
     ide_rename_here: "ce renommage touche plus de fichiers que l'éditeur n'en montre en diffs — réponds dans Glut",
     ide_rename_own: "tes propres modifications dans le diff d'un renommage ne sont pas reprises : il remplace l'ancien nom ou rien",
-    ide_none: "aucun éditeur auquel se relier : lance Neovim avec glut.nvim dans ce dossier",
+    ide_none: "aucun éditeur auquel se relier : lance Neovim avec glut.nvim, VS Code ou un IDE JetBrains avec le plugin de Glut dans ce dossier",
     ide_failed: "{ide} n'a pas répondu : {reason}",
     ide_off: "coupé de l'éditeur pour cette session",
     ide_now: "relié à {ide} · /ide off coupe",

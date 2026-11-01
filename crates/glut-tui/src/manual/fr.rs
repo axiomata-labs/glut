@@ -663,7 +663,7 @@ pub const PAGES: [(&str, &str); 65] = [
     ),
     (
         "ide",
-        "Ton éditeur à côté de Glut : Neovim avec le plugin glut.nvim (d'autres suivront).\n\
+        "Ton éditeur à côté de Glut : Neovim avec le plugin glut.nvim, VS Code (et Cursor, Windsurf) ou un IDE JetBrains avec le plugin propre à Glut.\n\
          \n\
          /ide — à quel éditeur Glut est relié, et lesquels conviennent\n\
          /ide on — relier (demande si plusieurs conviennent)\n\

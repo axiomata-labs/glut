@@ -232,7 +232,7 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "ide",
-            "o teu editor ao lado do Glut (Neovim com glut.nvim): a qual o Glut está ligado e quais servem — o Glut conhece lá o ficheiro ativo e a seleção e mostra as alterações como diff; /ide on liga, /ide off desliga",
+            "o teu editor ao lado do Glut (Neovim com glut.nvim, VS Code ou um IDE JetBrains com o plugin do Glut): a qual o Glut está ligado e quais servem — o Glut conhece lá o ficheiro ativo e a seleção e mostra as alterações como diff; /ide on liga, /ide off desliga",
         ),
         (
             "clean",
@@ -2206,7 +2206,7 @@ usos e renomeações",
     ide_connected: "ligado a {ide} — aquilo em que trabalhas lá vai com as tuas mensagens",
     ide_rename_here: "esta renomeação toca mais arquivos do que o editor mostra como diffs — responda no Glut",
     ide_rename_own: "suas próprias mudanças no diff de uma renomeação não são aplicadas: ela substitui o nome antigo ou nada",
-    ide_none: "nenhum editor a que ligar: arranca o Neovim com glut.nvim nesta pasta",
+    ide_none: "nenhum editor a que ligar: arranca o Neovim com glut.nvim, o VS Code ou um IDE JetBrains com o plugin do Glut nesta pasta",
     ide_failed: "{ide} não respondeu: {reason}",
     ide_off: "desligado do editor nesta sessão",
     ide_now: "ligado a {ide} · /ide off desliga",

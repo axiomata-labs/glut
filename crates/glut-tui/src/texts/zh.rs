@@ -174,7 +174,7 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "ide",
-            "Glut 旁边的编辑器（Neovim 配 glut.nvim）：Glut 连着哪个、哪些合适 — Glut 能知道其中的当前文件和选区，并把改动显示为差异；/ide on 连接，/ide off 断开",
+            "Glut 旁边的编辑器（Neovim 配 glut.nvim、VS Code，或装有 Glut 插件的 JetBrains IDE）：Glut 连着哪个、哪些合适 — Glut 能知道其中的当前文件和选区，并把改动显示为差异；/ide on 连接，/ide off 断开",
         ),
         (
             "clean",
@@ -1981,7 +1981,7 @@ pub const TEXTS: Texts = Texts {
     ide_connected: "已连接到 {ide} — 你在那里的工作会随消息一起发送",
     ide_rename_here: "此次重命名涉及的文件多于编辑器能以 diff 显示的数量——请在 Glut 中回答",
     ide_rename_own: "重命名 diff 中你自己的修改不会被采用：它要么替换旧名称，要么什么也不做",
-    ide_none: "没有可连接的编辑器：在此文件夹中启动装有 glut.nvim 的 Neovim",
+    ide_none: "没有可连接的编辑器：在此文件夹中启动装有 glut.nvim 的 Neovim、VS Code，或装有 Glut 插件的 JetBrains IDE",
     ide_failed: "{ide} 没有回应：{reason}",
     ide_off: "本次会话已与编辑器断开",
     ide_now: "已连接到 {ide} · /ide off 断开",

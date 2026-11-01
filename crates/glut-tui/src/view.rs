@@ -1556,7 +1556,7 @@ fn draw_keys(frame: &mut Frame, app: &App, area: Rect, branch: Option<String>, c
     }
     // T64c: the owner's editor Glut is connected to.
     if let Some(bridge) = &app.ide {
-        let name = crate::transcript::clean(&bridge.found.ide).to_lowercase();
+        let name = footer_name(&crate::transcript::clean(&bridge.found.ide));
         segments.push(Segment::hued(
             tr!(ide_footer, ide = name),
             theme::c().fine,
@@ -2464,11 +2464,29 @@ fn marked(text: &str, query: &str) -> Vec<Span<'static>> {
     spans
 }
 
+/// An editor's name as the footer shows it (T65): short — VS Code names itself "Visual Studio Code", a JetBrains IDE
+/// "IntelliJ IDEA" — lower-case like the rest of the footer.
+fn footer_name(name: &str) -> String {
+    let short = match name {
+        name if name.starts_with("Visual Studio Code") => "vs code",
+        "IntelliJ IDEA" => "idea",
+        name => return name.to_lowercase(),
+    };
+    short.to_owned()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{asked_rows, marked, panel_width, tab_titles};
+    use super::{asked_rows, footer_name, marked, panel_width, tab_titles};
     use crate::meter::tokens;
     use unicode_width::UnicodeWidthStr;
+
+    #[test]
+    fn an_editors_long_name_is_short_in_the_footer() {
+        assert_eq!(footer_name("Visual Studio Code - Insiders"), "vs code");
+        assert_eq!(footer_name("PyCharm"), "pycharm");
+        assert_eq!(footer_name("Cursor"), "cursor");
+    }
 
     #[test]
     fn a_found_word_is_marked_in_any_case_the_rest_quiet() {

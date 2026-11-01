@@ -214,7 +214,7 @@ pub const TEXTS: Texts = Texts {
         ),
         (
             "ide",
-            "Glut の隣のエディター（Neovim と glut.nvim）：どれに接続しているか、どれが合うか — Glut は開いているファイルと選択範囲を知り、変更を差分で表示します。/ide on で接続、/ide off で切断",
+            "Glut の隣のエディター（Neovim と glut.nvim、VS Code、または Glut のプラグインを入れた JetBrains IDE）：どれに接続しているか、どれが合うか — Glut は開いているファイルと選択範囲を知り、変更を差分で表示します。/ide on で接続、/ide off で切断",
         ),
         (
             "clean",
@@ -2082,7 +2082,7 @@ pub const TEXTS: Texts = Texts {
     ide_connected: "{ide} に接続しました — そこで作業中のものがメッセージに付きます",
     ide_rename_here: "この名前変更はエディタが diff で示せるより多くのファイルに及びます — Glut で答えてください",
     ide_rename_own: "名前変更の diff での自分の変更は反映されません：古い名前を置き換えるか、何もしないかです",
-    ide_none: "接続できるエディターがありません：このフォルダーで glut.nvim 入りの Neovim を起動してください",
+    ide_none: "接続できるエディターがありません：このフォルダーで glut.nvim 入りの Neovim、VS Code、または Glut のプラグインを入れた JetBrains IDE を起動してください",
     ide_failed: "{ide} が応答しません：{reason}",
     ide_off: "このセッションではエディターから切断しました",
     ide_now: "{ide} に接続中 · /ide off で切断",

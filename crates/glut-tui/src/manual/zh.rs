@@ -574,7 +574,7 @@ pub const PAGES: [(&str, &str); 65] = [
     ),
     (
         "ide",
-        "Glut 旁边的编辑器：装了 glut.nvim 插件的 Neovim（其他的以后）。\n\
+        "Glut 旁边的编辑器：装了 glut.nvim 插件的 Neovim、VS Code（以及 Cursor、Windsurf），或装有 Glut 自己插件的 JetBrains IDE。\n\
          \n\
          /ide — Glut 连着哪个编辑器，哪些合适\n\
          /ide on — 连接（有多个合适时会询问）\n\

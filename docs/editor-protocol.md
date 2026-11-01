@@ -1,6 +1,6 @@
 # Glut's editor protocol, v1
 
-How an editor plugin (`glut.nvim`, later VS Code's and JetBrains') and Glut talk, so Glut knows the file, the cursor
+How an editor plugin (`glut.nvim`, `glut-vscode` for VS Code and its forks, `glut-jetbrains`) and Glut talk, so Glut knows the file, the cursor
 and the selection the owner works on, reads the editor's buffers, and shows its edits as the editor's own diffs. The
 plan is T64c in `docs/plans/glut-tui.md`; the pattern is Gemini CLI's published IDE companion spec and Claude Code's
 IDE integration, the protocol Glut's own.
@@ -17,6 +17,9 @@ IDE integration, the protocol Glut's own.
 - MCP over HTTP: `POST http://127.0.0.1:<port>/mcp`, one JSON-RPC 2.0 message per request, answered with
   `Content-Type: application/json` (no event stream needed). A notification is answered `202` with no body.
 - The plugin binds `127.0.0.1` alone, on a port the system picks.
+- A connection with a question still waiting for its answer (a diff waits for the owner, up to Glut's ten minutes)
+  is never closed for idleness; one with nothing waiting may be, after a minute, and one that has not shown the token
+  after ten seconds.
 - The plugin judges a request by its head before it keeps any of its body: without the token or not `POST /mcp` it
   answers and closes the connection; a length that is no plain number, a second length or any transfer encoding is
   refused. Glut never takes the editor's answer about a file it did not ask about: `readBuffer` and `diagnostics`

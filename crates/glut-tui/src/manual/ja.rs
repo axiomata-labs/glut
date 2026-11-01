@@ -596,7 +596,7 @@ pub const PAGES: [(&str, &str); 65] = [
     ),
     (
         "ide",
-        "Glut の隣のエディター：プラグイン glut.nvim を入れた Neovim（ほかは今後）。\n\
+        "Glut の隣のエディター：プラグイン glut.nvim を入れた Neovim、VS Code（Cursor、Windsurf も）、または Glut 独自のプラグインを入れた JetBrains IDE。\n\
          \n\
          /ide — Glut がどのエディターに接続しているか、どれが合うか\n\
          /ide on — 接続（複数合うときは尋ねる）\n\

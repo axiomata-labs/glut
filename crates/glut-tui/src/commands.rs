@@ -409,7 +409,7 @@ pub const COMMANDS: [Command; 65] = [
         Topic::Settings,
         "ide",
         "[on|off]",
-        "your editor beside Glut (Neovim with glut.nvim): which one Glut is connected to and which fit — Glut knows \
+        "your editor beside Glut (Neovim with glut.nvim, VS Code or a JetBrains IDE with Glut's plugin): which one Glut is connected to and which fit — Glut knows \
          its active file and selection there and shows changes as diffs; /ide on connects, /ide off disconnects",
     ),
     command(

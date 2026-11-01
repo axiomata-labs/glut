@@ -545,9 +545,11 @@ mod tests {
             (2, 4, "fn a()")
         );
         assert_eq!(read.as_deref(), Some("unsaved\n"));
+        let alone = std::time::Instant::now();
         let outcome = bridge
             .open_diff("ask-1", Path::new("/w/a.rs"), Some("a"), "b", "a.rs", true)
             .await;
+        let alone = alone.elapsed();
         assert_eq!(outcome, Outcome::Accepted(None));
         // T91: a rename's diffs wait for the owner side by side, each on its own connection; the owner's text comes
         // back with an accept.
@@ -565,9 +567,12 @@ mod tests {
         );
         assert_eq!(first, Outcome::Accepted(None));
         assert_eq!(second, Outcome::Accepted(Some("mine\n".into())));
+        // Side by side they take about as long as one; one after the other, twice as long (the editor waits 1.5 s
+        // for each, however slow the machine is otherwise).
         assert!(
-            started.elapsed() < std::time::Duration::from_millis(2600),
-            "one after the other"
+            started.elapsed() < alone + std::time::Duration::from_millis(1000),
+            "one after the other: {:?} against {alone:?} alone",
+            started.elapsed()
         );
     }
 
