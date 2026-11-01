@@ -274,6 +274,12 @@ crate::catalog! {
         sandbox_git_read_only: &'static str,
         /// `glut sandbox git` from a command Glut runs.
         sandbox_owners_only: &'static str,
+        /// `glut sandbox show`: no command runs without a sandbox.
+        sandbox_required_shown: &'static str,
+        /// `glut sandbox required on` done.
+        sandbox_required_now_on: &'static str,
+        /// `glut sandbox required off` done.
+        sandbox_required_now_off: &'static str,
         /// `glut sandbox show`: the owner's settings switched the sandbox off.
         sandbox_off: &'static str,
         /// `glut sandbox git read-only` done.

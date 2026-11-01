@@ -150,12 +150,15 @@ pub const TEXTS: Texts = Texts {
      schreibgeschützt).",
     sandbox_git_read_only: "Git-Ordner: für Befehle schreibgeschützt, aus der Sandbox committet keiner (glut sandbox git writable \
      erlaubt es).",
+    sandbox_required_shown: "Ohne Sandbox läuft hier kein Befehl — glut sandbox required off lässt sie laufen, nur von den Regeln gehalten.",
+    sandbox_required_now_on: "Ab dem nächsten Befehl läuft in jeder Session kein Befehl, wo es keine Sandbox gibt.",
+    sandbox_required_now_off: "Befehle laufen wieder, wo es keine Sandbox gibt, nur von den Regeln gehalten.",
     sandbox_owners_only: "Der Schalter der Sandbox gehört allein dem Owner, nie einem Befehl, den Glut ausführt.",
     sandbox_off: "Befehle, die Glut ausführt, hält keine Sandbox: Sie ist in ~/.glut/settings.json aus (sandbox.enabled).",
     sandbox_git_now_read_only: "Ab dem nächsten Befehl schreibt in jeder Session kein Befehl, den Glut ausführt, in einen Git-Ordner.",
     sandbox_git_now_writable: "Ab dem nächsten Befehl dürfen Befehle, die Glut ausführt, in jeder Session wieder in Git-Ordner schreiben, \
      auch committen.",
-    sandbox_unreadable: "{reason} — Git-Ordner bleiben für Befehle schreibgeschützt, bis die Datei wieder lesbar ist.",
+    sandbox_unreadable: "{reason} — bis die Datei wieder lesbar ist, bleiben Git-Ordner für Befehle schreibgeschützt, und ohne Sandbox läuft keiner.",
     keychain_closed: "Der Schlüsselbund ist wieder zu für jeden Befehl, den Glut ausführt; die gelisteten Programme \
                       fragen nach ihm.",
     route_not_here: "{provider} bedient jedes Modell von einem Host: es gibt keine Hosts zu wählen (OpenRouter hat sie)",

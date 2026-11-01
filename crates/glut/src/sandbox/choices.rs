@@ -22,6 +22,8 @@ const MAX_FILE_BYTES: u64 = 4 * 1024;
 pub struct Choices {
     /// Every git folder read-only to a command: no commit from the sandbox.
     pub git_read_only: bool,
+    /// Without a sandbox here, no command runs at all (T94): rather none than one only the rules hold.
+    pub required: bool,
 }
 
 impl Choices {
@@ -57,11 +59,12 @@ impl Choices {
         serde_json::from_str(&text).map_err(|err| fail(err.to_string()))
     }
 
-    /// The choices a command runs under: a file that cannot be read keeps the git folders read-only — a switch the
-    /// owner turned on is not lost to a broken file.
+    /// The choices a command runs under: a file that cannot be read keeps both switches on — one the owner turned on
+    /// is not lost to a broken file. A switch set then starts from these, and the file is whole again.
     pub fn in_force(home: &Path) -> Self {
         Self::load(home).unwrap_or(Choices {
             git_read_only: true,
+            required: true,
         })
     }
 
@@ -96,6 +99,7 @@ mod tests {
         assert_eq!(Choices::load(&home).unwrap(), Choices::default());
         Choices {
             git_read_only: true,
+            required: false,
         }
         .save(&home)
         .unwrap();

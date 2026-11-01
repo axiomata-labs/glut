@@ -1,0 +1,67 @@
+# The Linux sandbox on a real x86_64 kernel (T94): Docker on the owner's Mac runs arm64 only, and x86_64 there is a
+# translation that proves nothing about a seccomp filter. Runs the sandbox's tests on every push to main.
+#
+# Axiomata-Foundation is private: the secret FOUNDATION_TOKEN (a fine-grained token that may read it) lets the run
+# check it out; without the secret the run is skipped with a note, never red.
+name: Linux sandbox (x86_64)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sandbox:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      # The token reaches only this look and the checkout below, never the build and the tests.
+      - id: token
+        env:
+          FOUNDATION_TOKEN: ${{ secrets.FOUNDATION_TOKEN }}
+        run: |
+          if [ -z "$FOUNDATION_TOKEN" ]; then
+            echo "::notice::FOUNDATION_TOKEN is not set: Axiomata-Foundation cannot be read, the run is skipped."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.token.outputs.skip != 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: Axiomata-Glut
+          persist-credentials: false
+      - if: steps.token.outputs.skip != 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: NamorX68/Axiomata-Foundation
+          path: Axiomata-Foundation
+          token: ${{ secrets.FOUNDATION_TOKEN }}
+          persist-credentials: false
+      - if: steps.token.outputs.skip != 'true'
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+      - if: steps.token.outputs.skip != 'true'
+        name: bubblewrap, and Ubuntu's AppArmor rule against unprivileged namespaces lifted for this machine
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends bubblewrap netcat-openbsd
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          uname -m
+      - if: steps.token.outputs.skip != 'true'
+        name: Foundation from the checkout beside, as on the owner's machine
+        run: |
+          mkdir -p Axiomata-Glut/.cargo
+          printf '[patch."https://github.com/NamorX68/Axiomata-Foundation"]\naxiomata-files = { path = "../Axiomata-Foundation/crates/axiomata-files" }\n' \
+            > Axiomata-Glut/.cargo/config.toml
+      - if: steps.token.outputs.skip != 'true'
+        name: the sandbox's tests, the sandbox required to be there
+        working-directory: Axiomata-Glut
+        env:
+          GLUT_EXPECT_SANDBOX: "1"
+        run: |
+          cargo build -p glut-tui
+          cargo test -p glut-tui --test linux_sandbox
+          GLUT_TEST_HELPER="$PWD/target/debug/glut" cargo test -p glut --lib sandbox::
+          GLUT_TEST_HELPER="$PWD/target/debug/glut" cargo test -p glut --lib tools::shell

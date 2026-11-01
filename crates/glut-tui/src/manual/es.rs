@@ -643,7 +643,9 @@ pub const PAGES: [(&str, &str); 66] = [
         "Cómo se sujetan los comandos que Glut ejecuta, y si pueden escribir en las carpetas git.\n\n/sandbox — \
          el sandbox aquí (macOS: Seatbelt; Linux: bubblewrap y seccomp) y el interruptor de git\n/sandbox git \
          read-only — ningún comando escribe en una carpeta git: ninguno hace commit desde el sandbox\n/sandbox \
-         git writable — los comandos pueden volver a escribir en las carpetas git, también hacer commit\n\nEl \
+         git writable — los comandos pueden volver a escribir en las carpetas git, también hacer commit\n\
+         /sandbox required on — ningún comando se ejecuta donde no hay sandbox (falta bubblewrap, un \
+         contenedor sin el derecho); off los deja ejecutarse, sujetos solo por las reglas\n\nEl \
          sandbox deja que un comando escriba solo en tus carpetas, lea todo salvo tus secretos y los archivos \
          .env, y llegue a la red solo por el proxy de Glut. En Linux no puede negar un nombre que aún no existe: \
          lo que un comando crea y macOS niega — un .envrc nuevo, un .git, un .git/commondir — va a \

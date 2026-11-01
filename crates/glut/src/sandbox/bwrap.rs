@@ -60,6 +60,22 @@ pub fn make_covers(policy: &Policy) {
     }
 }
 
+/// Programs that hand a job to the system, run later outside the sandbox (T94): systemd's, cron's and at's. They
+/// would fail anyway — D-Bus is a Unix socket the filter refuses, and a setuid program gets no rights under
+/// no-new-privs — so they are covered, never left to try.
+const LAUNCHERS: [&str; 10] = [
+    "/usr/bin/systemctl",
+    "/bin/systemctl",
+    "/usr/bin/systemd-run",
+    "/bin/systemd-run",
+    "/usr/bin/crontab",
+    "/bin/crontab",
+    "/usr/bin/at",
+    "/usr/bin/batch",
+    "/usr/bin/loginctl",
+    "/bin/loginctl",
+];
+
 /// What one path becomes in the sandbox; a path named twice takes the strongest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Mount {
@@ -196,6 +212,10 @@ fn mounts(policy: &Policy, found: &Found) -> BTreeMap<PathBuf, Mount> {
     }
     for path in policy.read_denied.iter().chain(&found.env_files) {
         name(path, Mount::Hide);
+    }
+    // What hands a job to the system to run later, outside the sandbox: covered, as macOS refuses `launchctl`.
+    for program in LAUNCHERS {
+        name(Path::new(program), Mount::Hide);
     }
     // A working folder inside a hidden one (a Studio worktree in `~/.axiomata/worktrees`) is read and written again:
     // its own mount comes after the cover, the folder sorting after the one holding it.

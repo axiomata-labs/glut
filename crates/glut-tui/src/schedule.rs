@@ -659,8 +659,33 @@ impl Lock {
     }
 }
 
-/// What starts and ends a plan's LaunchAgent: launchd, or a test's stand-in.
+/// What starts and ends a plan on this system: launchd's LaunchAgent, systemd's timer (T94), or a test's stand-in.
 pub trait Agents {
+    /// The files that hold `plan` here, each with its text, the one handed to [`Agents::start`] first: a LaunchAgent
+    /// unless the system says otherwise.
+    fn files(&self, home: &Path, plan: &Plan, program: &Path) -> Vec<(PathBuf, String)> {
+        vec![(agent_file(home, plan), agent_text(home, plan, program))]
+    }
+
+    /// Why this system cannot start plans now, and what helps; `None` where it can.
+    fn unready(&self) -> Option<String> {
+        None
+    }
+
+    /// A note for the owner about when plans run here (logged out or not); `None` where there is nothing to say.
+    fn note(&self) -> Option<String> {
+        None
+    }
+
+    /// A plan's line on when it runs: while the owner is logged in, unless this system says otherwise.
+    fn when_line(&self) -> String {
+        tr!(schedule_shown_logged_in).to_owned()
+    }
+
+    /// What is left of the plan `label` once its files are gone — systemd's loaded units and the stamp of its last
+    /// run, which would make a plan made again under the name catch up at once.
+    fn forget(&self, _home: &Path, _label: &str) {}
+
     /// The agent at `file`, labelled `label`, taken by launchd: what was there under the label before is let go.
     ///
     /// # Errors
@@ -675,6 +700,15 @@ pub trait Agents {
 /// How often a refused `bootstrap` is tried again, and the pause between.
 const BOOTSTRAP_TRIES: u32 = 5;
 const BOOTSTRAP_PAUSE: std::time::Duration = std::time::Duration::from_millis(200);
+
+/// The system's own way to start plans: launchd on macOS, systemd's timers on Linux.
+pub fn system() -> &'static dyn Agents {
+    if cfg!(target_os = "linux") {
+        &Systemd
+    } else {
+        &Launchd
+    }
+}
 
 /// launchd, in the owner's own login session.
 pub struct Launchd;
@@ -822,31 +856,301 @@ pub fn install(
     program: &Path,
     agents: &dyn Agents,
 ) -> Result<(), String> {
-    let file = agent_file(home, plan);
+    let files = agents.files(home, plan, program);
     if plan.paused {
         agents.stop(&plan.label());
-        let _ = std::fs::remove_file(&file);
+        for (file, _) in &files {
+            let _ = std::fs::remove_file(file);
+        }
+        agents.forget(home, &plan.label());
         return Ok(());
     }
-    let folder = file.parent().unwrap_or(home);
-    std::fs::create_dir_all(folder).map_err(|err| format!("{}: {err}", folder.display()))?;
-    // launchd refuses an agent others may write.
-    glut::providers::write_replacing(
-        folder,
-        &file,
-        agent_text(home, plan, program).as_bytes(),
-        0o644,
-    )
-    .map_err(|err| format!("{}: {err}", file.display()))?;
+    if let Some(why) = agents.unready() {
+        return Err(why);
+    }
+    for (file, text) in &files {
+        let folder = file.parent().unwrap_or(home);
+        std::fs::create_dir_all(folder).map_err(|err| format!("{}: {err}", folder.display()))?;
+        // launchd refuses an agent others may write; systemd would run what they wrote.
+        glut::providers::write_replacing(folder, file, text.as_bytes(), 0o644)
+            .map_err(|err| format!("{}: {err}", file.display()))?;
+    }
+    let Some((first, _)) = files.first() else {
+        return Ok(());
+    };
     agents
-        .start(&plan.label(), &file)
-        .map_err(|reason| tr!(schedule_launchd_failed, name = plan.name, reason = reason))
+        .start(&plan.label(), first)
+        .map_err(|reason| tr!(schedule_system_failed, name = plan.name, reason = reason))
 }
 
 /// The plan's LaunchAgent let go and its file gone.
 pub fn uninstall(home: &Path, plan: &Plan, agents: &dyn Agents) {
     agents.stop(&plan.label());
-    let _ = std::fs::remove_file(agent_file(home, plan));
+    for (file, _) in agents.files(home, plan, Path::new("")) {
+        let _ = std::fs::remove_file(file);
+    }
+    agents.forget(home, &plan.label());
+}
+
+/// systemd's timers of the owner's own user (T94): a timer and a service per plan in `~/.config/systemd/user/`,
+/// started with `systemctl --user`. A command cannot reach them: `systemctl --user` speaks D-Bus (a Unix socket the
+/// sandbox's filter refuses), and `~/.config` is not written from the sandbox.
+pub struct Systemd;
+
+/// Where systemctl and loginctl live: the system's own, never a folder on a `PATH`.
+const SYSTEMCTL: [&str; 2] = ["/usr/bin/systemctl", "/bin/systemctl"];
+const LOGINCTL: [&str; 2] = ["/usr/bin/loginctl", "/bin/loginctl"];
+
+/// How long systemctl has to answer.
+const SYSTEMCTL_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+impl Systemd {
+    fn systemctl(args: &[&str]) -> Result<(), String> {
+        let program = SYSTEMCTL
+            .iter()
+            .find(|path| Path::new(path).is_file())
+            .ok_or_else(|| tr!(schedule_no_systemd, why = "no systemctl").to_string())?;
+        let mut child = std::process::Command::new(program)
+            .arg("--user")
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|err| err.to_string())?;
+        // A D-Bus that hangs must not hold the screen: given up after a while, as an answer that did not come.
+        let since = std::time::Instant::now();
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) if since.elapsed() < SYSTEMCTL_WAIT => {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                _ => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!(
+                        "systemctl gave no answer in {} s",
+                        SYSTEMCTL_WAIT.as_secs()
+                    ));
+                }
+            }
+        };
+        if status.success() {
+            return Ok(());
+        }
+        let mut said = String::new();
+        if let Some(mut stderr) = child.stderr.take() {
+            let _ = std::io::Read::read_to_string(&mut stderr, &mut said);
+        }
+        Err(crate::transcript::clean(said.trim()))
+    }
+
+    /// The unit's name for the plan of `label` (`local.glut.schedule.<name>`).
+    fn unit(label: &str) -> String {
+        format!(
+            "glut-schedule-{}",
+            label.strip_prefix(LABEL).unwrap_or(label)
+        )
+    }
+}
+
+/// Whether the owner's plans run while they are logged out (`loginctl enable-linger`); `None` where it cannot be told.
+fn lingering() -> Option<bool> {
+    let uid = rustix::process::getuid().as_raw().to_string();
+    let program = LOGINCTL.iter().find(|path| Path::new(path).is_file())?;
+    let out = std::process::Command::new(program)
+        .args(["show-user", &uid, "--property=Linger", "--value"])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()
+        .filter(|out| out.status.success())?;
+    Some(String::from_utf8_lossy(&out.stdout).trim() == "yes")
+}
+
+/// Where systemd reads the user's own units: `$XDG_CONFIG_HOME/systemd/user`, else `~/.config/systemd/user`.
+fn user_units(home: &Path) -> PathBuf {
+    std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .filter(|dir| dir.is_absolute())
+        .unwrap_or_else(|| home.join(".config"))
+        .join("systemd")
+        .join("user")
+}
+
+impl Agents for Systemd {
+    fn files(&self, home: &Path, plan: &Plan, program: &Path) -> Vec<(PathBuf, String)> {
+        let unit = Self::unit(&plan.label());
+        let dir = user_units(home);
+        vec![
+            (dir.join(format!("{unit}.timer")), timer_text(plan)),
+            (
+                dir.join(format!("{unit}.service")),
+                service_text(home, plan, program),
+            ),
+        ]
+    }
+
+    fn unready(&self) -> Option<String> {
+        // Units a command could write would run its program outside the sandbox at the plan's times.
+        let home = glut::permissions::settings::home_dir().ok()?;
+        let units = user_units(&home);
+        let writable = glut::sandbox::Policy::new(&home, &home, &[], &[]).writable;
+        if let Some(place) = writable.iter().find(|place| units.starts_with(place)) {
+            return Some(
+                tr!(
+                    schedule_no_systemd,
+                    why = format!(
+                        "{} lies in {}, where commands write",
+                        units.display(),
+                        place.display()
+                    )
+                )
+                .to_string(),
+            );
+        }
+        let why = match Self::systemctl(&["show-environment"]) {
+            Ok(()) => return None,
+            Err(why) => why,
+        };
+        // WSL starts systemd only where its configuration says so.
+        let wsl = std::fs::read_to_string("/proc/sys/kernel/osrelease")
+            .is_ok_and(|release| release.to_ascii_lowercase().contains("microsoft"));
+        Some(if wsl {
+            tr!(schedule_no_systemd_wsl, why = why).to_string()
+        } else {
+            tr!(schedule_no_systemd, why = why).to_string()
+        })
+    }
+
+    fn note(&self) -> Option<String> {
+        let user = std::env::var("USER")
+            .unwrap_or_else(|_| rustix::process::getuid().as_raw().to_string());
+        (lingering() == Some(false)).then(|| tr!(schedule_linger_off, user = user).to_string())
+    }
+
+    fn when_line(&self) -> String {
+        if lingering() == Some(true) {
+            tr!(schedule_shown_lingering).to_owned()
+        } else {
+            tr!(schedule_shown_logged_in).to_owned()
+        }
+    }
+
+    fn start(&self, label: &str, _file: &Path) -> Result<(), String> {
+        let timer = format!("{}.timer", Self::unit(label));
+        Self::systemctl(&["daemon-reload"])?;
+        Self::systemctl(&["enable", &timer])?;
+        // A timer changed takes its new times on a restart.
+        Self::systemctl(&["restart", &timer])
+    }
+
+    fn stop(&self, label: &str) {
+        let _ = Self::systemctl(&["disable", "--now", &format!("{}.timer", Self::unit(label))]);
+    }
+
+    fn forget(&self, home: &Path, label: &str) {
+        // Its last run's stamp (`Persistent=true`): a plan made or resumed under the name would run at once.
+        let stamp = home
+            .join(".local/share/systemd/timers")
+            .join(format!("stamp-{}.timer", Self::unit(label)));
+        let _ = std::fs::remove_file(stamp);
+        // A service whose last run failed stays loaded with that run's time: a plan made again under the name would
+        // count its first interval from there, and run at once.
+        let _ = Self::systemctl(&["reset-failed", &format!("{}.service", Self::unit(label))]);
+        let _ = Self::systemctl(&["daemon-reload"]);
+    }
+}
+
+/// The days as systemd's calendar names them, Monday first (ISO's 1 to 7).
+const SYSTEMD_DAYS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+/// The plan's timer: its times, a time missed while the machine was off caught up once.
+pub fn timer_text(plan: &Plan) -> String {
+    let when = match &plan.when {
+        When::At { hour, minute, days } => {
+            let days: Vec<&str> = days
+                .iter()
+                .filter_map(|day| SYSTEMD_DAYS.get((*day as usize).checked_sub(1)?).copied())
+                .collect();
+            let prefix = if days.is_empty() {
+                String::new()
+            } else {
+                format!("{} ", days.join(","))
+            };
+            format!(
+                "OnCalendar={prefix}*-*-* {hour:02}:{minute:02}:00\nPersistent=true\nAccuracySec=1s\n"
+            )
+        }
+        When::Every { minutes } => {
+            format!("OnActiveSec={minutes}min\nOnUnitActiveSec={minutes}min\nAccuracySec=1s\n")
+        }
+    };
+    format!(
+        "[Unit]\nDescription=Glut's plan {name}\n\n[Timer]\n{when}\n[Install]\nWantedBy=timers.target\n",
+        name = unit_value(&plan.name)
+    )
+}
+
+/// The plan's service: `program schedule run --scheduled <name>` in the plan's folder, once per start — systemd never
+/// starts it twice at once — its output in `~/.glut/schedules/<name>.log`.
+pub fn service_text(home: &Path, plan: &Plan, program: &Path) -> String {
+    let log = dir(home).join(format!("{}.log", plan.name));
+    let mut env = String::new();
+    if !plan.path.is_empty() {
+        env.push_str(&format!(
+            "Environment={}\n",
+            unit_quoted(&format!("PATH={}", plan.path))
+        ));
+    }
+    if let Some(glut_home) = std::env::var_os("GLUT_HOME").filter(|value| !value.is_empty()) {
+        env.push_str(&format!(
+            "Environment={}\n",
+            unit_quoted(&format!("GLUT_HOME={}", glut_home.to_string_lossy()))
+        ));
+    }
+    let run = [
+        program.to_string_lossy().into_owned(),
+        "schedule".into(),
+        "run".into(),
+        "--scheduled".into(),
+        plan.name.clone(),
+    ]
+    .iter()
+    .map(|arg| exec_quoted(arg))
+    .collect::<Vec<_>>()
+    .join(" ");
+    let log = unit_value(&log.to_string_lossy());
+    format!(
+        "[Unit]\nDescription=Glut's plan {name}\n\n[Service]\nType=oneshot\nWorkingDirectory={folder}\n{env}\
+         ExecStart={run}\nStandardOutput=append:{log}\nStandardError=append:{log}\n",
+        name = unit_value(&plan.name),
+        folder = unit_value(&plan.folder.to_string_lossy()),
+    )
+}
+
+/// `text` as a value in a unit file: `%` written as systemd's own `%%` (else a specifier), and no line break or other
+/// control character — one would start a line of its own, a setting the plan never had.
+fn unit_value(text: &str) -> String {
+    let value = text
+        .chars()
+        .filter(|c| !c.is_control())
+        .collect::<String>()
+        .replace('%', "%%");
+    // A `\` at a line's end would join the next line to it.
+    value.trim_end_matches('\\').to_owned()
+}
+
+/// `text` as one quoted word of a unit file (`Environment=`): `\` and `"` escaped as well.
+fn unit_quoted(text: &str) -> String {
+    let value = unit_value(text).replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{value}\"")
+}
+
+/// `text` as one quoted word of `ExecStart=`, where `$` would name a variable: written `$$`.
+fn exec_quoted(text: &str) -> String {
+    unit_quoted(&text.replace('$', "$$"))
 }
 
 /// A macOS notification: `text` under `title`, handed to `osascript` as its arguments — never written into the script,
@@ -898,6 +1202,58 @@ mod tests {
     use std::cell::RefCell;
 
     use super::*;
+
+    #[test]
+    fn a_plans_systemd_units_hold_its_times_and_nothing_its_strings_could_add() {
+        let home = Path::new("/home/o");
+        let mut plan = sample("tests");
+        plan.when = When::At {
+            hour: 7,
+            minute: 5,
+            days: vec![1, 5, 7],
+        };
+        assert!(
+            timer_text(&plan).contains("OnCalendar=Mon,Fri,Sun *-*-* 07:05:00\nPersistent=true\n")
+        );
+        plan.when = When::Every { minutes: 90 };
+        let timer = timer_text(&plan);
+        assert!(
+            timer.contains("OnActiveSec=90min\nOnUnitActiveSec=90min\n")
+                && !timer.contains("Persistent")
+        );
+        // A folder, a PATH or a program with a line break, `%`, `$` or quotes stays one value of the line it is in.
+        plan.folder = PathBuf::from("/p/a\nExecStartPre=/bin/evil %h");
+        plan.path = "/bin:/x\"y".to_owned();
+        let service = service_text(home, &plan, Path::new("/opt/g $HOME/glut"));
+        let lines: Vec<&str> = service.lines().collect();
+        assert!(
+            lines.iter().all(|line| !line.starts_with("ExecStartPre")),
+            "{service}"
+        );
+        assert!(
+            service.contains("WorkingDirectory=/p/aExecStartPre=/bin/evil %%h\n"),
+            "{service}"
+        );
+        assert!(
+            service.contains("Environment=\"PATH=/bin:/x\\\"y\"\n"),
+            "{service}"
+        );
+        assert!(
+            service.contains(
+                "ExecStart=\"/opt/g $$HOME/glut\" \"schedule\" \"run\" \"--scheduled\" \"tests\"\n"
+            ),
+            "{service}"
+        );
+        let files = Systemd.files(home, &plan, Path::new("/g"));
+        assert_eq!(
+            files[0].0,
+            Path::new("/home/o/.config/systemd/user/glut-schedule-tests.timer")
+        );
+        assert_eq!(
+            files[1].0,
+            Path::new("/home/o/.config/systemd/user/glut-schedule-tests.service")
+        );
+    }
 
     fn plan(name: &str, when: When) -> Plan {
         Plan {

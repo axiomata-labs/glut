@@ -18,6 +18,19 @@ pub enum SandboxCommand {
         #[arg(value_enum)]
         mode: GitMode,
     },
+    /// Sets whether the commands Glut runs may run without a sandbox (on: none does where there is none).
+    Required {
+        /// on or off.
+        #[arg(value_enum)]
+        mode: OnOff,
+    },
+}
+
+/// A switch's two ways.
+#[derive(Clone, Copy, ValueEnum)]
+pub enum OnOff {
+    On,
+    Off,
 }
 
 /// What the commands Glut runs may do with git folders.
@@ -52,24 +65,54 @@ pub fn run(command: SandboxCommand) -> ExitCode {
                 Ok(_) => println!("{}", say!(sandbox_git_writable)),
                 Err(err) => println!("{}", say!(sandbox_unreadable, reason = err.to_string())),
             }
+            if Choices::in_force(&home).required {
+                println!("{}", say!(sandbox_required_shown));
+            }
             ExitCode::SUCCESS
+        }
+        SandboxCommand::Git { .. } | SandboxCommand::Required { .. }
+            if std::env::var_os(crate::tools::shell::SANDBOXED_ENV).is_some() =>
+        {
+            fail(say!(sandbox_owners_only))
         }
         SandboxCommand::Git { mode } => {
-            if std::env::var_os(crate::tools::shell::SANDBOXED_ENV).is_some() {
-                return fail(say!(sandbox_owners_only));
-            }
-            let read_only = matches!(mode, GitMode::ReadOnly);
-            match (Choices {
-                git_read_only: read_only,
-            })
-            .save(&home)
-            {
-                Ok(()) if read_only => println!("{}", say!(sandbox_git_now_read_only)),
-                Ok(()) => println!("{}", say!(sandbox_git_now_writable)),
-                Err(err) => return fail(&err.to_string()),
-            }
+            // The other switch stays as it stands.
+            let mut choices = Choices::in_force(&home);
+            choices.git_read_only = matches!(mode, GitMode::ReadOnly);
+            save(
+                &home,
+                choices,
+                if choices.git_read_only {
+                    say!(sandbox_git_now_read_only)
+                } else {
+                    say!(sandbox_git_now_writable)
+                },
+            )
+        }
+        SandboxCommand::Required { mode } => {
+            let mut choices = Choices::in_force(&home);
+            choices.required = matches!(mode, OnOff::On);
+            save(
+                &home,
+                choices,
+                if choices.required {
+                    say!(sandbox_required_now_on)
+                } else {
+                    say!(sandbox_required_now_off)
+                },
+            )
+        }
+    }
+}
+
+/// Keeps `choices` and says `done`.
+fn save(home: &std::path::Path, choices: Choices, done: &str) -> ExitCode {
+    match choices.save(home) {
+        Ok(()) => {
+            println!("{done}");
             ExitCode::SUCCESS
         }
+        Err(err) => fail(&err.to_string()),
     }
 }
 

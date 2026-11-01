@@ -454,7 +454,6 @@ impl Session {
         sandbox: Sandboxing,
         script: &str,
     ) -> Result<(Command, Option<crate::sandbox::scan::Watch>), String> {
-        let snapshot = self.snapshot().await;
         let mut proxy_env = Vec::new();
         // T36c: a pane's role without a `Network` rule keeps its commands offline, as a subagent's narrowing does.
         let role_online = match &sandbox {
@@ -467,6 +466,22 @@ impl Session {
             Sandboxing::On(gate, keychain) => (self.sandbox(gate).await, keychain),
             Sandboxing::Off => (None, false),
         };
+        // The owner's word (T94): without a sandbox, no command — the escape past it neither.
+        // A home not to be found counts as the switch on: the switch fails closed.
+        if sandbox.is_none()
+            && self
+                .home()
+                .is_none_or(|home| crate::sandbox::choices::Choices::in_force(&home).required)
+        {
+            let why = crate::sandbox::unavailable().unwrap_or_else(|| {
+                "it is off in ~/.glut/settings.json, or this command was to run past it".into()
+            });
+            return Err(format!(
+                "no command runs without a sandbox here (the owner's /sandbox required is on): {why}"
+            ));
+        }
+        // The owner's profile runs for the snapshot only once a command is going to run.
+        let snapshot = self.snapshot().await;
         let mut process = match sandbox {
             Some(sandbox) => {
                 let online = crate::permissions::agent_reaches_network() && role_online;
@@ -562,6 +577,16 @@ impl Session {
             .process_group(0)
             .kill_on_drop(true);
         Ok((process, watch))
+    }
+
+    /// The owner's home folder, as the cleaned environment names it, else as Glut's own does.
+    fn home(&self) -> Option<PathBuf> {
+        self.env
+            .iter()
+            .find(|(key, _)| key == "HOME")
+            .map(|(_, value)| PathBuf::from(value))
+            .filter(|home| home.is_absolute())
+            .or_else(|| crate::permissions::settings::home_dir().ok())
     }
 
     /// A mark for one chain's parts (N7): random for each call, so no file a command prints can hold one. It is no
@@ -2326,6 +2351,51 @@ mod tests {
             session
                 .direct_call("axiomata-cli board list", Some(&open))
                 .is_none()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// T94: with `/sandbox required on` and no sandbox here (or the sandbox off), no command runs — the escape past
+    /// it neither. Where the sandbox works, its settings switched off stand in for the missing one.
+    #[tokio::test]
+    async fn with_the_sandbox_required_and_none_here_no_command_runs() {
+        let dir = std::env::temp_dir().join(format!(
+            "glut-shell-required-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        std::fs::create_dir_all(dir.join("work")).unwrap();
+        crate::sandbox::choices::Choices {
+            git_read_only: false,
+            required: true,
+        }
+        .save(&dir)
+        .unwrap();
+        let ambient: Vec<(OsString, OsString)> = std::env::vars_os()
+            .filter(|(key, _)| key == "PATH")
+            .chain(std::iter::once((
+                "HOME".into(),
+                dir.clone().into_os_string(),
+            )))
+            .collect();
+        let options = ShellOptions {
+            shell: PathBuf::from("/bin/sh"),
+            profile: false,
+            ambient,
+            sandbox: Some(crate::permissions::settings::SandboxSettings {
+                enabled: false,
+                ..Default::default()
+            }),
+            direct: Vec::new(),
+            beside: Default::default(),
+            keychain: Default::default(),
+        };
+        let mut tools = Toolbox::new();
+        tools.extend(shell_tools(&dir.join("work"), options).unwrap());
+        let (ok, text) = bash(&tools, "echo ran").await;
+        assert!(
+            !ok && text.contains("/sandbox required is on") && !text.contains("\nran"),
+            "{text}"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -1858,7 +1858,15 @@ glut::catalog! {
         /// A plan's folder that is not there.
         schedule_folder_gone: &'static str,
         /// launchd refused a plan's agent.
-        schedule_launchd_failed: &'static str,
+        schedule_system_failed: &'static str,
+        /// No systemd of the user to start plans (Linux), `{why}` what it said.
+        schedule_no_systemd: &'static str,
+        /// The same in WSL, with its fix.
+        schedule_no_systemd_wsl: &'static str,
+        /// Plans run only while the owner is logged in (Linux without lingering), `{user}` the owner.
+        schedule_linger_off: &'static str,
+        /// A plan's line on when it runs, where the owner lets plans linger (Linux).
+        schedule_shown_lingering: &'static str,
         /// A plan's name that names none.
         schedule_unknown: &'static str,
         /// Above what a new plan may do.
@@ -2087,6 +2095,12 @@ glut::catalog! {
         sandbox_unreadable: &'static str,
         /// `/sandbox` with words it does not take.
         sandbox_usage: &'static str,
+        /// `/sandbox`: no command runs without a sandbox.
+        sandbox_required_shown: &'static str,
+        /// `/sandbox required on` done.
+        sandbox_required_now_on: &'static str,
+        /// `/sandbox required off` done.
+        sandbox_required_now_off: &'static str,
         /// Beside an ask's tool when the command would run with the Keychain open.
         ask_keychain: &'static str,
         /// The footer while the Keychain is open to every command.

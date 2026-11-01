@@ -146,12 +146,15 @@ pub const TEXTS: Texts = Texts {
      solo lectura).",
     sandbox_git_read_only: "Carpetas git: de solo lectura para los comandos, ninguno hace commit desde el sandbox (glut sandbox git \
      writable lo permite).",
+    sandbox_required_shown: "Sin sandbox aquí no se ejecuta ningún comando — glut sandbox required off los deja ejecutarse, sujetos solo por las reglas.",
+    sandbox_required_now_on: "Desde el próximo comando, en cada sesión, ningún comando se ejecuta donde no hay sandbox.",
+    sandbox_required_now_off: "Los comandos vuelven a ejecutarse donde no hay sandbox, sujetos solo por las reglas.",
     sandbox_owners_only: "El interruptor del sandbox es solo del propietario, nunca de un comando que Glut ejecuta.",
     sandbox_off: "Ningún sandbox sujeta los comandos que Glut ejecuta: está desactivado en ~/.glut/settings.json (sandbox.enabled).",
     sandbox_git_now_read_only: "Desde el próximo comando, en cada sesión, ningún comando que Glut ejecuta escribe en una carpeta git.",
     sandbox_git_now_writable: "Desde el próximo comando, en cada sesión, los comandos que Glut ejecuta pueden volver a escribir en las \
      carpetas git, también hacer commit.",
-    sandbox_unreadable: "{reason} — las carpetas git siguen de solo lectura para los comandos hasta que el archivo vuelva a leerse.",
+    sandbox_unreadable: "{reason} — hasta que el archivo vuelva a leerse, las carpetas git siguen de solo lectura para los comandos y ninguno se ejecuta sin sandbox.",
     keychain_closed: "El llavero vuelve a estar cerrado a todo comando que Glut ejecuta; los programas de la lista lo \
                       piden.",
     route_not_here: "{provider} sirve cada modelo desde un host: no hay hosts que elegir (OpenRouter los tiene)",

@@ -197,7 +197,12 @@ scripts/install.sh               # glut for every terminal: ~/.cargo/bin, linked
   keeps `~/.glut` out of a command's writes and refuses to start `launchctl` — keep both. What launchd starts (the
   program, every `PATH` folder) never lies where a plan's commands write, or a run would leave the next one a
   program outside the sandbox. A plan's name is a file's and a launchd label's part: `check_name` before it reaches
-  a path.
+  a path. On Linux (T94) a plan is a systemd timer and service of the user (`schedule::Systemd`, behind the same
+  `Agents` as launchd — pick it through `schedule::system()`, never by name): every value written into a unit goes
+  through `unit_value`/`exec_quoted` (no line break, `%%`, `$$`), and the sandbox covers `systemctl`, `systemd-run`,
+  `crontab` and `at` as macOS refuses `launchctl`. `/sandbox required on` (`sandbox::choices`, a broken file or an
+  unknown home counting as on) refuses every shell command and hook where there is no sandbox, the escape too —
+  not a declared direct program nor the owner's MCP servers, which never ran in it.
 - **`lsp` asks the safe language servers, and a rename is one change** (T62, `crates/glut/src/lsp.rs`,
   `diagnostics.rs` `LanguageServers`): the same `SAFE_PROGRAMS` as an edit's errors, in the sandbox, started only where
   the gate allows the command line (`Diagnostics::allow`; nothing else starts one) — a new server needs its own audit

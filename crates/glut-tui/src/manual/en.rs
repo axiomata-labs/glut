@@ -619,7 +619,9 @@ pub const PAGES: [(&str, &str); 66] = [
         "How the commands Glut runs are held, and whether they may write git folders.\n\n/sandbox — the sandbox \
          here (macOS: Seatbelt; Linux: bubblewrap and seccomp) and the git switch\n/sandbox git read-only — no \
          command writes a git folder: none commits from the sandbox\n/sandbox git writable — commands may write \
-         git folders again, commits too\n\nThe sandbox lets a command write only in your folders, read \
+         git folders again, commits too\n\
+         /sandbox required on — no command runs where there is no sandbox (a missing bubblewrap, a container \
+         without the right); off lets them run, held by the rules alone\n\nThe sandbox lets a command write only in your folders, read \
          everything but your secrets and .env files, and reach the network only through Glut's proxy. On Linux \
          it cannot refuse a name that is not there yet: what a command makes that macOS refuses — a new .envrc, \
          a .git, a .git/commondir — goes to ~/.glut/quarantine the moment it appears, and once more after the \

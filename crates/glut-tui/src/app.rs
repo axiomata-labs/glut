@@ -4706,14 +4706,14 @@ impl App {
                 Err(reason) => self.transcript.note(reason, Tone::Fault),
             },
             Act::Hold(name, paused) => {
-                match crate::scheduled::hold(&home, &name, paused, &crate::schedule::Launchd) {
+                match crate::scheduled::hold(&home, &name, paused, crate::schedule::system()) {
                     Ok(said) => self.say(said),
                     Err(reason) => self.transcript.note(reason, Tone::Fault),
                 }
                 self.runs.stale();
             }
             Act::Delete(name) => {
-                match crate::scheduled::remove(&home, &name, &crate::schedule::Launchd) {
+                match crate::scheduled::remove(&home, &name, crate::schedule::system()) {
                     Ok(said) => self.say(said),
                     Err(reason) => self.transcript.note(reason, Tone::Fault),
                 }
@@ -4739,13 +4739,13 @@ impl App {
         let home = self.parts.home.clone();
         let (word, name) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
         let name = name.trim();
-        let launchd = crate::schedule::Launchd;
+        let agents = crate::schedule::system();
         let done = match (word, name) {
             ("", _) => return self.open_tab(Tab::Runs),
             ("list", "") => crate::scheduled::list(&home),
             ("add", _) => {
                 let cwd = self.parts.config.cwd.clone();
-                crate::scheduled::add_line(&home, name, &cwd, &launchd)
+                crate::scheduled::add_line(&home, name, &cwd, agents)
             }
             ("run", name) if !name.is_empty() => crate::schedule::Schedules::load(&home)
                 .and_then(|schedules| {
@@ -4757,12 +4757,12 @@ impl App {
                 .and_then(|()| crate::scheduled::run_beside(name))
                 .map(|()| tr!(runs_started, name = name)),
             ("pause", name) if !name.is_empty() => {
-                crate::scheduled::hold(&home, name, true, &launchd)
+                crate::scheduled::hold(&home, name, true, agents)
             }
             ("resume", name) if !name.is_empty() => {
-                crate::scheduled::hold(&home, name, false, &launchd)
+                crate::scheduled::hold(&home, name, false, agents)
             }
-            ("remove", name) if !name.is_empty() => crate::scheduled::remove(&home, name, &launchd),
+            ("remove", name) if !name.is_empty() => crate::scheduled::remove(&home, name, agents),
             _ => Err(tr!(schedule_usage).to_owned()),
         };
         self.runs.stale();

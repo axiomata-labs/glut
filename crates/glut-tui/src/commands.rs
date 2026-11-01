@@ -401,9 +401,9 @@ pub const COMMANDS: [Command; 66] = [
     command(
         Topic::Settings,
         "sandbox",
-        "[git read-only|writable]",
-        "how the commands Glut runs are contained — the sandbox here, and whether git folders are read-only to them; \
-         /sandbox git read-only|writable",
+        "[git read-only|writable] [required on|off]",
+        "how the commands Glut runs are contained — the sandbox here, whether git folders are read-only to them and \
+         whether none runs without a sandbox; /sandbox git read-only|writable, /sandbox required on|off",
     ),
     command(
         Topic::Settings,
@@ -1312,6 +1312,7 @@ mod tests {
                 "read",
                 "read-only",
                 "remove",
+                "required",
                 "resume",
                 "rounds",
                 "rule",

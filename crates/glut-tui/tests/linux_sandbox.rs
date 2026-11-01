@@ -289,6 +289,28 @@ fn nothing_outside_the_filter_can_be_reached_into() {
     assert!(text.contains("environ refused"), "{text}");
 }
 
+#[test]
+fn a_command_cannot_hand_a_job_to_the_system() {
+    let Some(place) = Place::new("launchers") else {
+        return;
+    };
+    let present: Vec<&str> = [
+        "/usr/bin/systemctl",
+        "/usr/bin/systemd-run",
+        "/usr/bin/loginctl",
+        "/usr/bin/crontab",
+        "/usr/bin/at",
+    ]
+    .into_iter()
+    .filter(|program| Path::new(program).exists())
+    .collect();
+    for program in present {
+        // Not run at all: the shell cannot start it (126), whatever the program would have said.
+        let out = place.run(&format!("{program} </dev/null >/dev/null 2>&1; echo rc=$?"));
+        assert!(said(&out).contains("rc=126"), "{program}: {}", said(&out));
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn the_network_is_the_proxy_through_the_relay_and_nothing_else() {
     let Some(place) = Place::new("network") else {

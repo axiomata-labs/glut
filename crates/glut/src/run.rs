@@ -5365,10 +5365,12 @@ mod tests {
         let dir = journal_dir("lost");
         let config = journaled(&dir, "run-lost");
         let mut slow = Script::new(vec![Ok(calls(&[("c1", "echo", r#"{"text":"one"}"#)]))]);
-        slow.delay = Duration::from_millis(60);
+        // Each model call takes 400 ms: the first step (and its tool) is done by 600 ms with room to spare under a
+        // loaded machine, the second call still under way then.
+        slow.delay = Duration::from_millis(400);
         // The process "dies" during the second model call: the future is dropped, nothing ends the run.
         let lost = tokio::time::timeout(
-            Duration::from_millis(100),
+            Duration::from_millis(600),
             run(
                 &config,
                 &slow,

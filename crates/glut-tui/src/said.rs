@@ -38,29 +38,37 @@ pub fn classifier(home: &Path, rest: &str) -> Said {
     })
 }
 
-/// `/sandbox`: how the commands Glut runs are held — the sandbox here, and whether git folders are read-only to
-/// them (T59, the owner's switch, kept in `~/.glut/sandbox.json` for every session from its next command).
+/// `/sandbox`: how the commands Glut runs are held — the sandbox here, whether git folders are read-only to them
+/// (T59) and whether none runs without a sandbox (T94): the owner's switches, kept in `~/.glut/sandbox.json` for
+/// every session from its next command.
 pub fn sandbox(parts: &Parts, rest: &str) -> Said {
     use glut::sandbox::choices::Choices;
     let words: Vec<&str> = rest.split_whitespace().collect();
-    let set = match words.as_slice() {
+    // A switch changed keeps the other as it stands; an unreadable file starts from what it holds in force.
+    let mut choices = Choices::in_force(&parts.home);
+    let said = match words.as_slice() {
         [] => None,
-        ["git", "read-only"] => Some(true),
-        ["git", "writable"] => Some(false),
+        ["git", "read-only"] => {
+            choices.git_read_only = true;
+            Some(tr!(sandbox_git_now_read_only))
+        }
+        ["git", "writable"] => {
+            choices.git_read_only = false;
+            Some(tr!(sandbox_git_now_writable))
+        }
+        ["required", "on"] => {
+            choices.required = true;
+            Some(tr!(sandbox_required_now_on))
+        }
+        ["required", "off"] => {
+            choices.required = false;
+            Some(tr!(sandbox_required_now_off))
+        }
         _ => return Err(tr!(sandbox_usage).to_string()),
     };
-    if let Some(read_only) = set {
-        Choices {
-            git_read_only: read_only,
-        }
-        .save(&parts.home)
-        .map_err(|err| err.to_string())?;
-        return Ok(if read_only {
-            tr!(sandbox_git_now_read_only)
-        } else {
-            tr!(sandbox_git_now_writable)
-        }
-        .to_string());
+    if let Some(said) = said {
+        choices.save(&parts.home).map_err(|err| err.to_string())?;
+        return Ok(said.to_string());
     }
     let enabled = parts
         .config
@@ -72,12 +80,19 @@ pub fn sandbox(parts: &Parts, rest: &str) -> Said {
         Some(why) => tr!(sandbox_cmd_missing, why = why).to_string(),
         None => tr!(sandbox_cmd_on, kind = glut::sandbox::mechanism()).to_string(),
     };
-    let git = match Choices::load(&parts.home) {
-        Ok(choices) if choices.git_read_only => tr!(sandbox_git_read_only).to_string(),
-        Ok(_) => tr!(sandbox_git_writable).to_string(),
-        Err(err) => tr!(sandbox_unreadable, reason = err.to_string()).to_string(),
+    let mut text = match Choices::load(&parts.home) {
+        Ok(choices) if choices.git_read_only => format!("{held}\n{}", tr!(sandbox_git_read_only)),
+        Ok(_) => format!("{held}\n{}", tr!(sandbox_git_writable)),
+        Err(err) => format!(
+            "{held}\n{}",
+            tr!(sandbox_unreadable, reason = err.to_string())
+        ),
     };
-    Ok(format!("{held}\n{git}"))
+    if Choices::in_force(&parts.home).required {
+        text.push('\n');
+        text.push_str(tr!(sandbox_required_shown));
+    }
+    Ok(text)
 }
 
 /// `/folder`: the folders beside the working one (T60c), the owner's word for this session alone — listed alone,

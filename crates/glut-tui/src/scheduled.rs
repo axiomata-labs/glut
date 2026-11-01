@@ -123,7 +123,7 @@ pub async fn headless(command: Command) -> ExitCode {
     };
     let done = match command {
         Command::Add(args) => match std::env::current_dir() {
-            Ok(here) => add(&home, *args, &here, &schedule::Launchd),
+            Ok(here) => add(&home, *args, &here, schedule::system()),
             Err(err) => Err(err.to_string()),
         },
         Command::List => list(&home),
@@ -132,9 +132,9 @@ pub async fn headless(command: Command) -> ExitCode {
             scheduled,
             by_hand,
         } => return run(&home, &name, scheduled, by_hand).await,
-        Command::Pause { name } => hold(&home, &name, true, &schedule::Launchd),
-        Command::Resume { name } => hold(&home, &name, false, &schedule::Launchd),
-        Command::Remove { name } => remove(&home, &name, &schedule::Launchd),
+        Command::Pause { name } => hold(&home, &name, true, schedule::system()),
+        Command::Resume { name } => hold(&home, &name, false, schedule::system()),
+        Command::Remove { name } => remove(&home, &name, schedule::system()),
     };
     match done {
         Ok(said) => {
@@ -219,7 +219,7 @@ fn add(home: &Path, args: AddArgs, here: &Path, agents: &dyn Agents) -> Result<S
     let program = program()?;
     program_outside(&program, &places)?;
     plan.path = path_outside(&std::env::var("PATH").unwrap_or_default(), &places);
-    // launchd opens the log there before the run makes the folder.
+    // launchd and systemd open the log there before the run makes the folder.
     glut::providers::make_private_dir(&schedule::dir(home)).map_err(|err| err.to_string())?;
     if let Err(reason) = schedule::install(home, &plan, &program, agents) {
         // The agent of the plan as it was goes back; a new plan leaves none behind.
@@ -231,7 +231,12 @@ fn add(home: &Path, args: AddArgs, here: &Path, agents: &dyn Agents) -> Result<S
         }
         return Err(reason);
     }
-    let said = shown(home, &plan, kept.is_some());
+    let mut said = shown(home, &plan, kept.is_some());
+    // When plans run here at all (Linux: only while logged in, unless the owner lets them linger).
+    if let Some(note) = agents.note() {
+        said.push('\n');
+        said.push_str(&note);
+    }
     schedules.put(plan);
     schedules.save(home)?;
     Ok(said)
@@ -523,7 +528,7 @@ fn shown(home: &Path, plan: &Plan, changed: bool) -> String {
         }
     }
     lines.push(tr!(schedule_shown_owner_rules).to_owned());
-    lines.push(tr!(schedule_shown_logged_in).to_owned());
+    lines.push(schedule::system().when_line());
     if plan.paused {
         lines.push(tr!(schedule_shown_paused, name = plan.name));
     }
@@ -582,7 +587,12 @@ pub(crate) fn list(home: &Path) -> Result<String, String> {
             )
         })
         .collect();
-    Ok(lines.join("\n"))
+    let mut text = lines.join("\n");
+    if let Some(note) = schedule::system().note() {
+        text.push('\n');
+        text.push_str(&note);
+    }
+    Ok(text)
 }
 
 /// What a run cost, `—` where the prices are unknown.

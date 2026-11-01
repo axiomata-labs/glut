@@ -350,11 +350,32 @@ fn reap_until(command: u32) -> Result<std::process::ExitStatus, String> {
     }
 }
 
+/// The most connections the relay carries at once (T94), as the proxy serves at once: a command that opens more
+/// waits for none, its next is closed.
+const MOST_RELAYED: usize = 64;
+
 /// Hands every connection on `listener` to the proxy's bridge at `socket`, until the helper ends.
 fn relay_all(listener: &TcpListener, socket: &Path) {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    /// One connection counted while it lasts, however its thread ends.
+    struct Held(Arc<AtomicUsize>);
+    impl Drop for Held {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+    let open = Arc::new(AtomicUsize::new(0));
     for client in listener.incoming().flatten() {
-        let socket = socket.to_path_buf();
+        // Only this loop adds: the count cannot pass the limit between the look and the add.
+        if open.load(Ordering::SeqCst) >= MOST_RELAYED {
+            drop(client);
+            continue;
+        }
+        open.fetch_add(1, Ordering::SeqCst);
+        let (socket, held) = (socket.to_path_buf(), Held(Arc::clone(&open)));
         std::thread::spawn(move || {
+            let _held = held;
             if let Ok(upstream) = UnixStream::connect(&socket) {
                 relay_one(client, upstream);
             }

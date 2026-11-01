@@ -654,7 +654,9 @@ pub const PAGES: [(&str, &str); 66] = [
          git.\n\n/sandbox — le bac à sable ici (macOS : Seatbelt ; Linux : bubblewrap et seccomp) et le \
          commutateur git\n/sandbox git read-only — aucune commande n’écrit dans un dossier git : aucune ne \
          commite depuis le bac à sable\n/sandbox git writable — les commandes peuvent de nouveau écrire dans les \
-         dossiers git, et commiter\n\nLe bac à sable ne laisse une commande écrire que dans tes dossiers, tout \
+         dossiers git, et commiter\n\
+         /sandbox required on — aucune commande ne s’exécute là où il n’y a pas de bac à sable (bubblewrap \
+         absent, un conteneur sans le droit) ; off les laisse s’exécuter, tenues par les seules règles\n\nLe bac à sable ne laisse une commande écrire que dans tes dossiers, tout \
          lire sauf tes secrets et les fichiers .env, et n’atteindre le réseau que par le proxy de Glut. Sous \
          Linux, il ne peut pas refuser un nom qui n’existe pas encore : ce qu’une commande crée et que macOS \
          refuse — un nouveau .envrc, un .git, un .git/commondir — part dans ~/.glut/quarantine dès qu’il \
