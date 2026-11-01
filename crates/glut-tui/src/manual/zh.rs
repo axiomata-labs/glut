@@ -1,7 +1,7 @@
 //! The commands' manual pages in Chinese (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 65] = [
+pub const PAGES: [(&str, &str); 66] = [
     (
         "clear",
         "在此文件夹中开始一个新的空会话。\n\
@@ -558,6 +558,16 @@ pub const PAGES: [(&str, &str); 65] = [
          \n\
          列表保存在 `~/.glut/keychain.json`；`glut keychain open` 让钥匙串跨会话保持开放，`glut keychain close` \
          永久关闭它。",
+    ),
+    (
+        "sandbox",
+        "Glut 运行的命令如何被约束，以及它们能否写入 Git 文件夹。\n\n/sandbox — 这里的沙箱（macOS：Seatbelt；Linux：bubblewrap 和 seccomp）和 Git \
+         开关\n/sandbox git read-only — 没有命令写入 Git 文件夹：没有命令能从沙箱提交\n/sandbox git writable — 命令可以重新写入 Git \
+         文件夹，也可以提交\n\n沙箱只让命令写入你的文件夹，读取除你的机密和 .env 文件之外的一切，并且只能通过 Glut 的代理访问网络。在 Linux \
+         上，它无法拒绝一个尚不存在的名字：命令创建的、macOS 会拒绝的东西 — 新的 .envrc、.git、.git/commondir — 一出现就会被移到 \
+         ~/.glut/quarantine，命令结束后还会再检查一次。恰好在那一刻运行的你的工具仍可能遇到它；Git \
+         文件夹只读时，其中根本不会产生这类东西。\n\n这个开关从下一个命令起在每个会话和窗口中生效，保存在 ~/.glut/sandbox.json 中 — 从不由命令写入。glut sandbox show 和 \
+         glut sandbox git read-only|writable 在 Glut 之外做同样的事。",
     ),
     (
         "classifier",

@@ -44,6 +44,10 @@ pub struct Found {
     pub guarded: BTreeMap<PathBuf, Guard>,
     /// The git folders found below the roots (a nested repository's or a submodule's `.git`), beside the run's own.
     pub git_dirs: Vec<PathBuf>,
+    /// The git folders inside git folders (a submodule's in `modules/`, a worktree's in `worktrees/`).
+    pub inner_git_dirs: Vec<PathBuf>,
+    /// Every folder the search went through, the roots too: where a watch during the command looks ([`Rules`]).
+    pub folders: Vec<PathBuf>,
     /// Whether the search saw everything ([`MAX_ENTRIES`]).
     pub complete: bool,
 }
@@ -102,11 +106,11 @@ pub fn appeared(before: &Found, after: &Found) -> Vec<PathBuf> {
     let mut new: Vec<PathBuf> = after
         .guarded
         .iter()
-        .filter(|(path, now)| {
-            before
-                .guarded
-                .get(*path)
-                .is_none_or(|then| then.id != now.id)
+        .filter(|(path, now)| match before.guarded.get(*path) {
+            // There at the start, it was mounted as it was — only a link could not be: changed since, the change came
+            // from outside the sandbox (the owner's `git config` writes a new `config`), and it stays.
+            Some(then) => then.id.target.is_some() && then.id != now.id,
+            None => true,
         })
         .filter(|(path, now)| {
             before.guarded.contains_key(*path) || !known.contains(&(now.id.device, now.id.inode))
@@ -139,7 +143,7 @@ pub fn quarantine(paths: &[PathBuf], quarantine: &Path) -> Vec<(PathBuf, Result<
         .collect()
 }
 
-fn move_away(path: &Path, quarantine: &Path, at: usize) -> std::io::Result<PathBuf> {
+pub(crate) fn move_away(path: &Path, quarantine: &Path, at: usize) -> std::io::Result<PathBuf> {
     use std::os::unix::fs::DirBuilderExt;
     let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
         return Err(std::io::Error::other("not a path to move"));
@@ -190,6 +194,9 @@ fn open_without_links(path: &Path) -> std::io::Result<rustix::fd::OwnedFd> {
 pub struct Watch {
     /// `None` once settled.
     before: Option<Found>,
+    /// The watch while the command runs (Linux): what it makes is moved away at once.
+    #[cfg(target_os = "linux")]
+    watcher: Option<super::watcher::Watcher>,
     root: PathBuf,
     beside: Vec<PathBuf>,
     git_dirs: Vec<PathBuf>,
@@ -199,8 +206,17 @@ pub struct Watch {
 impl Watch {
     /// Watches a command about to run under `policy`, with `before` searched for it.
     pub fn new(policy: &super::Policy, before: Found) -> Self {
+        #[cfg(target_os = "linux")]
+        let watcher = {
+            let rules = Rules::new(&policy.root, &policy.beside, &policy.git_dirs, &before);
+            let mut folders = before.folders.clone();
+            folders.extend(rules.git_folders());
+            super::watcher::Watcher::start(rules, folders, policy.quarantine.join(held_name()))
+        };
         Watch {
             before: Some(before),
+            #[cfg(target_os = "linux")]
+            watcher,
             root: policy.root.clone(),
             beside: policy.beside.clone(),
             git_dirs: policy.git_dirs.clone(),
@@ -214,26 +230,21 @@ impl Watch {
     }
 
     fn settle_now(&mut self) -> Option<String> {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static NEXT: AtomicU64 = AtomicU64::new(0);
         let before = self.before.take()?;
+        let mut notes = String::new();
+        #[cfg(target_os = "linux")]
+        if let Some(watcher) = self.watcher.take() {
+            notes.extend(watcher.stop());
+        }
         let after = search(&self.root, &self.beside, &self.git_dirs);
         let made = appeared(&before, &after);
-        let mut notes = String::new();
         if !after.complete {
             notes.push_str(&format!(
                 "[the folders hold more than {MAX_ENTRIES} entries: what the command made past them was not checked]\n"
             ));
         }
         if !made.is_empty() {
-            let secs = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |since| since.as_secs());
-            let held = self.quarantine.join(format!(
-                "{secs}-{}-{}",
-                std::process::id(),
-                NEXT.fetch_add(1, Ordering::Relaxed)
-            ));
+            let held = self.quarantine.join(held_name());
             for (path, moved) in quarantine(&made, &held) {
                 notes.push_str(&match moved {
                     Ok(to) => format!(
@@ -251,6 +262,20 @@ impl Watch {
         }
         (!notes.is_empty()).then_some(notes)
     }
+}
+
+/// A new folder's name in the quarantine: when, which Glut, and a count, so no two moves meet.
+fn held_name() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs());
+    format!(
+        "{secs}-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    )
 }
 
 impl Drop for Watch {
@@ -303,6 +328,7 @@ fn walk(top: &Path, beside: bool, found: &mut Found, seen: &mut usize) {
     // Breadth first: past the limit, what is left uncovered lies deepest.
     let mut pending = std::collections::VecDeque::from([top.to_path_buf()]);
     while let Some(dir) = pending.pop_front() {
+        found.folders.push(dir.clone());
         let Ok(entries) = std::fs::read_dir(&dir) else {
             continue;
         };
@@ -348,6 +374,99 @@ fn walk(top: &Path, beside: bool, found: &mut Found, seen: &mut usize) {
     }
 }
 
+/// What a name may not become in a folder, while a command runs (T59's watch): the same rules the search follows,
+/// asked of one new entry at a time.
+#[derive(Debug, Clone, Default)]
+pub struct Rules {
+    root: PathBuf,
+    beside: Vec<PathBuf>,
+    git_dirs: std::collections::HashSet<PathBuf>,
+    /// The device and inode of every guarded path the search found: one of them under a new name only moved.
+    known: std::collections::HashSet<(u64, u64)>,
+    /// The guarded paths the sandbox mounted as they were (all but links): the command cannot make them anew, so
+    /// what appears there came from outside — the owner's own tools.
+    mounted: std::collections::HashSet<PathBuf>,
+}
+
+impl Rules {
+    /// The rules for the working folder `root`, the folders `beside` it and the git folders `found` and named.
+    pub fn new(root: &Path, beside: &[PathBuf], git_dirs: &[PathBuf], found: &Found) -> Self {
+        Rules {
+            root: root.to_path_buf(),
+            beside: beside.to_vec(),
+            git_dirs: git_dirs
+                .iter()
+                .chain(&found.git_dirs)
+                .chain(&found.inner_git_dirs)
+                .cloned()
+                .collect(),
+            known: found
+                .guarded
+                .values()
+                .map(|guard| (guard.id.device, guard.id.inode))
+                .collect(),
+            mounted: found
+                .guarded
+                .iter()
+                .filter(|(_, guard)| guard.id.target.is_none())
+                .map(|(path, _)| path.clone())
+                .collect(),
+        }
+    }
+
+    /// Whether `name`, new in the folder `dir`, is one the sandbox refuses: a git folder's runnable part or a new
+    /// folder for git folders in it, a git folder in those, a protected name in the working folder, a `.git` or an
+    /// `.envrc` anywhere, a protected name at any depth and in any case in a folder beside the working one.
+    pub fn refuses(&self, dir: &Path, name: &str) -> bool {
+        let lower = name.to_ascii_lowercase();
+        if self.git_dirs.contains(dir) {
+            return GIT_RUNS.contains(&name) || name == "modules" || name == "worktrees";
+        }
+        let holds_git_dirs = dir
+            .file_name()
+            .is_some_and(|last| last == "modules" || last == "worktrees")
+            && dir.parent().is_some_and(|git| self.git_dirs.contains(git));
+        if holds_git_dirs {
+            return true;
+        }
+        if dir == self.root && PROTECTED_IN_ROOT.contains(&name) {
+            return true;
+        }
+        if lower == ".git" || lower == ".envrc" {
+            return true;
+        }
+        self.beside.iter().any(|folder| dir.starts_with(folder))
+            && (PROTECTED_IN_ROOT.contains(&lower.as_str()) || lower == ".jj")
+    }
+
+    /// Whether `path` is no new thing of the command's: a guarded path the sandbox mounted (what appears there is the
+    /// owner's), or one the search found under whatever name it has now (never followed).
+    pub fn knows(&self, path: &Path) -> bool {
+        self.mounted.contains(path)
+            || std::fs::symlink_metadata(path)
+                .is_ok_and(|meta| self.known.contains(&(meta.dev(), meta.ino())))
+    }
+
+    /// Whether `dir` is one of the git folders.
+    pub fn is_git_dir(&self, dir: &Path) -> bool {
+        self.git_dirs.contains(dir)
+    }
+
+    /// The folders a watch follows beside the searched ones: the git folders and those holding git folders.
+    pub fn git_folders(&self) -> Vec<PathBuf> {
+        let mut folders: Vec<PathBuf> = Vec::new();
+        for git in &self.git_dirs {
+            folders.push(git.clone());
+            for holder in ["modules", "worktrees"] {
+                if git.join(holder).is_dir() {
+                    folders.push(git.join(holder));
+                }
+            }
+        }
+        folders
+    }
+}
+
 /// Whether the folder `name` at `path` is one a tool fills, by the mark it leaves ([`SKIPPED`]).
 fn skipped(name: &str, path: &Path) -> bool {
     SKIPPED.iter().any(|(skip, marks)| {
@@ -378,6 +497,7 @@ fn guard_git_dir(dir: &Path, found: &mut Found) {
             for entry in entries.flatten() {
                 if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
                     guard(found, entry.path(), true);
+                    found.inner_git_dirs.push(entry.path());
                     pending.push((entry.path(), depth + 1));
                 }
             }
@@ -451,11 +571,22 @@ mod tests {
         std::fs::write(root.join(".vscode/tasks.json"), "").unwrap();
         let after = search(&root, &[], &[root.join(".git")]);
         let new = appeared(&before, &after);
-        // Replaced under the same name: another file.
+        // Replaced under the same name: the sandbox had it mounted, so the owner did it (`git config`), and it stays;
+        // a link, which the sandbox cannot mount, replaced is another one.
         std::fs::remove_file(root.join(".git/config")).unwrap();
         std::fs::write(root.join(".git/config"), "[core]").unwrap();
-        let replaced = appeared(&after, &search(&root, &[], &[root.join(".git")]));
-        assert_eq!(replaced, vec![root.join(".git/config")]);
+        std::os::unix::fs::symlink("/a", root.join(".envrc")).unwrap();
+        let linked = search(&root, &[], &[root.join(".git")]);
+        std::fs::remove_file(root.join(".envrc")).unwrap();
+        std::os::unix::fs::symlink("/b", root.join(".envrc")).unwrap();
+        assert!(
+            appeared(&after, &linked)
+                .iter()
+                .all(|path| path != &root.join(".git/config"))
+        );
+        let replaced = appeared(&linked, &search(&root, &[], &[root.join(".git")]));
+        assert_eq!(replaced, vec![root.join(".envrc")]);
+        std::fs::remove_file(root.join(".envrc")).unwrap();
         assert_eq!(
             new,
             vec![
@@ -475,6 +606,43 @@ mod tests {
         );
         std::fs::remove_dir_all(root).unwrap();
         std::fs::remove_dir_all(held).unwrap();
+    }
+
+    #[test]
+    fn the_watch_refuses_what_the_search_guards() {
+        let root = folder();
+        let beside = folder();
+        std::fs::create_dir_all(root.join(".git/hooks")).unwrap();
+        std::fs::create_dir_all(root.join(".git/modules/m/hooks")).unwrap();
+        std::fs::create_dir_all(root.join("sub/.git/info")).unwrap();
+        std::fs::create_dir_all(root.join(".vscode")).unwrap();
+        std::fs::write(root.join("deep.envrc"), "").unwrap();
+        std::fs::create_dir_all(root.join("a")).unwrap();
+        std::fs::write(root.join("a/.envrc"), "").unwrap();
+        std::fs::create_dir_all(beside.join("p/.Cargo")).unwrap();
+        let git = [root.join(".git")];
+        let found = search(&root, std::slice::from_ref(&beside), &git);
+        let rules = Rules::new(&root, std::slice::from_ref(&beside), &git, &found);
+        for path in found.guarded.keys() {
+            let (dir, name) = (
+                path.parent().unwrap(),
+                path.file_name().unwrap().to_str().unwrap(),
+            );
+            assert!(
+                rules.refuses(dir, name),
+                "the search guards {path:?}, the watch would not"
+            );
+        }
+        assert!(found.folders.contains(&root.join("a")));
+        for (dir, name) in [
+            (root.clone(), "src"),
+            (root.join("a"), "main.rs"),
+            (root.join(".git"), "objects"),
+        ] {
+            assert!(!rules.refuses(&dir, name), "{dir:?} {name}");
+        }
+        std::fs::remove_dir_all(root).unwrap();
+        std::fs::remove_dir_all(beside).unwrap();
     }
 
     #[test]

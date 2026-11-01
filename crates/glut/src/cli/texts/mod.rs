@@ -264,6 +264,24 @@ crate::catalog! {
         keychain_opened: &'static str,
         /// `glut keychain close`.
         keychain_closed: &'static str,
+        /// `glut sandbox show`: the sandbox holds commands, `{kind}` its mechanism.
+        sandbox_on: &'static str,
+        /// `glut sandbox show`: no sandbox here, `{why}` the reason and what helps.
+        sandbox_missing: &'static str,
+        /// `glut sandbox show`: commands may write git folders.
+        sandbox_git_writable: &'static str,
+        /// `glut sandbox show`: git folders are read-only to commands.
+        sandbox_git_read_only: &'static str,
+        /// `glut sandbox git` from a command Glut runs.
+        sandbox_owners_only: &'static str,
+        /// `glut sandbox show`: the owner's settings switched the sandbox off.
+        sandbox_off: &'static str,
+        /// `glut sandbox git read-only` done.
+        sandbox_git_now_read_only: &'static str,
+        /// `glut sandbox git writable` done.
+        sandbox_git_now_writable: &'static str,
+        /// `glut sandbox show`: `~/.glut/sandbox.json` cannot be read, `{reason}` why.
+        sandbox_unreadable: &'static str,
         /// `glut providers route` for a provider off OpenRouter: `{provider}`.
         route_not_here: &'static str,
         /// The rule: `{on}`, `{margin}`, `{uptime}`, `{speed}`, `{wait}`.

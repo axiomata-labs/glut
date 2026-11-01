@@ -2069,6 +2069,24 @@ glut::catalog! {
         keychain_kept_note: &'static str,
         /// `/keychain` with words it does not know.
         keychain_usage: &'static str,
+        /// `/sandbox`: commands run in the sandbox, `{kind}` its mechanism.
+        sandbox_cmd_on: &'static str,
+        /// `/sandbox`: the sandbox is off in the settings.
+        sandbox_cmd_off: &'static str,
+        /// `/sandbox`: no sandbox here, `{why}` the reason and what helps.
+        sandbox_cmd_missing: &'static str,
+        /// `/sandbox`: commands may write git folders.
+        sandbox_git_writable: &'static str,
+        /// `/sandbox`: git folders are read-only to commands.
+        sandbox_git_read_only: &'static str,
+        /// `/sandbox git read-only` done.
+        sandbox_git_now_read_only: &'static str,
+        /// `/sandbox git writable` done.
+        sandbox_git_now_writable: &'static str,
+        /// `/sandbox`: `~/.glut/sandbox.json` cannot be read, `{reason}` why.
+        sandbox_unreadable: &'static str,
+        /// `/sandbox` with words it does not take.
+        sandbox_usage: &'static str,
         /// Beside an ask's tool when the command would run with the Keychain open.
         ask_keychain: &'static str,
         /// The footer while the Keychain is open to every command.

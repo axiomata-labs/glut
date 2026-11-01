@@ -11,11 +11,6 @@ use std::os::unix::process::{CommandExt as _, ExitStatusExt as _};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use seccompiler::{
-    BpfProgram, SeccompAction, SeccompCmpArgLen, SeccompCmpOp, SeccompCondition, SeccompFilter,
-    SeccompRule,
-};
-
 use super::bwrap::HELPER_FLAG;
 
 /// Where bubblewrap is looked for: the system's own, never a folder on a project's `PATH`.
@@ -79,7 +74,7 @@ fn try_ready() -> Result<PathBuf, String> {
     if helper_program().is_none() {
         return Err("this program does not serve the Linux sandbox's helper".into());
     }
-    if filters().is_err() {
+    if filter().is_err() {
         return Err(format!(
             "the sandbox's seccomp filter is not built for {}",
             std::env::consts::ARCH
@@ -138,120 +133,85 @@ fn namespace_help() -> &'static str {
     }
 }
 
-/// The two filters a command starts under: what is refused (`EPERM`), and `clone3` answered "not here" (`ENOSYS`) —
-/// its flags lie in memory a filter cannot read, and the C library falls back to `clone` on that answer.
-fn filters() -> Result<Vec<BpfProgram>, String> {
-    let arch = std::env::consts::ARCH
-        .try_into()
-        .map_err(|err: seccompiler::BackendError| err.to_string())?;
-    let always = |numbers: &[libc::c_long]| -> Vec<(i64, Vec<SeccompRule>)> {
-        numbers.iter().map(|number| (*number, Vec::new())).collect()
+/// The `AUDIT_ARCH_*` of this machine: its ELF machine, 64-bit, little-endian — `None` where the filter is not built.
+fn audit_arch() -> Option<u32> {
+    const BITS_64_LITTLE_ENDIAN: u32 = 0x8000_0000 | 0x4000_0000;
+    let machine = match std::env::consts::ARCH {
+        "x86_64" => 62,
+        "aarch64" => 183,
+        "riscv64" => 243,
+        _ => return None,
     };
-    let flag = |bits: libc::c_int| -> Result<SeccompRule, String> {
-        let bits = bits as u64;
-        SeccompCondition::new(
-            0,
-            SeccompCmpArgLen::Qword,
-            SeccompCmpOp::MaskedEq(bits),
-            bits,
-        )
-        .and_then(|condition| SeccompRule::new(vec![condition]))
-        .map_err(|err| err.to_string())
-    };
-    // A socket of any family but the network's own (the command's namespace holds those) and netlink's: a Unix one
-    // reaches the owner's agents, a vsock the host of a VM, and the rest are no business of a build.
-    let other_family = [libc::AF_INET, libc::AF_INET6, libc::AF_NETLINK]
-        .iter()
-        .map(|family| {
-            SeccompCondition::new(0, SeccompCmpArgLen::Dword, SeccompCmpOp::Ne, *family as u64)
-        })
-        .collect::<Result<Vec<_>, _>>()
-        .and_then(SeccompRule::new)
-        .map_err(|err| err.to_string())?;
-    let mut refused = always(&[
-        libc::SYS_unshare,
-        libc::SYS_setns,
-        libc::SYS_mount,
-        libc::SYS_umount2,
-        libc::SYS_pivot_root,
-        libc::SYS_open_tree,
-        libc::SYS_move_mount,
-        libc::SYS_fsopen,
-        libc::SYS_fsconfig,
-        libc::SYS_fsmount,
-        libc::SYS_fspick,
-        libc::SYS_mount_setattr,
-        libc::SYS_io_uring_setup,
-        libc::SYS_io_uring_enter,
-        libc::SYS_io_uring_register,
-        libc::SYS_keyctl,
-        libc::SYS_add_key,
-        libc::SYS_request_key,
-        libc::SYS_bpf,
-        // Into another process's memory or its open files: the helper is outside the filter.
-        libc::SYS_process_vm_readv,
-        libc::SYS_process_vm_writev,
-        libc::SYS_pidfd_getfd,
-    ]);
-    refused.push((libc::SYS_socket, vec![other_family]));
-    refused.push((
-        libc::SYS_clone,
-        [
-            libc::CLONE_NEWUSER,
-            libc::CLONE_NEWNS,
-            libc::CLONE_NEWNET,
-            libc::CLONE_NEWPID,
-            libc::CLONE_NEWIPC,
-            libc::CLONE_NEWUTS,
-            libc::CLONE_NEWCGROUP,
-        ]
-        .into_iter()
-        .map(flag)
-        .collect::<Result<_, _>>()?,
-    ));
-    let refused = SeccompFilter::new(
-        refused.into_iter().collect(),
-        SeccompAction::Allow,
-        SeccompAction::Errno(libc::EPERM as u32),
-        arch,
-    )
-    .map_err(|err| err.to_string())?;
-    let absent = SeccompFilter::new(
-        always(&[libc::SYS_clone3]).into_iter().collect(),
-        SeccompAction::Allow,
-        SeccompAction::Errno(libc::ENOSYS as u32),
-        arch,
-    )
-    .map_err(|err| err.to_string())?;
-    let mut programs = [refused, absent]
-        .into_iter()
-        .map(|filter| BpfProgram::try_from(filter).map_err(|err| err.to_string()))
-        .collect::<Result<Vec<_>, _>>()?;
-    if cfg!(target_arch = "x86_64") {
-        programs.push(no_x32());
-    }
-    Ok(programs)
+    Some(machine | BITS_64_LITTLE_ENDIAN)
 }
 
-/// On x86_64, every call of the x32 ABI refused: its numbers carry bit 30 and match none the filters name, so a
-/// kernel that has x32 would let `socket`, `unshare` and the rest through under them.
-fn no_x32() -> BpfProgram {
-    /// `AUDIT_ARCH_X86_64`: `EM_X86_64` (62), 64-bit, little-endian.
-    const ARCH_X86_64: u32 = 62 | 0x8000_0000 | 0x4000_0000;
-    const X32_BIT: u32 = 0x4000_0000;
-    const RET_ERRNO: u32 = 0x0005_0000;
-    const RET_ALLOW: u32 = 0x7fff_0000;
-    let step = |code: u16, jt: u8, jf: u8, k: u32| seccompiler::sock_filter { code, jt, jf, k };
-    // `seccomp_data`: the call's number at offset 0, its architecture at 4.
-    let (load, jump_eq, jump_set, ret) = (0x20, 0x15, 0x45, 0x06);
-    vec![
-        step(load, 0, 0, 4),
-        step(jump_eq, 0, 3, ARCH_X86_64),
-        step(load, 0, 0, 0),
-        step(jump_set, 0, 1, X32_BIT),
-        step(ret, 0, 0, RET_ERRNO | libc::ENOSYS as u32),
-        step(ret, 0, 0, RET_ALLOW),
-    ]
+/// The filter a command starts under ([`super::seccomp`]), from this machine's numbers.
+fn filter() -> Result<Vec<super::seccomp::Instruction>, String> {
+    let number =
+        |call: libc::c_long| u32::try_from(call).map_err(|_| format!("system call {call}"));
+    let numbers = |calls: &[libc::c_long]| {
+        calls
+            .iter()
+            .map(|call| number(*call))
+            .collect::<Result<Vec<_>, _>>()
+    };
+    let calls = super::seccomp::Calls {
+        arch: audit_arch().ok_or_else(|| format!("no filter for {}", std::env::consts::ARCH))?,
+        x32: cfg!(target_arch = "x86_64"),
+        refused: numbers(&[
+            libc::SYS_unshare,
+            libc::SYS_setns,
+            libc::SYS_mount,
+            libc::SYS_umount2,
+            libc::SYS_pivot_root,
+            libc::SYS_open_tree,
+            libc::SYS_move_mount,
+            libc::SYS_fsopen,
+            libc::SYS_fsconfig,
+            libc::SYS_fsmount,
+            libc::SYS_fspick,
+            libc::SYS_mount_setattr,
+            libc::SYS_io_uring_setup,
+            libc::SYS_io_uring_enter,
+            libc::SYS_io_uring_register,
+            libc::SYS_keyctl,
+            libc::SYS_add_key,
+            libc::SYS_request_key,
+            libc::SYS_bpf,
+            // Into another process's memory or its open files: the helper is outside the filter.
+            libc::SYS_process_vm_readv,
+            libc::SYS_process_vm_writev,
+            libc::SYS_pidfd_getfd,
+            libc::SYS_kcmp,
+            // Kernel surface no build needs (Docker's own profile refuses them too).
+            libc::SYS_perf_event_open,
+            libc::SYS_userfaultfd,
+            libc::SYS_name_to_handle_at,
+            libc::SYS_open_by_handle_at,
+        ])?,
+        absent: numbers(&[libc::SYS_clone3])?,
+        socket: number(libc::SYS_socket)?,
+        clone: number(libc::SYS_clone)?,
+        families: [libc::AF_INET, libc::AF_INET6, libc::AF_NETLINK]
+            .into_iter()
+            .map(|family| family as u32)
+            .collect(),
+        namespace_flags: (libc::CLONE_NEWUSER
+            | libc::CLONE_NEWNS
+            | libc::CLONE_NEWNET
+            | libc::CLONE_NEWPID
+            | libc::CLONE_NEWIPC
+            | libc::CLONE_NEWUTS
+            | libc::CLONE_NEWCGROUP) as u32,
+        eperm: libc::EPERM as u32,
+        enosys: libc::ENOSYS as u32,
+    };
+    let program = super::seccomp::program(&calls);
+    // The kernel's `sock_fprog` counts in 16 bits and takes at most 4096 instructions.
+    if program.len() > 4096 {
+        return Err(format!("the filter is {} instructions long", program.len()));
+    }
+    Ok(program)
 }
 
 /// The helper inside the sandbox: `[--check <root>]… [--relay <port> <socket>] -- <program> <args…>`.
@@ -298,7 +258,7 @@ fn start(mut args: &[OsString]) -> Result<std::process::ExitStatus, String> {
         .map(|(port, _)| TcpListener::bind(("127.0.0.1", *port)))
         .transpose()
         .map_err(|err| format!("the relay cannot listen: {err}"))?;
-    let filters = filters()?;
+    let mut filter = filter()?;
     // The helper stays outside the filter, so the command must not reach into it: not dumpable, no process of the
     // same user may trace it or write its memory. The command, a program of its own, is dumpable again after exec.
     // SAFETY: a plain `prctl` on this process.
@@ -310,19 +270,25 @@ fn start(mut args: &[OsString]) -> Result<std::process::ExitStatus, String> {
     }
     let mut process = std::process::Command::new(program);
     process.args(rest);
-    // SAFETY: between fork and exec only `prctl` and `seccomp` run, on memory made before the fork — no allocation,
+    // SAFETY: between fork and exec only two `prctl`s run, on memory made before the fork — no allocation,
     // no lock (this process has one thread until the relay starts after the spawn).
     unsafe {
         process.pre_exec(move || {
             if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 {
                 return Err(std::io::Error::last_os_error());
             }
-            for filter in &filters {
-                // The system's own reason where it gave one: a filter that failed to load is told by it.
-                seccompiler::apply_filter(filter).map_err(|err| match err {
-                    seccompiler::Error::Prctl(err) | seccompiler::Error::Seccomp(err) => err,
-                    _ => std::io::Error::from_raw_os_error(libc::EINVAL),
-                })?;
+            let program = libc::sock_fprog {
+                len: filter.len() as libc::c_ushort,
+                // `Instruction` is laid out as the kernel's `sock_filter`.
+                filter: filter.as_mut_ptr().cast::<libc::sock_filter>(),
+            };
+            if libc::prctl(
+                libc::PR_SET_SECCOMP,
+                libc::SECCOMP_MODE_FILTER,
+                &raw const program,
+            ) != 0
+            {
+                return Err(std::io::Error::last_os_error());
             }
             Ok(())
         });
@@ -417,12 +383,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_filters_build_for_this_machine() {
-        let built = filters().expect("filters");
-        assert_eq!(
-            built.len(),
-            if cfg!(target_arch = "x86_64") { 3 } else { 2 }
-        );
-        assert!(built.iter().all(|program| !program.is_empty()));
+    fn the_filter_builds_for_this_machine() {
+        let built = filter().expect("filter");
+        // The kernel takes at most 4096 instructions.
+        assert!(!built.is_empty() && built.len() < 4096);
     }
 }

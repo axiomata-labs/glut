@@ -475,7 +475,10 @@ impl Session {
                 }
                 // Without the network for a named agent whose `tools` name none (T37a) — the proxy judges on a task of
                 // its own, where the agent's narrowing is not seen.
-                let mut policy = sandbox.policy.with_beside(&self.beside.list());
+                let mut policy = sandbox
+                    .policy
+                    .with_beside(&self.beside.list())
+                    .with_choices_now();
                 if !online {
                     policy.proxy_port = None;
                 }
@@ -518,7 +521,15 @@ impl Session {
                 let process =
                     Command::from(policy.command(&self.shell, &self.root, &found, relay)?);
                 if linux {
-                    watch = Some(crate::sandbox::scan::Watch::new(&policy, found));
+                    // It follows every folder the search went through: off the async threads too.
+                    let watched = policy.clone();
+                    watch = Some(
+                        tokio::task::spawn_blocking(move || {
+                            crate::sandbox::scan::Watch::new(&watched, found)
+                        })
+                        .await
+                        .map_err(|err| format!("the watch over the command failed: {err}"))?,
+                    );
                 }
                 process
             }

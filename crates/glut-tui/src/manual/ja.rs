@@ -1,7 +1,7 @@
 //! The commands' manual pages in Japanese (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 65] = [
+pub const PAGES: [(&str, &str); 66] = [
     (
         "clear",
         "このフォルダーで、空の新しいセッションを始めます。\n\
@@ -580,6 +580,17 @@ pub const PAGES: [(&str, &str); 65] = [
          \n\
          リストは `~/.glut/keychain.json` に保たれます。`glut keychain open` \
          はセッションをまたいでキーチェーンを開いたままにし、`glut keychain close` は永久に閉じます。",
+    ),
+    (
+        "sandbox",
+        "Glut が実行するコマンドの扱いと、コマンドが Git フォルダに書き込めるかどうか。\n\n/sandbox — ここでのサンドボックス（macOS: Seatbelt、Linux: \
+         bubblewrap と seccomp）と Git のスイッチ\n/sandbox git read-only — どのコマンドも Git フォルダに書き込みません: \
+         サンドボックスからはどれもコミットしません\n/sandbox git writable — コマンドは再び Git \
+         フォルダに書き込めます。コミットもできます\n\nサンドボックスは、コマンドにあなたのフォルダへの書き込みだけを許し、秘密と .env ファイル以外のすべてを読ませ、ネットワークには Glut \
+         のプロキシ経由でのみ届かせます。Linux では、まだ存在しない名前を拒否できません: macOS が拒否するものをコマンドが作ると — 新しい .envrc、.git、.git/commondir — \
+         現れた瞬間に ~/.glut/quarantine へ移され、コマンドの後にもう一度確認されます。ちょうどその瞬間に動くあなたのツールはまだそれに出会う可能性があります。Git \
+         フォルダが読み取り専用なら、そこには何も作られません。\n\nスイッチは次のコマンドから、すべてのセッションとウィンドウで有効で、~/.glut/sandbox.json に保存されます — \
+         コマンドが書くことはありません。glut sandbox show と glut sandbox git read-only|writable は Glut の外で同じことをします。",
     ),
     (
         "classifier",

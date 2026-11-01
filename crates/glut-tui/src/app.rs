@@ -4246,6 +4246,10 @@ impl App {
                 Err(reason) => self.transcript.note(reason, Tone::Fault),
             },
             "keychain" => self.keychain_command(rest),
+            "sandbox" => match crate::said::sandbox(&self.parts, rest) {
+                Ok(said) => self.tell(said),
+                Err(reason) => self.transcript.note(reason, Tone::Fault),
+            },
             "clean" => self.clean_command(rest),
             "lsp" => match rest {
                 "on" | "off" => match prefs::set_lsp(&self.parts.home, rest == "on") {

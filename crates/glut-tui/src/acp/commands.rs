@@ -13,7 +13,7 @@ use super::{Live, Peer, options};
 use crate::session::{self, Report};
 
 /// The commands an editor offers, in the TUI's order.
-pub const OFFERED: [&str; 19] = [
+pub const OFFERED: [&str; 20] = [
     "compact",
     "handoff",
     "export",
@@ -29,6 +29,7 @@ pub const OFFERED: [&str; 19] = [
     "init",
     "gate",
     "classifier",
+    "sandbox",
     "rule",
     "maxsteps",
     "nudge",
@@ -92,6 +93,7 @@ pub async fn run(
     match name {
         "help" => Ran::Said(vec![help(live)]),
         "classifier" => said(crate::said::classifier(&parts.home, rest)),
+        "sandbox" => said(crate::said::sandbox(parts, rest)),
         "folder" => said(crate::said::folder(parts, rest)),
         "maxsteps" => said(crate::said::maxsteps(parts, rest)),
         "nudge" => said(crate::said::nudge(parts, rest)),

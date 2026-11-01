@@ -145,6 +145,20 @@ pub const TEXTS: Texts = Texts {
     keychain_not_listed: "{program} n'est pas sur la liste.",
     keychain_opened: "Le trousseau est ouvert à toute commande que Glut exécute, d'une session à l'autre — glut \
                       keychain close le referme.",
+    sandbox_on: "Les commandes que Glut exécute sont tenues dans le bac à sable ({kind}).",
+    sandbox_missing: "Ici, aucun bac à sable ne tient les commandes que Glut exécute : {why}",
+    sandbox_git_writable: "Dossiers git : les commandes peuvent y écrire, et commiter (glut sandbox git read-only les garde en lecture \
+     seule).",
+    sandbox_git_read_only: "Dossiers git : en lecture seule pour les commandes, aucune ne commite depuis le bac à sable (glut sandbox \
+     git writable le permet).",
+    sandbox_owners_only: "Le commutateur du bac à sable n’appartient qu’au propriétaire, jamais à une commande que Glut exécute.",
+    sandbox_off: "Aucun bac à sable ne tient les commandes que Glut exécute : il est désactivé dans ~/.glut/settings.json (sandbox.enabled).",
+    sandbox_git_now_read_only: "Dès la prochaine commande, dans chaque session, aucune commande que Glut exécute n’écrit dans un dossier \
+     git.",
+    sandbox_git_now_writable: "Dès la prochaine commande, dans chaque session, les commandes que Glut exécute peuvent de nouveau écrire \
+     dans les dossiers git, et commiter.",
+    sandbox_unreadable: "{reason} — les dossiers git restent en lecture seule pour les commandes jusqu’à ce que le fichier se lise \
+     de nouveau.",
     keychain_closed: "Le trousseau est de nouveau fermé à toute commande que Glut exécute ; les programmes listés le \
                       demandent.",
     route_not_here: "{provider} sert chaque modèle depuis un seul hôte : aucun hôte à choisir (OpenRouter en a)",

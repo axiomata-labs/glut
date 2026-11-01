@@ -232,6 +232,11 @@ pub const TEXTS: Texts = Texts {
              chaque fois ; /keychain add|remove <program>, /keychain open|close pour cette session",
         ),
         (
+            "sandbox",
+            "comment sont tenues les commandes que Glut exécute — le bac à sable ici, et si les dossiers git \
+             sont en lecture seule pour elles ; /sandbox git read-only|writable",
+        ),
+        (
             "classifier",
             "le second modèle qui juge une commande sur laquelle seul le mode interrogerait : si elle ne fait que lire, elle s’exécute comme une commande de lecture connue, dans le bac à sable — off te demande à chaque fois, session prend le modèle de la session",
         ),
@@ -346,6 +351,7 @@ pub const TEXTS: Texts = Texts {
         ("notify", "notifications"),
         ("secrets", "clés cachées au modèle"),
         ("keychain", "le trousseau pour les commandes"),
+        ("sandbox", "bac à sable et dossiers git"),
         ("classifier", "un second modèle juge les commandes"),
         ("ide", "ton éditeur à côté de Glut"),
         ("clean", "ranger ~/.glut"),
@@ -1288,6 +1294,22 @@ code",
             "Le trousseau pour les commandes que Glut exécute : fermé sauf aux programmes listés, qui le demandent à \
              chaque fois",
         ),
+        (
+            "How the commands Glut runs are held: the sandbox here, and whether git folders are read-only to them",
+            "Comment sont tenues les commandes que Glut exécute : le bac à sable ici, et si les dossiers git \
+             sont en lecture seule pour elles",
+        ),
+        (
+            "Shows the sandbox here and whether git folders are read-only to the commands Glut runs",
+            "Montre le bac à sable ici et si les dossiers git sont en lecture seule pour les commandes que Glut \
+             exécute",
+        ),
+        (
+            "Sets whether the commands Glut runs may write git folders (read-only: none commits from the sandbox)",
+            "Fixe si les commandes que Glut exécute peuvent écrire dans les dossiers git (read-only : aucune ne \
+             commite depuis le bac à sable)",
+        ),
+        ("read-only or writable", "read-only ou writable"),
         (
             "Shows whether the Keychain is open to the commands Glut runs, and the programs that may ask for it",
             "Montre si le trousseau est ouvert aux commandes que Glut exécute, et les programmes qui peuvent le \
@@ -2254,6 +2276,19 @@ code",
     keychain_closed: "le trousseau est de nouveau fermé ; les programmes listés le demandent",
     keychain_kept_note: "le trousseau est ouvert à toute commande que Glut exécute (glut keychain open) — /keychain \
                          close le ferme pour cette session, glut keychain close pour de bon",
+    sandbox_cmd_on: "Les commandes s’exécutent dans le bac à sable ({kind}).",
+    sandbox_cmd_off: "Les commandes s’exécutent sans bac à sable : il est désactivé dans ~/.glut/settings.json (sandbox.enabled).",
+    sandbox_cmd_missing: "Ici, les commandes s’exécutent sans bac à sable : {why}",
+    sandbox_git_writable: "Dossiers git : les commandes peuvent y écrire, et commiter — /sandbox git read-only garde chaque dossier \
+     git en lecture seule pour elles.",
+    sandbox_git_read_only: "Dossiers git : en lecture seule pour les commandes, aucune ne commite depuis le bac à sable — /sandbox git \
+     writable les laisse de nouveau commiter.",
+    sandbox_git_now_read_only: "Dès la prochaine commande, dans chaque session, aucune commande n’écrit dans un dossier git.",
+    sandbox_git_now_writable: "Dès la prochaine commande, dans chaque session, les commandes peuvent de nouveau écrire dans les dossiers \
+     git, et commiter.",
+    sandbox_unreadable: "{reason} — les dossiers git restent en lecture seule pour les commandes jusqu’à ce que le fichier se lise \
+     de nouveau.",
+    sandbox_usage: "/sandbox, /sandbox git read-only, /sandbox git writable",
     keychain_usage: "/keychain, /keychain add <program>, /keychain remove <program>, /keychain open, /keychain close",
     ask_keychain: "avec le trousseau",
     keychain_footer: "🔑 ouvert",

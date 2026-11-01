@@ -19,6 +19,7 @@ pub mod keychain;
 pub mod mcp_servers;
 pub mod models;
 pub mod providers;
+pub mod sandbox;
 
 use crate::commands::{PermissionsView, Registry};
 use crate::mcp;
@@ -88,6 +89,9 @@ pub enum Command {
     /// The Keychain for the commands Glut runs: shut but to the listed programs, which ask for it each time.
     #[command(subcommand)]
     Keychain(keychain::KeychainCommand),
+    /// How the commands Glut runs are held: the sandbox here, and whether git folders are read-only to them.
+    #[command(subcommand)]
+    Sandbox(sandbox::SandboxCommand),
 }
 
 /// Writes each event as one JSON line, flushed at once so a reader sees it while the run goes on.
@@ -258,6 +262,7 @@ pub async fn dispatch(command: Command) -> ExitCode {
         Command::Models(command) => models::run(command).await,
         Command::Mcp(command) => mcp_servers::run(command).await,
         Command::Keychain(command) => keychain::run(command),
+        Command::Sandbox(command) => sandbox::run(command),
     }
 }
 

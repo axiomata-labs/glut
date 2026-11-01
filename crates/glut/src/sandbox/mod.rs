@@ -17,10 +17,14 @@
 //! be written `/private/tmp`.
 
 pub mod bwrap;
+pub mod choices;
 #[cfg(target_os = "linux")]
 pub mod linux;
 pub mod proxy;
 pub mod scan;
+pub mod seccomp;
+#[cfg(target_os = "linux")]
+pub mod watcher;
 
 use std::path::{Path, PathBuf};
 
@@ -185,6 +189,15 @@ pub fn unavailable() -> Option<String> {
     }
 }
 
+/// The sandbox's mechanism on this system, by its own name.
+pub fn mechanism() -> &'static str {
+    if cfg!(target_os = "linux") {
+        "bubblewrap, seccomp"
+    } else {
+        "Seatbelt"
+    }
+}
+
 /// Runs the Linux sandbox's helper when this process was started as one and returns its exit code; otherwise
 /// remembers that this program serves it (the Linux sandbox needs that) and returns `None`. A program offering
 /// Glut's sandbox calls it first thing in `main`, before any thread starts; elsewhere than on Linux it does nothing.
@@ -244,6 +257,10 @@ pub struct Policy {
     /// The folder holding what the Linux sandbox covers secrets with ([`bwrap::make_covers`]), below `~/.glut`: no
     /// command reaches it to change them.
     pub covers: PathBuf,
+    /// Every git folder read-only to a command, the owner's choice ([`choices::Choices`]): no commit from here.
+    pub git_read_only: bool,
+    /// The owner's home folder, where the choices are read again ([`Policy::with_choices_now`]).
+    pub home: PathBuf,
 }
 
 impl Policy {
@@ -286,6 +303,8 @@ impl Policy {
             notes: Vec::new(),
             quarantine: home.join(crate::providers::DIR).join("quarantine"),
             covers: home.join(crate::providers::DIR).join("sandbox"),
+            git_read_only: choices::Choices::in_force(home).git_read_only,
+            home: home.to_path_buf(),
         }
     }
 
@@ -304,6 +323,13 @@ impl Policy {
             }
         }
         policy
+    }
+
+    /// This policy with the owner's choices as they stand now ([`choices::Choices`], read before every command): a
+    /// switch turned in another window holds from the next command on.
+    pub fn with_choices_now(mut self) -> Policy {
+        self.git_read_only = choices::Choices::in_force(&self.home).git_read_only;
+        self
     }
 
     /// The working folder and the folders beside it: where a command writes as in the run's own folder.
@@ -387,6 +413,18 @@ impl Policy {
         out.push_str("(deny file-write*\n");
         for path in &self.write_denied {
             out.push_str(&format!("  (subpath {})\n", quoted(path)));
+        }
+        if self.git_read_only {
+            // The owner's choice: no git folder written, the repository's own nor any in the roots.
+            for dir in &self.git_dirs {
+                out.push_str(&format!("  (subpath {})\n", quoted(dir)));
+            }
+            // In any case: macOS volumes do not tell `.GIT` from `.git`.
+            let git = any_case(".git");
+            for root in self.roots() {
+                let root = regex_escape(root);
+                out.push_str(&format!("  (regex #\"^{root}/(.*/)?{git}(/.*)?$\")\n"));
+            }
         }
         for dir in &self.git_dirs {
             for part in GIT_RUNS {
@@ -902,6 +940,55 @@ mod tests {
             let out = sandboxed(&policy, &format!("{script} || echo REFUSED"));
             assert!(refused(&out), "{script}: {out}");
         }
+    }
+
+    #[test]
+    fn the_git_switch_off_leaves_the_profile_as_it_was() {
+        let root = temp("git-switch-root");
+        let home = temp("git-switch-home");
+        let mut policy = Policy::new(&root, &home, &[], &[]);
+        policy.git_dirs = vec![root.join(".git")];
+        let off = policy.profile();
+        policy.git_read_only = true;
+        let on = policy.profile();
+        assert!(
+            on.len() > off.len()
+                && on.starts_with(&off[..off.find("(deny file-write*\n").unwrap()])
+        );
+        assert!(
+            on.contains("[gG][iI][tT](/.*)?$") && !off.contains("[gG][iI][tT](/.*)?$"),
+            "{off}"
+        );
+    }
+
+    #[test]
+    fn with_git_read_only_no_git_folder_is_written() {
+        if !available() {
+            return;
+        }
+        let (home, root) = (temp("git-ro-home"), temp("git-ro-root"));
+        let git = |dir: &Path, args: &[&str]| {
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(dir)
+                .args(args)
+                .output()
+                .unwrap()
+        };
+        git(&root, &["init", "-q"]);
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        git(&root.join("sub"), &["init", "-q"]);
+        let mut policy = Policy::new(&root, &home, &[], &[]);
+        policy.git_read_only = true;
+        let out = sandboxed(
+            &policy,
+            "echo a > f && echo WROTE; git add f || echo ADD-REFUSED; \
+             echo x > .git/commondir || echo COMMONDIR-REFUSED; echo x > sub/.git/description || echo SUB-REFUSED",
+        );
+        for expected in ["WROTE", "ADD-REFUSED", "COMMONDIR-REFUSED", "SUB-REFUSED"] {
+            assert!(out.contains(expected), "{expected}: {out}");
+        }
+        assert!(!root.join(".git/commondir").exists(), "{out}");
     }
 
     #[test]

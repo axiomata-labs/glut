@@ -1,7 +1,7 @@
 //! The commands' manual pages in English (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 65] = [
+pub const PAGES: [(&str, &str); 66] = [
     (
         "clear",
         "Start a new, empty session in this folder.\n\
@@ -613,6 +613,20 @@ pub const PAGES: [(&str, &str); 65] = [
          \n\
          The list is kept in `~/.glut/keychain.json`; `glut keychain open` keeps the Keychain open across sessions, \
          `glut keychain close` shuts it for good.",
+    ),
+    (
+        "sandbox",
+        "How the commands Glut runs are held, and whether they may write git folders.\n\n/sandbox — the sandbox \
+         here (macOS: Seatbelt; Linux: bubblewrap and seccomp) and the git switch\n/sandbox git read-only — no \
+         command writes a git folder: none commits from the sandbox\n/sandbox git writable — commands may write \
+         git folders again, commits too\n\nThe sandbox lets a command write only in your folders, read \
+         everything but your secrets and .env files, and reach the network only through Glut's proxy. On Linux \
+         it cannot refuse a name that is not there yet: what a command makes that macOS refuses — a new .envrc, \
+         a .git, a .git/commondir — goes to ~/.glut/quarantine the moment it appears, and once more after the \
+         command. A tool of yours that runs at that very moment could still meet it; with git folders read-only, \
+         none is made in them at all.\n\nThe switch counts in every session and window from the next command on, \
+         and is kept in ~/.glut/sandbox.json — never written by a command. glut sandbox show and glut sandbox \
+         git read-only|writable do the same outside Glut.",
     ),
     (
         "classifier",

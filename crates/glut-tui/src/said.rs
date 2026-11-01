@@ -38,6 +38,48 @@ pub fn classifier(home: &Path, rest: &str) -> Said {
     })
 }
 
+/// `/sandbox`: how the commands Glut runs are held — the sandbox here, and whether git folders are read-only to
+/// them (T59, the owner's switch, kept in `~/.glut/sandbox.json` for every session from its next command).
+pub fn sandbox(parts: &Parts, rest: &str) -> Said {
+    use glut::sandbox::choices::Choices;
+    let words: Vec<&str> = rest.split_whitespace().collect();
+    let set = match words.as_slice() {
+        [] => None,
+        ["git", "read-only"] => Some(true),
+        ["git", "writable"] => Some(false),
+        _ => return Err(tr!(sandbox_usage).to_string()),
+    };
+    if let Some(read_only) = set {
+        Choices {
+            git_read_only: read_only,
+        }
+        .save(&parts.home)
+        .map_err(|err| err.to_string())?;
+        return Ok(if read_only {
+            tr!(sandbox_git_now_read_only)
+        } else {
+            tr!(sandbox_git_now_writable)
+        }
+        .to_string());
+    }
+    let enabled = parts
+        .config
+        .sandbox
+        .as_ref()
+        .is_some_and(|sandbox| sandbox.enabled);
+    let held = match glut::sandbox::unavailable() {
+        _ if !enabled => tr!(sandbox_cmd_off).to_string(),
+        Some(why) => tr!(sandbox_cmd_missing, why = why).to_string(),
+        None => tr!(sandbox_cmd_on, kind = glut::sandbox::mechanism()).to_string(),
+    };
+    let git = match Choices::load(&parts.home) {
+        Ok(choices) if choices.git_read_only => tr!(sandbox_git_read_only).to_string(),
+        Ok(_) => tr!(sandbox_git_writable).to_string(),
+        Err(err) => tr!(sandbox_unreadable, reason = err.to_string()).to_string(),
+    };
+    Ok(format!("{held}\n{git}"))
+}
+
 /// `/folder`: the folders beside the working one (T60c), the owner's word for this session alone — listed alone,
 /// one added (checked: never the home folder, one holding the project or a secret) or taken away. What is added
 /// counts from the next call on: the file tools, the commands' sandbox, the gate and the snapshots share it.

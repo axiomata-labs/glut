@@ -140,6 +140,18 @@ pub const TEXTS: Texts = Texts {
     keychain_not_listed: "{program} no está en la lista.",
     keychain_opened: "El llavero está abierto a todo comando que Glut ejecuta, de una sesión a otra — glut keychain \
                       close lo vuelve a cerrar.",
+    sandbox_on: "Los comandos que Glut ejecuta van en el sandbox ({kind}).",
+    sandbox_missing: "Aquí ningún sandbox sujeta los comandos que Glut ejecuta: {why}",
+    sandbox_git_writable: "Carpetas git: los comandos pueden escribirlas, también hacer commit (glut sandbox git read-only las deja de \
+     solo lectura).",
+    sandbox_git_read_only: "Carpetas git: de solo lectura para los comandos, ninguno hace commit desde el sandbox (glut sandbox git \
+     writable lo permite).",
+    sandbox_owners_only: "El interruptor del sandbox es solo del propietario, nunca de un comando que Glut ejecuta.",
+    sandbox_off: "Ningún sandbox sujeta los comandos que Glut ejecuta: está desactivado en ~/.glut/settings.json (sandbox.enabled).",
+    sandbox_git_now_read_only: "Desde el próximo comando, en cada sesión, ningún comando que Glut ejecuta escribe en una carpeta git.",
+    sandbox_git_now_writable: "Desde el próximo comando, en cada sesión, los comandos que Glut ejecuta pueden volver a escribir en las \
+     carpetas git, también hacer commit.",
+    sandbox_unreadable: "{reason} — las carpetas git siguen de solo lectura para los comandos hasta que el archivo vuelva a leerse.",
     keychain_closed: "El llavero vuelve a estar cerrado a todo comando que Glut ejecuta; los programas de la lista lo \
                       piden.",
     route_not_here: "{provider} sirve cada modelo desde un host: no hay hosts que elegir (OpenRouter los tiene)",

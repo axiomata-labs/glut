@@ -229,6 +229,11 @@ pub const TEXTS: Texts = Texts {
              cada vez; /keychain add|remove <program>, /keychain open|close para esta sesión",
         ),
         (
+            "sandbox",
+            "cómo se sujetan los comandos que Glut ejecuta — el sandbox aquí, y si las carpetas git son de solo \
+             lectura para ellos; /sandbox git read-only|writable",
+        ),
+        (
             "classifier",
             "el segundo modelo que juzga un comando por el que solo el modo preguntaría: si solo lee, se ejecuta como un comando de lectura conocido, en el sandbox — off te pregunta cada vez, session usa el modelo de la sesión",
         ),
@@ -340,6 +345,7 @@ pub const TEXTS: Texts = Texts {
         ("notify", "notificaciones"),
         ("secrets", "claves ocultas al modelo"),
         ("keychain", "el llavero para comandos"),
+        ("sandbox", "sandbox y carpetas git"),
         ("classifier", "un segundo modelo juzga comandos"),
         ("ide", "tu editor junto a Glut"),
         ("clean", "ordenar ~/.glut"),
@@ -1267,6 +1273,21 @@ definiciones, usos y renombres",
             "El llavero para los comandos que Glut ejecuta: cerrado salvo a los programas de la lista, que lo piden \
              cada vez",
         ),
+        (
+            "How the commands Glut runs are held: the sandbox here, and whether git folders are read-only to them",
+            "Cómo se sujetan los comandos que Glut ejecuta: el sandbox aquí, y si las carpetas git son de solo \
+             lectura para ellos",
+        ),
+        (
+            "Shows the sandbox here and whether git folders are read-only to the commands Glut runs",
+            "Muestra el sandbox aquí y si las carpetas git son de solo lectura para los comandos que Glut ejecuta",
+        ),
+        (
+            "Sets whether the commands Glut runs may write git folders (read-only: none commits from the sandbox)",
+            "Fija si los comandos que Glut ejecuta pueden escribir en las carpetas git (read-only: ninguno hace \
+             commit desde el sandbox)",
+        ),
+        ("read-only or writable", "read-only o writable"),
         (
             "Shows whether the Keychain is open to the commands Glut runs, and the programs that may ask for it",
             "Muestra si el llavero está abierto a los comandos que Glut ejecuta, y los programas que pueden pedirlo",
@@ -2217,6 +2238,18 @@ definiciones, usos y renombres",
     keychain_closed: "el llavero vuelve a estar cerrado; los programas de la lista lo piden",
     keychain_kept_note: "el llavero está abierto a todo comando que Glut ejecuta (glut keychain open) — /keychain \
                          close lo cierra para esta sesión, glut keychain close para siempre",
+    sandbox_cmd_on: "Los comandos se ejecutan en el sandbox ({kind}).",
+    sandbox_cmd_off: "Los comandos se ejecutan sin sandbox: está desactivado en ~/.glut/settings.json (sandbox.enabled).",
+    sandbox_cmd_missing: "Aquí los comandos se ejecutan sin sandbox: {why}",
+    sandbox_git_writable: "Carpetas git: los comandos pueden escribirlas, también hacer commit — /sandbox git read-only mantiene cada \
+     carpeta git de solo lectura para ellos.",
+    sandbox_git_read_only: "Carpetas git: de solo lectura para los comandos, ninguno hace commit desde el sandbox — /sandbox git \
+     writable les deja volver a hacer commit.",
+    sandbox_git_now_read_only: "Desde el próximo comando, en cada sesión, ningún comando escribe en una carpeta git.",
+    sandbox_git_now_writable: "Desde el próximo comando, en cada sesión, los comandos pueden volver a escribir en las carpetas git, \
+     también hacer commit.",
+    sandbox_unreadable: "{reason} — las carpetas git siguen de solo lectura para los comandos hasta que el archivo vuelva a leerse.",
+    sandbox_usage: "/sandbox, /sandbox git read-only, /sandbox git writable",
     keychain_usage: "/keychain, /keychain add <program>, /keychain remove <program>, /keychain open, /keychain close",
     ask_keychain: "con el llavero",
     keychain_footer: "🔑 abierto",

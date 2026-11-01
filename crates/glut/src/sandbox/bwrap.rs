@@ -181,15 +181,15 @@ fn mounts(policy: &Policy, found: &Found) -> BTreeMap<PathBuf, Mount> {
         name(path, Mount::Read);
     }
     for (path, guard) in &found.guarded {
-        // A git folder and the folders holding others stay writable: only bound, so they cannot be moved.
-        name(
-            path,
-            if guard.writable {
-                Mount::Write
-            } else {
-                Mount::Read
-            },
-        );
+        // A git folder and the folders holding others stay writable: only bound, so they cannot be moved — unless
+        // the owner keeps every git folder read-only.
+        let write = guard.writable && !policy.git_read_only;
+        name(path, if write { Mount::Write } else { Mount::Read });
+    }
+    if policy.git_read_only {
+        for path in policy.git_dirs.iter().chain(&found.git_dirs) {
+            name(path, Mount::Read);
+        }
     }
     for path in &policy.notes {
         name(path, Mount::Write);
@@ -295,6 +295,43 @@ mod tests {
             .expect(&args);
         assert!(covered < bound, "{args}");
         assert!(args.contains(&format!("--tmpfs {}", home.join(".ssh").display())));
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn with_git_read_only_every_git_folder_is_bound_read_only() {
+        let root = folder("git-ro");
+        std::fs::create_dir_all(root.join(".git/hooks")).unwrap();
+        std::fs::create_dir_all(root.join("sub/.git")).unwrap();
+        let home = folder("git-ro-home");
+        let mut policy = Policy::new(&root, &home, &[], &[]);
+        policy.git_dirs = vec![root.join(".git")];
+        let found = super::super::scan::search(&root, &[], &policy.git_dirs);
+        let bound = |policy: &Policy| {
+            let args = text(&arguments(
+                policy,
+                &found,
+                Path::new("/g"),
+                None,
+                &root,
+                Path::new("/bin/sh"),
+            ));
+            [".git", "sub/.git"].map(|git| {
+                let path = root.join(git).display().to_string();
+                (
+                    args.contains(&format!("--bind {path} {path}")),
+                    args.contains(&format!("--ro-bind {path} {path}")),
+                )
+            })
+        };
+        assert_eq!(
+            bound(&policy),
+            [(true, false), (true, false)],
+            "writable by default"
+        );
+        policy.git_read_only = true;
+        assert_eq!(bound(&policy), [(false, true), (false, true)]);
+        std::fs::remove_dir_all(root).unwrap();
         std::fs::remove_dir_all(home).unwrap();
     }
 

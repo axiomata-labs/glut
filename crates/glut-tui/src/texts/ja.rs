@@ -209,6 +209,10 @@ pub const TEXTS: Texts = Texts {
              open|close はこのセッション用",
         ),
         (
+            "sandbox",
+            "Glut が実行するコマンドの扱い — ここでのサンドボックスと、Git フォルダがコマンドに読み取り専用かどうか。/sandbox git read-only|writable",
+        ),
+        (
             "classifier",
             "モードだけが確認を求めるコマンドを判定する第二のモデル: 読み取りだけなら既知の読み取りコマンドと同じくサンドボックス内で実行 — off は毎回確認、session はセッションのモデルを使用",
         ),
@@ -314,6 +318,7 @@ pub const TEXTS: Texts = Texts {
         ("notify", "通知"),
         ("secrets", "モデルに隠すキー"),
         ("keychain", "コマンド用のキーチェーン"),
+        ("sandbox", "サンドボックスと Git フォルダ"),
         ("classifier", "第二のモデルがコマンドを判定"),
         ("ide", "Glut の隣のエディター"),
         ("clean", "~/.glut を整理"),
@@ -1188,6 +1193,19 @@ pub const TEXTS: Texts = Texts {
             "The Keychain for the commands Glut runs: shut but to the listed programs, which ask for it each time",
             "Glut が実行するコマンドのキーチェーン: リストのプログラム以外には閉じており、それらは毎回それを求めます",
         ),
+        (
+            "How the commands Glut runs are held: the sandbox here, and whether git folders are read-only to them",
+            "Glut が実行するコマンドの扱い: ここでのサンドボックスと、Git フォルダがコマンドに読み取り専用かどうか",
+        ),
+        (
+            "Shows the sandbox here and whether git folders are read-only to the commands Glut runs",
+            "ここでのサンドボックスと、Git フォルダが Glut の実行するコマンドに読み取り専用かどうかを表示します",
+        ),
+        (
+            "Sets whether the commands Glut runs may write git folders (read-only: none commits from the sandbox)",
+            "Glut が実行するコマンドが Git フォルダに書き込めるかを設定します（read-only: サンドボックスからはどれもコミットしません）",
+        ),
+        ("read-only or writable", "read-only または writable"),
         (
             "Shows whether the Keychain is open to the commands Glut runs, and the programs that may ask for it",
             "キーチェーンが Glut の実行するコマンドに開いているかと、それを求めてよいプログラムを表示します",
@@ -2076,6 +2094,15 @@ pub const TEXTS: Texts = Texts {
     keychain_closed: "キーチェーンは再び閉じました。リストのプログラムはそれを求めます",
     keychain_kept_note: "キーチェーンは Glut が実行するすべてのコマンドに開いています (glut keychain open) — /keychain close でこのセッションだけ、glut \
                          keychain close で永久に閉じます",
+    sandbox_cmd_on: "コマンドはサンドボックス内で実行されます（{kind}）。",
+    sandbox_cmd_off: "コマンドはサンドボックスなしで実行されます: ~/.glut/settings.json でオフです（sandbox.enabled）。",
+    sandbox_cmd_missing: "ここではコマンドはサンドボックスなしで実行されます: {why}",
+    sandbox_git_writable: "Git フォルダ: コマンドは書き込めます。コミットもできます — /sandbox git read-only ですべての Git フォルダをコマンドに対して読み取り専用にします。",
+    sandbox_git_read_only: "Git フォルダ: コマンドには読み取り専用で、サンドボックスからはどれもコミットしません — /sandbox git writable で再びコミットできます。",
+    sandbox_git_now_read_only: "次のコマンドから、すべてのセッションで、どのコマンドも Git フォルダに書き込みません。",
+    sandbox_git_now_writable: "次のコマンドから、すべてのセッションで、コマンドは再び Git フォルダに書き込めます。コミットもできます。",
+    sandbox_unreadable: "{reason} — ファイルが再び読めるまで、Git フォルダはコマンドに対して読み取り専用のままです。",
+    sandbox_usage: "/sandbox, /sandbox git read-only, /sandbox git writable",
     keychain_usage: "/keychain, /keychain add <program>, /keychain remove <program>, /keychain open, /keychain close",
     ask_keychain: "キーチェーン付き",
     keychain_footer: "🔑 開",

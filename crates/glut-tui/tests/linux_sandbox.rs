@@ -207,6 +207,72 @@ fn no_unix_socket_no_namespace_no_signal_to_others() {
 }
 
 #[test]
+fn what_the_command_makes_that_macos_refuses_is_gone_while_it_still_runs() {
+    let Some(place) = Place::new("watch") else {
+        return;
+    };
+    let policy = place.policy();
+    let before = search(&policy.root, &policy.beside, &policy.git_dirs);
+    let mut command = policy
+        .command(Path::new("/bin/sh"), &place.root, &before, None)
+        .unwrap();
+    let watch = Watch::new(&policy, before);
+    let mut child = command
+        .arg("-c")
+        .arg("echo /elsewhere > .git/commondir; mkdir -p deep/sub/.git/hooks; mkdir -p .cargo; sleep 3")
+        .current_dir(&place.root)
+        .spawn()
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(1000));
+    let running = child.try_wait().unwrap().is_none();
+    let left: Vec<&str> = [".git/commondir", "deep/sub/.git", ".cargo"]
+        .into_iter()
+        .filter(|made| place.root.join(made).exists())
+        .collect();
+    let _ = child.kill();
+    let _ = child.wait();
+    let note = watch.settle().unwrap_or_default();
+    assert!(running, "the command was still to run");
+    assert!(
+        left.is_empty(),
+        "still there while it ran: {left:?}; {note}"
+    );
+    assert!(note.contains("at once"), "{note}");
+}
+
+#[test]
+fn what_the_owner_changes_meanwhile_stays_where_it_is() {
+    let Some(place) = Place::new("owners") else {
+        return;
+    };
+    let policy = place.policy();
+    let before = search(&policy.root, &policy.beside, &policy.git_dirs);
+    let mut command = policy
+        .command(Path::new("/bin/sh"), &place.root, &before, None)
+        .unwrap();
+    let watch = Watch::new(&policy, before);
+    let mut child = command
+        .arg("-c")
+        .arg("sleep 2")
+        .current_dir(&place.root)
+        .spawn()
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    // As the owner's `git config` writes it: a new file, renamed over the old one.
+    let git = place.root.join(".git");
+    std::fs::write(git.join("config.lock"), "[core]\n[remote \"origin\"]\n").unwrap();
+    std::fs::rename(git.join("config.lock"), git.join("config")).unwrap();
+    let _ = child.wait();
+    let note = watch.settle().unwrap_or_default();
+    assert_eq!(
+        std::fs::read_to_string(git.join("config")).unwrap(),
+        "[core]\n[remote \"origin\"]\n",
+        "{note}"
+    );
+    assert!(!note.contains(".git/config"), "{note}");
+}
+
+#[test]
 fn nothing_outside_the_filter_can_be_reached_into() {
     let Some(place) = Place::new("helper") else {
         return;

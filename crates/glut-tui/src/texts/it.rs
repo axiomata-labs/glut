@@ -232,6 +232,11 @@ pub const TEXTS: Texts = Texts {
              volta; /keychain add|remove <program>, /keychain open|close per questa sessione",
         ),
         (
+            "sandbox",
+            "come sono tenuti i comandi che Glut esegue — la sandbox qui, e se le cartelle git sono in sola \
+             lettura per loro; /sandbox git read-only|writable",
+        ),
+        (
             "classifier",
             "il secondo modello che giudica un comando per cui solo la modalità chiederebbe: se legge soltanto, viene eseguito come un comando di lettura noto, nella sandbox — off ti chiede ogni volta, session usa il modello della sessione",
         ),
@@ -345,6 +350,7 @@ pub const TEXTS: Texts = Texts {
         ("notify", "notifiche"),
         ("secrets", "chiavi nascoste al modello"),
         ("keychain", "il portachiavi per i comandi"),
+        ("sandbox", "sandbox e cartelle git"),
         ("classifier", "un secondo modello giudica i comandi"),
         ("ide", "il tuo editor accanto a Glut"),
         ("clean", "riordina ~/.glut"),
@@ -1283,6 +1289,21 @@ usi e rinomine",
             "Il portachiavi per i comandi che Glut esegue: chiuso tranne ai programmi in lista, che lo chiedono ogni \
              volta",
         ),
+        (
+            "How the commands Glut runs are held: the sandbox here, and whether git folders are read-only to them",
+            "Come sono tenuti i comandi che Glut esegue: la sandbox qui, e se le cartelle git sono in sola \
+             lettura per loro",
+        ),
+        (
+            "Shows the sandbox here and whether git folders are read-only to the commands Glut runs",
+            "Mostra la sandbox qui e se le cartelle git sono in sola lettura per i comandi che Glut esegue",
+        ),
+        (
+            "Sets whether the commands Glut runs may write git folders (read-only: none commits from the sandbox)",
+            "Stabilisce se i comandi che Glut esegue possono scrivere nelle cartelle git (read-only: nessuno fa \
+             commit dalla sandbox)",
+        ),
+        ("read-only or writable", "read-only o writable"),
         (
             "Shows whether the Keychain is open to the commands Glut runs, and the programs that may ask for it",
             "Mostra se il portachiavi è aperto ai comandi che Glut esegue, e i programmi che possono chiederlo",
@@ -2236,6 +2257,18 @@ usi e rinomine",
     keychain_closed: "il portachiavi è di nuovo chiuso; i programmi in lista lo chiedono",
     keychain_kept_note: "il portachiavi è aperto a ogni comando che Glut esegue (glut keychain open) — /keychain \
                          close lo chiude per questa sessione, glut keychain close per sempre",
+    sandbox_cmd_on: "I comandi girano nella sandbox ({kind}).",
+    sandbox_cmd_off: "I comandi girano senza sandbox: è spenta in ~/.glut/settings.json (sandbox.enabled).",
+    sandbox_cmd_missing: "Qui i comandi girano senza sandbox: {why}",
+    sandbox_git_writable: "Cartelle git: i comandi possono scriverle, anche fare commit — /sandbox git read-only tiene ogni cartella \
+     git in sola lettura per loro.",
+    sandbox_git_read_only: "Cartelle git: in sola lettura per i comandi, nessuno fa commit dalla sandbox — /sandbox git writable li \
+     lascia di nuovo fare commit.",
+    sandbox_git_now_read_only: "Dal prossimo comando, in ogni sessione, nessun comando scrive in una cartella git.",
+    sandbox_git_now_writable: "Dal prossimo comando, in ogni sessione, i comandi possono di nuovo scrivere nelle cartelle git, anche fare \
+     commit.",
+    sandbox_unreadable: "{reason} — le cartelle git restano in sola lettura per i comandi finché il file non si legge di nuovo.",
+    sandbox_usage: "/sandbox, /sandbox git read-only, /sandbox git writable",
     keychain_usage: "/keychain, /keychain add <program>, /keychain remove <program>, /keychain open, /keychain close",
     ask_keychain: "con il portachiavi",
     keychain_footer: "🔑 aperto",

@@ -231,6 +231,11 @@ pub const TEXTS: Texts = Texts {
              Mal fragen; /keychain add|remove <program>, /keychain open|close für diese Session",
         ),
         (
+            "sandbox",
+            "wie die Befehle gehalten werden, die Glut ausführt — die Sandbox hier, und ob Git-Ordner für sie \
+             schreibgeschützt sind; /sandbox git read-only|writable",
+        ),
+        (
             "classifier",
             "das zweite Modell, das einen Befehl beurteilt, nach dem sonst nur der Modus fragen würde: liest er nur, läuft er wie ein gelisteter Lesebefehl, in der Sandbox — off fragt dich jedes Mal, session nimmt das Modell der Session",
         ),
@@ -343,6 +348,7 @@ pub const TEXTS: Texts = Texts {
         ("notify", "Benachrichtigungen"),
         ("secrets", "Keys, die das Modell nicht sieht"),
         ("keychain", "Schlüsselbund für Befehle"),
+        ("sandbox", "Sandbox und Git-Ordner"),
         ("classifier", "ein zweites Modell beurteilt Befehle"),
         ("ide", "dein Editor neben Glut"),
         ("clean", "~/.glut aufräumen"),
@@ -1269,6 +1275,21 @@ einen",
             "Der Schlüsselbund für die Befehle, die Glut ausführt: zu außer für die gelisteten Programme, die jedes \
              Mal nach ihm fragen",
         ),
+        (
+            "How the commands Glut runs are held: the sandbox here, and whether git folders are read-only to them",
+            "Wie die Befehle gehalten werden, die Glut ausführt: die Sandbox hier, und ob Git-Ordner für sie \
+             schreibgeschützt sind",
+        ),
+        (
+            "Shows the sandbox here and whether git folders are read-only to the commands Glut runs",
+            "Zeigt die Sandbox hier und ob Git-Ordner für die Befehle, die Glut ausführt, schreibgeschützt sind",
+        ),
+        (
+            "Sets whether the commands Glut runs may write git folders (read-only: none commits from the sandbox)",
+            "Legt fest, ob die Befehle, die Glut ausführt, Git-Ordner schreiben dürfen (read-only: aus der \
+             Sandbox committet keiner)",
+        ),
+        ("read-only or writable", "read-only oder writable"),
         (
             "Shows whether the Keychain is open to the commands Glut runs, and the programs that may ask for it",
             "Zeigt, ob der Schlüsselbund für die Befehle, die Glut ausführt, offen ist, und die Programme, die nach \
@@ -2234,6 +2255,17 @@ einen",
     keychain_closed: "der Schlüsselbund ist wieder zu; die gelisteten Programme fragen nach ihm",
     keychain_kept_note: "der Schlüsselbund ist offen für jeden Befehl, den Glut ausführt (glut keychain open) — \
                          /keychain close schließt ihn für diese Session, glut keychain close für immer",
+    sandbox_cmd_on: "Befehle laufen in der Sandbox ({kind}).",
+    sandbox_cmd_off: "Befehle laufen ohne Sandbox: Sie ist in ~/.glut/settings.json aus (sandbox.enabled).",
+    sandbox_cmd_missing: "Befehle laufen hier ohne Sandbox: {why}",
+    sandbox_git_writable: "Git-Ordner: Befehle dürfen sie schreiben, auch committen — /sandbox git read-only hält jeden Git-Ordner für \
+     sie schreibgeschützt.",
+    sandbox_git_read_only: "Git-Ordner: für Befehle schreibgeschützt, aus der Sandbox committet keiner — /sandbox git writable lässt \
+     sie wieder committen.",
+    sandbox_git_now_read_only: "Ab dem nächsten Befehl schreibt in jeder Session kein Befehl mehr in einen Git-Ordner.",
+    sandbox_git_now_writable: "Ab dem nächsten Befehl dürfen Befehle in jeder Session wieder in Git-Ordner schreiben, auch committen.",
+    sandbox_unreadable: "{reason} — Git-Ordner bleiben für Befehle schreibgeschützt, bis die Datei wieder lesbar ist.",
+    sandbox_usage: "/sandbox, /sandbox git read-only, /sandbox git writable",
     keychain_usage: "/keychain, /keychain add <program>, /keychain remove <program>, /keychain open, /keychain close",
     ask_keychain: "mit dem Schlüsselbund",
     keychain_footer: "🔑 offen",

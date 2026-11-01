@@ -144,6 +144,18 @@ pub const TEXTS: Texts = Texts {
     keychain_not_listed: "{program} steht nicht auf der Liste.",
     keychain_opened: "Der Schlüsselbund ist offen für jeden Befehl, den Glut ausführt, über Sessions hinweg — glut \
                       keychain close schließt ihn wieder.",
+    sandbox_on: "Befehle, die Glut ausführt, laufen in der Sandbox ({kind}).",
+    sandbox_missing: "Befehle, die Glut ausführt, hält hier keine Sandbox: {why}",
+    sandbox_git_writable: "Git-Ordner: Befehle dürfen sie schreiben, auch committen (glut sandbox git read-only hält sie \
+     schreibgeschützt).",
+    sandbox_git_read_only: "Git-Ordner: für Befehle schreibgeschützt, aus der Sandbox committet keiner (glut sandbox git writable \
+     erlaubt es).",
+    sandbox_owners_only: "Der Schalter der Sandbox gehört allein dem Owner, nie einem Befehl, den Glut ausführt.",
+    sandbox_off: "Befehle, die Glut ausführt, hält keine Sandbox: Sie ist in ~/.glut/settings.json aus (sandbox.enabled).",
+    sandbox_git_now_read_only: "Ab dem nächsten Befehl schreibt in jeder Session kein Befehl, den Glut ausführt, in einen Git-Ordner.",
+    sandbox_git_now_writable: "Ab dem nächsten Befehl dürfen Befehle, die Glut ausführt, in jeder Session wieder in Git-Ordner schreiben, \
+     auch committen.",
+    sandbox_unreadable: "{reason} — Git-Ordner bleiben für Befehle schreibgeschützt, bis die Datei wieder lesbar ist.",
     keychain_closed: "Der Schlüsselbund ist wieder zu für jeden Befehl, den Glut ausführt; die gelisteten Programme \
                       fragen nach ihm.",
     route_not_here: "{provider} bedient jedes Modell von einem Host: es gibt keine Hosts zu wählen (OpenRouter hat sie)",

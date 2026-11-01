@@ -102,7 +102,7 @@ const fn command(
 }
 
 /// Every command, grouped by topic in [`Topic::ALL`]'s order, the most used first inside a topic.
-pub const COMMANDS: [Command; 65] = [
+pub const COMMANDS: [Command; 66] = [
     command(Topic::Session, "clear", "", "start a new session"),
     command(
         Topic::Session,
@@ -397,6 +397,13 @@ pub const COMMANDS: [Command; 65] = [
         "[add|remove <program>|open|close]",
         "the Keychain for the commands Glut runs — shut but to the listed programs, which ask each time; /keychain \
          add|remove <program>, /keychain open|close for this session",
+    ),
+    command(
+        Topic::Settings,
+        "sandbox",
+        "[git read-only|writable]",
+        "how the commands Glut runs are contained — the sandbox here, and whether git folders are read-only to them; \
+         /sandbox git read-only|writable",
     ),
     command(
         Topic::Settings,
@@ -1278,6 +1285,7 @@ mod tests {
                 "folded",
                 "fresh",
                 "full",
+                "git",
                 "here",
                 "html",
                 "inline",
@@ -1302,6 +1310,7 @@ mod tests {
                 "prefer",
                 "quant",
                 "read",
+                "read-only",
                 "remove",
                 "resume",
                 "rounds",
@@ -1314,6 +1323,7 @@ mod tests {
                 "tiles",
                 "tokens",
                 "tree",
+                "writable",
                 "write",
             ]
         );

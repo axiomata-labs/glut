@@ -62,14 +62,21 @@ scripts/install.sh               # glut for every terminal: ~/.cargo/bin, linked
   `sandbox-exec` or `bwrap` yourself. bubblewrap runs this build's `glut` as its helper (`sandbox::serve_helper`, first
   thing in `main`) as the namespace's PID 1, not dumpable (`--as-pid-1`: no unfiltered process a command could write
   into): it checks inside that every `.env` is closed, relays `127.0.0.1:<port>` to the proxy's `Bridge` socket and
-  starts the command under seccomp (no socket but IPv4/IPv6/netlink, no namespace, mount, `io_uring`, keyring, other
-  process's memory, no x32 call; every capability dropped) — a helper a command may write is refused. Mounts cover only
+  starts the command under seccomp (Glut's own BPF, `sandbox/seccomp.rs`, tested through an interpreter: no socket but
+  IPv4/IPv6/netlink, no namespace, mount, `io_uring`, keyring, other process's memory, no x32 call; every capability
+  dropped) — a helper a command may write is refused. Mounts cover only
   what exists, so `scan::search` runs before every command (the `.env` files to cover, the guarded paths; a search
   past `MAX_ENTRIES` runs no command) and `scan::Watch::settle` after it, even when the run is dropped, moving what it
   made that a Seatbelt pattern refuses (`.envrc`, `.git`, a protected name, a git folder's `config`/`hooks`/
   `commondir`…) to `~/.glut/quarantine` through folders opened without links — keep both around any new way a command
-  runs. **Left open**: until then such a path exists; a tool of the owner's that runs it meanwhile (an editor's git, a
-  prompt's `git status`) runs the command's code — Seatbelt refuses its making. A covered secret is a mode-000
+  runs. While the command runs, `sandbox/watcher.rs` (inotify, `scan::Rules` — keep it equal to the search's guarded
+  set, a test compares them) moves such a name the moment it appears; **left open** is that moment — a tool of the
+  owner's that runs it then (an editor's git, a prompt's `git status`) runs the command's code. The owner's switch
+  `/sandbox git read-only` (`~/.glut/sandbox.json`, `sandbox::choices`, read before every command, an unreadable file
+  counts as on) keeps every git folder read-only on both systems and closes it for them — on Linux the ones the
+  search found (not inside a build folder it skips). What was there at the start was mounted as it was, so a change to
+  it came from outside (the owner's `git config` renames a new `config` in): neither the watch nor the check after
+  moves it — only a link, which no mount holds, is judged again. A covered secret is a mode-000
   placeholder from `~/.glut/sandbox`, so a read is refused rather than empty; a secret made after a job started stays
   open to that job. Every session's scratch folder lies in one `glut-shells-<uid>` no command writes (macOS too).
   `allowLocalBinding` means nothing there (a command's localhost is its own). Tested in Docker only (`--security-opt

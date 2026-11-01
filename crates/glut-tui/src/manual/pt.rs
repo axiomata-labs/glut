@@ -1,7 +1,7 @@
 //! The commands' manual pages in Portuguese (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 65] = [
+pub const PAGES: [(&str, &str); 66] = [
     (
         "clear",
         "Começa uma sessão nova e vazia nesta pasta.\n\
@@ -637,6 +637,21 @@ pub const PAGES: [(&str, &str); 65] = [
          \n\
          A lista fica em `~/.glut/keychain.json`; `glut keychain open` mantém o porta-chaves aberto de uma sessão \
          para outra, `glut keychain close` fecha-o de vez.",
+    ),
+    (
+        "sandbox",
+        "Como são contidos os comandos que o Glut executa, e se podem escrever nas pastas git.\n\n/sandbox — a \
+         sandbox aqui (macOS: Seatbelt; Linux: bubblewrap e seccomp) e o interruptor do git\n/sandbox git \
+         read-only — nenhum comando escreve numa pasta git: nenhum faz commit a partir da sandbox\n/sandbox git \
+         writable — os comandos podem voltar a escrever nas pastas git, também fazer commit\n\nA sandbox deixa \
+         um comando escrever só nas tuas pastas, ler tudo menos os teus segredos e os ficheiros .env, e chegar à \
+         rede só pelo proxy do Glut. Em Linux não consegue recusar um nome que ainda não existe: o que um \
+         comando cria e o macOS recusa — um .envrc novo, um .git, um .git/commondir — vai para \
+         ~/.glut/quarantine assim que aparece, e mais uma vez depois do comando. Uma ferramenta tua que corra \
+         precisamente nesse momento ainda o poderia encontrar; com as pastas git só de leitura, não se cria \
+         nenhum nelas.\n\nO interruptor vale em cada sessão e janela a partir do próximo comando, e fica em \
+         ~/.glut/sandbox.json — nunca escrito por um comando. glut sandbox show e glut sandbox git \
+         read-only|writable fazem o mesmo fora do Glut.",
     ),
     (
         "classifier",

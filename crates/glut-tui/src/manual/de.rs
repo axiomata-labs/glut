@@ -1,7 +1,7 @@
 //! The commands' manual pages in German (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 65] = [
+pub const PAGES: [(&str, &str); 66] = [
     (
         "clear",
         "Eine neue, leere Session in diesem Ordner beginnen.\n\
@@ -651,6 +651,21 @@ pub const PAGES: [(&str, &str); 65] = [
          \n\
          Die Liste bleibt in `~/.glut/keychain.json`; `glut keychain open` hält den Schlüsselbund über Sessions \
          hinweg offen, `glut keychain close` schließt ihn für immer.",
+    ),
+    (
+        "sandbox",
+        "Wie die Befehle gehalten werden, die Glut ausführt, und ob sie Git-Ordner schreiben dürfen.\n\n/sandbox \
+         — die Sandbox hier (macOS: Seatbelt; Linux: bubblewrap und seccomp) und der Git-Schalter\n/sandbox git \
+         read-only — kein Befehl schreibt in einen Git-Ordner: aus der Sandbox committet keiner\n/sandbox git \
+         writable — Befehle dürfen wieder in Git-Ordner schreiben, auch committen\n\nDie Sandbox lässt einen \
+         Befehl nur in deinen Ordnern schreiben, alles lesen außer deinen Geheimnissen und .env-Dateien, und ins \
+         Netz nur über Gluts Proxy. Unter Linux kann sie einen Namen, den es noch nicht gibt, nicht verbieten: \
+         Was ein Befehl anlegt, das macOS verweigert — ein neues .envrc, ein .git, eine .git/commondir —, kommt \
+         nach ~/.glut/quarantine, sobald es auftaucht, und nach dem Befehl noch einmal. Ein Werkzeug von dir, \
+         das genau in diesem Moment läuft, könnte es trotzdem antreffen; sind Git-Ordner schreibgeschützt, \
+         entsteht darin gar keins.\n\nDer Schalter gilt in jeder Session und jedem Fenster ab dem nächsten \
+         Befehl und liegt in ~/.glut/sandbox.json — kein Befehl schreibt ihn. glut sandbox show und glut sandbox \
+         git read-only|writable tun dasselbe außerhalb von Glut.",
     ),
     (
         "classifier",

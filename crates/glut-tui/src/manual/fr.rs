@@ -1,7 +1,7 @@
 //! The commands' manual pages in French (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 65] = [
+pub const PAGES: [(&str, &str); 66] = [
     (
         "clear",
         "Commencer une nouvelle session vide dans ce dossier.\n\
@@ -647,6 +647,22 @@ pub const PAGES: [(&str, &str); 65] = [
          \n\
          La liste est gardée dans `~/.glut/keychain.json` ; `glut keychain open` garde le trousseau ouvert d'une \
          session à l'autre, `glut keychain close` le ferme pour de bon.",
+    ),
+    (
+        "sandbox",
+        "Comment sont tenues les commandes que Glut exécute, et si elles peuvent écrire dans les dossiers \
+         git.\n\n/sandbox — le bac à sable ici (macOS : Seatbelt ; Linux : bubblewrap et seccomp) et le \
+         commutateur git\n/sandbox git read-only — aucune commande n’écrit dans un dossier git : aucune ne \
+         commite depuis le bac à sable\n/sandbox git writable — les commandes peuvent de nouveau écrire dans les \
+         dossiers git, et commiter\n\nLe bac à sable ne laisse une commande écrire que dans tes dossiers, tout \
+         lire sauf tes secrets et les fichiers .env, et n’atteindre le réseau que par le proxy de Glut. Sous \
+         Linux, il ne peut pas refuser un nom qui n’existe pas encore : ce qu’une commande crée et que macOS \
+         refuse — un nouveau .envrc, un .git, un .git/commondir — part dans ~/.glut/quarantine dès qu’il \
+         apparaît, et encore une fois après la commande. Un outil à toi qui s’exécute à cet instant précis \
+         pourrait encore le rencontrer ; avec les dossiers git en lecture seule, aucun n’y est créé.\n\nLe \
+         commutateur vaut dans chaque session et chaque fenêtre dès la prochaine commande, et se garde dans \
+         ~/.glut/sandbox.json — jamais écrit par une commande. glut sandbox show et glut sandbox git \
+         read-only|writable font de même hors de Glut.",
     ),
     (
         "classifier",
