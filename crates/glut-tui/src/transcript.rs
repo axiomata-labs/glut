@@ -651,12 +651,26 @@ impl Transcript {
         });
     }
 
-    /// The answer's whole text: it replaces what streamed, or stands alone when nothing did.
+    /// The answer's whole text: it replaces what streamed, or stands alone when nothing did. A note may stand after
+    /// the streamed part (who serves the answers arrives with the whole reply), so the open answer is looked for
+    /// past it.
     fn answered(&mut self, whole: &str) {
         self.close_thinking();
-        if let Some(block) = self.blocks.last_mut()
+        if let Some(block) = self
+            .blocks
+            .iter_mut()
+            .rev()
+            .take_while(|block| matches!(block.kind, Kind::Answer { .. } | Kind::Note { .. }))
+            .find(|block| {
+                matches!(
+                    block.kind,
+                    Kind::Answer {
+                        streaming: true,
+                        ..
+                    }
+                )
+            })
             && let Kind::Answer { text, streaming } = &mut block.kind
-            && *streaming
         {
             whole.clone_into(text);
             *streaming = false;
@@ -1507,6 +1521,25 @@ mod tests {
         for row in wrap("lorem ipsum dolor sit amet, consectetur 日本 adipiscing", 7) {
             assert!(row.width() <= 7, "{row:?}");
         }
+    }
+
+    #[test]
+    fn a_note_after_the_streamed_answer_does_not_show_it_twice() {
+        let mut stream = Transcript::default();
+        stream.take(&Event::TextDelta {
+            turn: 1,
+            text: "Das mache ich nicht.".into(),
+        });
+        stream.note("die Antworten kommen jetzt von Morph", Tone::Quiet);
+        stream.take(&Event::AssistantText {
+            turn: 1,
+            text: "Das mache ich nicht.".into(),
+        });
+        assert_eq!(stream.blocks.len(), 2);
+        assert!(
+            matches!(&stream.blocks[0].kind, Kind::Answer { text, streaming: false } if text == "Das mache ich nicht.")
+        );
+        assert!(matches!(&stream.blocks[1].kind, Kind::Note { .. }));
     }
 
     #[test]
