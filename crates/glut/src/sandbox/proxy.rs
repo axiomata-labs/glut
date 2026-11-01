@@ -119,6 +119,59 @@ impl Drop for Proxy {
     }
 }
 
+/// A Unix socket in front of the proxy (T59): the Linux sandbox's helper reaches the proxy through it, since a command
+/// there has a network of its own where `127.0.0.1` is not this machine's. Every connection is handed to the proxy's
+/// port as it is, so the proxy judges it like any other.
+pub struct Bridge {
+    path: std::path::PathBuf,
+    task: JoinHandle<()>,
+}
+
+impl Bridge {
+    /// Serves the socket at `path` (in a folder only the owner reaches) for the proxy on `port`.
+    ///
+    /// # Errors
+    ///
+    /// The socket cannot be made.
+    pub fn start(path: &std::path::Path, port: u16) -> std::io::Result<Self> {
+        let listener = tokio::net::UnixListener::bind(path)?;
+        let task = tokio::spawn(async move {
+            let mut connections = JoinSet::new();
+            loop {
+                let mut client = match listener.accept().await {
+                    Ok((client, _)) => client,
+                    Err(_) => {
+                        tokio::time::sleep(ACCEPT_BACKOFF).await;
+                        continue;
+                    }
+                };
+                while connections.try_join_next().is_some() {}
+                connections.spawn(async move {
+                    if let Ok(mut upstream) = TcpStream::connect(("127.0.0.1", port)).await {
+                        let _ = tokio::io::copy_bidirectional(&mut client, &mut upstream).await;
+                    }
+                });
+            }
+        });
+        Ok(Bridge {
+            path: path.to_path_buf(),
+            task,
+        })
+    }
+
+    /// The socket's path.
+    pub fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+}
+
+impl Drop for Bridge {
+    fn drop(&mut self) {
+        self.task.abort();
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
 /// One client connection: read its request head, judge the host, then tunnel or forward.
 async fn serve(
     mut client: TcpStream,

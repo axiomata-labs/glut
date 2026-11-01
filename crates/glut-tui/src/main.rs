@@ -154,6 +154,10 @@ const CLEAN_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 const SHUTDOWN: std::time::Duration = std::time::Duration::from_secs(3);
 
 fn main() -> std::process::ExitCode {
+    // The Linux sandbox starts this program again inside it as its helper (T59): before anything else, no thread yet.
+    if let Some(code) = glut::sandbox::serve_helper() {
+        return std::process::ExitCode::from(u8::try_from(code).unwrap_or(1));
+    }
     // The help speaks the language the run will (T48): `--lang` is read before clap reads the rest.
     if let Some(lang) = lang_given(std::env::args()) {
         glut_tui::force_language(lang);

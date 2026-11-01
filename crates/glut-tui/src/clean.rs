@@ -1,8 +1,8 @@
 //! Glut cleans its own `~/.glut` (T82, `glut clean`, `/clean`): the snapshots, journals and `lean.jsonl` by the
 //! library's passes, the sessions — with their event logs and long results — and the images no kept session holds by
-//! this one; the exports are only counted, they are the owner's files. The owner's terms are in `~/.glut/clean.json`
-//! ([`glut::clean::Keep`]); a pass runs on its own once a day as Glut starts, in the background. Axiomata never
-//! touches `~/.glut`: it calls `glut clean --json` and shows what it says.
+//! this one; the exports and the Linux sandbox's quarantine are only counted, they are the owner's files. The owner's
+//! terms are in `~/.glut/clean.json` ([`glut::clean::Keep`]); a pass runs on its own once a day as Glut starts, in
+//! the background. Axiomata never touches `~/.glut`: it calls `glut clean --json` and shows what it says.
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -27,7 +27,7 @@ const MARKER: &str = "cleaned";
 /// The lock one pass at a time holds, in `~/.glut`: two windows starting together sweep once.
 const LOCK: &str = "clean.lock";
 /// The kinds a report lists, in its order: the fixed words of `--json`.
-pub const ITEMS: [&str; 8] = [
+pub const ITEMS: [&str; 9] = [
     "snapshots",
     "journals",
     "sessions",
@@ -35,6 +35,7 @@ pub const ITEMS: [&str; 8] = [
     "images",
     "exports",
     "lean",
+    "quarantine",
     "other",
 ];
 
@@ -80,8 +81,13 @@ pub fn clean(home: &Path, keep: &Keep, dry: bool) -> Report {
         glut::clean::span(keep.lean),
         dry,
     );
+    // What the Linux sandbox moved out of a project (T59): only counted — the owner looks and decides.
+    let held = glut_dir.join("quarantine");
+    let mut quarantine = Tally::new("quarantine", None);
+    quarantine.bytes = glut::clean::size_of(&held);
+    quarantine.count = glut::clean::entries_in(&held);
     let mut items = vec![
-        snapshots, journals, sessions, results, images, exports, lean,
+        snapshots, journals, sessions, results, images, exports, lean, quarantine,
     ];
     let mut other = Tally::new("other", None);
     other.bytes = total_bytes.saturating_sub(items.iter().map(|item| item.bytes).sum());

@@ -12,7 +12,7 @@ is merged.
 ## What this is
 
 **Glut**, an agent harness: a lean tool-calling loop over an OpenAI-compatible model API (OpenRouter, Ollama), with
-guarded file tools, an OS sandbox for every command (macOS Seatbelt) and a network gate, refusal limits, compaction of
+guarded file tools, an OS sandbox for every command (macOS Seatbelt, Linux bubblewrap plus seccomp) and a network gate, refusal limits, compaction of
 its own, snapshots before every changing step, LSP errors after an edit, code mode (QuickJS), MCP, skills, hooks,
 subagents and journals that let a lost run resume.
 
@@ -57,6 +57,24 @@ scripts/install.sh               # glut for every terminal: ~/.cargo/bin, linked
   until rquickjs bundles a fixed engine; `cargo audit` cannot see GitHub advisories. A script's tool calls go through
   `run.rs` `perform` like direct ones — never call the toolbox from `codemode.rs`. Language servers asked after an
   edit (`diagnostics.rs` `SAFE_SERVERS`) must never run the project's code: an agent writes the files they read.
+- **The Linux sandbox holds what Seatbelt holds, by mounts** (T59, `crates/glut/src/sandbox/{bwrap,linux,scan}.rs`):
+  every sandboxed start goes through `Policy::command` (the shell, hooks, jobs, language servers) — never spawn
+  `sandbox-exec` or `bwrap` yourself. bubblewrap runs this build's `glut` as its helper (`sandbox::serve_helper`, first
+  thing in `main`) as the namespace's PID 1, not dumpable (`--as-pid-1`: no unfiltered process a command could write
+  into): it checks inside that every `.env` is closed, relays `127.0.0.1:<port>` to the proxy's `Bridge` socket and
+  starts the command under seccomp (no socket but IPv4/IPv6/netlink, no namespace, mount, `io_uring`, keyring, other
+  process's memory, no x32 call; every capability dropped) — a helper a command may write is refused. Mounts cover only
+  what exists, so `scan::search` runs before every command (the `.env` files to cover, the guarded paths; a search
+  past `MAX_ENTRIES` runs no command) and `scan::Watch::settle` after it, even when the run is dropped, moving what it
+  made that a Seatbelt pattern refuses (`.envrc`, `.git`, a protected name, a git folder's `config`/`hooks`/
+  `commondir`…) to `~/.glut/quarantine` through folders opened without links — keep both around any new way a command
+  runs. **Left open**: until then such a path exists; a tool of the owner's that runs it meanwhile (an editor's git, a
+  prompt's `git status`) runs the command's code — Seatbelt refuses its making. A covered secret is a mode-000
+  placeholder from `~/.glut/sandbox`, so a read is refused rather than empty; a secret made after a job started stays
+  open to that job. Every session's scratch folder lies in one `glut-shells-<uid>` no command writes (macOS too).
+  `allowLocalBinding` means nothing there (a command's localhost is its own). Tested in Docker only (`--security-opt
+  seccomp=unconfined --security-opt systempaths=unconfined`); the library's own tests reach the helper through
+  `GLUT_TEST_HELPER`.
 - **Glut ends what refusals keep repeating, and compacts itself** (Glut robust): `refusals.rs` counts per tool and
   target *once per call* (the network proxy judges every connection) — keep that when feeding it from a new place;
   `FinishReason::Refused` must still answer every call of the last reply. A compaction keeps the system prompt, the

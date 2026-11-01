@@ -10499,7 +10499,12 @@ pub(crate) mod tests {
         );
         app.folder_command("add ~/Vault");
         assert!(last_note(&app).contains("~/Vault"), "{}", last_note(&app));
-        assert_eq!(app.parts.tools.folders().list().len(), 1);
+        assert_eq!(
+            app.parts.tools.folders().list().len(),
+            1,
+            "{}",
+            last_note(&app)
+        );
         app.folder_command("add ~/Vault");
         assert!(last_note(&app).contains("already"), "{}", last_note(&app));
         app.folder_command("add ~");

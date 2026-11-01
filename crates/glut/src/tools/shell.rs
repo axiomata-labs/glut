@@ -233,6 +233,8 @@ struct Sandbox {
     /// What the sandbox allows, with the proxy's port as the one way to the network; the profile is made from it for
     /// each command, with the folders beside the working one as they stand then (T60c).
     policy: crate::sandbox::Policy,
+    /// The way from the Linux sandbox's own network to the proxy (T59); `None` elsewhere or without a proxy.
+    bridge: Option<crate::sandbox::proxy::Bridge>,
 }
 
 /// What the shell tools of one run share — also the hooks of a run (HS7, D5): they get what a command gets.
@@ -259,6 +261,16 @@ pub(crate) struct Session {
     beside: crate::folders::Folders,
     /// The Keychain's list and switch (T74).
     keychain: crate::keychain::Keychain,
+}
+
+/// Settles a command's watch ([`crate::sandbox::scan::Watch`]) off the async threads — it walks the folders — and
+/// returns its note. Begun, it finishes though the caller is dropped meanwhile.
+async fn settled(watch: Option<crate::sandbox::scan::Watch>) -> Option<String> {
+    let watch = watch?;
+    tokio::task::spawn_blocking(move || watch.settle())
+        .await
+        .ok()
+        .flatten()
 }
 
 /// What `reader` writes, kept up to [`MAX_FOREGROUND_BYTES`]; the rest is read and dropped, so the program never
@@ -408,6 +420,7 @@ impl Session {
     /// is everyone's). `None` without a sandbox.
     async fn sandbox(&self, gate: Option<Arc<Gate>>) -> Option<&Sandbox> {
         let policy = self.policy.as_ref()?;
+        let socket = self.scratch.join("proxy.sock");
         let sandbox = self
             .sandbox
             .get_or_init(|| async move {
@@ -415,13 +428,24 @@ impl Session {
                 let proxy = Proxy::start(gate).await.ok();
                 let mut policy = policy.clone();
                 policy.proxy_port = proxy.as_ref().map(Proxy::port);
-                Sandbox { policy, proxy }
+                let bridge = proxy
+                    .as_ref()
+                    .filter(|_| cfg!(target_os = "linux"))
+                    .and_then(|proxy| {
+                        crate::sandbox::proxy::Bridge::start(&socket, proxy.port()).ok()
+                    });
+                Sandbox {
+                    policy,
+                    proxy,
+                    bridge,
+                }
             })
             .await;
         Some(sandbox)
     }
 
-    /// A command ready to spawn: the shell running `script` for `command` in `cwd`.
+    /// A command ready to spawn: the shell running `script` for `command` in `cwd`; with the Linux sandbox, the watch
+    /// that tells what the command made which the sandbox refuses ([`crate::sandbox::scan`]), settled once it ends.
     async fn command(
         &self,
         command: &str,
@@ -429,7 +453,7 @@ impl Session {
         cwd_file: Option<&Path>,
         sandbox: Sandboxing,
         script: &str,
-    ) -> Command {
+    ) -> Result<(Command, Option<crate::sandbox::scan::Watch>), String> {
         let snapshot = self.snapshot().await;
         let mut proxy_env = Vec::new();
         // T36c: a pane's role without a `Network` rule keeps its commands offline, as a subagent's narrowing does.
@@ -438,12 +462,12 @@ impl Session {
             Sandboxing::Off => true,
         };
         let mut keychain_open = false;
+        let mut watch = None;
         let (sandbox, given_keychain) = match sandbox {
             Sandboxing::On(gate, keychain) => (self.sandbox(gate).await, keychain),
             Sandboxing::Off => (None, false),
         };
         let mut process = match sandbox {
-            // The profile goes in as an argument: nothing on disk for a command to change between two calls.
             Some(sandbox) => {
                 let online = crate::permissions::agent_reaches_network() && role_online;
                 if online && let Some(proxy) = &sandbox.proxy {
@@ -460,11 +484,42 @@ impl Session {
                 // The scratch folder holds the profile snapshot every later command sources: a command that wrote
                 // there would run its code inside the next one — one given the Keychain too. Only its own note of
                 // where it ended stays writable.
-                policy.write_denied.push(self.scratch.clone());
+                // Every session's scratch folder, not only this one's ([`scratch_home`]).
+                policy
+                    .write_denied
+                    .push(self.scratch.parent().unwrap_or(&self.scratch).to_path_buf());
                 policy.notes.extend(cwd_file.map(Path::to_path_buf));
-                let profile = policy.profile();
-                let mut process = Command::new(crate::sandbox::SANDBOX_EXEC);
-                process.arg("-p").arg(&profile).arg(&self.shell);
+                let linux = cfg!(target_os = "linux");
+                let found = if linux {
+                    // Linux binds only what is there: the note too, before the command writes it.
+                    if let Some(file) = cwd_file {
+                        std::fs::File::create(file)
+                            .map_err(|err| format!("no note for the command's folder: {err}"))?;
+                    }
+                    // It walks the folders: off the async threads.
+                    let (root, beside, git) = (
+                        policy.root.clone(),
+                        policy.beside.clone(),
+                        policy.git_dirs.clone(),
+                    );
+                    tokio::task::spawn_blocking(move || {
+                        crate::sandbox::scan::search(&root, &beside, &git)
+                    })
+                    .await
+                    .map_err(|err| format!("the search before the command failed: {err}"))?
+                } else {
+                    crate::sandbox::scan::Found::default()
+                };
+                let relay = sandbox
+                    .bridge
+                    .as_ref()
+                    .filter(|_| policy.proxy_port.is_some())
+                    .map(crate::sandbox::proxy::Bridge::path);
+                let process =
+                    Command::from(policy.command(&self.shell, &self.root, &found, relay)?);
+                if linux {
+                    watch = Some(crate::sandbox::scan::Watch::new(&policy, found));
+                }
                 process
             }
             None => Command::new(&self.shell),
@@ -495,7 +550,7 @@ impl Session {
             .stderr(Stdio::null())
             .process_group(0)
             .kill_on_drop(true);
-        process
+        Ok((process, watch))
     }
 
     /// A mark for one chain's parts (N7): random for each call, so no file a command prints can hold one. It is no
@@ -538,7 +593,7 @@ impl Session {
             "cwd-{}",
             self.next_note.fetch_add(1, Ordering::Relaxed)
         ));
-        let mut child = self
+        let (mut process, watch) = self
             .command(
                 command,
                 &cwd,
@@ -546,7 +601,8 @@ impl Session {
                 sandbox,
                 &command_script(self.family),
             )
-            .await
+            .await?;
+        let mut child = process
             .spawn()
             .map_err(|err| format!("could not start {}: {err}", self.shell.display()))?;
         // Dropped with this future (the run timed out or was stopped while waiting here): the group goes with it.
@@ -596,6 +652,9 @@ impl Session {
         );
         if let Some(moved) = self.carry_folder(&note) {
             text.push_str(&moved);
+        }
+        if let Some(refused) = settled(watch).await {
+            text.push_str(&refused);
         }
         let _ = std::fs::remove_file(&note);
         match ending {
@@ -738,7 +797,7 @@ impl Session {
         gate: Option<Arc<Gate>>,
     ) -> Result<HookOutput, String> {
         let (cwd, _) = self.start_dir();
-        let mut process = self
+        let (mut process, watch) = self
             .command(
                 command,
                 &cwd,
@@ -748,7 +807,8 @@ impl Session {
                 Sandboxing::On(gate, false),
                 &hook_script(self.family),
             )
-            .await;
+            .await
+            .map_err(|err| format!("the hook could not start: {err}"))?;
         process.stdin(Stdio::piped()).stderr(Stdio::piped());
         let mut child = process
             .spawn()
@@ -801,16 +861,20 @@ impl Session {
         if let Some(writer) = writer {
             let _ = writer.await;
         }
+        let mut stderr = err
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .text();
+        if let Some(refused) = settled(watch).await {
+            stderr.push_str(&refused);
+        }
         Ok(HookOutput {
             code: status.and_then(|status| status.code()),
             stdout: out
                 .lock()
                 .unwrap_or_else(|poison| poison.into_inner())
                 .text(),
-            stderr: err
-                .lock()
-                .unwrap_or_else(|poison| poison.into_inner())
-                .text(),
+            stderr,
             timed_out,
         })
     }
@@ -818,7 +882,8 @@ impl Session {
     /// Takes the folder a command ended in as the next command's, if it lies inside the run's folder; otherwise
     /// returns to the run's folder and says so. No note (the command ended with `exit`) keeps the folder as it was.
     fn carry_folder(&self, note: &Path) -> Option<String> {
-        let ended = std::fs::read(note).ok()?;
+        // Empty: made for the Linux sandbox's mount, never written (the command ended with `exit`).
+        let ended = std::fs::read(note).ok().filter(|ended| !ended.is_empty())?;
         let ended = PathBuf::from(std::ffi::OsStr::from_bytes(
             ended.strip_suffix(b"\n").unwrap_or(&ended),
         ));
@@ -846,9 +911,10 @@ impl Session {
             return Err(full());
         }
         let (cwd, _) = self.start_dir();
-        let mut child = self
+        let (mut process, watch) = self
             .command(command, &cwd, None, sandbox, &command_script(self.family))
-            .await
+            .await?;
+        let mut child = process
             .spawn()
             .map_err(|err| format!("could not start {}: {err}", self.shell.display()))?;
         let group = Group::of(&child);
@@ -866,10 +932,14 @@ impl Session {
             {
                 reader.abort();
             }
-            let text = match status {
+            let mut text = match status {
                 Ok(status) => describe_exit(status),
                 Err(err) => format!("could not be waited for: {err}"),
             };
+            if let Some(refused) = settled(watch).await {
+                text.push('\n');
+                text.push_str(refused.trim_end());
+            }
             *done.lock().unwrap_or_else(|poison| poison.into_inner()) = Some(text);
         });
         let mut jobs = self
@@ -1223,15 +1293,37 @@ fn describe_exit(status: ExitStatus) -> String {
     }
 }
 
-/// A new private folder for the session's files. Its name carries the time as well as the pid and a counter, so a
-/// folder a crashed run left behind under the same pid does not stand in the way.
+/// The folder every session's scratch folder lies in, resolved: one for all, so the sandbox keeps a command out of
+/// every session's — one that wrote another session's profile snapshot would run its code in that session's next
+/// command, which may run without the sandbox or with other rights. Made by Glut before any command runs; one that
+/// is a link, another user's or open to others is not taken.
+fn scratch_home() -> std::io::Result<PathBuf> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+    let uid = rustix::process::geteuid().as_raw();
+    let home = std::env::temp_dir().join(format!("glut-shells-{uid}"));
+    match std::fs::DirBuilder::new().mode(0o700).create(&home) {
+        Err(err) if err.kind() != std::io::ErrorKind::AlreadyExists => return Err(err),
+        _ => {}
+    }
+    let meta = std::fs::symlink_metadata(&home)?;
+    if !meta.is_dir() || meta.uid() != uid || meta.mode() & 0o077 != 0 {
+        return Err(std::io::Error::other(format!(
+            "{} is not Glut's own folder (a link, another user's, or open to others)",
+            home.display()
+        )));
+    }
+    home.canonicalize()
+}
+
+/// A new private folder for the session's files, in [`scratch_home`]. Its name carries the time as well as the pid
+/// and a counter, so a folder a crashed run left behind under the same pid does not stand in the way.
 fn scratch_dir() -> std::io::Result<PathBuf> {
     use std::os::unix::fs::DirBuilderExt;
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |since| since.as_nanos());
-    let dir = std::env::temp_dir().join(format!(
+    let dir = scratch_home()?.join(format!(
         "glut-shell-{}-{nanos}-{}",
         std::process::id(),
         COUNTER.fetch_add(1, Ordering::Relaxed)
@@ -1637,7 +1729,11 @@ mod tests {
 
     #[tokio::test]
     async fn a_chain_runs_as_written_and_reports_where_each_part_printed() {
-        for shell in ["/bin/bash", "/bin/zsh", "/bin/sh"] {
+        // The shells this system has: Linux often comes without zsh.
+        for shell in ["/bin/bash", "/bin/zsh", "/bin/sh"]
+            .into_iter()
+            .filter(|shell| Path::new(shell).exists())
+        {
             let (dir, tools) = setup(shell, &[]);
             std::fs::write(dir.join("sub").join("a.txt"), "a").unwrap();
             std::fs::create_dir(dir.join("sub").join("empty")).unwrap();
@@ -2262,7 +2358,12 @@ mod tests {
         tools.extend(shell_tools(&dir.join("work"), options).unwrap());
 
         let (ok, text) = bash(&tools, &format!("echo x > {}", target.display())).await;
-        assert!(!ok && text.contains("Operation not permitted"), "{text}");
+        // Seatbelt refuses the write; Linux's sandbox sees that place read-only.
+        assert!(
+            !ok && (text.contains("Operation not permitted")
+                || text.contains("Read-only file system")),
+            "{text}"
+        );
         assert!(!target.exists());
         assert_eq!(
             bash(&tools, "echo inside > a.txt && cat a.txt").await,

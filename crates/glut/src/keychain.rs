@@ -545,10 +545,18 @@ mod tests {
         assert_eq!(keychain.programs().len(), DEFAULT_PROGRAMS.len());
         assert_eq!(keychain.change(&home, "cargo", true), Ok(true));
         assert_eq!(
-            keychain.change(&home, "CARGO", true),
+            keychain.change(&home, "  cargo ", true),
             Ok(false),
             "listed already"
         );
+        // macOS finds `CARGO` as `cargo` (its volumes do not tell the cases apart); Linux runs another program.
+        if cfg!(target_os = "macos") {
+            assert_eq!(
+                keychain.change(&home, "CARGO", true),
+                Ok(false),
+                "listed already"
+            );
+        }
         assert_eq!(keychain.change(&home, "gh", false), Ok(true));
         assert!(keychain.wants("cargo tauri build").is_some());
         assert!(keychain.wants("gh pr list").is_none());

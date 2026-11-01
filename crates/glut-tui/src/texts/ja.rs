@@ -2096,6 +2096,7 @@ pub const TEXTS: Texts = Texts {
         "画像",
         "エクスポート",
         "lean.jsonl",
+        "隔離",
         "その他",
     ],
     clean_item: "{name}：{bytes}",

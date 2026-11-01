@@ -11,12 +11,12 @@
 //!   server has finished indexing ([`INDEX_LIMIT`] at its first question); the `code` module shapes them.
 //! * **Blocking work** (the server's pipes) runs on tokio's blocking pool. The servers live in [`LanguageServers`],
 //!   which a host keeps for a whole session (a new run would index the project anew) and a run shares with its
-//!   subagents; a change of the root or of the sandbox's profile starts them anew.
+//!   subagents; a change of the root or of the sandbox's rules starts them anew.
 
 use std::collections::{HashMap, HashSet};
 use std::io::{BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, ChildStdin, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
@@ -196,17 +196,14 @@ impl Server {
         program: &Path,
         args: &[String],
         root: &Path,
-        profile: &str,
+        policy: &crate::sandbox::Policy,
     ) -> Result<Self, String> {
         use std::os::unix::process::CommandExt;
-        // In the run's sandbox, as a command of the run; with a cleared environment.
-        let mut command = Command::new(crate::sandbox::SANDBOX_EXEC);
-        command
-            .arg("-p")
-            .arg(profile)
-            .arg(program)
-            .args(args)
-            .env_clear();
+        // In the run's sandbox, as a command of the run; with a cleared environment. The `.env` files are covered as
+        // they stand when it starts (T59: Linux covers only what is there).
+        let found = crate::sandbox::scan::search(root, &policy.beside, &policy.git_dirs);
+        let mut command = policy.command(program, root, &found, None)?;
+        command.args(args).env_clear();
         for key in ["PATH", "HOME", "TMPDIR"] {
             if let Some(value) = std::env::var_os(key) {
                 command.env(key, value);
@@ -617,8 +614,8 @@ pub(crate) struct Launch {
 pub(crate) struct Diagnostics {
     root: PathBuf,
     search: Vec<PathBuf>,
-    /// The run's sandbox profile, which every server runs in.
-    profile: String,
+    /// The run's sandbox, which every server runs in.
+    policy: crate::sandbox::Policy,
     servers: HashMap<&'static str, Option<Server>>,
     /// The servers the gate allowed to start for these servers' root and profile (T62): no other starts, whatever
     /// file an edit or a rename names.
@@ -629,13 +626,13 @@ pub(crate) struct Diagnostics {
 type Resolved = (PathBuf, &'static str, &'static str, PathBuf, Vec<String>);
 
 impl Diagnostics {
-    /// The servers for a run in `root`, each started in the sandbox `profile`.
-    pub(crate) fn new(root: &Path, profile: String) -> Self {
+    /// The servers for a run in `root`, each started in the sandbox `policy`.
+    pub(crate) fn new(root: &Path, policy: crate::sandbox::Policy) -> Self {
         let home = std::env::var_os("HOME").map(PathBuf::from);
         Self {
             root: root.canonicalize().unwrap_or_else(|_| root.to_owned()),
             search: servers::search_path(std::env::var_os("PATH").as_deref(), home.as_deref()),
-            profile,
+            policy,
             servers: HashMap::new(),
             allowed: HashSet::new(),
         }
@@ -777,11 +774,11 @@ impl Diagnostics {
         if !self.allowed.contains(server) {
             return None;
         }
-        let (root, profile) = (self.root.clone(), self.profile.clone());
+        let (root, policy) = (self.root.clone(), self.policy.clone());
         Some(
             self.servers
                 .entry(server)
-                .or_insert_with(|| Server::start(server, program, args, &root, &profile).ok()),
+                .or_insert_with(|| Server::start(server, program, args, &root, &policy).ok()),
         )
     }
 
@@ -850,16 +847,20 @@ impl std::fmt::Debug for LanguageServers {
 }
 
 impl LanguageServers {
-    /// The servers for `root`, each started in the sandbox `profile`: the ones running stay where both are the same,
+    /// The servers for `root`, each started in the sandbox `policy`: the ones running stay where both are the same,
     /// else they end and start anew as they are needed. Blocks while a question is under way.
-    pub(crate) fn lock(&self, root: &Path, profile: &str) -> MutexGuard<'_, Option<Diagnostics>> {
+    pub(crate) fn lock(
+        &self,
+        root: &Path,
+        policy: &crate::sandbox::Policy,
+    ) -> MutexGuard<'_, Option<Diagnostics>> {
         let mut held = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         let root = root.canonicalize().unwrap_or_else(|_| root.to_owned());
         if held
             .as_ref()
-            .is_none_or(|servers| servers.root != root || servers.profile != profile)
+            .is_none_or(|servers| servers.root != root || servers.policy != *policy)
         {
-            *held = Some(Diagnostics::new(&root, profile.to_owned()));
+            *held = Some(Diagnostics::new(&root, policy.clone()));
         }
         held
     }
@@ -939,8 +940,8 @@ mod tests {
         .unwrap();
         let root = dir.canonicalize().unwrap();
         let home = std::path::PathBuf::from(std::env::var_os("HOME").unwrap());
-        let profile = crate::sandbox::Policy::new(&root, &home, &[], &[]).profile();
-        let mut servers = Diagnostics::new(&root, profile);
+        let policy = crate::sandbox::Policy::new(&root, &home, &[], &[]);
+        let mut servers = Diagnostics::new(&root, policy);
         servers.allow("rust-analyzer");
         let mut ask = |op: Op, line: u32, symbol: &str| {
             servers
@@ -982,8 +983,8 @@ mod tests {
         .unwrap();
         let root = dir.canonicalize().unwrap();
         let home = std::path::PathBuf::from(std::env::var_os("HOME").unwrap());
-        let profile = crate::sandbox::Policy::new(&root, &home, &[], &[]).profile();
-        let mut diagnostics = Diagnostics::new(&root, profile);
+        let policy = crate::sandbox::Policy::new(&root, &home, &[], &[]);
+        let mut diagnostics = Diagnostics::new(&root, policy);
         assert!(
             diagnostics.after_edit("src/main.rs").is_none(),
             "nothing starts unallowed"

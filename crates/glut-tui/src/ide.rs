@@ -117,7 +117,50 @@ pub fn fitting(home: &Path, cwd: &Path) -> Vec<Found> {
         .collect()
 }
 
+/// The process listening on `port` on loopback, by the kernel's own tables: the socket listening there in
+/// `/proc/net/tcp`, then the one process holding it open (`lsof` is often not installed on Linux); `None` where none
+/// is, or it cannot be told.
+#[cfg(target_os = "linux")]
+fn listener_of(port: u16) -> Option<i32> {
+    // `127.0.0.1` as the kernel writes it on a little-endian machine, and the port in hex; `0A` is LISTEN.
+    let wanted = format!("{:08X}:{port:04X}", u32::from_ne_bytes([127, 0, 0, 1]));
+    let table = std::fs::read_to_string("/proc/net/tcp").ok()?;
+    let sockets: Vec<String> = table
+        .lines()
+        .skip(1)
+        .filter_map(|line| {
+            let fields: Vec<&str> = line.split_whitespace().collect();
+            (fields.get(1) == Some(&wanted.as_str()) && fields.get(3) == Some(&"0A"))
+                .then(|| fields.get(9).map(|inode| format!("socket:[{inode}]")))
+                .flatten()
+        })
+        .collect();
+    if sockets.is_empty() {
+        return None;
+    }
+    let holds = |pid: i32| {
+        std::fs::read_dir(format!("/proc/{pid}/fd")).is_ok_and(|fds| {
+            fds.flatten().any(|fd| {
+                std::fs::read_link(fd.path()).is_ok_and(|link| {
+                    sockets
+                        .iter()
+                        .any(|socket| link.as_os_str() == socket.as_str())
+                })
+            })
+        })
+    };
+    let mut pids = std::fs::read_dir("/proc")
+        .ok()?
+        .flatten()
+        .filter_map(|entry| entry.file_name().to_str()?.parse::<i32>().ok())
+        .filter(|pid| holds(*pid));
+    let pid = pids.next()?;
+    // Two holders of one socket is no answer to trust.
+    pids.all(|other| other == pid).then_some(pid)
+}
+
 /// The process listening on `port` on loopback, by `lsof`; `None` where none is, or it cannot be told.
+#[cfg(not(target_os = "linux"))]
 fn listener_of(port: u16) -> Option<i32> {
     // Its own place on macOS, not whatever a PATH names first.
     let program = if Path::new("/usr/sbin/lsof").exists() {

@@ -294,7 +294,9 @@ mod tests {
         );
         let line = std::fs::read_to_string(&path).unwrap();
         assert!(line.lines().all(|line| line.contains("\"at\":")), "{line}");
-        // Another session opened: its own log.
+        // Another session opened: its own log — later than the first by more than the file system's clock tells apart
+        // (Linux's can be a few milliseconds coarse).
+        std::thread::sleep(std::time::Duration::from_millis(20));
         log.follow("s2");
         log.owner("Next");
         assert_eq!(

@@ -2176,8 +2176,16 @@ impl BuiltGate {
                 "the project's own .glut/ hooks are not run: only ~/.glut/settings.json hooks run",
             );
         }
-        if !self.sandbox.enabled || !crate::sandbox::available() {
+        if !self.sandbox.enabled {
             notes.push("commands run without a sandbox: only the permission rules hold them");
+        } else if let Some(why) = crate::sandbox::unavailable() {
+            // Why, and what helps (T59: Linux has more ways to lack one) — the same for the whole process.
+            static NOTE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+            notes.push(NOTE.get_or_init(|| {
+                format!(
+                    "commands run without a sandbox: only the permission rules hold them — {why}"
+                )
+            }));
         }
         notes
     }

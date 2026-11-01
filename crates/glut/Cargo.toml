@@ -47,6 +47,11 @@ ring.workspace = true
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3"
 
+# The Linux sandbox's seccomp filter (T59): Firecracker's compiler, pure Rust; `libc` for its system call numbers.
+[target.'cfg(target_os = "linux")'.dependencies]
+seccompiler = "0.5"
+libc = "0.2"
+
 [dev-dependencies]
 # The fake model server of the tests listens on the loopback.
 tokio = { workspace = true, features = ["net"] }

@@ -3407,10 +3407,10 @@ impl<'a, M: ChatModel> Loop<'a, M> {
         &self,
         work: impl FnOnce(&mut crate::diagnostics::Diagnostics) -> R + Send + 'static,
     ) -> Option<R> {
-        let profile = self.sandbox_profile()?;
+        let policy = self.sandbox_policy()?;
         let (servers, cwd) = (self.config.servers.clone(), self.config.cwd.clone());
         let job =
-            tokio::task::spawn_blocking(move || servers.lock(&cwd, &profile).as_mut().map(work));
+            tokio::task::spawn_blocking(move || servers.lock(&cwd, &policy).as_mut().map(work));
         tokio::select! {
             joined = job => joined.ok().flatten(),
             () = tokio::time::sleep_until(self.deadline) => None,
@@ -3467,9 +3467,9 @@ impl<'a, M: ChatModel> Loop<'a, M> {
         Ok(())
     }
 
-    /// The run's sandbox as a Seatbelt profile without network — `None` where there is no sandbox (not on, not on this
-    /// system, no home): then nothing else is started for the run either.
-    fn sandbox_profile(&self) -> Option<String> {
+    /// The run's sandbox without network — `None` where there is no sandbox (not on, not on this system, no home): then
+    /// nothing else is started for the run either.
+    fn sandbox_policy(&self) -> Option<crate::sandbox::Policy> {
         let settings = self
             .config
             .sandbox
@@ -3482,9 +3482,12 @@ impl<'a, M: ChatModel> Loop<'a, M> {
             .map(std::path::PathBuf::from)
             .filter(|home| home.is_absolute())?;
         let root = self.config.cwd.canonicalize().ok()?;
-        let policy =
-            crate::sandbox::Policy::new(&root, &home, &settings.allow_write, &settings.deny_read);
-        Some(policy.profile())
+        Some(crate::sandbox::Policy::new(
+            &root,
+            &home,
+            &settings.allow_write,
+            &settings.deny_read,
+        ))
     }
 
     /// The `exit_plan` arm (Glut 2, D): the plan goes to the owner; yes switches the gate to the run's build mode — or

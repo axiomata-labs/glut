@@ -1611,7 +1611,14 @@ pub fn for_tests() -> (Parts, Engine) {
     let parts = Parts {
         // A folder of its own per test session: a test that sets a window or an editor writes there, never in /tmp.
         // Numbered, not timed: macOS's clock counts microseconds, and two tests at once got the same folder.
-        home: std::env::temp_dir().join(format!(
+        // Outside the working folder `/tmp` (Linux's temporary folder is it): a home inside it would make every
+        // folder of the home a part of the working one.
+        home: if std::env::temp_dir().starts_with("/tmp") {
+            PathBuf::from("/var/tmp")
+        } else {
+            std::env::temp_dir()
+        }
+        .join(format!(
             "glut-tui-test-{}-{}",
             std::process::id(),
             TEST_HOMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed)

@@ -1,5 +1,6 @@
 //! The sandbox the shell's commands run in (`docs/plans/harness.md`, HS3b): macOS's Seatbelt (`sandbox-exec`), the
-//! same mechanism Claude Code and Codex use. Unlike the rules of HS3a, which judge what a command *says*, the
+//! same mechanism Claude Code and Codex use; on Linux bubblewrap plus seccomp (T59, [`bwrap`], [`linux`]) — the same
+//! rules, held by mounts and namespaces. Unlike the rules of HS3a, which judge what a command *says*, the
 //! operating system holds whatever the command *does* — a script, `find -delete`, a daemon that left its process
 //! group.
 //!
@@ -15,7 +16,11 @@
 //! The profile is built per run from real (resolved) paths: Seatbelt matches what a path resolves to, so `/tmp` must
 //! be written `/private/tmp`.
 
+pub mod bwrap;
+#[cfg(target_os = "linux")]
+pub mod linux;
 pub mod proxy;
+pub mod scan;
 
 use std::path::{Path, PathBuf};
 
@@ -37,7 +42,7 @@ const HOME_WRITABLE_FILES: [&str; 1] = [".cargo/.package-cache"];
 
 /// Folders and files below the home folder no command reads: keys and credentials, Axiomata's and the harness's own
 /// configuration (`~/.axiomata/config.toml` holds API keys), other agents' credentials, browser and mail data.
-const HOME_SECRETS: [&str; 38] = [
+const HOME_SECRETS: [&str; 65] = [
     ".ssh",
     ".git-credentials",
     ".config/git/credentials",
@@ -76,6 +81,35 @@ const HOME_SECRETS: [&str; 38] = [
     "Library/Mail",
     "Library/Messages",
     "Library/Application Support/AddressBook",
+    // Linux's (T59): the desktop's keyrings and password store, browsers and chat as they keep them there.
+    ".local/share/keyrings",
+    ".password-store",
+    ".config/google-chrome",
+    ".config/chromium",
+    ".config/BraveSoftware",
+    ".config/microsoft-edge",
+    ".mozilla",
+    ".thunderbird",
+    ".config/Slack",
+    ".config/discord",
+    ".config/1Password",
+    ".config/Signal",
+    // Tokens other tools keep (security audit of T59).
+    ".config/rclone",
+    ".vault-token",
+    ".config/op",
+    ".oci",
+    ".m2/settings.xml",
+    ".gradle/gradle.properties",
+    ".config/glab-cli",
+    ".config/doctl",
+    ".huggingface/token",
+    ".cache/huggingface/token",
+    ".Xauthority",
+    ".local/share/docker",
+    ".python_history",
+    ".psql_history",
+    ".mysql_history",
 ];
 
 /// Names in the working folder no command writes (the same configuration the file tools protect; the git folder is
@@ -97,7 +131,7 @@ pub const PROTECTED_IN_ROOT: [&str; 11] = [
 
 /// The parts of a git folder that make the owner's git run code: never written by a command. `commondir` and
 /// `gitdir` point git at another git folder — with a config of the command's making (security audit, 2026-10-24).
-const GIT_RUNS: [&str; 6] = [
+pub(crate) const GIT_RUNS: [&str; 6] = [
     "config",
     "config.worktree",
     "hooks",
@@ -132,7 +166,37 @@ const APPLE_EVENT_TOOLS: [&str; 7] = [
 
 /// Whether commands can run in the sandbox here.
 pub fn available() -> bool {
-    cfg!(target_os = "macos") && Path::new(SANDBOX_EXEC).is_file()
+    unavailable().is_none()
+}
+
+/// Why commands cannot run in the sandbox here, and what helps; `None` where they can.
+pub fn unavailable() -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        (!Path::new(SANDBOX_EXEC).is_file()).then(|| format!("{SANDBOX_EXEC} is missing"))
+    }
+    #[cfg(target_os = "linux")]
+    {
+        linux::ready().err().map(str::to_owned)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        Some(format!("Glut has no sandbox for {}", std::env::consts::OS))
+    }
+}
+
+/// Runs the Linux sandbox's helper when this process was started as one and returns its exit code; otherwise
+/// remembers that this program serves it (the Linux sandbox needs that) and returns `None`. A program offering
+/// Glut's sandbox calls it first thing in `main`, before any thread starts; elsewhere than on Linux it does nothing.
+pub fn serve_helper() -> Option<i32> {
+    #[cfg(target_os = "linux")]
+    {
+        linux::serve_helper()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
 }
 
 /// The places no command reads for the owner whose home is `home`, resolved: Glut's own list of secrets and the
@@ -147,7 +211,7 @@ pub fn secrets(home: &Path, extra: &[PathBuf]) -> Vec<PathBuf> {
 }
 
 /// What a run's sandbox allows, in resolved paths.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Policy {
     /// The working folder.
     pub root: PathBuf,
@@ -175,6 +239,11 @@ pub struct Policy {
     /// ended, in the scratch folder that also holds the profile snapshot every later command sources): allowed after
     /// every deny, so nothing else of that folder opens with them.
     pub notes: Vec<PathBuf>,
+    /// Where what a command made that the sandbox refuses goes (T59, Linux: [`scan`]), below `~/.glut`.
+    pub quarantine: PathBuf,
+    /// The folder holding what the Linux sandbox covers secrets with ([`bwrap::make_covers`]), below `~/.glut`: no
+    /// command reaches it to change them.
+    pub covers: PathBuf,
 }
 
 impl Policy {
@@ -215,6 +284,8 @@ impl Policy {
             local_binding: false,
             keychain: false,
             notes: Vec::new(),
+            quarantine: home.join(crate::providers::DIR).join("quarantine"),
+            covers: home.join(crate::providers::DIR).join("sandbox"),
         }
     }
 
@@ -238,6 +309,64 @@ impl Policy {
     /// The working folder and the folders beside it: where a command writes as in the run's own folder.
     fn roots(&self) -> impl Iterator<Item = &PathBuf> {
         std::iter::once(&self.root).chain(&self.beside)
+    }
+
+    /// The process running `program` (its arguments the caller adds) in this sandbox, starting in `cwd`. On Linux
+    /// `found` is what [`scan::search`] found right before, and `relay` the socket of the bridge to the run's proxy.
+    ///
+    /// # Errors
+    ///
+    /// No sandbox here, or (Linux) the helper is a program a command may write — it runs inside the sandbox but
+    /// outside its seccomp filter, so a command that changed it would reach what the filter keeps closed — or the
+    /// search before the command did not see everything.
+    #[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
+    pub fn command(
+        &self,
+        program: &Path,
+        cwd: &Path,
+        found: &scan::Found,
+        relay: Option<&Path>,
+    ) -> Result<std::process::Command, String> {
+        #[cfg(target_os = "macos")]
+        {
+            // The profile goes in as an argument: nothing on disk for a command to change between two calls.
+            let mut command = std::process::Command::new(SANDBOX_EXEC);
+            command.arg("-p").arg(self.profile()).arg(program);
+            Ok(command)
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let bwrap = linux::ready()?;
+            // What the search did not reach is not covered: no command, rather than one that reads a `.env`.
+            if !found.complete {
+                return Err(format!(
+                    "the folders hold more than {} entries: Glut cannot cover every .env file in them, so no command \
+                     runs — work in a smaller folder, or take a folder beside this one away",
+                    scan::MAX_ENTRIES
+                ));
+            }
+            let helper = linux::helper_program().ok_or("no helper for the sandbox")?;
+            let writable = self
+                .roots()
+                .chain(&self.writable)
+                .chain(&self.git_dirs)
+                .chain(&found.git_dirs);
+            if let Some(place) = writable.into_iter().find(|place| helper.starts_with(place)) {
+                return Err(format!(
+                    "{} lies in {}, where commands write: install glut elsewhere and start that one",
+                    helper.display(),
+                    place.display()
+                ));
+            }
+            bwrap::make_covers(self);
+            let mut command = std::process::Command::new(bwrap);
+            command.args(bwrap::arguments(self, found, helper, relay, cwd, program));
+            Ok(command)
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        {
+            Err(unavailable().unwrap_or_default())
+        }
     }
 
     /// The Seatbelt profile. Later rules win over earlier ones: the broad allows come first, the narrow denies last.
@@ -481,29 +610,55 @@ mod tests {
 
     /// A fresh folder for a test, resolved (Seatbelt sees `/private/var/…`, not `/var/…`).
     fn temp(name: &str) -> PathBuf {
+        // Numbered too: Linux's clock can give two tests at once the same moment, and two tests share a name.
+        static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let dir = std::env::temp_dir().join(format!(
-            "glut-sandbox-{name}-{}-{}",
+            "glut-sandbox-{name}-{}-{}-{}",
             std::process::id(),
-            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
         std::fs::create_dir_all(&dir).unwrap();
         dir.canonicalize().unwrap()
     }
 
-    /// Runs `script` with zsh in the sandbox of `policy`, in its working folder; stdout and stderr together.
+    /// Runs `script` with `sh` in the sandbox of `policy`, in its working folder, as Glut runs a command there — on
+    /// Linux with the search before it and what it made that the sandbox refuses moved away after, the note of that
+    /// appended ([`scan::Watch`]); stdout and stderr together.
     fn sandboxed(policy: &Policy, script: &str) -> String {
-        let out = std::process::Command::new(SANDBOX_EXEC)
-            .arg("-p")
-            .arg(policy.profile())
-            .args(["/bin/sh", "-c", script])
+        sandboxed_relayed(policy, script, None)
+    }
+
+    /// [`sandboxed`] with the Linux sandbox's way to the proxy at `relay`.
+    fn sandboxed_relayed(policy: &Policy, script: &str, relay: Option<&Path>) -> String {
+        let linux = cfg!(target_os = "linux");
+        let found = if linux {
+            scan::search(&policy.root, &policy.beside, &policy.git_dirs)
+        } else {
+            scan::Found::default()
+        };
+        let out = policy
+            .command(Path::new("/bin/sh"), &policy.root, &found, relay)
+            .unwrap()
+            .args(["-c", script])
             .current_dir(&policy.root)
             .output()
             .unwrap();
+        let settled = linux
+            .then(|| scan::Watch::new(policy, found).settle())
+            .flatten()
+            .unwrap_or_default();
         format!(
-            "{}{}",
+            "{}{}{settled}",
             String::from_utf8_lossy(&out.stdout),
             String::from_utf8_lossy(&out.stderr)
         )
+    }
+
+    /// Whether `out` tells a write was refused: at once (`REFUSED`, the script's own word), or — Linux, for a path
+    /// that was not there — moved away right after.
+    fn refused(out: &str) -> bool {
+        out.contains("REFUSED") || out.contains("refused by the sandbox")
     }
 
     #[test]
@@ -614,7 +769,7 @@ mod tests {
             ),
         ] {
             let out = sandboxed(&policy, &format!("{script} || echo REFUSED"));
-            assert!(out.contains("REFUSED"), "{what}: {out}");
+            assert!(refused(&out), "{what}: {out}");
         }
         let _ = std::fs::remove_dir_all(&vault);
     }
@@ -652,13 +807,13 @@ mod tests {
             ("cat .env".to_owned(), "reading .env"),
         ] {
             let out = sandboxed(&policy, &format!("{script} || echo REFUSED"));
-            assert!(out.contains("REFUSED"), "{what}: {out}");
+            assert!(refused(&out), "{what}: {out}");
         }
         let out = sandboxed(&policy, &format!("cat {}/note", outside.display()));
         assert_eq!(out, "n", "reading elsewhere stays allowed");
         let out = sandboxed(
             &policy,
-            "echo tmp > \"$TMPDIR/glut-sandbox-probe\" && echo tmp-ok",
+            "echo tmp > \"${TMPDIR:-/tmp}/glut-sandbox-probe\" && echo tmp-ok",
         );
         assert!(out.contains("tmp-ok"), "{out}");
     }
@@ -691,12 +846,17 @@ mod tests {
         assert!(out.contains("GIT-OK"), "{out}");
         let here = sandboxed(&policy, "pwd -P");
         assert!(here.trim_end().ends_with("/s"), "{here}");
-        // The folders on the way stay closed to a look inside.
+        // The folders on the way stay closed to a look inside — on Linux an empty folder holding only the way to the
+        // working one, which the command knows already.
         let out = sandboxed(
             &policy,
             &format!("ls {}/.axiomata || echo REFUSED", home.display()),
         );
-        assert!(out.contains("REFUSED"), "listing the hidden folder: {out}");
+        if cfg!(target_os = "linux") {
+            assert_eq!(out.trim(), "worktrees", "listing the hidden folder: {out}");
+        } else {
+            assert!(out.contains("REFUSED"), "listing the hidden folder: {out}");
+        }
         let out = sandboxed(&policy, "echo more >> README.md && echo wrote");
         assert!(out.contains("wrote"), "{out}");
         for (script, what) in [
@@ -707,7 +867,7 @@ mod tests {
             ("cat .env".to_owned(), "the working folder's .env"),
         ] {
             let out = sandboxed(&policy, &format!("{script} || echo REFUSED"));
-            assert!(out.contains("REFUSED"), "{what}: {out}");
+            assert!(refused(&out), "{what}: {out}");
         }
     }
 
@@ -740,7 +900,7 @@ mod tests {
             "echo /tmp/elsewhere > .git/commondir",
         ] {
             let out = sandboxed(&policy, &format!("{script} || echo REFUSED"));
-            assert!(out.contains("REFUSED"), "{script}: {out}");
+            assert!(refused(&out), "{script}: {out}");
         }
     }
 
@@ -804,11 +964,27 @@ mod tests {
             service.local_addr().unwrap().port(),
         );
         policy.proxy_port = Some(proxy);
+        // Linux: a command has a network of its own, the proxy reached through the relay to a socket in front of it —
+        // here straight to the stand-in proxy's port, as a run's bridge hands it on.
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let socket = temp("net-socket").join("proxy.sock");
+        let _bridge = cfg!(target_os = "linux").then(|| {
+            runtime
+                .block_on(async { proxy::Bridge::start(&socket, proxy) })
+                .unwrap()
+        });
+        let relay = cfg!(target_os = "linux").then_some(socket.as_path());
+        // A connection's time limit: BSD's netcat (macOS) and OpenBSD's port on Linux spell it apart.
+        let wait = if cfg!(target_os = "linux") {
+            "-w 2"
+        } else {
+            "-G 2"
+        };
         let probe = format!(
             "nc -z 127.0.0.1 {proxy} && echo PROXY; nc -z 127.0.0.1 {service} || echo SERVICE-REFUSED; \
-             nc -z -G 2 1.1.1.1 443 || echo REMOTE-REFUSED"
+             nc -z {wait} 1.1.1.1 443 || echo REMOTE-REFUSED"
         );
-        let out = sandboxed(&policy, &probe);
+        let out = sandboxed_relayed(&policy, &probe, relay);
         assert!(
             out.contains("PROXY")
                 && out.contains("SERVICE-REFUSED")
@@ -816,11 +992,14 @@ mod tests {
             "{out}"
         );
         policy.local_binding = true;
-        let out = sandboxed(&policy, &probe);
-        assert!(
-            !out.contains("SERVICE-REFUSED") && out.contains("REMOTE-REFUSED"),
+        let out = sandboxed_relayed(&policy, &probe, relay);
+        // On Linux the owner's localhost stays out of reach: the command's own is another (T59).
+        assert_eq!(
+            out.contains("SERVICE-REFUSED"),
+            cfg!(target_os = "linux"),
             "{out}"
         );
+        assert!(out.contains("REMOTE-REFUSED"), "{out}");
     }
 
     #[test]
@@ -847,20 +1026,42 @@ mod tests {
              mkdir -p n && (echo 'gitdir: /private/tmp' > n/.git || echo GITFILE-REFUSED); \
              mkdir -p ev2 && (mv ev2 sub/.git/modules/m2 || echo MODULE-REFUSED)",
         );
+        // Refused at once on both systems: what is there is mounted read-only, and a git folder cannot be moved.
         for expected in [
-            "MOVE-IN-REFUSED",
             "MOVE-OUT-REFUSED",
-            "GITFILE-REFUSED",
-            "MODULE-REFUSED",
-            "CONFIG-REFUSED",
             "HOOK-REFUSED",
             "OBJECTS-WRITTEN",
-            "ENVRC-REFUSED",
             "OSASCRIPT-REFUSED",
             "LAUNCHCTL-REFUSED",
             "SECURITY-REFUSED",
         ] {
             assert!(out.contains(expected), "{expected}: {out}");
+        }
+        if cfg!(target_os = "linux") {
+            // What was not there is made, then moved away before anything else runs.
+            for made in [
+                "sub/.git/config",
+                "deep/.envrc",
+                "sub2/.git",
+                "n/.git",
+                "sub/.git/modules/m2",
+            ] {
+                assert!(!root.join(made).exists(), "{made}: {out}");
+                assert!(
+                    out.contains(&format!("{}/{made}", root.display())),
+                    "{made}: {out}"
+                );
+            }
+        } else {
+            for expected in [
+                "MOVE-IN-REFUSED",
+                "GITFILE-REFUSED",
+                "MODULE-REFUSED",
+                "CONFIG-REFUSED",
+                "ENVRC-REFUSED",
+            ] {
+                assert!(out.contains(expected), "{expected}: {out}");
+            }
         }
     }
 }

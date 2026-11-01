@@ -9,6 +9,7 @@ use std::cell::Cell;
 use std::collections::BTreeSet;
 use std::fmt::Display;
 use std::sync::atomic::{AtomicU8, Ordering};
+#[cfg(target_os = "macos")]
 use std::time::{Duration, Instant};
 
 /// A language Glut speaks to the owner in.
@@ -225,16 +226,36 @@ fn system() -> Option<Lang> {
     preferred(&listed)
 }
 
+/// The language of the locale's variables, as the C library reads them: the first of `LC_ALL`, `LC_MESSAGES` and
+/// `LANG` that is set decides (`de_DE.UTF-8`; `C` or `POSIX` names none), and `LANGUAGE`'s list (`de:en`) is asked
+/// before it only where that locale is not `C`.
 #[cfg(not(target_os = "macos"))]
 fn system() -> Option<Lang> {
-    None
+    let tidy = |value: &str| value.replace(':', ",").replace('_', "-");
+    let locale = ["LC_ALL", "LC_MESSAGES", "LANG"]
+        .iter()
+        .filter_map(|name| std::env::var(name).ok())
+        .find(|value| !value.is_empty())?;
+    let plain = locale
+        .split(['.', '@'])
+        .next()
+        .is_some_and(|name| name == "C" || name == "POSIX");
+    if plain {
+        return None;
+    }
+    std::env::var("LANGUAGE")
+        .ok()
+        .and_then(|list| preferred(&tidy(&list)))
+        .or_else(|| preferred(&tidy(&locale)))
 }
 
-/// The first language Glut speaks in `defaults`' list: `(\n    "de-DE",\n    "en-US"\n)`.
+/// The first language Glut speaks in `defaults`' list (`(\n    "de-DE",\n    "en-US"\n)`) or a locale's
+/// (`de-DE.UTF-8,en`): what follows `.` or `@` (an encoding, a variant) is no part of the language.
 fn preferred(listed: &str) -> Option<Lang> {
     listed
         .split([',', '\n', '(', ')'])
         .map(|tag| tag.trim().trim_matches('"'))
+        .map(|tag| tag.split(['.', '@']).next().unwrap_or(tag))
         .filter(|tag| !tag.is_empty())
         .find_map(Lang::parse)
 }
@@ -460,6 +481,10 @@ mod tests {
         );
         assert_eq!(preferred("(\n    \"nl-NL\"\n)"), None);
         assert_eq!(preferred(""), None);
+        // A locale's form: the encoding and the variant are no part of the language; "C" names none.
+        assert_eq!(preferred("de-DE.UTF-8"), Some(Lang::De));
+        assert_eq!(preferred("C,fr-FR@euro"), Some(Lang::Fr));
+        assert_eq!(preferred("C.UTF-8"), None);
     }
 
     #[test]

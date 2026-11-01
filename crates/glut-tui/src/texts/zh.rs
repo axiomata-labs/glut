@@ -1995,6 +1995,7 @@ pub const TEXTS: Texts = Texts {
         "图片",
         "导出",
         "lean.jsonl",
+        "隔离区",
         "其他",
     ],
     clean_item: "{name}：{bytes}",
