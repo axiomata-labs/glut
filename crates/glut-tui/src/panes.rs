@@ -1679,6 +1679,15 @@ impl Panes {
             self.notifier.focus(event == TermEvent::FocusGained);
             return;
         }
+        // ⌃L draws the screen anew, as in a shell: a terminal that cleared itself (an editor's ⌘K) left it blank.
+        if let TermEvent::Key(key) = &event
+            && key.kind == crossterm::event::KeyEventKind::Press
+            && key.code == crossterm::event::KeyCode::Char('l')
+            && key.modifiers == crossterm::event::KeyModifiers::CONTROL
+        {
+            self.redraw = true;
+            return;
+        }
         // A background agent's stream over the pane is only to read: Esc, q (T71) or ⌃C close it, nothing else goes
         // through.
         if self.peek.is_some() {
@@ -3668,6 +3677,15 @@ mod tests {
         );
         assert_eq!(placed.lines, [Rect::new(50, 0, 1, 40)]);
         assert_eq!(placed.border, Some(Rect::new(50, 0, 1, 40)));
+    }
+
+    #[tokio::test]
+    async fn ctrl_l_draws_the_screen_anew_and_types_nothing() {
+        let (mut panes, _inlets) = split();
+        panes.redraw = false;
+        press(&mut panes, KeyCode::Char('l'), KeyModifiers::CONTROL);
+        assert!(panes.redraw);
+        assert!(panes.active().input.is_empty());
     }
 
     /// Pane `number` built into the grid, as `on_built` makes it.

@@ -531,7 +531,7 @@ const fn key(topic: Topic, key: &'static str, what: &'static str, command: &'sta
 }
 
 /// Every key Glut has, grouped as [`COMMANDS`] are; a topic without keys shows no heading.
-pub const KEYS: [Key; 44] = [
+pub const KEYS: [Key; 45] = [
     key(
         Topic::Session,
         "⇧⇥",
@@ -559,6 +559,7 @@ pub const KEYS: [Key; 44] = [
     ),
     key(Topic::Session, "⌃C ⌃C", "quit", "/quit"),
     key(Topic::View, "⌃F", "search the stream", ""),
+    key(Topic::View, "⌃L", "draw the screen anew", ""),
     key(Topic::View, "⌃O", "unfold or fold every tool result", ""),
     key(Topic::View, "⌃T", "open or fold every thought", "/thinking"),
     key(

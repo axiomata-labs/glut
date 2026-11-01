@@ -384,6 +384,7 @@ pub const TEXTS: Texts = Texts {
         ("⌥↑", "reprendre le dernier message en attente"),
         ("⌃C ⌃C", "quitter"),
         ("⌃F", "chercher dans le flux"),
+        ("⌃L", "redessiner l’écran"),
         ("⌃O", "déplier ou replier chaque résultat d’outil"),
         ("⌃T", "ouvrir ou replier chaque réflexion"),
         ("⌃B", "le panneau latéral sur le plan, ou le masquer"),

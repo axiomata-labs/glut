@@ -383,6 +383,7 @@ pub const TEXTS: Texts = Texts {
         ("⌥↑", "riprendere l’ultimo messaggio in attesa"),
         ("⌃C ⌃C", "uscire"),
         ("⌃F", "cercare nel flusso"),
+        ("⌃L", "ridisegnare lo schermo"),
         ("⌃O", "aprire o chiudere ogni risultato di strumento"),
         ("⌃T", "aprire o chiudere ogni ragionamento"),
         ("⌃B", "il pannello laterale con il piano, o nasconderlo"),

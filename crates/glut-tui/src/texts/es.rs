@@ -378,6 +378,7 @@ pub const TEXTS: Texts = Texts {
         ("⌥↑", "recuperar el último mensaje en espera"),
         ("⌃C ⌃C", "salir"),
         ("⌃F", "buscar en el flujo"),
+        ("⌃L", "volver a dibujar la pantalla"),
         ("⌃O", "desplegar o plegar cada resultado de herramienta"),
         ("⌃T", "desplegar o plegar cada razonamiento"),
         ("⌃B", "el panel lateral con el plan, u ocultarlo"),

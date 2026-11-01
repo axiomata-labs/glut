@@ -381,6 +381,7 @@ pub const TEXTS: Texts = Texts {
         ("⌥↑", "die letzte wartende Nachricht zurückholen"),
         ("⌃C ⌃C", "beenden"),
         ("⌃F", "den Stream durchsuchen"),
+        ("⌃L", "den Bildschirm neu zeichnen"),
         ("⌃O", "jedes Werkzeug-Ergebnis auf- oder zuklappen"),
         ("⌃T", "jeden Gedanken auf- oder zuklappen"),
         ("⌃B", "die Seitenleiste mit dem Plan, oder ausblenden"),
