@@ -374,6 +374,13 @@ pub enum Request {
     Switch(Switch),
     /// The switch the owner said yes to: the window ends as at a `/quit`, and Glut starts anew in the folder.
     SwitchNow(Switch),
+    /// `/arena <models>: <task>` (T61): an arena of these models on this task.
+    Arena(crate::arena::Asked),
+    /// `/arena take <n>`: the arena's model n's changes into the owner's folder (counted from 0) — shown and asked
+    /// first, `true` once the owner said yes.
+    ArenaTake(usize, bool),
+    /// `/arena end`: its panes and worktrees removed — asked first, `true` once the owner said yes.
+    ArenaEnd(bool),
 }
 
 /// What a report is for a tile (T69), read before the pane takes it.
@@ -578,6 +585,8 @@ struct Building {
     restore: Option<String>,
     /// The loop it runs (T60a), with the folders beside the working one of the pane that started it.
     looping: Option<(crate::looping::Asked, Vec<glut::folders::Folder>)>,
+    /// The arena's model it is the pane of (T61), by its place among the members.
+    arena: Option<usize>,
     reports: mpsc::UnboundedSender<Report>,
 }
 
@@ -657,6 +666,8 @@ pub struct Panes {
     window_tried: Option<String>,
     /// The pane the keys go back to once another one closed (`/close 2`): the owner stays where they were.
     return_to: Option<u64>,
+    /// The model arena under way, or done and waiting for the owner's pick (T61).
+    pub arena: Option<crate::arena::Arena>,
 }
 
 /// How often an open Glut looks whether a plan's run ended (T60b): a tile for it, as for an agent's end.
@@ -760,6 +771,7 @@ impl Panes {
             notify_back: Vec::new(),
             window_tried: None,
             return_to: None,
+            arena: None,
         };
         (
             panes,
@@ -1017,6 +1029,22 @@ impl Panes {
         let Some(at) = self.list.iter().position(|pane| pane.id == id) else {
             return;
         };
+        // An arena's model whose turn ended is done with the task (T61); one a limit stopped stays aborted.
+        if let Report::Done(outcome, _) = &report
+            && let Some(member) = self.arena.as_mut().and_then(|arena| arena.member_of(id))
+            && member.state == crate::arena::State::Working
+        {
+            member.state = crate::arena::State::Done(outcome.reason);
+            member.took = member.began.map(|began| began.elapsed());
+        }
+        // A turn the host refused before it began (a hook's veto) never ends with a `Done`.
+        if let Report::Refused { reason, .. } = &report
+            && let Some(member) = self.arena.as_mut().and_then(|arena| arena.member_of(id))
+            && member.state == crate::arena::State::Working
+        {
+            member.state = crate::arena::State::Aborted(crate::transcript::clean(reason));
+            member.took = member.began.map(|began| began.elapsed());
+        }
         let occasion = self.occasion(at, &report);
         let tile = Tiled::of(&report);
         // How a loop's round ended is the loop's to judge once its agent rests (T60a).
@@ -1780,6 +1808,7 @@ impl Panes {
             self.restore_step(host);
         }
         self.step_loops(Instant::now());
+        self.step_arena(host);
         // One at a time: a close changes the list the next is looked for in.
         while let Some(at) = self
             .list
@@ -1892,6 +1921,9 @@ impl Panes {
                 Request::LoopList => self.list_loops(),
                 Request::Switch(to) => self.switch(to),
                 Request::SwitchNow(to) => self.switch_to = Some(to),
+                Request::Arena(asked) => self.start_arena(asked),
+                Request::ArenaTake(at, sure) => self.arena_take(at, sure),
+                Request::ArenaEnd(sure) => self.end_arena(sure),
                 Request::Peek(Some(name)) => match self.resolve_background(&name) {
                     Some(at) => self.peek = Some(self.list[at].id),
                     _ => self.active().tell(tr!(
@@ -2067,6 +2099,15 @@ impl Panes {
             return self.active().tell(tr!(close_working));
         }
         self.close_armed = None;
+        // An arena's model's worktree ends with the arena (T61): taken through `/arena take`, removed by `/arena end`.
+        let id = self.list[self.active].id;
+        if self
+            .arena
+            .as_ref()
+            .is_some_and(|arena| arena.members.iter().any(|member| member.pane == Some(id)))
+        {
+            return self.active().tell(tr!(arena_member_close));
+        }
         if let Some(tree) = self.list[self.active].tree.clone() {
             // Git goes over the worktree only once nothing writes there any more.
             if self.active().working() {
@@ -2274,6 +2315,7 @@ impl Panes {
             restore: self.restore_next.take(),
             reports: reports.clone(),
             looping,
+            arena: None,
         });
         let built = self.built.clone();
         let host = Arc::clone(host);
@@ -2312,6 +2354,13 @@ impl Panes {
                     },
                     None => None,
                 };
+                if let Some(member) = building
+                    .arena
+                    .and_then(|at| self.arena.as_mut()?.members.get_mut(at))
+                {
+                    member.state = crate::arena::State::Aborted(crate::transcript::clean(&reason));
+                    member.tree = None;
+                }
                 let failed = tr!(pane_not_started, n = building.number, reason = reason);
                 let said = match gone {
                     Some(gone) => tr!(clause_join, first = failed, second = gone),
@@ -2320,6 +2369,28 @@ impl Panes {
                 return self.active().transcript.note(said, Tone::Fault);
             }
         };
+        // An arena ended while its model's pane was built (T61): the pane does not come, its worktree goes. Nor does
+        // one whose settings, read anew for it, run its commands outside a sandbox in `auto`.
+        let unguarded = building.arena.is_some()
+            && !session::sandboxed(&parts)
+            && parts
+                .tools
+                .gate()
+                .is_some_and(|gate| gate.mode() == glut::permissions::Mode::Auto);
+        if unguarded
+            && let Some(member) = building
+                .arena
+                .and_then(|at| self.arena.as_mut()?.members.get_mut(at))
+        {
+            member.state = crate::arena::State::Aborted(tr!(arena_no_sandbox).into());
+            member.tree = None;
+        }
+        if building.arena.is_some() && (self.arena.is_none() || unguarded) {
+            if let Some(tree) = &building.tree {
+                let _ = crate::worktree::remove(tree, true);
+            }
+            return;
+        }
         let mut app = App::new(Arc::new(parts), engine, building.reports);
         // A worktree's pane belongs to the window's project (T44): `/projects` there marks and leaves that one.
         app.project = self.cwd.clone();
@@ -2409,8 +2480,18 @@ impl Panes {
         app.panel = Some(false);
         let current = &mut self.list[self.active].app;
         current.panel = Some(false);
-        let busy_here =
-            !current.input.is_empty() || current.waits_for_owner() || current.picker.is_some();
+        // An arena's panes come one after another: the keys stay with the owner meanwhile (T61).
+        let busy_here = building.arena.is_some()
+            || !current.input.is_empty()
+            || current.waits_for_owner()
+            || current.picker.is_some();
+        if let Some(member) = building
+            .arena
+            .and_then(|at| self.arena.as_mut()?.members.get_mut(at))
+        {
+            member.state = crate::arena::State::Ready;
+            member.pane = Some(building.id);
+        }
         let active_id = self.list[self.active].id;
         self.grid.others.push(building.id);
         self.list.push(Pane {
@@ -2499,6 +2580,439 @@ impl Panes {
             Delivered::OnEnter => tr!(sent_on_enter),
         };
         self.active().tell(tr!(sent_to, label = label, when = when));
+    }
+
+    /// `/arena <models>: <task>` (T61): the arena set up in a git repository with room for its panes; its models'
+    /// worktrees and panes then come one after another ([`Self::step_arena`]).
+    fn start_arena(&mut self, asked: crate::arena::Asked) {
+        if !self.may_split {
+            return self.active().tell(tr!(host_one_pane));
+        }
+        if let Some(arena) = &self.arena {
+            let said = if arena.over() {
+                tr!(arena_end_first)
+            } else {
+                tr!(arena_running)
+            };
+            return self.active().tell(said);
+        }
+        // A pane of an arena ended meanwhile still builds: its place among the members would be the new one's.
+        if self
+            .building
+            .as_ref()
+            .is_some_and(|building| building.arena.is_some())
+        {
+            return self.active().tell(tr!(pane_starting));
+        }
+        if self.visible() + asked.contenders.len() > MOST {
+            return self
+                .active()
+                .tell(tr!(arena_no_room, n = asked.contenders.len(), most = MOST));
+        }
+        let cwd = self.active().parts.config.cwd.clone();
+        let repo = match crate::worktree::repo_of(&cwd) {
+            Ok(Some(repo)) => repo,
+            Ok(None) => return self.active().tell(tr!(arena_no_repository)),
+            Err(reason) => return self.active().transcript.note(reason, Tone::Fault),
+        };
+        let head = match crate::worktree::head(&repo) {
+            Ok(head) => head,
+            Err(reason) => return self.active().transcript.note(reason, Tone::Fault),
+        };
+        let mut arena = crate::arena::Arena::new(asked, self.list[self.active].id);
+        arena.repo = Some(repo);
+        arena.head = head;
+        let names: Vec<String> = arena
+            .members
+            .iter()
+            .map(|member| crate::transcript::clean(&member.contender.named()))
+            .collect();
+        let local = arena.members.iter().any(|member| member.contender.local);
+        let said = tr!(
+            arena_starts,
+            models = names.join(", "),
+            minutes = crate::arena::TIME_LIMIT.as_secs() / 60,
+            dollars = format!("{:.2}", crate::arena::COST_LIMIT)
+        );
+        let said = if local {
+            tr!(clause_join, first = said, second = tr!(arena_local_later))
+        } else {
+            said
+        };
+        self.active().tell(said);
+        self.arena = Some(arena);
+    }
+
+    /// The arena's next steps, at every turn of the screen's loop: a model past a limit stopped, the task given to
+    /// each model whose turn it is, the next model's worktree and pane made, and once all are over their numbers
+    /// shown in the pane it started from.
+    fn step_arena(&mut self, host: &Arc<dyn Host>) {
+        let Some(mut arena) = self.arena.take() else {
+            return;
+        };
+        for member in &mut arena.members {
+            let crate::arena::State::Working = member.state else {
+                continue;
+            };
+            let Some(at) = self
+                .list
+                .iter()
+                .position(|pane| Some(pane.id) == member.pane)
+            else {
+                member.state = crate::arena::State::Aborted(tr!(arena_closed).into());
+                continue;
+            };
+            let began = member.began.unwrap_or_else(Instant::now);
+            if let Some(why) = crate::arena::past_limit(began, self.list[at].app.cost) {
+                self.list[at].app.stop_turn();
+                self.list[at]
+                    .app
+                    .tell(tr!(arena_stopped, why = why.clone()));
+                member.took = Some(began.elapsed());
+                member.state = crate::arena::State::Aborted(why);
+            }
+        }
+        while let Some(due) = arena.next_due() {
+            let member = &mut arena.members[due];
+            match self
+                .list
+                .iter()
+                .position(|pane| Some(pane.id) == member.pane)
+            {
+                // A pane busy otherwise (a list open, a message waiting) gets it once free: its clock starts then.
+                Some(at) if !self.list[at].app.takes_now() => break,
+                Some(at) => {
+                    self.list[at].app.deliver(arena.task.clone());
+                    member.state = crate::arena::State::Working;
+                    member.began = Some(Instant::now());
+                }
+                None => member.state = crate::arena::State::Aborted(tr!(arena_closed).into()),
+            }
+        }
+        if self.building.is_none()
+            && let Some(next) = arena
+                .members
+                .iter()
+                .position(|member| member.state == crate::arena::State::Waiting)
+            && let Err(reason) = self.start_member(&mut arena, next, host)
+        {
+            arena.members[next].state =
+                crate::arena::State::Aborted(crate::transcript::clean(&reason));
+        }
+        if arena.over() && !arena.compared {
+            arena.compared = true;
+            let said = self.compare(&arena);
+            match self.list.iter().position(|pane| pane.id == arena.home) {
+                Some(at) => self.list[at].app.transcript.note(said, Tone::Fine),
+                None => self.active().transcript.note(said, Tone::Fine),
+            }
+        }
+        self.arena = Some(arena);
+    }
+
+    /// Member `at`'s worktree made from the owner's folder as it is, and its pane started there on its model, in
+    /// `auto` where a sandbox holds its commands (else in build, which asks before every command).
+    fn start_member(
+        &mut self,
+        arena: &mut crate::arena::Arena,
+        at: usize,
+        host: &Arc<dyn Host>,
+    ) -> Result<(), String> {
+        if !self.room_for_one_more() {
+            return Err(tr!(no_room).into());
+        }
+        let Some(repo) = arena.repo.clone() else {
+            return Err(tr!(arena_no_repository).into());
+        };
+        let from = self
+            .list
+            .iter()
+            .position(|pane| pane.id == arena.home)
+            .unwrap_or(self.active);
+        let home = self.list[from].app.parts.home.clone();
+        let tree = crate::worktree::add(&home, &repo, &arena.branch(at))?;
+        let mirrored = match crate::worktree::mirror(&tree) {
+            Ok(mirrored) => mirrored,
+            Err(reason) => {
+                let _ = crate::worktree::remove(&tree, true);
+                return Err(reason);
+            }
+        };
+        if !mirrored.left_out.is_empty() {
+            let shown: Vec<&str> = mirrored
+                .left_out
+                .iter()
+                .take(4)
+                .map(String::as_str)
+                .collect();
+            self.list[from]
+                .app
+                .tell(tr!(arena_left_out, n = at + 1, files = shown.join(", ")));
+        }
+        let member = &mut arena.members[at];
+        member.tree = Some(tree.clone());
+        member.start = Some(mirrored.start);
+        member.state = crate::arena::State::Building;
+        let number = (1..=u8::MAX)
+            .find(|number| self.list.iter().all(|pane| pane.number != *number))
+            .unwrap_or(u8::MAX);
+        let id = self.next_id;
+        self.next_id += 1;
+        let sandboxed = session::sandboxed(&self.list[from].app.parts);
+        // Unattended: none of the owner's servers, which run outside the sandbox, and no message to another pane.
+        let mut launch = launch_beside(&self.list[from].app, crate::host::Servers::None);
+        launch.gate.deny.push("tell".to_owned());
+        launch.cwd = tree.place.clone();
+        launch.engine = crate::host::EngineChoice::Providers {
+            provider: Some(member.contender.provider.clone()),
+            model: Some(member.contender.model.clone()),
+        };
+        launch.gate.mode = Some(if sandboxed {
+            glut::permissions::Mode::Auto
+        } else {
+            glut::permissions::Mode::AcceptEdits
+        });
+        let (reports, inlet) = mpsc::unbounded_channel();
+        forward(id, inlet, self.reports.clone());
+        self.building = Some(Building {
+            id,
+            number,
+            resume: false,
+            tree: Some(tree),
+            role: None,
+            background: None,
+            restore: None,
+            looping: None,
+            arena: Some(at),
+            reports: reports.clone(),
+        });
+        let built = self.built.clone();
+        let host = Arc::clone(host);
+        tokio::spawn(async move {
+            let _ = built.send(session::build(launch, host, reports).await);
+        });
+        Ok(())
+    }
+
+    /// The arena's comparison: each model's state, time, cost, tokens, calls and changes.
+    fn compare(&self, arena: &crate::arena::Arena) -> String {
+        let spent: Vec<crate::arena::Spent> = arena
+            .members
+            .iter()
+            .map(|member| {
+                let Some(pane) = self.list.iter().find(|pane| Some(pane.id) == member.pane) else {
+                    return crate::arena::Spent::default();
+                };
+                let app = &pane.app;
+                crate::arena::Spent {
+                    cost: app.cost,
+                    tokens: app.usage.input_tokens + app.usage.output_tokens,
+                    calls: app.meter.turns.iter().map(|turn| turn.calls).sum(),
+                    tools: app.meter.turns.iter().map(|turn| turn.tools).sum(),
+                }
+            })
+            .collect();
+        let changes: Vec<Result<crate::worktree::Changes, String>> = arena
+            .members
+            .iter()
+            .map(|member| match (&member.tree, &member.start) {
+                (Some(tree), Some(start)) => crate::worktree::changes(tree, start),
+                _ => Err(tr!(arena_no_tree).into()),
+            })
+            .collect();
+        crate::arena::compared(arena, &spent, &changes)
+    }
+
+    /// `/arena take <n>`: model n's changes into the owner's folder, once every model is over and no other's were
+    /// taken — first its files shown and asked, then taken (`sure`).
+    fn arena_take(&mut self, at: usize, sure: bool) {
+        let Some(arena) = &self.arena else {
+            return self.active().tell(tr!(arena_none));
+        };
+        if !arena.over() {
+            return self.active().tell(tr!(arena_running));
+        }
+        if let Some(taken) = arena.taken {
+            return self.active().tell(tr!(arena_taken_already, n = taken + 1));
+        }
+        let Some(member) = arena.members.get(at) else {
+            return self.active().tell(tr!(arena_no_member, n = at + 1));
+        };
+        let (Some(tree), Some(start)) = (member.tree.clone(), member.start.clone()) else {
+            return self.active().tell(tr!(arena_no_tree));
+        };
+        // A stopped turn may still be ending: nothing is taken while something writes there.
+        if let Some(pane) = self.list.iter().find(|pane| Some(pane.id) == member.pane)
+            && pane.app.working()
+        {
+            return self.active().tell(tr!(arena_still_writing, n = at + 1));
+        }
+        let name = crate::transcript::clean(&member.contender.named());
+        let head = arena.head.clone();
+        if !sure {
+            let taking = match crate::worktree::taking(&tree, &start) {
+                Ok(taking) => taking,
+                Err(reason) => return self.active().transcript.note(reason, Tone::Fault),
+            };
+            if let Some(arena) = &mut self.arena {
+                arena.offered = Some((at, taking.now.clone()));
+            }
+            let shown = |paths: &[String]| {
+                let mut shown: Vec<&str> = paths.iter().take(6).map(String::as_str).collect();
+                if paths.len() > shown.len() {
+                    shown.push("…");
+                }
+                shown.join(", ")
+            };
+            let mut detail = tr!(arena_take_files, files = shown(&taking.files));
+            if !taking.executable.is_empty() {
+                detail = tr!(
+                    clause_join,
+                    first = detail,
+                    second = tr!(arena_take_executable, files = shown(&taking.executable))
+                );
+            }
+            let items = vec![
+                crate::picker::Item::plain(tr!(no), tr!(arena_take_no), crate::picker::Pick::Shown),
+                crate::picker::Item::plain(
+                    tr!(arena_take_yes),
+                    detail,
+                    crate::picker::Pick::Pane(Request::ArenaTake(at, true)),
+                ),
+            ];
+            let title = tr!(
+                arena_take_title,
+                n = at + 1,
+                name = name,
+                count = taking.files.len()
+            );
+            self.active().picker = Some(crate::picker::Picker::new(title, items, None).guarded());
+            return;
+        }
+        // Only what the owner was shown: the yes names that list's tree.
+        let Some(now) = arena
+            .offered
+            .as_ref()
+            .filter(|(offered, _)| *offered == at)
+            .map(|(_, now)| now.clone())
+        else {
+            return self.active().tell(tr!(arena_take_usage));
+        };
+        match crate::worktree::apply(&tree, &start, &now, &head) {
+            Ok(files) => {
+                if let Some(arena) = &mut self.arena {
+                    arena.taken = Some(at);
+                }
+                let folder = tree.repo.top.display().to_string();
+                self.active().tell(tr!(
+                    arena_taken,
+                    n = at + 1,
+                    name = name,
+                    files = files,
+                    folder = folder
+                ));
+            }
+            Err(reason) => self.active().transcript.note(reason, Tone::Fault),
+        }
+    }
+
+    /// `/arena end`: asked first, then every model's pane closed (a turn under way stopped) and its worktree removed
+    /// with what it holds.
+    fn end_arena(&mut self, sure: bool) {
+        let Some(arena) = &self.arena else {
+            return self.active().tell(tr!(arena_none));
+        };
+        if !sure {
+            let lost = match arena.taken {
+                Some(taken) => tr!(arena_end_taken, n = taken + 1),
+                None => tr!(arena_end_nothing_taken).to_owned(),
+            };
+            let items = vec![
+                crate::picker::Item::plain(
+                    tr!(no),
+                    tr!(arena_end_keep),
+                    crate::picker::Pick::Shown,
+                ),
+                crate::picker::Item::plain(
+                    tr!(arena_end_yes),
+                    lost,
+                    crate::picker::Pick::Pane(Request::ArenaEnd(true)),
+                ),
+            ];
+            let picker = crate::picker::Picker::new(
+                tr!(arena_end_title, n = arena.members.len()),
+                items,
+                None,
+            )
+            .guarded();
+            self.active().picker = Some(picker);
+            return;
+        }
+        // Git goes over the worktrees only once nothing writes there any more: turns under way are stopped first.
+        let working: Vec<usize> = self
+            .list
+            .iter()
+            .enumerate()
+            .filter(|(_, pane)| {
+                pane.app.working()
+                    && arena
+                        .members
+                        .iter()
+                        .any(|member| member.pane == Some(pane.id))
+            })
+            .map(|(at, _)| at)
+            .collect();
+        if !working.is_empty() {
+            for at in working {
+                self.list[at].app.stop_turn();
+            }
+            return self.active().tell(tr!(arena_stopping));
+        }
+        let Some(arena) = self.arena.take() else {
+            return;
+        };
+        let mut failed = Vec::new();
+        for member in &arena.members {
+            // A model's pane made the main one (`/swap`) stays, and its worktree with it.
+            if member.pane == Some(self.grid.main) {
+                if let Some(tree) = &member.tree {
+                    failed.push(tr!(arena_main_kept, place = tree.place.display()));
+                }
+                continue;
+            }
+            if let Some(id) = member.pane {
+                self.drop_pane(id);
+            }
+            if let Some(tree) = &member.tree
+                && let Err(reason) = crate::worktree::remove(tree, true)
+            {
+                failed.push(reason);
+            }
+        }
+        if failed.is_empty() {
+            self.active().tell(tr!(arena_ended));
+        } else {
+            self.active()
+                .transcript
+                .note(failed.join(" · "), Tone::Fault);
+        }
+    }
+
+    /// Pane `id` taken away without its worktree's question (the arena removes the worktree itself); the keys stay
+    /// where they were. The main pane stays.
+    fn drop_pane(&mut self, id: u64) {
+        let Some(at) = self.list.iter().position(|pane| pane.id == id) else {
+            return;
+        };
+        if id == self.grid.main {
+            return;
+        }
+        self.list[at].tree = None;
+        let keys = self.list[self.active].id;
+        self.active = at;
+        self.return_to = (keys != id).then_some(keys);
+        self.remove_active();
+        self.return_to = None;
     }
 
     /// At the end (TUI9e): a window of several panes or with agents in the background keeps how it stood for the
@@ -3544,6 +4058,7 @@ mod tests {
             background: None,
             restore: None,
             reports: sender,
+            arena: None,
         });
         panes.on_built(Ok(session::for_tests()));
         (panes, inlets)
@@ -3648,6 +4163,7 @@ mod tests {
             background: Some(name.to_owned()),
             restore: None,
             reports: sender,
+            arena: None,
         });
         panes.on_built(Ok(session::for_tests()));
         (panes, inlets)
@@ -3701,6 +4217,7 @@ mod tests {
             background: None,
             restore: None,
             reports: sender,
+            arena: None,
         });
         panes.on_built(Ok(session::for_tests()));
     }
@@ -4098,6 +4615,7 @@ mod tests {
             background: None,
             restore: None,
             reports: sender,
+            arena: None,
         });
         panes.on_built(Ok(session::for_tests()));
         assert_eq!(numbers_of(&panes), vec![1, 2], "the number 2 again");
@@ -4126,6 +4644,7 @@ mod tests {
             background: None,
             restore: None,
             reports: sender,
+            arena: None,
         });
         panes.on_built(Ok(session::for_tests()));
         assert_eq!(
@@ -4256,6 +4775,109 @@ mod tests {
         panes.settle(&(Arc::new(crate::Standalone) as Arc<dyn Host>));
         assert!(!tree.place.exists() && panes.list.len() == 1);
         let _ = std::fs::remove_dir_all(repo.top.parent().unwrap());
+    }
+
+    #[tokio::test]
+    async fn an_arena_gives_cloud_models_the_task_first_stops_one_past_its_cost_and_compares_at_the_end()
+     {
+        let host: Arc<dyn Host> = Arc::new(crate::Standalone);
+        let owners = |panes: &Panes, id: u64| -> Vec<String> {
+            let pane = panes.list.iter().find(|pane| pane.id == id).unwrap();
+            pane.app
+                .transcript
+                .blocks
+                .iter()
+                .filter_map(|block| match &block.kind {
+                    crate::transcript::Kind::Owner(text) => Some(text.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+        let (mut panes, _inlets) = split();
+        add(&mut panes, 3);
+        let contender = |local: bool| crate::arena::Contender {
+            provider: "p".into(),
+            model: "m".into(),
+            local,
+        };
+        let asked = crate::arena::Asked {
+            contenders: vec![contender(true), contender(false)],
+            task: "fix it".into(),
+        };
+        let mut arena = crate::arena::Arena::new(asked, panes.list[0].id);
+        for (member, id) in arena.members.iter_mut().zip([2, 3]) {
+            member.state = crate::arena::State::Ready;
+            member.pane = Some(id);
+        }
+        panes.arena = Some(arena);
+        // A list open in a model's pane holds its task back: its clock has not started.
+        let at = panes.at(3);
+        panes.list[at].app.picker = Some(crate::picker::Picker::new("x", Vec::new(), None));
+        panes.settle(&host);
+        assert!(owners(&panes, 3).is_empty());
+        let at = panes.at(3);
+        panes.list[at].app.picker = None;
+        panes.settle(&host);
+        assert!(owners(&panes, 2).is_empty(), "the local model waits");
+        assert_eq!(owners(&panes, 3), ["fix it"]);
+        let state =
+            |panes: &Panes, at: usize| panes.arena.as_ref().unwrap().members[at].state.clone();
+        assert_eq!(state(&panes, 1), crate::arena::State::Working);
+        let at = panes.at(3);
+        panes.list[at].app.cost = Some(crate::arena::COST_LIMIT + 0.5);
+        panes.settle(&host);
+        assert!(matches!(state(&panes, 1), crate::arena::State::Aborted(_)));
+        assert_eq!(owners(&panes, 2), ["fix it"], "now the local one goes");
+        // A late end of the stopped one keeps it aborted.
+        panes.on_report(3, ended(glut::FinishReason::Cancelled));
+        assert!(matches!(state(&panes, 1), crate::arena::State::Aborted(_)));
+        // Its pane closes only with the arena.
+        panes.active = panes.at(2);
+        panes.active().pane_request = Some(Request::Close);
+        panes.settle(&host);
+        assert_eq!(panes.list.len(), 3);
+        // A turn the host refused never ends with a `Done`: the model is aborted.
+        panes.on_report(
+            2,
+            Report::Refused {
+                reason: "a hook said no".into(),
+                prompt: "fix it".into(),
+                conversation: Vec::new(),
+            },
+        );
+        assert!(matches!(state(&panes, 0), crate::arena::State::Aborted(_)));
+        panes.settle(&host);
+        assert!(panes.arena.as_ref().unwrap().compared);
+        let notes: Vec<String> = panes.list[0]
+            .app
+            .transcript
+            .blocks
+            .iter()
+            .filter_map(|block| match &block.kind {
+                crate::transcript::Kind::Note { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            notes.iter().any(|note| note.starts_with("Arena — fix it")),
+            "{notes:?}"
+        );
+        // Ended: asked first, then the panes go.
+        panes.active = 0;
+        panes.active().pane_request = Some(Request::ArenaEnd(false));
+        panes.settle(&host);
+        assert!(
+            panes
+                .active()
+                .picker
+                .as_ref()
+                .is_some_and(|picker| picker.guarded)
+        );
+        panes.active().picker = None;
+        panes.active().pane_request = Some(Request::ArenaEnd(true));
+        panes.settle(&host);
+        assert!(panes.arena.is_none());
+        assert_eq!(panes.list.len(), 1);
     }
 
     #[test]
@@ -4852,6 +5474,7 @@ mod tests {
                 background: Some(format!("a{n}")),
                 restore: None,
                 reports: sender,
+                arena: None,
             });
             panes.on_built(Ok(session::for_tests()));
         }
@@ -4914,6 +5537,7 @@ mod tests {
             background: Some("tester".to_owned()),
             restore: None,
             reports: sender,
+            arena: None,
         });
         panes.on_built(Ok(session::for_tests()));
         panes.active().pane_request = Some(Request::Show("critic".into()));
@@ -4974,6 +5598,7 @@ mod tests {
             background: Some("loop".to_owned()),
             restore: None,
             reports: sender,
+            arena: None,
         });
         panes.on_built(Ok(session::for_tests()));
         (panes, inlets)
@@ -5253,6 +5878,7 @@ mod tests {
             background: None,
             restore: None,
             reports: sender,
+            arena: None,
         });
         panes.on_built(Ok(session::for_tests()));
         assert_eq!(panes.visible(), 3);
@@ -5292,6 +5918,7 @@ mod tests {
             background: None,
             restore: None,
             reports: sender.clone(),
+            arena: None,
         });
         panes.on_built(Ok(session::for_tests()));
         panes.building = Some(Building {
@@ -5304,6 +5931,7 @@ mod tests {
             background: Some("critic".into()),
             restore: None,
             reports: sender.clone(),
+            arena: None,
         });
         panes.on_built(Ok(session::for_tests()));
         panes.grid.share = 60;
@@ -5336,6 +5964,7 @@ mod tests {
                 background: kept.agent,
                 restore: Some(kept.session),
                 reports: sender.clone(),
+                arena: None,
             });
             back.on_built(Ok(session::for_tests()));
             next_id += 1;

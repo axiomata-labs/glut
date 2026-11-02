@@ -2267,6 +2267,102 @@ glut::catalog! {
         hint_form_begin: &'static str,
         /// The reader mode: a server's form waits, `{server}`.
         state_asks_form: &'static str,
+        /// An arena's worktree would take over too many files from the owner's folder: `{n}`, `{most}`.
+        mirror_too_many: &'static str,
+        /// `/arena take`: the model changed nothing.
+        arena_nothing: &'static str,
+        /// `/arena take`: the changes do not apply to the folder as it is now: `{reason}` git's words.
+        arena_conflict: &'static str,
+        /// `/arena`: a name fits several models: `{word}`, `{names}`.
+        arena_ambiguous: &'static str,
+        /// `/arena`: no model of that name: `{word}`.
+        arena_unknown: &'static str,
+        /// `/arena`'s line without a task.
+        arena_usage: &'static str,
+        /// `/arena`: too few or too many models: `{fewest}`, `{most}`.
+        arena_count: &'static str,
+        /// An arena's model stopped by its time limit: `{minutes}`.
+        arena_over_time: &'static str,
+        /// An arena's model stopped by its cost limit: `{dollars}`.
+        arena_over_cost: &'static str,
+        /// The arena's comparison, its first line: `{task}`.
+        arena_compared: &'static str,
+        /// An arena's model that answered.
+        arena_done: &'static str,
+        /// What an arena's model changed: `{files}`, `{added}`, `{removed}`.
+        arena_changed: &'static str,
+        /// An arena's model's tokens: `{tokens}`.
+        arena_tokens: &'static str,
+        /// An arena's model's calls: `{calls}` to the model, `{tools}` tools.
+        arena_calls: &'static str,
+        /// Below the arena's comparison: what the owner can do.
+        arena_next: &'static str,
+        /// `/arena`'s list: `{most}`.
+        arena_pick_title: &'static str,
+        /// `/arena take` without a number.
+        arena_take_usage: &'static str,
+        /// `/arena` while the last arena still stands.
+        arena_end_first: &'static str,
+        /// An arena is still under way.
+        arena_running: &'static str,
+        /// No room for the arena's panes: `{n}` models, `{most}` panes at most.
+        arena_no_room: &'static str,
+        /// `/arena` outside a git repository.
+        arena_no_repository: &'static str,
+        /// The arena starts: `{models}`, its limits `{minutes}` and `{dollars}`.
+        arena_starts: &'static str,
+        /// The arena's local models wait for the others.
+        arena_local_later: &'static str,
+        /// An arena's model whose pane was closed.
+        arena_closed: &'static str,
+        /// In an arena's pane: a limit stopped it, `{why}`.
+        arena_stopped: &'static str,
+        /// An arena's worktree left files out: `{n}` the model's number, `{files}`.
+        arena_left_out: &'static str,
+        /// An arena's model without a worktree.
+        arena_no_tree: &'static str,
+        /// `/arena take` or `/arena end` without an arena.
+        arena_none: &'static str,
+        /// `/arena take` after one was taken: `{n}`.
+        arena_taken_already: &'static str,
+        /// `/arena take` with a number no model has: `{n}`.
+        arena_no_member: &'static str,
+        /// A model's changes taken: `{n}`, `{name}`, `{files}`, `{folder}`.
+        arena_taken: &'static str,
+        /// `/arena end`'s question when one was taken: `{n}`.
+        arena_end_taken: &'static str,
+        /// `/arena end`'s question when none was taken.
+        arena_end_nothing_taken: &'static str,
+        /// `/arena end`'s no.
+        arena_end_keep: &'static str,
+        /// `/arena end`'s yes.
+        arena_end_yes: &'static str,
+        /// `/arena end`'s question: `{n}` models.
+        arena_end_title: &'static str,
+        /// The arena ended.
+        arena_ended: &'static str,
+        /// An arena's model not started: its commands would run outside a sandbox in auto.
+        arena_no_sandbox: &'static str,
+        /// `/arena take` after the owner's HEAD moved since the start.
+        arena_head_moved: &'static str,
+        /// `/arena take`'s question: `{n}`, `{name}`, `{count}` files.
+        arena_take_title: &'static str,
+        /// `/arena take`'s yes.
+        arena_take_yes: &'static str,
+        /// `/arena take`'s no.
+        arena_take_no: &'static str,
+        /// `/arena take`: the files it writes, `{files}`.
+        arena_take_files: &'static str,
+        /// `/arena take`: the files it makes executable, `{files}`.
+        arena_take_executable: &'static str,
+        /// `/arena take` while that model's turn is still ending: `{n}`.
+        arena_still_writing: &'static str,
+        /// `/arena end` while models still work: their turns are stopped first.
+        arena_stopping: &'static str,
+        /// `/arena end`: a model's pane is the main one now and stays, with its worktree: `{place}`.
+        arena_main_kept: &'static str,
+        /// `/close` on an arena's model's pane.
+        arena_member_close: &'static str,
     }
 }
 

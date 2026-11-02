@@ -139,6 +139,9 @@ pub enum Servers {
     /// The owner's servers as [`Servers::Owner`] has them, and the file's beside them (`glut --mcp-config`, a master's
     /// team server): a name both have is the file's, as the one who named it asked for it.
     Also(PathBuf),
+    /// No server at all: an arena's model (T61), unattended in `auto`, reaches none of the owner's tools outside its
+    /// sandbox.
+    None,
 }
 
 /// The model the session starts with.

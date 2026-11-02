@@ -189,6 +189,8 @@ pub struct Picker {
     pub keyed: bool,
     /// `/resume` (T55): what it finds in the conversations, below the entries that fit.
     pub finding: Option<Finding>,
+    /// A list of several picks (`/arena`, T61): the entries marked with Space; `None` for a list of one.
+    pub marked: Option<Vec<Pick>>,
 }
 
 /// The kept session an entry opens, if it opens one.
@@ -233,6 +235,7 @@ impl Picker {
             opened: std::time::Instant::now(),
             keyed: false,
             finding: None,
+            marked: None,
         };
         picker.select(current);
         picker
@@ -241,6 +244,34 @@ impl Picker {
     /// Its entries, taken out (to build another list of them).
     pub fn into_items(self) -> Vec<Item> {
         self.items
+    }
+
+    /// A picker of several picks, `marked` marked already: Space marks the selected entry or takes its mark away.
+    pub fn several(mut self, marked: Vec<Pick>) -> Self {
+        self.marked = Some(marked);
+        self
+    }
+
+    /// Marks the selected entry, or takes its mark away, in a list of several picks.
+    pub fn toggle_mark(&mut self) {
+        let Some(chosen) = self.chosen() else {
+            return;
+        };
+        if let Some(marked) = &mut self.marked {
+            match marked.iter().position(|pick| *pick == chosen) {
+                Some(at) => {
+                    marked.remove(at);
+                }
+                None => marked.push(chosen),
+            }
+        }
+    }
+
+    /// Whether `pick` is marked.
+    pub fn is_marked(&self, pick: &Pick) -> bool {
+        self.marked
+            .as_ref()
+            .is_some_and(|marked| marked.contains(pick))
     }
 
     /// A picker of Glut's own whose pick is hard to take back: see [`Picker::guarded`]'s field.

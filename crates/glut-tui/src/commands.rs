@@ -102,7 +102,7 @@ const fn command(
 }
 
 /// Every command, grouped by topic in [`Topic::ALL`]'s order, the most used first inside a topic.
-pub const COMMANDS: [Command; 66] = [
+pub const COMMANDS: [Command; 67] = [
     command(Topic::Session, "clear", "", "start a new session"),
     command(
         Topic::Session,
@@ -237,6 +237,13 @@ pub const COMMANDS: [Command; 66] = [
         "split",
         "[resume] [as <role>] [here|tree [branch]]",
         "a new session beside the main pane (up to six, two rows of three); in a git repository here or in a worktree",
+    ),
+    command(
+        Topic::Panes,
+        "arena",
+        "[<model>, <model>: <task>|take <n>|end]",
+        "the same task on two to four models at once, each in a pane and a worktree of its own, then compared — /arena \
+         alone picks the models",
     ),
     command(
         Topic::Panes,
@@ -1283,6 +1290,7 @@ mod tests {
                 "clickable",
                 "close",
                 "copy",
+                "end",
                 "folded",
                 "fresh",
                 "full",
@@ -1322,6 +1330,7 @@ mod tests {
                 "stop",
                 "strict",
                 "system",
+                "take",
                 "tiles",
                 "tokens",
                 "tree",

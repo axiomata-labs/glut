@@ -114,6 +114,9 @@ pub struct Prefs {
     /// is pointed out again only once it grew beyond it.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub guide_checked: std::collections::BTreeMap<String, u64>,
+    /// The models of the last arena (T61), as `provider/model`: `/arena`'s list marks them again.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub arena: Vec<String>,
     #[serde(flatten)]
     other: serde_json::Map<String, serde_json::Value>,
 }

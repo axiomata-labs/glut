@@ -224,6 +224,13 @@ scripts/install.sh               # glut for every terminal: ~/.cargo/bin, linked
   the owner's terms in `~/.glut/clean.json` (written only by `glut clean keep` / `/clean keep`). A new kind of data
   Glut keeps there gets its line in the report (`clean::ITEMS`, `--json` is read by Axiomata — add, never rename) and
   a rule for when it goes; a dry run removes nothing; what a session's JSON names is never a path to delete.
+- **An arena's winner is checked as the bytes git applies** (T61, `crates/glut-tui/src/worktree.rs` `arena_patch`,
+  `panes.rs` `start_member`): every git call over a model's worktree goes through `git_alone` (no global or system
+  config, no attributes file — a model's `.gitattributes` then names no filter that exists); the patch is made once
+  from a written tree id, listed by `git apply --numstat/--summary` and its own header lines, refused for any link or
+  submodule mode (an edited link keeps its mode: the `index` line says it), a protected, tool or key name at any depth,
+  any `….git` part or a git folder's shape, then applied from the same bytes on stdin — the yes is bound to the tree
+  the owner was shown. A member runs in `auto` only where `session::sandboxed`, with no MCP server and `tell` denied.
 - **What a command *is* decides beside the rules** (TUI1e, `crates/glut/src/permissions/kinds.rs`): a command whose
   every part is a listed reader (`ls`, `grep`, `sed -n 1,9p`, `git status`, …) runs in every mode like `read_file`;
   in `auto` everything sandboxed runs but a `kinds::heavy` one (`rm -rf`, `git push`, `sudo`, …). A new reader needs

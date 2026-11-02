@@ -185,6 +185,46 @@ impl Tree {
 /// Git on the pinned folders, its hooks, file monitor, maintenance and network off, never asking, ended after
 /// [`TIMEOUT`] (a changing call after [`TIMEOUT_CHANGING`]); its output, or its error's first lines.
 fn git(pin: &Pin, args: &[&str]) -> Result<String, String> {
+    let (command, limit) = pinned(pin, args);
+    run(command, limit)
+}
+
+/// [`git`]'s output as git wrote it, untrimmed: a patch must keep its last line's end.
+fn git_bytes(pin: &Pin, args: &[&str]) -> Result<Vec<u8>, String> {
+    let (command, limit) = pinned(pin, args);
+    run_bytes(command, limit, None)
+}
+
+/// [`git`] for an arena (T61), over a worktree a model wrote: no global or system config and no attributes file,
+/// so a `.gitattributes` the model wrote names no filter or driver that exists; `input` on its standard input.
+fn git_alone(pin: &Pin, args: &[&str], input: Option<Vec<u8>>) -> Result<Vec<u8>, String> {
+    let (command, limit) = alone(pin, args);
+    run_bytes(command, limit, input)
+}
+
+/// [`git_alone`]'s command, and how long it may take.
+fn alone(pin: &Pin, args: &[&str]) -> (Command, Duration) {
+    let (mut command, limit) = pinned(pin, &[]);
+    command
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .args(["-c", "core.attributesFile=/dev/null"])
+        .args(args);
+    let limit = match args.first() {
+        Some(&("add" | "apply")) => TIMEOUT_CHANGING,
+        _ => limit,
+    };
+    (command, limit)
+}
+
+/// [`git_alone`]'s output as text, trimmed.
+fn git_alone_text(pin: &Pin, args: &[&str]) -> Result<String, String> {
+    git_alone(pin, args, None).map(|out| String::from_utf8_lossy(&out).trim().to_owned())
+}
+
+/// Git's command on the pinned folders, and how long it may take.
+fn pinned(pin: &Pin, args: &[&str]) -> (Command, Duration) {
     let mut command = Command::new("git");
     command.current_dir(pin.work_tree);
     scrub(&mut command);
@@ -203,9 +243,9 @@ fn git(pin: &Pin, args: &[&str]) -> Result<String, String> {
         .args(args);
     let changing = matches!(
         args.first(),
-        Some(&("worktree" | "merge" | "commit" | "branch"))
+        Some(&("worktree" | "merge" | "commit" | "branch" | "add" | "apply"))
     );
-    run(command, if changing { TIMEOUT_CHANGING } else { TIMEOUT })
+    (command, if changing { TIMEOUT_CHANGING } else { TIMEOUT })
 }
 
 /// A git call outside any repository's pins: finding one, from a folder.
@@ -245,10 +285,23 @@ fn scrub(command: &mut Command) {
 
 /// Runs `command` with its output bounded and its time limited: past `limit` git and what it started (a filter, gpg)
 /// are asked to end, then killed — a lock file it leaves is named in the message.
-fn run(mut command: Command, limit: Duration) -> Result<String, String> {
+fn run(command: Command, limit: Duration) -> Result<String, String> {
+    run_bytes(command, limit, None).map(|out| String::from_utf8_lossy(&out).trim().to_owned())
+}
+
+/// [`run`]'s output as it came.
+fn run_bytes(
+    mut command: Command,
+    limit: Duration,
+    input: Option<Vec<u8>>,
+) -> Result<Vec<u8>, String> {
     use std::os::unix::process::CommandExt as _;
     let mut child = command
-        .stdin(Stdio::null())
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         // A group of its own: ending it ends what it started too.
@@ -268,6 +321,13 @@ fn run(mut command: Command, limit: Duration) -> Result<String, String> {
         });
         got
     };
+    // What git reads on its standard input, written beside it: a patch larger than the pipe must not stall it.
+    if let (Some(input), Some(mut stdin)) = (input, child.stdin.take()) {
+        std::thread::spawn(move || {
+            use std::io::Write as _;
+            let _ = stdin.write_all(&input);
+        });
+    }
     let out = read(child.stdout.take().map(|pipe| Box::new(pipe) as _));
     let err = read(child.stderr.take().map(|pipe| Box::new(pipe) as _));
     let started = Instant::now();
@@ -288,7 +348,7 @@ fn run(mut command: Command, limit: Duration) -> Result<String, String> {
         return Err(tr!(git_too_much).to_owned());
     }
     if status.success() {
-        return Ok(String::from_utf8_lossy(&out).trim().to_owned());
+        return Ok(out);
     }
     let said = String::from_utf8_lossy(&err);
     let said: Vec<&str> = said
@@ -847,6 +907,461 @@ pub fn remove(tree: &Tree, force: bool) -> Result<(), String> {
     Ok(())
 }
 
+/// The most changed and new files an arena's worktree takes over from the owner's folder (T61).
+const MIRROR_FILES: usize = 5_000;
+/// The largest of them taken over; a bigger one is left out and named.
+const MIRROR_FILE_BYTES: u64 = 50 * 1024 * 1024;
+/// The most bytes an arena's worktree takes over in all.
+const MIRROR_BYTES: u64 = 500 * 1024 * 1024;
+/// Git's mode of a link and of a submodule: neither is brought into the owner's folder.
+const LINK_MODES: [&str; 2] = ["120000", "160000"];
+/// Names an arena's winner may not bring at any depth (beyond [`protected`]'s): other tools' files that run things
+/// where the owner works.
+const ARENA_ANY_DEPTH: [&str; 8] = [
+    ".nvim.lua",
+    ".exrc",
+    "mise.toml",
+    ".mise.toml",
+    ".tool-versions",
+    ".github",
+    ".pre-commit-config.yaml",
+    ".githooks",
+];
+/// The files that make a folder beside `objects/` or `refs/` a git folder, in lower case.
+const GIT_FILES: [&str; 6] = [
+    "head",
+    "config",
+    "packed-refs",
+    "commondir",
+    "gitdir",
+    "config.worktree",
+];
+/// Endings and names of key files the mirror leaves out beside the `.env` files.
+const KEY_ENDINGS: [&str; 6] = [".pem", ".key", ".p12", ".pfx", ".keystore", ".jks"];
+const KEY_NAMES: [&str; 4] = ["id_rsa", "id_ed25519", "id_ecdsa", "credentials.json"];
+
+/// What [`mirror`] made of an arena's worktree (T61): the state every model starts from, as git's tree id, and what
+/// it left out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Mirrored {
+    pub start: String,
+    pub copied: usize,
+    pub left_out: Vec<String>,
+}
+
+/// What a model changed in its arena worktree since the start.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Changes {
+    pub files: usize,
+    pub added: u64,
+    pub removed: u64,
+}
+
+/// What taking an arena's winner would write: its files, and those it makes executable.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Taking {
+    pub files: Vec<String>,
+    pub executable: Vec<String>,
+    /// The worktree as git's tree id when it was read: what the owner said yes to is what is applied.
+    pub now: String,
+}
+
+/// Whether `name` is one of the `.env` files the sandbox keeps from every command (`sandbox::scan`'s list).
+fn secret_name(name: &str) -> bool {
+    let name = name.to_lowercase();
+    name == ".env"
+        || name.starts_with(".env.")
+        || (name.ends_with(".env") && name.len() > ".env".len())
+        || name == ".envrc"
+        || name.starts_with(".envrc.")
+}
+
+/// Whether `name` looks like a key or a credential file, which an arena's models, with the network open, never get.
+fn key_name(name: &str) -> bool {
+    let name = name.to_lowercase();
+    secret_name(&name)
+        || KEY_NAMES
+            .iter()
+            .any(|key| name == *key || name.starts_with(&format!("{key}.")))
+        || KEY_ENDINGS.iter().any(|ending| name.ends_with(ending))
+}
+
+/// Whether git's `path` stays below the folder it is read in: no empty, `.` or `..` part, not absolute.
+fn plain_relative(path: &str) -> bool {
+    !path.starts_with('/')
+        && path
+            .split('/')
+            .all(|part| !part.is_empty() && part != "." && part != "..")
+}
+
+/// The folders above `path` in `top`, made where missing; `false` where one is a link or no folder, which a copy
+/// must not go through.
+fn plain_parents(top: &Path, path: &str, make: bool) -> bool {
+    let mut at = top.to_path_buf();
+    let parts: Vec<&str> = path.split('/').collect();
+    for part in &parts[..parts.len().saturating_sub(1)] {
+        at.push(part);
+        match std::fs::symlink_metadata(&at) {
+            Ok(meta) if meta.is_dir() => {}
+            Err(err) if make && err.kind() == std::io::ErrorKind::NotFound => {
+                if std::fs::create_dir(&at).is_err() {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+    }
+    true
+}
+
+/// Copies the owner's `from` to the new worktree's `to` without following a link on either side: `from` opened as
+/// the file it is (its folders checked first), `to` written only where nothing or a plain file stands. The bytes
+/// copied, or `None` where it is no plain file within `room`.
+fn copy_plain(top: &Path, place: &Path, path: &str, room: u64) -> Option<u64> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    if !plain_parents(top, path, false) {
+        return None;
+    }
+    let mut from = std::fs::OpenOptions::new()
+        .read(true)
+        // Not blocking: a pipe where a file was must not hold the screen; it is no plain file and stays out.
+        .custom_flags((rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK).bits() as i32)
+        .open(top.join(path))
+        .ok()?;
+    let meta = from.metadata().ok()?;
+    if !meta.is_file() || meta.len() > MIRROR_FILE_BYTES || meta.len() > room {
+        return None;
+    }
+    if !plain_parents(place, path, true) {
+        return None;
+    }
+    let to = place.join(path);
+    if std::fs::symlink_metadata(&to).is_ok_and(|there| !there.is_file()) {
+        return None;
+    }
+    let mut out = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
+        .open(&to)
+        .ok()?;
+    let copied = std::io::copy(&mut (&mut from).take(meta.len()), &mut out).ok()?;
+    use std::os::unix::fs::PermissionsExt as _;
+    let _ = out.set_permissions(std::fs::Permissions::from_mode(
+        meta.permissions().mode() & 0o755,
+    ));
+    Some(copied)
+}
+
+/// The owner's `HEAD` now, as a commit id: an arena takes a winner only while it has not moved.
+///
+/// # Errors
+///
+/// Git's refusal (a repository without a commit).
+pub fn head(repo: &Repo) -> Result<String, String> {
+    git(
+        &repo.pin(),
+        &["rev-parse", "--verify", "--end-of-options", "HEAD^{commit}"],
+    )
+}
+
+/// Gives an arena's new worktree (T61) the owner's folder as it is now: every changed, deleted and new file git does
+/// not ignore, so each model starts from what the owner sees, not from the last commit. A `.env` or key file, a link,
+/// a folder (a submodule), a file over [`MIRROR_FILE_BYTES`] or past [`MIRROR_BYTES`] in all stays out and is
+/// named. Its state is then kept as git's tree id: what the model changes is measured and taken over against it,
+/// whatever it does to the branch.
+///
+/// # Errors
+///
+/// A config that could run a program, more than [`MIRROR_FILES`] files, git's refusal.
+pub fn mirror(tree: &Tree) -> Result<Mirrored, String> {
+    let repo = tree.repo.pin();
+    checked(&repo)?;
+    checked(&tree.pin())?;
+    // Read as git wrote them: a name's leading space or bytes no UTF-8 holds stay as they are.
+    let changed = git_bytes(
+        &repo,
+        &["diff", "--name-only", "-z", "--no-renames", "HEAD"],
+    )?;
+    let untracked = git_bytes(&repo, &["ls-files", "--others", "--exclude-standard", "-z"])?;
+    let paths: Vec<&[u8]> = changed
+        .split(|byte| *byte == 0)
+        .chain(untracked.split(|byte| *byte == 0))
+        .filter(|path| !path.is_empty())
+        .collect();
+    if paths.len() > MIRROR_FILES {
+        return Err(tr!(mirror_too_many, n = paths.len(), most = MIRROR_FILES));
+    }
+    let mut copied = 0;
+    let mut bytes = 0;
+    let mut left_out = Vec::new();
+    for path in paths {
+        let Ok(path) = std::str::from_utf8(path) else {
+            left_out.push(crate::transcript::clean(&String::from_utf8_lossy(path)));
+            continue;
+        };
+        if !plain_relative(path) || path.split('/').any(key_name) {
+            left_out.push(crate::transcript::clean(path));
+            continue;
+        }
+        let from = tree.repo.top.join(path);
+        match std::fs::symlink_metadata(&from) {
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                // Deleted in the owner's folder: deleted here too.
+                let to = tree.place.join(path);
+                if plain_parents(&tree.place, path, false)
+                    && std::fs::symlink_metadata(&to).is_ok_and(|there| !there.is_dir())
+                {
+                    let _ = std::fs::remove_file(&to);
+                }
+            }
+            _ => match copy_plain(&tree.repo.top, &tree.place, path, MIRROR_BYTES - bytes) {
+                Some(size) => {
+                    bytes += size;
+                    copied += 1;
+                }
+                None => left_out.push(crate::transcript::clean(path)),
+            },
+        }
+    }
+    git_alone(&tree.pin(), &["add", "--all"], None)?;
+    let start = git_alone_text(&tree.pin(), &["write-tree"])?;
+    Ok(Mirrored {
+        start,
+        copied,
+        left_out,
+    })
+}
+
+/// The worktree as git's tree id now, every file the model wrote included.
+fn written(tree: &Tree) -> Result<String, String> {
+    checked(&tree.pin())?;
+    git_alone(&tree.pin(), &["add", "--all"], None)?;
+    git_alone_text(&tree.pin(), &["write-tree"])
+}
+
+/// What the model of an arena's worktree changed since `start` (git's tree id from [`mirror`]): files, lines added
+/// and removed, new files included (a binary one counts no lines).
+///
+/// # Errors
+///
+/// A config that could run a program, git's refusal.
+pub fn changes(tree: &Tree, start: &str) -> Result<Changes, String> {
+    let now = written(tree)?;
+    let stat = git_alone(
+        &tree.pin(),
+        &[
+            "diff",
+            "--numstat",
+            "-z",
+            "--no-renames",
+            "--end-of-options",
+            start,
+            &now,
+        ],
+        None,
+    )?;
+    let mut changes = Changes::default();
+    for entry in stat
+        .split(|byte| *byte == 0)
+        .filter(|entry| !entry.is_empty())
+    {
+        let entry = String::from_utf8_lossy(entry);
+        let mut fields = entry.splitn(3, '\t');
+        let number =
+            |field: Option<&str>| field.and_then(|text| text.parse::<u64>().ok()).unwrap_or(0);
+        changes.added += number(fields.next());
+        changes.removed += number(fields.next());
+        changes.files += 1;
+    }
+    Ok(changes)
+}
+
+/// Whether a path of an arena's winner may not come into the owner's folder: what a take-over refuses, a protected
+/// or another tool's name at any depth, any `….git` part, a `.env` or key file.
+fn arena_refuses(path: &str) -> bool {
+    protected(path)
+        || !plain_relative(path)
+        || path.split('/').any(|part| {
+            let part = part.to_lowercase();
+            glut::sandbox::PROTECTED_IN_ROOT
+                .iter()
+                .chain(MORE_ROOTS.iter())
+                .chain(ARENA_ANY_DEPTH.iter())
+                .any(|name| name.eq_ignore_ascii_case(&part))
+                || part.ends_with(".git")
+                || key_name(&part)
+        })
+}
+
+/// The folders among `paths` laid out as a git folder (one of [`GIT_FILES`] beside `objects/` or `refs/`): a repository the owner's git would run the config of once it stood in the folder.
+fn git_folders(paths: &[String]) -> Vec<String> {
+    // In any case: the owner's disk does not tell `HEAD` from `head`.
+    let lowered: Vec<String> = paths.iter().map(|path| path.to_lowercase()).collect();
+    lowered
+        .iter()
+        .zip(paths)
+        .filter_map(|(path, shown)| {
+            let (dir, name) = path.rsplit_once('/').unwrap_or(("", path.as_str()));
+            let shaped = GIT_FILES.contains(&name)
+                && lowered.iter().any(|other| {
+                    let inside = if dir.is_empty() {
+                        other.as_str()
+                    } else {
+                        match other
+                            .strip_prefix(dir)
+                            .and_then(|rest| rest.strip_prefix('/'))
+                        {
+                            Some(inside) => inside,
+                            None => return false,
+                        }
+                    };
+                    inside.starts_with("objects/") || inside.starts_with("refs/")
+                });
+            shaped.then(|| shown.clone())
+        })
+        .collect()
+}
+
+/// The patch of what the arena's model changed since `start`, made once, and what it writes as git's `apply` reads
+/// these very bytes — checked: nothing [`arena_refuses`], no link or submodule, no git folder.
+fn arena_patch(tree: &Tree, start: &str, now: Option<&str>) -> Result<(Vec<u8>, Taking), String> {
+    checked(&tree.repo.pin())?;
+    let now = match now {
+        Some(now) => now.to_owned(),
+        None => written(tree)?,
+    };
+    let patch = git_alone(
+        &tree.pin(),
+        &[
+            "diff",
+            "--binary",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-renames",
+            "--end-of-options",
+            start,
+            &now,
+        ],
+        None,
+    )?;
+    if patch.is_empty() {
+        return Err(tr!(arena_nothing).into());
+    }
+    let repo = tree.repo.pin();
+    let listed = git_alone(
+        &repo,
+        &["apply", "--numstat", "-z", "-"],
+        Some(patch.clone()),
+    )?;
+    let files: Vec<String> = listed
+        .split(|byte| *byte == 0)
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| {
+            let entry = String::from_utf8_lossy(entry);
+            entry.splitn(3, '\t').nth(2).unwrap_or("").to_owned()
+        })
+        .collect();
+    let summary = git_alone(&repo, &["apply", "--summary", "-"], Some(patch.clone()))?;
+    let summary = String::from_utf8_lossy(&summary);
+    let mut refused: Vec<String> = files
+        .iter()
+        .filter(|path| arena_refuses(path))
+        .cloned()
+        .collect();
+    refused.extend(git_folders(&files));
+    // A link edited in place keeps its mode and shows in no summary: its headers say it. A header line stands at
+    // the line's start, where no line of a file's text or of a binary's base85 can.
+    for line in patch.split(|byte| *byte == b'\n') {
+        let line = String::from_utf8_lossy(line);
+        let header = [
+            "index ",
+            "old mode ",
+            "new mode ",
+            "new file mode ",
+            "deleted file mode ",
+        ]
+        .iter()
+        .any(|start| line.starts_with(start));
+        if header
+            && line
+                .split_whitespace()
+                .any(|word| LINK_MODES.contains(&word))
+        {
+            refused.push(line.into_owned());
+        }
+    }
+    let mut executable = Vec::new();
+    for line in summary.lines() {
+        let words: Vec<&str> = line.split_whitespace().collect();
+        if words.iter().any(|word| LINK_MODES.contains(word)) {
+            refused.push(line.trim().to_owned());
+        }
+        // ` create mode 100755 path` and ` mode change 100644 => 100755 path`.
+        if let Some(at) = words.iter().position(|word| *word == "100755")
+            && let Some(path) = words.get(at + 1)
+        {
+            executable.push((*path).to_owned());
+        }
+    }
+    let refused: Vec<String> = refused
+        .iter()
+        .map(|path| crate::transcript::clean(path))
+        .collect();
+    refuse_protected(&tree.branch, &refused)?;
+    let clean = |paths: Vec<String>| {
+        paths
+            .iter()
+            .map(|path| crate::transcript::clean(path))
+            .collect()
+    };
+    Ok((
+        patch,
+        Taking {
+            files: clean(files),
+            executable: clean(executable),
+            now,
+        },
+    ))
+}
+
+/// What taking the arena's winner would write, for the owner to see before saying yes.
+///
+/// # Errors
+///
+/// As [`apply`] refuses.
+pub fn taking(tree: &Tree, start: &str) -> Result<Taking, String> {
+    arena_patch(tree, start, None).map(|(_, taking)| taking)
+}
+
+/// Takes what the winner of an arena (T61) changed from `start` to `now` (the tree [`taking`] showed the owner)
+/// into the owner's folder, uncommitted, as a diff:
+/// only while the owner's `HEAD` is still `head`, when it applies as a whole to the folder as it is now (git's
+/// check first — a file changed there since the start that the winner changed too is a conflict, nothing is
+/// written) and brings nothing [`arena_patch`] refuses. The patch goes to git on its standard input: the bytes
+/// checked are the bytes applied.
+///
+/// # Errors
+///
+/// What stood in the way, the conflict named.
+pub fn apply(tree: &Tree, start: &str, now: &str, head_then: &str) -> Result<usize, String> {
+    let repo = tree.repo.pin();
+    checked(&repo)?;
+    if head(&tree.repo)? != head_then {
+        return Err(tr!(arena_head_moved).into());
+    }
+    let (patch, taking) = arena_patch(tree, start, Some(now))?;
+    git_alone(
+        &repo,
+        &["apply", "--check", "--binary", "-"],
+        Some(patch.clone()),
+    )
+    .and_then(|_| git_alone(&repo, &["apply", "--binary", "-"], Some(patch)))
+    .map_err(|reason| tr!(arena_conflict, reason = reason))?;
+    Ok(taking.files.len())
+}
+
 /// A repository to try worktrees on, for this module's tests and the panes'.
 #[cfg(test)]
 pub(crate) mod testing {
@@ -893,6 +1408,187 @@ mod tests {
 
     fn pinned(dir: &Path) -> Repo {
         repo_of(dir).unwrap().unwrap()
+    }
+
+    #[test]
+    fn an_arena_worktree_starts_from_the_folder_as_it_is_and_its_changes_go_back_as_a_diff() {
+        let (home, top) = repo("arena-mirror");
+        commit(&top, "gone.txt", "old\n");
+        std::fs::write(top.join("a.txt"), "one changed\n").unwrap();
+        std::fs::write(top.join("new.txt"), "new\n").unwrap();
+        std::fs::write(top.join(".env"), "SECRET=1\n").unwrap();
+        std::fs::write(top.join("server.pem"), "KEY\n").unwrap();
+        std::fs::remove_file(top.join("gone.txt")).unwrap();
+        let repo = pinned(&top);
+        let head_then = head(&repo).unwrap();
+        let tree = add(&home, &repo, "glut/arena-1").unwrap();
+        let mirrored = mirror(&tree).unwrap();
+        let read = |path: PathBuf| std::fs::read_to_string(path).unwrap();
+        assert_eq!(read(tree.place.join("a.txt")), "one changed\n");
+        assert_eq!(read(tree.place.join("new.txt")), "new\n");
+        assert!(
+            !tree.place.join("gone.txt").exists(),
+            "deleted there, deleted here"
+        );
+        assert!(!tree.place.join(".env").exists(), "a secret stays out");
+        let mut left_out = mirrored.left_out.clone();
+        left_out.sort();
+        assert_eq!(left_out, [".env", "server.pem"]);
+        assert_eq!(changes(&tree, &mirrored.start).unwrap(), Changes::default());
+        // The model works: a line more, a file more, an executable script.
+        std::fs::write(tree.place.join("a.txt"), "one changed\nand more\n").unwrap();
+        std::fs::write(tree.place.join("b.txt"), "b\n").unwrap();
+        std::fs::write(tree.place.join("run.sh"), "echo\n").unwrap();
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(
+            tree.place.join("run.sh"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        assert_eq!(
+            changes(&tree, &mirrored.start).unwrap(),
+            Changes {
+                files: 3,
+                added: 3,
+                removed: 0
+            }
+        );
+        let shown = taking(&tree, &mirrored.start).unwrap();
+        assert_eq!(shown.files, ["a.txt", "b.txt", "run.sh"]);
+        assert_eq!(shown.executable, ["run.sh"], "said before it is taken");
+        assert_eq!(
+            apply(&tree, &mirrored.start, &written(&tree).unwrap(), &head_then).unwrap(),
+            3
+        );
+        assert_eq!(read(top.join("a.txt")), "one changed\nand more\n");
+        assert_eq!(read(top.join("b.txt")), "b\n");
+        assert_eq!(
+            read(top.join(".env")),
+            "SECRET=1\n",
+            "the owner's own stays"
+        );
+        // Taken a second time it no longer fits the folder: nothing is written.
+        std::fs::write(top.join("a.txt"), "the owner's\n").unwrap();
+        assert!(apply(&tree, &mirrored.start, &written(&tree).unwrap(), &head_then).is_err());
+        assert_eq!(read(top.join("a.txt")), "the owner's\n");
+        // A HEAD moved since the start: refused before anything is looked at.
+        commit(&top, "c.txt", "c\n");
+        assert_eq!(
+            apply(&tree, &mirrored.start, &written(&tree).unwrap(), &head_then).unwrap_err(),
+            tr!(arena_head_moved)
+        );
+        assert!(!home.join(".glut/arena").exists(), "no patch lies anywhere");
+        remove(&tree, true).unwrap();
+        let _ = std::fs::remove_dir_all(top.parent().unwrap());
+    }
+
+    #[test]
+    fn an_arena_winner_brings_no_link_git_folder_or_protected_secret_or_tool_name() {
+        let (home, top) = repo("arena-refuse");
+        let repo = pinned(&top);
+        let head_then = head(&repo).unwrap();
+        let tree = add(&home, &repo, "glut/arena-1").unwrap();
+        let start = mirror(&tree).unwrap().start;
+        assert!(
+            apply(&tree, &start, &written(&tree).unwrap(), &head_then).is_err(),
+            "nothing changed"
+        );
+        std::os::unix::fs::symlink("/etc/hosts", tree.place.join("hosts")).unwrap();
+        assert!(apply(&tree, &start, &written(&tree).unwrap(), &head_then).is_err());
+        assert!(std::fs::symlink_metadata(top.join("hosts")).is_err());
+        std::fs::remove_file(tree.place.join("hosts")).unwrap();
+        for files in [
+            &[".gitattributes"][..],
+            &["sub/.envrc"],
+            &["config.env"],
+            &["keys/deploy.pem"],
+            &[".claude/settings.json"],
+            &["crates/x/.cargo/config.toml"],
+            &["web/.vscode/tasks.json"],
+            &["vendor/x.git/HEAD"],
+            &["vendor/bare/HEAD", "vendor/bare/objects/info/packs"],
+            &["HEAD", "refs/heads/main"],
+            &["vendor/foo/head", "vendor/foo/Objects/x"],
+        ] {
+            for name in files {
+                let path = tree.place.join(name);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(&path, "x\n").unwrap();
+            }
+            assert!(
+                apply(&tree, &start, &written(&tree).unwrap(), &head_then).is_err(),
+                "{files:?}"
+            );
+            for name in files {
+                assert!(!top.join(name).exists(), "{name}");
+                std::fs::remove_file(tree.place.join(name)).unwrap();
+            }
+        }
+        // A `HEAD` alone is a file like any other.
+        std::fs::write(tree.place.join("HEAD"), "notes\n").unwrap();
+        assert_eq!(
+            apply(&tree, &start, &written(&tree).unwrap(), &head_then).unwrap(),
+            1
+        );
+        remove(&tree, true).unwrap();
+        let _ = std::fs::remove_dir_all(top.parent().unwrap());
+    }
+
+    #[test]
+    fn an_arena_winner_does_not_turn_a_tracked_link_elsewhere() {
+        let (home, top) = repo("arena-link");
+        std::os::unix::fs::symlink("a.txt", top.join("lk")).unwrap();
+        plain(&top, &["add", "lk"]).unwrap();
+        plain(
+            &top,
+            &["-c", "commit.gpgsign=false", "commit", "-q", "-m", "lk"],
+        )
+        .unwrap();
+        let repo = pinned(&top);
+        let head_then = head(&repo).unwrap();
+        let tree = add(&home, &repo, "glut/arena-1").unwrap();
+        let start = mirror(&tree).unwrap().start;
+        std::fs::remove_file(tree.place.join("lk")).unwrap();
+        std::os::unix::fs::symlink("/etc/hosts", tree.place.join("lk")).unwrap();
+        assert!(taking(&tree, &start).is_err());
+        let now = written(&tree).unwrap();
+        assert!(apply(&tree, &start, &now, &head_then).is_err());
+        assert_eq!(
+            std::fs::read_link(top.join("lk")).unwrap(),
+            Path::new("a.txt")
+        );
+        remove(&tree, true).unwrap();
+        let _ = std::fs::remove_dir_all(top.parent().unwrap());
+    }
+
+    #[test]
+    fn an_arena_snapshot_runs_no_filter_the_models_attributes_name() {
+        let (home, top) = repo("arena-filter");
+        let tree = add(&home, &pinned(&top), "glut/arena-1").unwrap();
+        // A filter in the owner's own git config, chosen by the model's attributes for every file it writes.
+        let owner = top.parent().unwrap().join("owner-home");
+        let mark = top.parent().unwrap().join("ran");
+        std::fs::create_dir_all(&owner).unwrap();
+        std::fs::write(
+            owner.join(".gitconfig"),
+            format!("[filter \"x\"]\n\tclean = touch {}\n", mark.display()),
+        )
+        .unwrap();
+        std::fs::write(tree.place.join(".gitattributes"), "* filter=x\n").unwrap();
+        std::fs::write(tree.place.join("b.txt"), "b\n").unwrap();
+        let staged = |(mut command, limit): (Command, Duration)| {
+            command.env("HOME", &owner).env_remove("XDG_CONFIG_HOME");
+            run_bytes(command, limit, None).unwrap();
+        };
+        staged(alone(&tree.pin(), &["add", "--all"]));
+        assert!(!mark.exists(), "the arena's git ran no filter");
+        staged(super::pinned(
+            &tree.pin(),
+            &["add", "--all", "--renormalize"],
+        ));
+        assert!(mark.exists(), "the owner's git would have");
+        remove(&tree, true).unwrap();
+        let _ = std::fs::remove_dir_all(top.parent().unwrap());
     }
 
     #[test]

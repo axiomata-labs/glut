@@ -1,7 +1,7 @@
 //! The commands' manual pages in Chinese (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 66] = [
+pub const PAGES: [(&str, &str); 67] = [
     (
         "clear",
         "在此文件夹中开始一个新的空会话。\n\
@@ -245,6 +245,10 @@ pub const PAGES: [(&str, &str); 66] = [
          Worktree 使它们互不干扰，直到 /close 询问如何结束它。\n\
          \n\
          /split tree fix-login as reviewer",
+    ),
+    (
+        "arena",
+        "让同一任务同时在两到四个模型上运行并比较结果（竞技场）。\n\n/arena — 列出所有 provider 的模型；空格键标记两到四个，⏎ 将它们放入输入框，再接着写任务\n/arena <model>, <model>: <task> — 同样的操作写成一行（provider/model，或能对应唯一模型的名称）\n/arena take <n> — 把模型 n 的改动应用到你的文件夹，不提交\n/arena end — 关闭竞技场的 Pane，删除它们的 worktree（会先询问）\n\n每个模型在各自的 Pane 和 worktree 中工作，起点是你的文件夹当前的样子，包含未提交的文件和新文件（不含 .env 文件和链接），使用 auto：只有重量级命令才会询问。模型运行 30 分钟或花费 $2 后停止。云端模型同时运行，本地模型（Ollama、LM Studio）等其他模型结束后依次运行。全部结束后，各自的数据会显示在启动竞技场的 Pane 中：时间、费用、token、调用次数，以及各自改了什么。/arena take 会检查这些改动是否仍适用于你的文件夹；不适用则不会写入任何内容。\n\n/arena sonnet, gpt-5: make the failing test pass",
     ),
     (
         "swap",

@@ -1,7 +1,7 @@
 //! The commands' manual pages in English (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 66] = [
+pub const PAGES: [(&str, &str); 67] = [
     (
         "clear",
         "Start a new, empty session in this folder.\n\
@@ -276,6 +276,10 @@ pub const PAGES: [(&str, &str); 66] = [
          apart until /close asks how it ends.\n\
          \n\
          /split tree fix-login as reviewer",
+    ),
+    (
+        "arena",
+        "Run the same task on two to four models at once and compare them (the arena).\n\n/arena — the models of every provider; Space marks two to four, ⏎ puts them into the input to add the task\n/arena <model>, <model>: <task> — the same in one line (provider/model, or a name that fits one model)\n/arena take <n> — model n's changes into your folder, not committed\n/arena end — the arena's panes closed, their worktrees removed (asked first)\n\nEach model works in a pane and a Worktree of its own that starts from your folder as it is, uncommitted and new files included (no .env file, no link), in auto: only heavy commands ask. A model stops after 30 minutes or $2. Cloud models run at once, local ones (Ollama, LM Studio) one after another once the others are done. When all are over, their numbers stand in the pane the arena started from: time, cost, tokens, calls and what each changed. /arena take checks that the changes still fit your folder; nothing is written when they do not.\n\n/arena sonnet, gpt-5: make the failing test pass",
     ),
     (
         "swap",

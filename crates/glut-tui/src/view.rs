@@ -2398,7 +2398,28 @@ fn draw_picker(frame: &mut Frame, app: &App, area: Rect) {
     ])];
     for (at, item) in shown.iter().enumerate().skip(first).take(rows) {
         let chosen = at == picker.selected;
-        let mark = if chosen { "▸ " } else { "  " };
+        let mark = match (
+            chosen,
+            picker.marked.is_some(),
+            picker.is_marked(&item.pick),
+        ) {
+            (_, true, true) => {
+                if chosen {
+                    "▸☑ "
+                } else {
+                    " ☑ "
+                }
+            }
+            (_, true, false) => {
+                if chosen {
+                    "▸☐ "
+                } else {
+                    " ☐ "
+                }
+            }
+            (true, false, _) => "▸ ",
+            (false, false, _) => "  ",
+        };
         let style = match (chosen, item.dim) {
             (true, _) => theme::glow(),
             (false, true) => theme::quiet().add_modifier(Modifier::DIM),

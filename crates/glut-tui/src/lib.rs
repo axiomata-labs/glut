@@ -7,6 +7,7 @@ mod texts;
 mod acp;
 mod agents;
 mod app;
+mod arena;
 mod background;
 mod branch;
 mod btw;

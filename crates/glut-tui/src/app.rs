@@ -4141,6 +4141,7 @@ impl App {
                     .transcript
                     .note(tr!(footer_unknown, word = other), Tone::Fault),
             },
+            "arena" => self.arena_command(rest),
             "split" => match crate::panes::parse_split(rest) {
                 Ok(request) => self.pane_request = Some(request),
                 Err(reason) => self.transcript.note(reason, Tone::Fault),
@@ -5716,6 +5717,80 @@ impl App {
         Picker::new(title, items, Some(&current)).sorting()
     }
 
+    /// `/arena` (T61): alone, the models of every provider to mark two to four of; `take <n>` takes model n's
+    /// changes into this folder; `end` removes the arena's panes and worktrees, asked first; else the models and the
+    /// task in one line.
+    fn arena_command(&mut self, rest: &str) {
+        let (word, more) = rest.split_once(' ').unwrap_or((rest, ""));
+        match (word, more.trim()) {
+            ("", _) => {
+                let kept = Prefs::load(&self.parts.home).arena;
+                let marked: Vec<Pick> = kept
+                    .iter()
+                    .filter_map(|named| named.split_once('/'))
+                    .map(|(provider, model)| Pick::Model {
+                        provider: provider.to_owned(),
+                        model: model.to_owned(),
+                    })
+                    .collect();
+                let picker = self.models_picker(None, false);
+                // A model no list holds any more is no mark the owner could see.
+                let marked = marked
+                    .into_iter()
+                    .filter(|pick| picker.shown().iter().any(|item| item.pick == *pick))
+                    .collect();
+                let mut picker = picker.several(marked);
+                picker.title = tr!(arena_pick_title, most = crate::arena::MOST);
+                self.picker = Some(picker);
+            }
+            ("take", number) => match number.parse::<usize>() {
+                Ok(number) if number >= 1 => {
+                    self.pane_request = Some(crate::panes::Request::ArenaTake(number - 1, false));
+                }
+                _ => self.tell(tr!(arena_take_usage)),
+            },
+            ("end", "") => self.pane_request = Some(crate::panes::Request::ArenaEnd(false)),
+            _ => {
+                let lists = crate::arena::listed(&self.parts.home);
+                match crate::arena::parse(&lists, rest) {
+                    Ok(asked) => {
+                        let mut prefs = Prefs::load(&self.parts.home);
+                        prefs.arena = asked
+                            .contenders
+                            .iter()
+                            .map(crate::arena::Contender::named)
+                            .collect();
+                        // A list not kept only costs the marks next time.
+                        let _ = prefs.save(&self.parts.home);
+                        self.pane_request = Some(crate::panes::Request::Arena(asked));
+                    }
+                    Err(reason) => self.transcript.note(reason, Tone::Fault),
+                }
+            }
+        }
+    }
+
+    /// The models marked in `/arena`'s list, put into the input as its line, for the owner to add the task.
+    fn arena_picked(&mut self, marked: &[Pick]) {
+        let names: Vec<String> = marked
+            .iter()
+            .filter_map(|pick| match pick {
+                Pick::Model { provider, model } => Some(format!("{provider}/{model}")),
+                _ => None,
+            })
+            .collect();
+        if !(crate::arena::FEWEST..=crate::arena::MOST).contains(&names.len()) {
+            return self.tell(tr!(
+                arena_count,
+                fewest = crate::arena::FEWEST,
+                most = crate::arena::MOST
+            ));
+        }
+        self.input.clear();
+        self.input
+            .insert_text(&format!("/arena {}: ", names.join(", ")));
+    }
+
     /// `/projects` (T44): the folders Glut worked in, pinned first, then the newest — the first that is not this one
     /// chosen — and a last entry to name another folder.
     fn projects_picker(&self) -> Picker {
@@ -6102,6 +6177,18 @@ impl App {
                 if let Some(reply) = self.model_pick.take() {
                     let _ = reply.send(None);
                 }
+            }
+            // `/arena`'s list (T61): Space marks a model, typing filters.
+            KeyCode::Char(' ') if picker.marked.is_some() => picker.toggle_mark(),
+            KeyCode::Enter if picker.marked.is_some() => {
+                let mut marked = picker.marked.clone().unwrap_or_default();
+                if marked.is_empty()
+                    && let Some(chosen) = picker.chosen()
+                {
+                    marked.push(chosen);
+                }
+                self.picker = None;
+                self.arena_picked(&marked);
             }
             KeyCode::Char('s') if ctrl => picker.next_sort(),
             // `/resume`'s ⌃E: the chosen session exported (T54) — a letter alone filters the list.
@@ -6846,6 +6933,12 @@ impl App {
                 self.agent_view = Some(crate::agents::View::new(path));
             }
         }
+    }
+
+    /// Whether a message delivered now starts a turn at once (T61: an arena's task goes only then, or its clock
+    /// would run while it waits).
+    pub fn takes_now(&self) -> bool {
+        self.steering.is_none() && !self.working() && self.picker.is_none() && self.queue.is_empty()
     }
 
     /// A message from another pane (T36b), taken as if the owner had typed it here: at once while this pane is

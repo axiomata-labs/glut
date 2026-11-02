@@ -1,7 +1,7 @@
 //! The commands' manual pages in Italian (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 66] = [
+pub const PAGES: [(&str, &str); 67] = [
     (
         "clear",
         "Inizia una nuova sessione vuota in questa cartella.\n\
@@ -285,6 +285,10 @@ pub const PAGES: [(&str, &str); 66] = [
          file; un Worktree li tiene separati finché /close chiede come finisce.\n\
          \n\
          /split tree fix-login as reviewer",
+    ),
+    (
+        "arena",
+        "Esegui lo stesso compito su due-quattro modelli insieme e confrontali (l’arena).\n\n/arena — i modelli di ogni provider; la barra spaziatrice ne segna da due a quattro, ⏎ li mette nell’input per aggiungere il compito\n/arena <model>, <model>: <task> — lo stesso in una riga (provider/modello, o un nome che corrisponde a un solo modello)\n/arena take <n> — le modifiche del modello n nella tua cartella, senza commit\n/arena end — chiude i pane dell’arena e rimuove i loro worktree (chiede prima)\n\nOgni modello lavora in un pane e in un worktree propri che partono dalla tua cartella così com’è, file non committati e nuovi compresi (nessun file .env, nessun link), in auto: chiedono solo i comandi pesanti. Un modello si ferma dopo 30 minuti o 2 $. I modelli cloud girano insieme, quelli locali (Ollama, LM Studio) uno dopo l’altro quando gli altri hanno finito. Quando tutti hanno finito, i loro numeri compaiono nel pane da cui è partita l’arena: tempo, costo, token, chiamate e cosa ha cambiato ciascuno. /arena take controlla che le modifiche si adattino ancora alla tua cartella; se non si adattano, non viene scritto nulla.\n\n/arena sonnet, gpt-5: make the failing test pass",
     ),
     (
         "swap",

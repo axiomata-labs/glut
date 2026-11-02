@@ -1,7 +1,7 @@
 //! The commands' manual pages in Japanese (T60 help box): what `/help` shows when a command is opened.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 66] = [
+pub const PAGES: [(&str, &str); 67] = [
     (
         "clear",
         "このフォルダーで、空の新しいセッションを始めます。\n\
@@ -247,6 +247,10 @@ pub const PAGES: [(&str, &str); 66] = [
          は同じファイルを変更します。Worktree なら、/close が終わらせ方を尋ねるまで分けておけます。\n\
          \n\
          /split tree fix-login as reviewer",
+    ),
+    (
+        "arena",
+        "同じタスクを 2〜4 個のモデルで同時に実行して比較します（アリーナ）。\n\n/arena — すべての provider のモデルを表示します。Space で 2〜4 個を選び、⏎ で入力欄に入れてタスクを続けます\n/arena <model>, <model>: <task> — 同じことを 1 行で（provider/model、または 1 つのモデルに当てはまる名前）\n/arena take <n> — モデル n の変更をあなたのフォルダに取り込みます（コミットはしません）\n/arena end — アリーナの Pane を閉じ、worktree を削除します（先に確認します）\n\n各モデルは専用の Pane と worktree で動き、あなたのフォルダの現在の状態（未コミットのファイルと新しいファイルを含む。.env ファイルとリンクは除く）から始まります。auto なので、確認するのは重いコマンドだけです。モデルは 30 分または $2 で止まります。クラウドのモデルは同時に、ローカルのモデル（Ollama、LM Studio）は他が終わってから 1 つずつ実行されます。すべて終わると、アリーナを始めた Pane に結果が並びます: 時間、コスト、Token、呼び出し回数、各モデルが変えた内容。/arena take は変更がまだあなたのフォルダに合うか確かめ、合わなければ何も書き込みません。\n\n/arena sonnet, gpt-5: make the failing test pass",
     ),
     (
         "swap",
