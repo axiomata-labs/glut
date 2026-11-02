@@ -2513,14 +2513,8 @@ fn draw_help(frame: &mut Frame, app: &mut App, area: Rect) {
 /// The picker over the stream: its title, what was typed, and the entries that match, the chosen one marked.
 fn draw_picker(frame: &mut Frame, app: &App, area: Rect) {
     let Some(picker) = &app.picker else { return };
-    // `/arena`'s list of every provider's models is a box of its own: wide and tall, as `/help`'s.
-    let (most_width, most_height) = if picker.marked.is_some() {
-        (area.width.saturating_sub(4), area.height.saturating_sub(4))
-    } else {
-        (100, 20)
-    };
-    let width = area.width.saturating_sub(4).min(most_width);
-    let height = area.height.saturating_sub(4).min(most_height);
+    let width = area.width.saturating_sub(4).min(100);
+    let height = area.height.saturating_sub(4).min(20);
     // Two rows above the input: the stream's last line, often what led to the picker, stays readable.
     let place = Rect {
         x: area.x + (area.width.saturating_sub(width)) / 2,
@@ -2566,28 +2560,21 @@ fn draw_picker(frame: &mut Frame, app: &App, area: Rect) {
     ])];
     for (at, item) in shown.iter().enumerate().skip(first).take(rows) {
         let chosen = at == picker.selected;
-        let mark = match (
-            chosen,
-            picker.marked.is_some(),
-            picker.is_marked(&item.pick),
-        ) {
-            (_, true, true) => {
-                if chosen {
-                    "▸☑ "
-                } else {
-                    " ☑ "
-                }
+        let mark = if chosen { "▸ " } else { "  " };
+        // A list of several picks (`/arena`): a box as wide as two letters, its tick in the green of what passed —
+        // the font's own ☐/☑ is drawn too small to read at a glance.
+        let tick = picker.marked.is_some().then(|| {
+            if picker.is_marked(&item.pick) {
+                Span::styled(
+                    "[✓] ",
+                    Style::default()
+                        .fg(theme::c().fine)
+                        .add_modifier(Modifier::BOLD),
+                )
+            } else {
+                Span::styled("[ ] ", theme::quiet())
             }
-            (_, true, false) => {
-                if chosen {
-                    "▸☐ "
-                } else {
-                    " ☐ "
-                }
-            }
-            (true, false, _) => "▸ ",
-            (false, false, _) => "  ",
-        };
+        });
         let style = match (chosen, item.dim) {
             (true, _) => theme::glow(),
             (false, true) => theme::quiet().add_modifier(Modifier::DIM),
@@ -2599,10 +2586,9 @@ fn draw_picker(frame: &mut Frame, app: &App, area: Rect) {
         } else {
             format!("  {}", item.detail)
         };
-        let mut spans = vec![
-            Span::styled(mark, theme::glow()),
-            Span::styled(item.label.clone(), style),
-        ];
+        let mut spans = vec![Span::styled(mark, theme::glow())];
+        spans.extend(tick);
+        spans.push(Span::styled(item.label.clone(), style));
         if picker.finding.is_some() {
             spans.extend(marked(&detail, &picker.query));
         } else {
