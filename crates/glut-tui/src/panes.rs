@@ -383,6 +383,11 @@ pub enum Request {
     ArenaEnd(bool),
     /// `/arena card`: the comparison card again.
     ArenaCard,
+    /// `/arena tasks <set>` (step 2): the set's tasks one after another on these models, each judged by its check.
+    ArenaBench {
+        set: String,
+        contenders: Vec<crate::arena::Contender>,
+    },
     /// `/arena check [command]`: the check command kept for this repository and run in every worktree — the one
     /// kept, without a command.
     ArenaCheck(Option<String>),
@@ -675,6 +680,8 @@ pub struct Panes {
     pub arena: Option<crate::arena::Arena>,
     /// The arena's comparison card over the screen, while open.
     pub card: Option<crate::arena::Card>,
+    /// The test bench under way (T61 step 2): its arena is the task now run.
+    pub bench: Option<crate::bench::Bench>,
 }
 
 /// How often an open Glut looks whether a plan's run ended (T60b): a tile for it, as for an agent's end.
@@ -780,6 +787,7 @@ impl Panes {
             return_to: None,
             arena: None,
             card: None,
+            bench: None,
         };
         (
             panes,
@@ -1853,6 +1861,10 @@ impl Panes {
         }
         self.step_loops(Instant::now());
         self.step_arena(host);
+        // Between a bench's tasks there is no arena to step: the next task comes once there is room.
+        if self.arena.is_none() {
+            self.step_bench();
+        }
         // One at a time: a close changes the list the next is looked for in.
         while let Some(at) = self
             .list
@@ -1969,6 +1981,7 @@ impl Panes {
                 Request::ArenaTake(at, sure) => self.arena_take(at, sure),
                 Request::ArenaEnd(sure) => self.end_arena(sure),
                 Request::ArenaCard => self.open_card(),
+                Request::ArenaBench { set, contenders } => self.start_bench(set, contenders),
                 Request::ArenaCheck(command) => self.arena_check(command),
                 Request::Peek(Some(name)) => match self.resolve_background(&name) {
                     Some(at) => self.peek = Some(self.list[at].id),
@@ -2665,13 +2678,42 @@ impl Panes {
             Ok(None) => return self.active().tell(tr!(arena_no_repository)),
             Err(reason) => return self.active().transcript.note(reason, Tone::Fault),
         };
-        let head = match crate::worktree::head(&repo) {
-            Ok(head) => head,
-            Err(reason) => return self.active().transcript.note(reason, Tone::Fault),
-        };
-        let mut arena = crate::arena::Arena::new(asked, self.list[self.active].id);
+        let home = self.list[self.active].id;
+        if let Err(reason) = self.begin_arena(asked, repo, home, None) {
+            self.active().transcript.note(reason, Tone::Fault);
+        }
+    }
+
+    /// An arena of `asked` on `repo`, with a bench task's limits (else the free arena's): the room for its panes
+    /// checked, the owner's `HEAD` written down, what it runs said.
+    fn begin_arena(
+        &mut self,
+        asked: crate::arena::Asked,
+        repo: crate::worktree::Repo,
+        home: u64,
+        limits: Option<(Duration, f64)>,
+    ) -> Result<(), String> {
+        if self.arena.is_some() {
+            return Err(tr!(arena_end_first).into());
+        }
+        if self
+            .building
+            .as_ref()
+            .is_some_and(|building| building.arena.is_some())
+        {
+            return Err(tr!(pane_starting).into());
+        }
+        if self.visible() + asked.contenders.len() > MOST {
+            return Err(tr!(arena_no_room, n = asked.contenders.len(), most = MOST));
+        }
+        let head = crate::worktree::head(&repo)?;
+        let mut arena = crate::arena::Arena::new(asked, home);
         arena.repo = Some(repo);
         arena.head = head;
+        if let Some((time, cost)) = limits {
+            arena.time_limit = time;
+            arena.cost_limit = cost;
+        }
         let names: Vec<String> = arena
             .members
             .iter()
@@ -2681,16 +2723,272 @@ impl Panes {
         let said = tr!(
             arena_starts,
             models = names.join(", "),
-            minutes = crate::arena::TIME_LIMIT.as_secs() / 60,
-            dollars = format!("{:.2}", crate::arena::COST_LIMIT)
+            minutes = arena.time_limit.as_secs() / 60,
+            dollars = format!("{:.2}", arena.cost_limit)
         );
         let said = if local {
             tr!(clause_join, first = said, second = tr!(arena_local_later))
         } else {
             said
         };
-        self.active().tell(said);
+        self.note_in(home, said, Tone::Quiet);
         self.arena = Some(arena);
+        Ok(())
+    }
+
+    /// `/arena tasks <set>` (step 2): the set's tasks one after another on `contenders`, each an arena of its own on
+    /// a fresh repository of the task's start, judged by the task's check — only where panes may split and a sandbox
+    /// holds the models, as nobody watches them.
+    fn start_bench(&mut self, set: String, contenders: Vec<crate::arena::Contender>) {
+        if !self.may_split {
+            return self.active().tell(tr!(host_one_pane));
+        }
+        if !session::sandboxed(&self.active().parts) {
+            return self.active().tell(tr!(arena_no_sandbox));
+        }
+        if self.arena.is_some() || self.bench.is_some() {
+            return self.active().tell(tr!(arena_end_first));
+        }
+        let home = self.active().parts.home.clone();
+        let tasks = match crate::bench::tasks(&crate::bench::root(&home), &set) {
+            Ok(tasks) => tasks,
+            Err(reason) => return self.active().transcript.note(reason, Tone::Fault),
+        };
+        let names: Vec<String> = contenders
+            .iter()
+            .map(|contender| crate::transcript::clean(&contender.named()))
+            .collect();
+        self.active().tell(tr!(
+            bench_starts,
+            set = set.clone(),
+            n = tasks.len(),
+            models = names.join(", ")
+        ));
+        self.bench = Some(crate::bench::Bench {
+            home,
+            home_pane: self.list[self.active].id,
+            set,
+            contenders,
+            total: tasks.len(),
+            left: tasks.into(),
+            current: None,
+        });
+        self.next_task();
+    }
+
+    /// The bench's next task as an arena, once nothing of the last one stands and there is room for its panes (else
+    /// it waits for a later turn of the loop); once none is left, the set's results.
+    fn next_task(&mut self) {
+        loop {
+            let Some(bench) = &self.bench else {
+                return;
+            };
+            if self.arena.is_some()
+                || self.building.is_some()
+                || bench.current.is_some()
+                || self.visible() + bench.contenders.len() > MOST
+            {
+                return;
+            }
+            let (home, set, total) = (bench.home.clone(), bench.set.clone(), bench.total);
+            let (home_pane, contenders) = (bench.home_pane, bench.contenders.clone());
+            let Some(task) = self.bench.as_mut().and_then(|bench| bench.left.pop_front()) else {
+                self.bench = None;
+                let records: Vec<crate::bench::Record> = crate::bench::results(&home)
+                    .into_iter()
+                    .filter(|record| record.set == set)
+                    .collect();
+                let said = format!(
+                    "{}\n{}",
+                    tr!(bench_done, set = set),
+                    crate::bench::table(&records)
+                );
+                return self.note_in(home_pane, said, Tone::Fine);
+            };
+            let number = total - self.bench.as_ref().map_or(0, |bench| bench.left.len());
+            let started = crate::bench::prepare(&set, &task).and_then(|place| {
+                let asked = crate::arena::Asked {
+                    contenders,
+                    task: task.text.clone(),
+                };
+                let begun = match crate::worktree::repo_of(&place) {
+                    Ok(Some(repo)) => self.begin_arena(
+                        asked,
+                        repo,
+                        home_pane,
+                        Some((task.time_limit, task.cost_limit)),
+                    ),
+                    Ok(None) => Err(tr!(arena_no_repository).to_owned()),
+                    Err(reason) => Err(reason),
+                };
+                if begun.is_err() {
+                    crate::bench::forget(&place);
+                }
+                begun.map(|()| place)
+            });
+            match started {
+                Ok(place) => {
+                    let said = tr!(
+                        bench_task,
+                        n = number,
+                        total = total,
+                        task = task.name.clone()
+                    );
+                    self.note_in(home_pane, said, Tone::Quiet);
+                    if let Some(bench) = &mut self.bench {
+                        bench.current = Some((task, place));
+                    }
+                    return;
+                }
+                // A task that cannot start is passed by no model: said, and the next one comes.
+                Err(reason) => {
+                    let said = tr!(
+                        bench_task_failed,
+                        task = task.name.clone(),
+                        reason = crate::transcript::clean(&reason)
+                    );
+                    self.note_in(home_pane, said, Tone::Fault);
+                }
+            }
+        }
+    }
+
+    /// A note in pane `id`, else in the active one.
+    fn note_in(&mut self, id: u64, said: String, tone: Tone) {
+        match self.list.iter().position(|pane| pane.id == id) {
+            Some(at) => self.list[at].app.transcript.note(said, tone),
+            None => self.active().transcript.note(said, tone),
+        }
+    }
+
+    /// A bench task's check for every model that answered: in a copy Glut makes in `~/.glut` of the task's start
+    /// and the model's checked patch, with the task's own check files ([`crate::worktree::check_copy`]), run there in
+    /// a sandboxed shell of its own ([`App::arena_check_in`]). A patch the copy refuses fails the check, its reason
+    /// said in that pane.
+    fn bench_checks(&mut self) {
+        let Some(folder) = self
+            .bench
+            .as_ref()
+            .and_then(|bench| bench.current.as_ref())
+            .map(|(task, _)| task.folder.clone())
+        else {
+            return;
+        };
+        let Some(home) = self.bench.as_ref().map(|bench| bench.home.clone()) else {
+            return;
+        };
+        let Some(mut arena) = self.arena.take() else {
+            return;
+        };
+        arena.checking = true;
+        for (at, member) in arena.members.iter().enumerate() {
+            if member.state != crate::arena::State::Done(glut::FinishReason::Answered) {
+                continue;
+            }
+            let (Some(tree), Some(start), Some(now)) =
+                (&member.tree, &member.start, &member.snapshot)
+            else {
+                continue;
+            };
+            let Some(pane) = self
+                .list
+                .iter_mut()
+                .find(|pane| Some(pane.id) == member.pane)
+            else {
+                continue;
+            };
+            let place = check_place(&home, &arena, at);
+            match crate::worktree::check_copy(tree, start, now, &folder, &place) {
+                Ok(()) => {
+                    let started = pane.app.arena_check_in(place, "sh .arena/check.sh");
+                    if started.is_some() {
+                        arena.checks[at] = crate::arena::Check::Running;
+                    }
+                    arena.check_ids[at] = started;
+                }
+                Err(reason) => {
+                    pane.app.transcript.note(
+                        tr!(
+                            bench_check_refused,
+                            reason = crate::transcript::clean(&reason)
+                        ),
+                        Tone::Fault,
+                    );
+                    arena.checks[at] = crate::arena::Check::Failed;
+                }
+            }
+        }
+        self.arena = Some(arena);
+    }
+
+    /// Once a bench task's checks are over: the arena ended without asking (its worktrees are Glut's own, of a
+    /// repository made for the task); once it is gone, every model's result kept and the next task begun. A check
+    /// that never ran (no answer, a pane closed) is said so in the result, not counted as a model's failure alone.
+    fn step_bench(&mut self) {
+        let Some(bench) = &self.bench else {
+            return;
+        };
+        let Some((task, place)) = bench.current.clone() else {
+            // Between tasks: the next one, once there is room.
+            return self.next_task();
+        };
+        let (home, set, home_pane) = (bench.home.clone(), bench.set.clone(), bench.home_pane);
+        let Some(arena) = &self.arena else {
+            return;
+        };
+        if !arena.checking || arena.checks.contains(&crate::arena::Check::Running) {
+            return;
+        }
+        let rows = self.rows(arena);
+        let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let records: Vec<crate::bench::Record> = arena
+            .members
+            .iter()
+            .zip(&rows)
+            .enumerate()
+            .map(|(at, (member, row))| {
+                let check = arena.checks[at];
+                let ended = if !row.answered {
+                    Some(row.state.clone())
+                } else if check == crate::arena::Check::None {
+                    Some(tr!(bench_unchecked).to_owned())
+                } else {
+                    None
+                };
+                crate::bench::Record {
+                    date: date.clone(),
+                    set: set.clone(),
+                    task: task.name.clone(),
+                    model: member.contender.named(),
+                    passed: row.answered && check == crate::arena::Check::Passed,
+                    seconds: row.seconds,
+                    dollars: row.dollars,
+                    tokens: row.token_count,
+                    ended,
+                }
+            })
+            .collect();
+        let said = crate::arena::compared(arena, &rows);
+        let arena_now = arena.clone();
+        // The task counts once its arena is gone: taken out of the bench first, as `end_arena` reads an owner's end
+        // there; put back when something still holds the arena, for the next turn of the loop to try again.
+        let current = self.bench.as_mut().and_then(|bench| bench.current.take());
+        self.end_arena(true);
+        if self.arena.is_some() {
+            if let Some(bench) = &mut self.bench {
+                bench.current = current;
+            }
+            return;
+        }
+        if let Err(reason) = crate::bench::keep(&home, &records) {
+            self.note_in(home_pane, reason, Tone::Fault);
+        }
+        for at in 0..records.len() {
+            let _ = std::fs::remove_dir_all(check_place(&home, &arena_now, at));
+        }
+        self.note_in(home_pane, said, Tone::Fine);
+        crate::bench::forget(&place);
+        self.next_task();
     }
 
     /// The arena's next steps, at every turn of the screen's loop: a model past a limit stopped, the task given to
@@ -2700,6 +2998,7 @@ impl Panes {
         let Some(mut arena) = self.arena.take() else {
             return;
         };
+        let limits = (arena.time_limit, arena.cost_limit);
         for member in &mut arena.members {
             let crate::arena::State::Working = member.state else {
                 continue;
@@ -2713,7 +3012,9 @@ impl Panes {
                 continue;
             };
             let began = member.began.unwrap_or_else(Instant::now);
-            if let Some(why) = crate::arena::past_limit(began, self.list[at].app.cost) {
+            if let Some(why) =
+                crate::arena::past_limit(limits.0, limits.1, began, self.list[at].app.cost)
+            {
                 self.list[at].app.stop_turn();
                 self.list[at]
                     .app
@@ -2777,9 +3078,12 @@ impl Panes {
         self.arena = Some(arena);
         // Once all are over the check kept for this repository runs in every worktree; the card waits for the owner's
         // `/arena card`, never opening under a key typed for something else.
-        if compared_now && self.check_command().is_some() {
+        if compared_now && self.bench.is_some() {
+            self.bench_checks();
+        } else if compared_now && self.check_command().is_some() {
             self.arena_check(None);
         }
+        self.step_bench();
     }
 
     /// Member `at`'s worktree made from the owner's folder as it is, and its pane started there on its model, in
@@ -2938,6 +3242,10 @@ impl Panes {
     /// `/arena check [command]` (and `c` on the card): `command` kept for the arena's repository, then the kept one
     /// run in every model's worktree, in its pane's sandbox — once every model is over.
     fn arena_check(&mut self, command: Option<String>) {
+        // A bench task's own check decides its result.
+        if self.bench.is_some() {
+            return self.active().tell(tr!(bench_no_check));
+        }
         let Some(arena) = &self.arena else {
             return self.active().tell(tr!(arena_none));
         };
@@ -3016,6 +3324,10 @@ impl Panes {
     /// `/arena take <n>`: model n's changes into the owner's folder, once every model is over and no other's were
     /// taken — first its files shown and asked, then taken (`sure`).
     fn arena_take(&mut self, at: usize, sure: bool) {
+        // A bench task's changes go into its own start repository, never the owner's folder: nothing to take.
+        if self.bench.is_some() {
+            return self.active().tell(tr!(bench_no_take));
+        }
         let Some(arena) = &self.arena else {
             return self.active().tell(tr!(arena_none));
         };
@@ -3093,6 +3405,19 @@ impl Panes {
             Ok(files) => {
                 if let Some(arena) = &mut self.arena {
                     arena.taken = Some(at);
+                    let home = self.list[self.active].app.parts.home.clone();
+                    let win = crate::bench::Record {
+                        date: chrono::Local::now().format("%Y-%m-%d").to_string(),
+                        set: crate::bench::FREE.to_owned(),
+                        task: crate::transcript::cut(&arena.task, 80),
+                        model: arena.members[at].contender.named(),
+                        passed: true,
+                        seconds: arena.members[at].took.map(|took| took.as_secs()),
+                        dollars: None,
+                        tokens: 0,
+                        ended: None,
+                    };
+                    let _ = crate::bench::keep(&home, &[win]);
                 }
                 let folder = tree.repo.top.display().to_string();
                 self.active().tell(tr!(
@@ -3167,6 +3492,19 @@ impl Panes {
             return;
         };
         self.card = None;
+        // Ended by the owner mid-bench, the bench ends with it (its start repository once the worktrees are gone);
+        // ended by the bench itself, it goes on.
+        let stopped = self
+            .bench
+            .as_mut()
+            .and_then(|bench| Some((bench.current.take()?.1, bench.home.clone())));
+        if let Some((_, home)) = &stopped {
+            for at in 0..arena.members.len() {
+                let _ = std::fs::remove_dir_all(check_place(home, &arena, at));
+            }
+            self.bench = None;
+            self.active().tell(tr!(bench_stopped));
+        }
         let mut failed = Vec::new();
         for member in &arena.members {
             // A model's pane made the main one (`/swap`) stays, and its worktree with it.
@@ -3184,6 +3522,9 @@ impl Panes {
             {
                 failed.push(reason);
             }
+        }
+        if let Some((place, _)) = stopped {
+            crate::bench::forget(&place);
         }
         if failed.is_empty() {
             self.active().tell(tr!(arena_ended));
@@ -4180,6 +4521,15 @@ fn discard_picker(
 
 /// The new pane's session: the owner's, in the active pane's folder, on its provider and model, with the first
 /// session's servers, starting in build (the owner's flow: the first pane plans, the second builds).
+/// Where member `at`'s bench check runs: in `~/.glut`, by its worktree's branch.
+fn check_place(
+    home: &std::path::Path,
+    arena: &crate::arena::Arena,
+    at: usize,
+) -> std::path::PathBuf {
+    crate::bench::checks_dir(home).join(arena.branch(at).replace('/', "-"))
+}
+
 /// Each arena model's worktree written down as git's tree id, once: what its card, numbers and a take read.
 fn snapshots(arena: &mut crate::arena::Arena) {
     for member in &mut arena.members {
@@ -5134,6 +5484,74 @@ mod tests {
         panes.settle(&host);
         assert!(panes.arena.is_none());
         assert_eq!(panes.list.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_bench_task_keeps_each_models_result_once_its_checks_are_over_then_the_set_ends() {
+        let host: Arc<dyn Host> = Arc::new(crate::Standalone);
+        let (mut panes, _inlets) = split();
+        add(&mut panes, 3);
+        let home = panes.list[0].app.parts.home.clone();
+        let contender = |model: &str| crate::arena::Contender {
+            provider: "p".into(),
+            model: model.into(),
+            local: false,
+        };
+        let asked = crate::arena::Asked {
+            contenders: vec![contender("good"), contender("bad")],
+            task: "fix it".into(),
+        };
+        let mut arena = crate::arena::Arena::new(asked, panes.list[0].id);
+        for (member, id) in arena.members.iter_mut().zip([2, 3]) {
+            member.state = crate::arena::State::Done(glut::FinishReason::Answered);
+            member.pane = Some(id);
+            member.took = Some(Duration::from_secs(9));
+        }
+        arena.compared = true;
+        arena.checking = true;
+        arena.checks = vec![crate::arena::Check::Passed, crate::arena::Check::Running];
+        panes.arena = Some(arena);
+        let place =
+            crate::bench::bench_dir().join(format!("2026-11-t-test-{}", std::process::id()));
+        std::fs::create_dir_all(&place).unwrap();
+        let task = crate::bench::Task {
+            name: "t".into(),
+            text: "fix it".into(),
+            time_limit: crate::arena::TIME_LIMIT,
+            cost_limit: crate::arena::COST_LIMIT,
+            folder: home.join("glut-arena/sets/2026-11/t"),
+        };
+        panes.bench = Some(crate::bench::Bench {
+            home: home.clone(),
+            home_pane: panes.list[0].id,
+            set: "2026-11".into(),
+            contenders: Vec::new(),
+            left: std::collections::VecDeque::new(),
+            current: Some((task, place.clone())),
+            total: 1,
+        });
+        panes.settle(&host);
+        assert!(
+            crate::bench::results(&home).is_empty(),
+            "a check still runs"
+        );
+        panes.arena.as_mut().unwrap().checks[1] = crate::arena::Check::Failed;
+        panes.settle(&host);
+        let passed: Vec<(String, bool)> = crate::bench::results(&home)
+            .into_iter()
+            .map(|record| (record.model, record.passed))
+            .collect();
+        assert_eq!(
+            passed,
+            [("p/good".to_owned(), true), ("p/bad".to_owned(), false)]
+        );
+        assert!(
+            panes.arena.is_none() && panes.bench.is_none(),
+            "the set is through"
+        );
+        assert_eq!(panes.list.len(), 1, "the task's panes went");
+        assert!(!place.exists(), "its start repository too");
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]

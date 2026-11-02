@@ -241,7 +241,7 @@ pub const COMMANDS: [Command; 67] = [
     command(
         Topic::Panes,
         "arena",
-        "[<model>, <model>: <task>|take <n>|check [command]|card|end]",
+        "[<model>, <model>: <task>|tasks [<set>]|results|take <n>|check [command]|card|end]",
         "the same task on two to four models at once, each in a pane and a worktree of its own, then compared — /arena \
          alone picks the models",
     ),
@@ -1324,6 +1324,7 @@ mod tests {
                 "read-only",
                 "remove",
                 "required",
+                "results",
                 "resume",
                 "rounds",
                 "rule",
@@ -1333,6 +1334,7 @@ mod tests {
                 "strict",
                 "system",
                 "take",
+                "tasks",
                 "tiles",
                 "tokens",
                 "tree",

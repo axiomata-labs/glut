@@ -1360,6 +1360,109 @@ fn arena_patch(tree: &Tree, start: &str, now: Option<&str>) -> Result<(Vec<u8>, 
     ))
 }
 
+/// A bench task's check folder `place` (T61 step 2), in `~/.glut` where no model's command reads or writes: the
+/// task's own `start` folder copied (files and folders alone), a git repository of its own whose one commit is that
+/// start (so `git status` there tells what the model changed, whatever it did to its own branch or the shared
+/// objects), the model's changes from `start` (git's tree id) to `now` laid over it as the bytes [`arena_patch`]
+/// checked (no link, protected or tool name, no git folder — a change it refuses is the check's failure), and the
+/// task's `check.sh` and `check/` copied into `.arena/` last, which that repository ignores. Nothing the model left
+/// in its worktree besides is in it, and nothing of the model's runs beside it while the check runs.
+///
+/// # Errors
+///
+/// What the patch refuses, or what could not be made.
+pub fn check_copy(
+    tree: &Tree,
+    start: &str,
+    now: &str,
+    task: &Path,
+    place: &Path,
+) -> Result<(), String> {
+    checked(&tree.pin())?;
+    let patch = match arena_patch(tree, start, Some(now)) {
+        Ok((patch, _)) => Some(patch),
+        Err(reason) if reason == tr!(arena_nothing) => None,
+        Err(reason) => return Err(reason),
+    };
+    if let Ok(there) = std::fs::symlink_metadata(place) {
+        if there.is_dir() {
+            std::fs::remove_dir_all(place)
+        } else {
+            std::fs::remove_file(place)
+        }
+        .map_err(|err| format!("{}: {err}", place.display()))?;
+    }
+    if let Some(parent) = place.parent() {
+        use std::os::unix::fs::DirBuilderExt as _;
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(parent)
+            .map_err(|err| format!("{}: {err}", parent.display()))?;
+    }
+    copy_files(&task.join("start"), place)?;
+    let scratch = |args: &[&str], input: Option<Vec<u8>>| {
+        let mut command = Command::new("git");
+        command.current_dir(place);
+        scrub(&mut command);
+        command
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .args([
+                "-c",
+                "core.attributesFile=/dev/null",
+                "-c",
+                "core.excludesFile=/dev/null",
+            ])
+            .args([
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "user.name=Glut",
+                "-c",
+                "user.email=glut@localhost",
+            ])
+            .args(args);
+        run_bytes(command, TIMEOUT_CHANGING, input)
+    };
+    scratch(&["init", "-q", "-b", "main"], None)?;
+    scratch(&["add", "--all", "--force"], None)?;
+    scratch(&["commit", "-q", "--allow-empty", "-m", "start"], None)?;
+    if let Some(patch) = patch {
+        scratch(&["apply", "--binary", "-"], Some(patch))?;
+    }
+    let exclude = place.join(".git/info/exclude");
+    std::fs::create_dir_all(place.join(".git/info"))
+        .and_then(|()| std::fs::write(&exclude, ".arena/\n"))
+        .map_err(|err| format!("{}: {err}", exclude.display()))?;
+    let arena = place.join(".arena");
+    std::fs::create_dir(&arena).map_err(|err| format!("{}: {err}", arena.display()))?;
+    copy_files(&task.join("check.sh"), &arena.join("check.sh"))?;
+    if task.join("check").is_dir() {
+        copy_files(&task.join("check"), &arena.join("check"))?;
+    }
+    Ok(())
+}
+
+/// Copies the owner's `from` (a file or a folder) to `to`, files and folders alone: no link is followed or made.
+fn copy_files(from: &Path, to: &Path) -> Result<(), String> {
+    let said = |err: std::io::Error| format!("{}: {err}", from.display());
+    let meta = std::fs::symlink_metadata(from).map_err(said)?;
+    if meta.is_file() {
+        std::fs::copy(from, to).map_err(said)?;
+    } else if meta.is_dir() {
+        if !to.is_dir() {
+            std::fs::create_dir(to).map_err(said)?;
+        }
+        for entry in std::fs::read_dir(from).map_err(said)? {
+            let entry = entry.map_err(said)?;
+            copy_files(&entry.path(), &to.join(entry.file_name()))?;
+        }
+    }
+    Ok(())
+}
+
 /// What taking the arena's winner would write, for the owner to see before saying yes.
 ///
 /// # Errors
@@ -1599,6 +1702,56 @@ mod tests {
             std::fs::read_link(top.join("lk")).unwrap(),
             Path::new("a.txt")
         );
+        remove(&tree, true).unwrap();
+        let _ = std::fs::remove_dir_all(top.parent().unwrap());
+    }
+
+    #[test]
+    fn a_check_copy_holds_the_tasks_start_the_checked_patch_and_the_check_alone() {
+        let (home, top) = repo("arena-check-copy");
+        let tree = add(&home, &pinned(&top), "glut/arena-1").unwrap();
+        let start = mirror(&tree).unwrap().start;
+        std::fs::write(tree.place.join("a.txt"), "changed\n").unwrap();
+        std::fs::write(tree.place.join("b.txt"), "new\n").unwrap();
+        let now = snapshot(&tree).unwrap();
+        // What the model does after the snapshot is not in it.
+        std::fs::write(tree.place.join("late.txt"), "late\n").unwrap();
+        let task = top.parent().unwrap().join("task");
+        std::fs::create_dir_all(task.join("check")).unwrap();
+        std::fs::create_dir_all(task.join("start")).unwrap();
+        std::fs::write(task.join("start/a.txt"), "one\n").unwrap();
+        std::fs::write(task.join("check.sh"), "exit 0\n").unwrap();
+        std::fs::write(task.join("check/t.py"), "pass\n").unwrap();
+        let place = top.parent().unwrap().join("checks/glut-arena-1");
+        std::fs::create_dir_all(place.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink("/tmp", &place).unwrap();
+        check_copy(&tree, &start, &now, &task, &place).unwrap();
+        assert!(
+            std::fs::symlink_metadata(&place).unwrap().is_dir(),
+            "the link went, a folder stands"
+        );
+        let read = |name: &str| std::fs::read_to_string(place.join(name)).unwrap();
+        assert_eq!(read("a.txt"), "changed\n");
+        assert_eq!(read("b.txt"), "new\n");
+        assert!(!place.join("late.txt").exists());
+        assert_eq!(read(".arena/check.sh"), "exit 0\n");
+        assert_eq!(read(".arena/check/t.py"), "pass\n");
+        let status = plain(&place, &["status", "--porcelain", "--untracked-files=all"]).unwrap();
+        let mut changed: Vec<&str> = status
+            .lines()
+            .filter_map(|line| line.split_whitespace().last())
+            .collect();
+        changed.sort_unstable();
+        assert_eq!(
+            changed,
+            ["a.txt", "b.txt"],
+            "its own repository's one commit is the start"
+        );
+        // A link the model made is refused for the check as for a take.
+        std::os::unix::fs::symlink("/etc/hosts", tree.place.join("hosts")).unwrap();
+        let now = snapshot(&tree).unwrap();
+        assert!(check_copy(&tree, &start, &now, &task, &place).is_err());
+        std::fs::remove_file(tree.place.join("hosts")).unwrap();
         remove(&tree, true).unwrap();
         let _ = std::fs::remove_dir_all(top.parent().unwrap());
     }

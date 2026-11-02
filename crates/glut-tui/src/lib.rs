@@ -9,6 +9,7 @@ mod agents;
 mod app;
 mod arena;
 mod background;
+mod bench;
 mod branch;
 mod btw;
 mod clean;

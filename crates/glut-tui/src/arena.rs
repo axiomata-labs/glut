@@ -244,6 +244,11 @@ pub struct Arena {
     /// The repository of the folder it started from, and its `HEAD` then: a winner is taken only while it stands.
     pub repo: Option<crate::worktree::Repo>,
     pub head: String,
+    /// What stops a model: its time and its spending (a bench task's own, else [`TIME_LIMIT`] and [`COST_LIMIT`]).
+    pub time_limit: Duration,
+    pub cost_limit: f64,
+    /// Its checks were started (a bench task's, after every model was over).
+    pub checking: bool,
 }
 
 impl Arena {
@@ -274,6 +279,9 @@ impl Arena {
             offered: None,
             repo: None,
             head: String::new(),
+            time_limit: TIME_LIMIT,
+            cost_limit: COST_LIMIT,
+            checking: false,
         }
     }
 
@@ -323,13 +331,18 @@ impl Arena {
 }
 
 /// Why member's work must stop now: past the time or the cost limit; `None` while within both.
-pub fn past_limit(began: Instant, cost: Option<f64>) -> Option<String> {
-    if began.elapsed() >= TIME_LIMIT {
-        return Some(tr!(arena_over_time, minutes = TIME_LIMIT.as_secs() / 60));
+pub fn past_limit(
+    time_limit: Duration,
+    cost_limit: f64,
+    began: Instant,
+    cost: Option<f64>,
+) -> Option<String> {
+    if began.elapsed() >= time_limit {
+        return Some(tr!(arena_over_time, minutes = time_limit.as_secs() / 60));
     }
     match cost {
-        Some(cost) if cost >= COST_LIMIT => {
-            Some(tr!(arena_over_cost, dollars = format!("{COST_LIMIT:.2}")))
+        Some(cost) if cost >= cost_limit => {
+            Some(tr!(arena_over_cost, dollars = format!("{cost_limit:.2}")))
         }
         _ => None,
     }

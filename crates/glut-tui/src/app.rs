@@ -5756,6 +5756,20 @@ impl App {
             },
             ("end", "") => self.pane_request = Some(crate::panes::Request::ArenaEnd(false)),
             ("card", "") => self.pane_request = Some(crate::panes::Request::ArenaCard),
+            ("results", "") => {
+                let records = crate::bench::results(&self.parts.home);
+                self.transcript
+                    .note(crate::bench::table(&records), Tone::Fine);
+            }
+            ("tasks", "") => {
+                let root = crate::bench::root(&self.parts.home);
+                self.transcript
+                    .note(crate::bench::listing(&root), Tone::Quiet);
+            }
+            ("tasks", rest) => match self.bench_asked(rest) {
+                Ok(request) => self.pane_request = Some(request),
+                Err(reason) => self.transcript.note(reason, Tone::Fault),
+            },
             ("check", command) => {
                 let command = (!command.is_empty()).then(|| command.to_owned());
                 self.pane_request = Some(crate::panes::Request::ArenaCheck(command));
@@ -5817,6 +5831,97 @@ impl App {
             let _ = reports.send(Report::Shell {
                 id,
                 command: shown,
+                ran: crate::shell::Ran { ok, output },
+                to_model: false,
+            });
+        });
+        Some(started)
+    }
+
+    /// `/arena tasks <set>[: <model>, <model>]`: the bench on the models named, else on the last arena's.
+    fn bench_asked(&self, rest: &str) -> Result<crate::panes::Request, String> {
+        let (set, named) = match rest.split_once(':') {
+            Some((set, named)) => (set.trim(), Some(named)),
+            None => (rest.trim(), None),
+        };
+        let lists = crate::arena::listed(&self.parts.home);
+        let named: Vec<String> = named
+            .unwrap_or_default()
+            .split(',')
+            .map(|word| word.trim().to_owned())
+            .filter(|word| !word.is_empty())
+            .collect();
+        // None named (or nothing after the colon): the last arena's.
+        let words = if named.is_empty() {
+            Prefs::load(&self.parts.home).arena
+        } else {
+            named
+        };
+        if !(crate::arena::FEWEST..=crate::arena::MOST).contains(&words.len()) {
+            return Err(tr!(
+                arena_count,
+                fewest = crate::arena::FEWEST,
+                most = crate::arena::MOST
+            ));
+        }
+        let contenders = words
+            .iter()
+            .map(|word| crate::arena::resolve(&lists, word))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut prefs = Prefs::load(&self.parts.home);
+        prefs.arena = contenders
+            .iter()
+            .map(crate::arena::Contender::named)
+            .collect();
+        // A list not kept only costs the marks next time.
+        let _ = prefs.save(&self.parts.home);
+        Ok(crate::panes::Request::ArenaBench {
+            set: set.to_owned(),
+            contenders,
+        })
+    }
+
+    /// A bench task's check (T61 step 2) in `folder` — Glut's own check copy in `~/.glut`, never the model's worktree
+    /// — through a shell of its own rooted there, in the sandbox of this pane's settings: no model's command reaches
+    /// the folder, nothing of the model's runs beside it, and the shell with its jobs ends with the check. Shown and
+    /// answered here as [`Self::arena_check`]'s is; `None` where no sandbox holds it.
+    pub fn arena_check_in(&mut self, folder: std::path::PathBuf, command: &str) -> Option<String> {
+        if !session::sandboxed(&self.parts) {
+            self.transcript.note(tr!(arena_no_sandbox), Tone::Fault);
+            return None;
+        }
+        self.shells += 1;
+        let id = format!("{ARENA_CHECK}{}", self.shells);
+        self.transcript.push(crate::transcript::Kind::Tool {
+            id: id.clone(),
+            name: "check".into(),
+            target: command.to_owned(),
+            state: crate::transcript::ToolState::Running,
+            gate: Some(tr!(bench_check_gate).into()),
+            output: String::new(),
+            unfolded: true,
+            depth: 0,
+        });
+        let mut options = glut::tools::shell::ShellOptions::from_environment();
+        options.sandbox = self.parts.config.sandbox.clone();
+        let reports = self.reports.clone();
+        let command = command.to_owned();
+        let started = id.clone();
+        tokio::spawn(async move {
+            let arguments =
+                serde_json::json!({ "command": command, "timeout_secs": ARENA_CHECK_SECS })
+                    .to_string();
+            let (ok, output) = match glut::tools::shell::shell_tools(&folder, options) {
+                Ok(tools) => {
+                    let mut toolbox = glut::Toolbox::new();
+                    toolbox.extend(tools);
+                    toolbox.call("bash", &arguments).await
+                }
+                Err(err) => (false, err.to_string()),
+            };
+            let _ = reports.send(Report::Shell {
+                id,
+                command,
                 ran: crate::shell::Ran { ok, output },
                 to_model: false,
             });

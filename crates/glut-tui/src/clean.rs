@@ -27,7 +27,7 @@ const MARKER: &str = "cleaned";
 /// The lock one pass at a time holds, in `~/.glut`: two windows starting together sweep once.
 const LOCK: &str = "clean.lock";
 /// The kinds a report lists, in its order: the fixed words of `--json`.
-pub const ITEMS: [&str; 9] = [
+pub const ITEMS: [&str; 10] = [
     "snapshots",
     "journals",
     "sessions",
@@ -36,8 +36,11 @@ pub const ITEMS: [&str; 9] = [
     "exports",
     "lean",
     "quarantine",
+    "arena",
     "other",
 ];
+/// A bench task's start repository left behind (a window closed mid-task) goes after this long.
+const BENCH_GRACE: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// What one pass found and did, as `glut clean --json` writes it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -86,8 +89,9 @@ pub fn clean(home: &Path, keep: &Keep, dry: bool) -> Report {
     let mut quarantine = Tally::new("quarantine", None);
     quarantine.bytes = glut::clean::size_of(&held);
     quarantine.count = glut::clean::entries_in(&held);
+    let arena = arena(home, dry);
     let mut items = vec![
-        snapshots, journals, sessions, results, images, exports, lean, quarantine,
+        snapshots, journals, sessions, results, images, exports, lean, quarantine, arena,
     ];
     let mut other = Tally::new("other", None);
     other.bytes = total_bytes.saturating_sub(items.iter().map(|item| item.bytes).sum());
@@ -103,6 +107,41 @@ pub fn clean(home: &Path, keep: &Keep, dry: bool) -> Report {
         last_run,
         items,
     }
+}
+
+/// The arena (T61): `~/.glut/arena` counted (its results and task sets are kept), and a bench task's start
+/// repository or check folder a closed window left removed after [`BENCH_GRACE`] — only a folder directly in
+/// [`crate::bench::bench_dir`] or [`crate::bench::checks_dir`], never through a link.
+fn arena(home: &Path, dry: bool) -> Tally {
+    let now = SystemTime::now();
+    let mut tally = arena_in(home, &crate::bench::bench_dir(), dry, now);
+    // A check folder a closed window left goes the same way; it is counted in `~/.glut/arena` already.
+    let checks = arena_in(home, &crate::bench::checks_dir(home), dry, now);
+    tally.freeable_bytes += checks.freeable_bytes;
+    tally.freeable_count += checks.freeable_count;
+    tally
+}
+
+fn arena_in(home: &Path, bench: &Path, dry: bool, now: SystemTime) -> Tally {
+    let mut tally = Tally::new("arena", None);
+    tally.bytes = glut::clean::size_of(&home.join(glut::providers::DIR).join("arena"));
+    tally.count = glut::clean::entries_in(bench);
+    let Ok(entries) = std::fs::read_dir(bench) else {
+        return tally;
+    };
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        let plain = entry.file_type().is_ok_and(|kind| kind.is_dir());
+        if !plain || age(&path, now) < BENCH_GRACE {
+            continue;
+        }
+        tally.freeable_bytes += glut::clean::size_of(&path);
+        tally.freeable_count += 1;
+        if !dry {
+            let _ = std::fs::remove_dir_all(&path);
+        }
+    }
+    tally
 }
 
 /// When the last pass ended, if one did.
@@ -598,6 +637,28 @@ mod tests {
     use std::fs::File;
 
     use super::*;
+
+    #[test]
+    fn a_bench_start_left_behind_goes_after_a_day_and_a_link_never() {
+        let root = std::env::temp_dir().join(format!("glut-clean-arena-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let bench = root.join("bench");
+        std::fs::create_dir_all(bench.join("old")).unwrap();
+        std::fs::create_dir_all(bench.join("young")).unwrap();
+        std::fs::write(bench.join("old/f"), "x").unwrap();
+        std::os::unix::fs::symlink(root.join("elsewhere"), bench.join("linked")).unwrap();
+        std::fs::create_dir_all(root.join("elsewhere")).unwrap();
+        let later = SystemTime::now() + BENCH_GRACE + Duration::from_secs(60);
+        let young = std::fs::File::open(bench.join("young")).unwrap();
+        young.set_modified(later).unwrap();
+        let dry = arena_in(&root, &bench, true, later);
+        assert_eq!(dry.freeable_count, 1);
+        assert!(bench.join("old").exists(), "a dry run removes nothing");
+        arena_in(&root, &bench, false, later);
+        assert!(!bench.join("old").exists());
+        assert!(bench.join("young").exists() && root.join("elsewhere").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     fn home(label: &str) -> PathBuf {
         let home = std::env::temp_dir().join(format!("glut-clean-{label}-{}", std::process::id()));

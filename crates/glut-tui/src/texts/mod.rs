@@ -2341,6 +2341,48 @@ glut::catalog! {
         arena_end_title: &'static str,
         /// The arena ended.
         arena_ended: &'static str,
+        /// The bench's temporary folder is not the user's own: `{dir}`.
+        bench_dir_not_own: &'static str,
+        /// Beside a bench task's check in a model's pane.
+        bench_check_gate: &'static str,
+        /// A bench task's check could not be laid out: the model's changes were refused, `{reason}`.
+        bench_check_refused: &'static str,
+        /// A bench result whose check never ran.
+        bench_unchecked: &'static str,
+        /// `/arena check` while the bench runs.
+        bench_no_check: &'static str,
+        /// `/arena take` while the bench runs.
+        bench_no_take: &'static str,
+        /// `/arena tasks`: no set of that name: `{set}`.
+        bench_no_set: &'static str,
+        /// A task's folder lacks a part it needs.
+        bench_missing: &'static str,
+        /// `/arena results` before any result.
+        bench_no_results: &'static str,
+        /// `/arena results`: the free arena's heading.
+        bench_wins_title: &'static str,
+        /// `/arena results`: a model's wins in the free arena, `{n}`.
+        bench_wins: &'static str,
+        /// `/arena results`: a set's heading, `{set}`.
+        bench_set_title: &'static str,
+        /// `/arena results`: a model's tasks passed, `{passed}` of `{runs}`.
+        bench_passed: &'static str,
+        /// `/arena tasks` without a set: where they are looked for, `{root}`.
+        bench_no_sets: &'static str,
+        /// `/arena tasks`: the heading, `{root}`.
+        bench_sets_title: &'static str,
+        /// `/arena tasks`: how a set runs.
+        bench_usage: &'static str,
+        /// The bench starts: `{set}`, `{n}` tasks, `{models}`.
+        bench_starts: &'static str,
+        /// The bench is through a set, `{set}`.
+        bench_done: &'static str,
+        /// The bench's next task: `{n}` of `{total}`, `{task}`.
+        bench_task: &'static str,
+        /// A bench task that could not start: `{task}`, `{reason}`.
+        bench_task_failed: &'static str,
+        /// The owner ended the arena mid-bench.
+        bench_stopped: &'static str,
         /// Below the arena's comparison: the best of the models that answered, by number: `{fastest}`, `{cheapest}`,
         /// `{leanest}`.
         arena_best: &'static str,
