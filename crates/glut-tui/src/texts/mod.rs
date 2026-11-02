@@ -2341,6 +2341,18 @@ glut::catalog! {
         arena_end_title: &'static str,
         /// The arena ended.
         arena_ended: &'static str,
+        /// `/arena end` while checks run in the worktrees.
+        arena_checking: &'static str,
+        /// Beside an arena's check in a model's pane.
+        arena_check_gate: &'static str,
+        /// `/arena check <command>` kept it for the repository: `{command}`.
+        arena_check_kept: &'static str,
+        /// `/arena check` with none kept yet.
+        arena_check_usage: &'static str,
+        /// The comparison card: before a model's check mark.
+        arena_check_label: &'static str,
+        /// The comparison card's keys, in its frame.
+        arena_card_keys: &'static str,
         /// An arena's model not started: its commands would run outside a sandbox in auto.
         arena_no_sandbox: &'static str,
         /// `/arena take` after the owner's HEAD moved since the start.

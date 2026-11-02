@@ -381,6 +381,11 @@ pub enum Request {
     ArenaTake(usize, bool),
     /// `/arena end`: its panes and worktrees removed — asked first, `true` once the owner said yes.
     ArenaEnd(bool),
+    /// `/arena card`: the comparison card again.
+    ArenaCard,
+    /// `/arena check [command]`: the check command kept for this repository and run in every worktree — the one
+    /// kept, without a command.
+    ArenaCheck(Option<String>),
 }
 
 /// What a report is for a tile (T69), read before the pane takes it.
@@ -668,6 +673,8 @@ pub struct Panes {
     return_to: Option<u64>,
     /// The model arena under way, or done and waiting for the owner's pick (T61).
     pub arena: Option<crate::arena::Arena>,
+    /// The arena's comparison card over the screen, while open.
+    pub card: Option<crate::arena::Card>,
 }
 
 /// How often an open Glut looks whether a plan's run ended (T60b): a tile for it, as for an agent's end.
@@ -772,6 +779,7 @@ impl Panes {
             window_tried: None,
             return_to: None,
             arena: None,
+            card: None,
         };
         (
             panes,
@@ -1036,6 +1044,23 @@ impl Panes {
         {
             member.state = crate::arena::State::Done(outcome.reason);
             member.took = member.began.map(|began| began.elapsed());
+        }
+        // An arena's check ended in a model's worktree.
+        // Only the check last started there: a slower earlier one ends unheard.
+        if let Report::Shell { id: shell, ran, .. } = &report
+            && let Some(arena) = &mut self.arena
+            && let Some(at) = arena
+                .members
+                .iter()
+                .position(|member| member.pane == Some(id))
+            && arena.check_ids[at].as_ref() == Some(shell)
+        {
+            arena.check_ids[at] = None;
+            arena.checks[at] = if ran.ok {
+                crate::arena::Check::Passed
+            } else {
+                crate::arena::Check::Failed
+            };
         }
         // A turn the host refused before it began (a hook's veto) never ends with a `Done`.
         if let Report::Refused { reason, .. } = &report
@@ -1716,6 +1741,25 @@ impl Panes {
             self.redraw = true;
             return;
         }
+        // The arena's card over the screen (T61) takes the keys while it shows; the wheel scrolls its diff.
+        if self.card.as_ref().is_some_and(|card| card.drawn) {
+            let scrolled =
+                |code| crossterm::event::KeyEvent::new(code, crossterm::event::KeyModifiers::NONE);
+            match &event {
+                TermEvent::Key(key) => self.on_card_key(*key),
+                TermEvent::Mouse(mouse) => match mouse.kind {
+                    MouseEventKind::ScrollDown => {
+                        self.on_card_key(scrolled(crossterm::event::KeyCode::Down))
+                    }
+                    MouseEventKind::ScrollUp => {
+                        self.on_card_key(scrolled(crossterm::event::KeyCode::Up))
+                    }
+                    _ => {}
+                },
+                _ => {}
+            }
+            return;
+        }
         // A background agent's stream over the pane is only to read: Esc, q (T71) or ⌃C close it, nothing else goes
         // through.
         if self.peek.is_some() {
@@ -1924,6 +1968,8 @@ impl Panes {
                 Request::Arena(asked) => self.start_arena(asked),
                 Request::ArenaTake(at, sure) => self.arena_take(at, sure),
                 Request::ArenaEnd(sure) => self.end_arena(sure),
+                Request::ArenaCard => self.open_card(),
+                Request::ArenaCheck(command) => self.arena_check(command),
                 Request::Peek(Some(name)) => match self.resolve_background(&name) {
                     Some(at) => self.peek = Some(self.list[at].id),
                     _ => self.active().tell(tr!(
@@ -2391,6 +2437,10 @@ impl Panes {
             }
             return;
         }
+        // Nobody watches an arena's model (T61): the Keychain the owner keeps open for sessions stays shut to it.
+        if building.arena.is_some() {
+            parts.tools.keychain().set_session_open(false);
+        }
         let mut app = App::new(Arc::new(parts), engine, building.reports);
         // A worktree's pane belongs to the window's project (T44): `/projects` there marks and leaves that one.
         app.project = self.cwd.clone();
@@ -2672,6 +2722,14 @@ impl Panes {
                 member.state = crate::arena::State::Aborted(why);
             }
         }
+        // A check whose pane closed never reports: it is no longer running.
+        for (at, member) in arena.members.iter().enumerate() {
+            if arena.checks[at] == crate::arena::Check::Running
+                && !self.list.iter().any(|pane| Some(pane.id) == member.pane)
+            {
+                arena.checks[at] = crate::arena::Check::None;
+            }
+        }
         while let Some(due) = arena.next_due() {
             let member = &mut arena.members[due];
             match self
@@ -2699,15 +2757,29 @@ impl Panes {
             arena.members[next].state =
                 crate::arena::State::Aborted(crate::transcript::clean(&reason));
         }
-        if arena.over() && !arena.compared {
+        // Compared once every model is over and no stopped turn still writes in its worktree.
+        let resting = arena.members.iter().all(|member| {
+            self.list
+                .iter()
+                .find(|pane| Some(pane.id) == member.pane)
+                .is_none_or(|pane| !pane.app.working())
+        });
+        let compared_now = arena.over() && !arena.compared && resting;
+        if compared_now {
             arena.compared = true;
-            let said = self.compare(&arena);
+            snapshots(&mut arena);
+            let said = crate::arena::compared(&arena, &self.rows(&arena));
             match self.list.iter().position(|pane| pane.id == arena.home) {
                 Some(at) => self.list[at].app.transcript.note(said, Tone::Fine),
                 None => self.active().transcript.note(said, Tone::Fine),
             }
         }
         self.arena = Some(arena);
+        // Once all are over the check kept for this repository runs in every worktree; the card waits for the owner's
+        // `/arena card`, never opening under a key typed for something else.
+        if compared_now && self.check_command().is_some() {
+            self.arena_check(None);
+        }
     }
 
     /// Member `at`'s worktree made from the owner's folder as it is, and its pane started there on its model, in
@@ -2794,8 +2866,8 @@ impl Panes {
         Ok(())
     }
 
-    /// The arena's comparison: each model's state, time, cost, tokens, calls and changes.
-    fn compare(&self, arena: &crate::arena::Arena) -> String {
+    /// Each arena model's numbers: what its pane spent, what its worktree changed.
+    fn rows(&self, arena: &crate::arena::Arena) -> Vec<crate::arena::Row> {
         let spent: Vec<crate::arena::Spent> = arena
             .members
             .iter()
@@ -2815,12 +2887,130 @@ impl Panes {
         let changes: Vec<Result<crate::worktree::Changes, String>> = arena
             .members
             .iter()
-            .map(|member| match (&member.tree, &member.start) {
-                (Some(tree), Some(start)) => crate::worktree::changes(tree, start),
-                _ => Err(tr!(arena_no_tree).into()),
-            })
+            .map(
+                |member| match (&member.tree, &member.start, &member.snapshot) {
+                    (Some(tree), Some(start), Some(now)) => {
+                        crate::worktree::changes(tree, start, now)
+                    }
+                    _ => Err(tr!(arena_no_tree).into()),
+                },
+            )
             .collect();
-        crate::arena::compared(arena, &spent, &changes)
+        crate::arena::rows(arena, &spent, &changes)
+    }
+
+    /// `/arena card`: the comparison card over the screen, read from each worktree as it stood once every model was
+    /// over.
+    fn open_card(&mut self) {
+        let Some(arena) = &self.arena else {
+            return self.active().tell(tr!(arena_none));
+        };
+        if !arena.compared {
+            return self.active().tell(tr!(arena_running));
+        }
+        let rows = self.rows(arena);
+        let diffs = arena
+            .members
+            .iter()
+            .map(
+                |member| match (&member.tree, &member.start, &member.snapshot) {
+                    (Some(tree), Some(start), Some(now)) => {
+                        crate::worktree::diff_text(tree, start, now)
+                    }
+                    _ => Err(tr!(arena_no_tree).into()),
+                },
+            )
+            .collect();
+        let selected = self.card.as_ref().map_or(0, |card| card.selected);
+        self.card = Some(crate::arena::Card::new(rows, diffs, selected));
+    }
+
+    /// The check command kept for the arena's repository.
+    fn check_command(&self) -> Option<String> {
+        let repo = self.arena.as_ref()?.repo.as_ref()?;
+        let home = &self.list[self.active].app.parts.home;
+        crate::prefs::Prefs::load(home)
+            .arena_checks
+            .get(&repo.top.to_string_lossy().into_owned())
+            .cloned()
+    }
+
+    /// `/arena check [command]` (and `c` on the card): `command` kept for the arena's repository, then the kept one
+    /// run in every model's worktree, in its pane's sandbox — once every model is over.
+    fn arena_check(&mut self, command: Option<String>) {
+        let Some(arena) = &self.arena else {
+            return self.active().tell(tr!(arena_none));
+        };
+        if let Some(command) = command
+            && let Some(repo) = &arena.repo
+        {
+            let top = repo.top.to_string_lossy().into_owned();
+            let home = self.list[self.active].app.parts.home.clone();
+            let mut prefs = crate::prefs::Prefs::load(&home);
+            prefs.arena_checks.insert(top, command.clone());
+            if let Err(reason) = prefs.save(&home) {
+                self.active().transcript.note(reason, Tone::Fault);
+            }
+            self.active().tell(tr!(
+                arena_check_kept,
+                command = crate::transcript::clean(&command)
+            ));
+        }
+        let Some(command) = self.check_command() else {
+            return self.active().tell(tr!(arena_check_usage));
+        };
+        let Some(mut arena) = self.arena.take() else {
+            return;
+        };
+        if arena.compared {
+            for (at, member) in arena.members.iter().enumerate() {
+                // One check at a time in a worktree, and none where a stopped turn still writes.
+                if arena.checks[at] == crate::arena::Check::Running {
+                    continue;
+                }
+                let pane = self
+                    .list
+                    .iter_mut()
+                    .find(|pane| Some(pane.id) == member.pane)
+                    .filter(|pane| !pane.app.working());
+                if let (Some(pane), Some(_)) = (pane, &member.tree) {
+                    let started = pane.app.arena_check(&command);
+                    arena.checks[at] = if started.is_some() {
+                        crate::arena::Check::Running
+                    } else {
+                        crate::arena::Check::None
+                    };
+                    arena.check_ids[at] = started;
+                }
+            }
+        } else {
+            self.active().tell(tr!(arena_running));
+        }
+        self.arena = Some(arena);
+    }
+
+    /// A key on the comparison card: its own, or what it asks of the screen.
+    fn on_card_key(&mut self, key: crossterm::event::KeyEvent) {
+        let Some(card) = &mut self.card else {
+            return;
+        };
+        match card.key(key) {
+            crate::arena::CardAction::None => {}
+            crate::arena::CardAction::Close => self.card = None,
+            crate::arena::CardAction::Check => self.arena_check(None),
+            crate::arena::CardAction::Take(at) => {
+                if let Some(home) = self.arena.as_ref().map(|arena| arena.home)
+                    && let Some(at) = self.list.iter().position(|pane| pane.id == home)
+                {
+                    self.focus(at);
+                }
+                self.arena_take(at, false);
+                // The card makes room for the question; a refusal is said in the pane, the card stays.
+                if self.active().picker.is_some() {
+                    self.card = None;
+                }
+            }
+        }
     }
 
     /// `/arena take <n>`: model n's changes into the owner's folder, once every model is over and no other's were
@@ -2850,7 +3040,8 @@ impl Panes {
         let name = crate::transcript::clean(&member.contender.named());
         let head = arena.head.clone();
         if !sure {
-            let taking = match crate::worktree::taking(&tree, &start) {
+            let snapshot = arena.members[at].snapshot.clone();
+            let taking = match crate::worktree::taking(&tree, &start, snapshot.as_deref()) {
                 Ok(taking) => taking,
                 Err(reason) => return self.active().transcript.note(reason, Tone::Fault),
             };
@@ -2948,6 +3139,10 @@ impl Panes {
             self.active().picker = Some(picker);
             return;
         }
+        // A check cannot be stopped midway: the worktrees go once every check is over.
+        if arena.checks.contains(&crate::arena::Check::Running) {
+            return self.active().tell(tr!(arena_checking));
+        }
         // Git goes over the worktrees only once nothing writes there any more: turns under way are stopped first.
         let working: Vec<usize> = self
             .list
@@ -2971,6 +3166,7 @@ impl Panes {
         let Some(arena) = self.arena.take() else {
             return;
         };
+        self.card = None;
         let mut failed = Vec::new();
         for member in &arena.members {
             // A model's pane made the main one (`/swap`) stays, and its worktree with it.
@@ -3984,6 +4180,17 @@ fn discard_picker(
 
 /// The new pane's session: the owner's, in the active pane's folder, on its provider and model, with the first
 /// session's servers, starting in build (the owner's flow: the first pane plans, the second builds).
+/// Each arena model's worktree written down as git's tree id, once: what its card, numbers and a take read.
+fn snapshots(arena: &mut crate::arena::Arena) {
+    for member in &mut arena.members {
+        if member.snapshot.is_none()
+            && let Some(tree) = &member.tree
+        {
+            member.snapshot = crate::worktree::snapshot(tree).ok();
+        }
+    }
+}
+
 fn launch_beside(app: &App, servers: Servers) -> Launch {
     let mut launch = Launch::owner(
         app.parts.config.cwd.clone(),
@@ -4862,6 +5069,55 @@ mod tests {
             notes.iter().any(|note| note.starts_with("Arena — fix it")),
             "{notes:?}"
         );
+        // The card comes on the owner's word only; a check's end is counted for the check last started there.
+        assert!(panes.card.is_none());
+        panes.active().pane_request = Some(Request::ArenaCard);
+        panes.settle(&host);
+        assert!(panes.card.is_some());
+        panes.card.as_mut().unwrap().drawn = true;
+        let stale = Report::Shell {
+            id: format!("{}0", crate::app::ARENA_CHECK),
+            command: "cargo test".into(),
+            ran: crate::shell::Ran {
+                ok: false,
+                output: "old".into(),
+            },
+            to_model: false,
+        };
+        panes.arena.as_mut().unwrap().check_ids[1] = Some(format!("{}1", crate::app::ARENA_CHECK));
+        panes.on_report(3, stale);
+        assert_eq!(
+            panes.arena.as_ref().unwrap().checks[1],
+            crate::arena::Check::None
+        );
+        panes.on_report(
+            3,
+            Report::Shell {
+                id: format!("{}1", crate::app::ARENA_CHECK),
+                command: "cargo test".into(),
+                ran: crate::shell::Ran {
+                    ok: true,
+                    output: "ok".into(),
+                },
+                to_model: false,
+            },
+        );
+        assert_eq!(
+            panes.arena.as_ref().unwrap().checks,
+            [crate::arena::Check::None, crate::arena::Check::Passed]
+        );
+        // The card holds the keys: Esc closes it, and nothing reached the pane behind.
+        let key = |code| {
+            TermEvent::Key(crossterm::event::KeyEvent::new(
+                code,
+                crossterm::event::KeyModifiers::NONE,
+            ))
+        };
+        let before = panes.active().input.text();
+        panes.on_terminal(key(KeyCode::Char('x')));
+        assert_eq!(panes.active().input.text(), before);
+        panes.on_terminal(key(KeyCode::Esc));
+        assert!(panes.card.is_none());
         // Ended: asked first, then the panes go.
         panes.active = 0;
         panes.active().pane_request = Some(Request::ArenaEnd(false));

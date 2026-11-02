@@ -117,6 +117,9 @@ pub struct Prefs {
     /// The models of the last arena (T61), as `provider/model`: `/arena`'s list marks them again.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub arena: Vec<String>,
+    /// The arena's check command per repository (T61, `/arena check`), by the repository's folder.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub arena_checks: std::collections::BTreeMap<String, String>,
     #[serde(flatten)]
     other: serde_json::Map<String, serde_json::Value>,
 }

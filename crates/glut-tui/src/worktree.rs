@@ -1134,21 +1134,31 @@ pub fn mirror(tree: &Tree) -> Result<Mirrored, String> {
     })
 }
 
-/// The worktree as git's tree id now, every file the model wrote included.
+/// The worktree as git's tree id now, every file the model wrote included: what the arena's card, numbers and a
+/// take are read from, taken once (a check run afterwards writes there too).
+///
+/// # Errors
+///
+/// A config that could run a program, git's refusal.
+pub fn snapshot(tree: &Tree) -> Result<String, String> {
+    written(tree)
+}
+
+/// [`snapshot`]'s work.
 fn written(tree: &Tree) -> Result<String, String> {
     checked(&tree.pin())?;
     git_alone(&tree.pin(), &["add", "--all"], None)?;
     git_alone_text(&tree.pin(), &["write-tree"])
 }
 
-/// What the model of an arena's worktree changed since `start` (git's tree id from [`mirror`]): files, lines added
+/// What the model of an arena's worktree changed from `start` (git's tree id from [`mirror`]) to `now`: files, lines added
 /// and removed, new files included (a binary one counts no lines).
 ///
 /// # Errors
 ///
 /// A config that could run a program, git's refusal.
-pub fn changes(tree: &Tree, start: &str) -> Result<Changes, String> {
-    let now = written(tree)?;
+pub fn changes(tree: &Tree, start: &str, now: &str) -> Result<Changes, String> {
+    checked(&tree.pin())?;
     let stat = git_alone(
         &tree.pin(),
         &[
@@ -1158,7 +1168,7 @@ pub fn changes(tree: &Tree, start: &str) -> Result<Changes, String> {
             "--no-renames",
             "--end-of-options",
             start,
-            &now,
+            now,
         ],
         None,
     )?;
@@ -1176,6 +1186,30 @@ pub fn changes(tree: &Tree, start: &str) -> Result<Changes, String> {
         changes.files += 1;
     }
     Ok(changes)
+}
+
+/// What the model of an arena's worktree changed from `start` to `now`, as git's text diff, for the owner to read.
+///
+/// # Errors
+///
+/// A config that could run a program, git's refusal (a diff past git's output bound among them).
+pub fn diff_text(tree: &Tree, start: &str, now: &str) -> Result<String, String> {
+    checked(&tree.pin())?;
+    let out = git_alone(
+        &tree.pin(),
+        &[
+            "diff",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-renames",
+            "--end-of-options",
+            start,
+            now,
+        ],
+        None,
+    )?;
+    Ok(String::from_utf8_lossy(&out).into_owned())
 }
 
 /// Whether a path of an arena's winner may not come into the owner's folder: what a take-over refuses, a protected
@@ -1331,8 +1365,8 @@ fn arena_patch(tree: &Tree, start: &str, now: Option<&str>) -> Result<(Vec<u8>, 
 /// # Errors
 ///
 /// As [`apply`] refuses.
-pub fn taking(tree: &Tree, start: &str) -> Result<Taking, String> {
-    arena_patch(tree, start, None).map(|(_, taking)| taking)
+pub fn taking(tree: &Tree, start: &str, now: Option<&str>) -> Result<Taking, String> {
+    arena_patch(tree, start, now).map(|(_, taking)| taking)
 }
 
 /// Takes what the winner of an arena (T61) changed from `start` to `now` (the tree [`taking`] showed the owner)
@@ -1434,7 +1468,10 @@ mod tests {
         let mut left_out = mirrored.left_out.clone();
         left_out.sort();
         assert_eq!(left_out, [".env", "server.pem"]);
-        assert_eq!(changes(&tree, &mirrored.start).unwrap(), Changes::default());
+        assert_eq!(
+            changes(&tree, &mirrored.start, &snapshot(&tree).unwrap()).unwrap(),
+            Changes::default()
+        );
         // The model works: a line more, a file more, an executable script.
         std::fs::write(tree.place.join("a.txt"), "one changed\nand more\n").unwrap();
         std::fs::write(tree.place.join("b.txt"), "b\n").unwrap();
@@ -1446,14 +1483,19 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            changes(&tree, &mirrored.start).unwrap(),
+            changes(&tree, &mirrored.start, &snapshot(&tree).unwrap()).unwrap(),
             Changes {
                 files: 3,
                 added: 3,
                 removed: 0
             }
         );
-        let shown = taking(&tree, &mirrored.start).unwrap();
+        let diff = diff_text(&tree, &mirrored.start, &snapshot(&tree).unwrap()).unwrap();
+        assert!(
+            diff.contains("+and more") && diff.contains("b/run.sh"),
+            "{diff}"
+        );
+        let shown = taking(&tree, &mirrored.start, None).unwrap();
         assert_eq!(shown.files, ["a.txt", "b.txt", "run.sh"]);
         assert_eq!(shown.executable, ["run.sh"], "said before it is taken");
         assert_eq!(
@@ -1550,7 +1592,7 @@ mod tests {
         let start = mirror(&tree).unwrap().start;
         std::fs::remove_file(tree.place.join("lk")).unwrap();
         std::os::unix::fs::symlink("/etc/hosts", tree.place.join("lk")).unwrap();
-        assert!(taking(&tree, &start).is_err());
+        assert!(taking(&tree, &start, None).is_err());
         let now = written(&tree).unwrap();
         assert!(apply(&tree, &start, &now, &head_then).is_err());
         assert_eq!(

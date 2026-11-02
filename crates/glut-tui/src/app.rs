@@ -548,6 +548,11 @@ enum ThemeFrom {
     Pinned,
 }
 
+/// The start of an arena's check's stream id (T61): the screen counts a report of that id as the check's result.
+pub const ARENA_CHECK: &str = "arena-check-";
+/// How long an arena's check may run: the shell tool's longest.
+const ARENA_CHECK_SECS: u64 = 600;
+
 impl App {
     pub fn new(parts: Arc<Parts>, engine: Engine, reports: mpsc::UnboundedSender<Report>) -> Self {
         let folder = session::shown_folder(&parts.config.cwd);
@@ -5750,6 +5755,11 @@ impl App {
                 _ => self.tell(tr!(arena_take_usage)),
             },
             ("end", "") => self.pane_request = Some(crate::panes::Request::ArenaEnd(false)),
+            ("card", "") => self.pane_request = Some(crate::panes::Request::ArenaCard),
+            ("check", command) => {
+                let command = (!command.is_empty()).then(|| command.to_owned());
+                self.pane_request = Some(crate::panes::Request::ArenaCheck(command));
+            }
             _ => {
                 let lists = crate::arena::listed(&self.parts.home);
                 match crate::arena::parse(&lists, rest) {
@@ -5768,6 +5778,54 @@ impl App {
                 }
             }
         }
+    }
+
+    /// The arena's check command (T61) in this pane's worktree, through its own shell tool and so in its sandbox —
+    /// never as the owner's `!!`, which runs outside it: what it builds and tests is a model's code. Its end comes
+    /// back as a [`Report::Shell`] of the id it returns; `None` where no sandbox holds it.
+    pub fn arena_check(&mut self, command: &str) -> Option<String> {
+        if !session::sandboxed(&self.parts) {
+            self.transcript.note(tr!(arena_no_sandbox), Tone::Fault);
+            return None;
+        }
+        self.shells += 1;
+        let id = format!("{ARENA_CHECK}{}", self.shells);
+        self.transcript.push(crate::transcript::Kind::Tool {
+            id: id.clone(),
+            name: "check".into(),
+            target: command.to_owned(),
+            state: crate::transcript::ToolState::Running,
+            gate: Some(tr!(arena_check_gate).into()),
+            output: String::new(),
+            unfolded: true,
+            depth: 0,
+        });
+        let parts = Arc::clone(&self.parts);
+        let reports = self.reports.clone();
+        // From the worktree's top, whichever folder the model's last `cd` left the pane's shell in.
+        let root = self
+            .parts
+            .config
+            .cwd
+            .to_string_lossy()
+            .replace('\'', "'\\''");
+        let shown = command.to_owned();
+        let command = format!("cd -- '{root}' && {command}");
+        let started = id.clone();
+        tokio::spawn(async move {
+            // A fresh worktree builds from nothing: the longest a command may run.
+            let arguments =
+                serde_json::json!({ "command": command, "timeout_secs": ARENA_CHECK_SECS })
+                    .to_string();
+            let (ok, output) = parts.tools.call("bash", &arguments).await;
+            let _ = reports.send(Report::Shell {
+                id,
+                command: shown,
+                ran: crate::shell::Ran { ok, output },
+                to_model: false,
+            });
+        });
+        Some(started)
     }
 
     /// The models marked in `/arena`'s list, put into the input as its line, for the owner to add the task.

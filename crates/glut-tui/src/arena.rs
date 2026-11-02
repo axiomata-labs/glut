@@ -209,6 +209,9 @@ pub struct Member {
     /// When it was given the task, and how long it took.
     pub began: Option<Instant>,
     pub took: Option<Duration>,
+    /// Its worktree as git's tree id once every model was over: the card's numbers and diff and a take are read
+    /// from it, not from what a check wrote there since.
+    pub snapshot: Option<String>,
 }
 
 /// What a member spent, read from its pane when the arena is compared.
@@ -233,6 +236,9 @@ pub struct Arena {
     pub compared: bool,
     /// The member whose changes went into the owner's folder.
     pub taken: Option<usize>,
+    /// Each member's check (`/arena check`), in the members' order, and the stream id of the one running.
+    pub checks: Vec<Check>,
+    pub check_ids: Vec<Option<String>>,
     /// The member the owner was shown for `/arena take`, and its worktree as git's tree id then.
     pub offered: Option<(usize, String)>,
     /// The repository of the folder it started from, and its `HEAD` then: a winner is taken only while it stands.
@@ -242,7 +248,10 @@ pub struct Arena {
 
 impl Arena {
     pub fn new(asked: Asked, home: u64) -> Self {
+        let count = asked.contenders.len();
         Arena {
+            checks: vec![Check::None; count],
+            check_ids: vec![None; count],
             task: asked.task,
             stamp: chrono::Local::now().format("%Y%m%d-%H%M%S").to_string(),
             members: asked
@@ -256,6 +265,7 @@ impl Arena {
                     pane: None,
                     began: None,
                     took: None,
+                    snapshot: None,
                 })
                 .collect(),
             home,
@@ -331,61 +341,276 @@ pub fn clock(took: Duration) -> String {
     format!("{}:{:02}", secs / 60, secs % 60)
 }
 
-/// The comparison's lines: one per member, its numbers in columns, then what the owner can do.
-pub fn compared(
+/// Where a member's check command stands (the owner's `/arena check`, run in its worktree's sandbox).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Check {
+    /// Not run.
+    #[default]
+    None,
+    /// Running now: no second one starts in that worktree.
+    Running,
+    /// It ended with success.
+    Passed,
+    /// It failed, timed out or could not run.
+    Failed,
+}
+
+impl Check {
+    /// Its mark in the card: nothing, `…`, `✓`, `✗`.
+    pub fn mark(self) -> &'static str {
+        match self {
+            Check::None => "—",
+            Check::Running => "…",
+            Check::Passed => "✓",
+            Check::Failed => "✗",
+        }
+    }
+}
+
+/// A member's numbers as the comparison shows them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Row {
+    /// `provider/model`, cleaned.
+    pub name: String,
+    /// How it ended, in words.
+    pub state: String,
+    /// Whether it answered (else a limit, an error or a refusal ended it).
+    pub answered: bool,
+    /// The time, cost, tokens, calls and changes as shown.
+    pub took: String,
+    pub cost: String,
+    pub tokens: String,
+    pub calls: String,
+    pub changed: String,
+}
+
+/// Each member's row, from what it spent and changed.
+pub fn rows(
     arena: &Arena,
     spent: &[Spent],
     changes: &[Result<crate::worktree::Changes, String>],
-) -> String {
-    let names: Vec<String> = arena
+) -> Vec<Row> {
+    arena
         .members
         .iter()
-        .map(|member| crate::transcript::clean(&member.contender.named()))
-        .collect();
-    let wide = names
+        .enumerate()
+        .map(|(at, member)| {
+            let (state, answered) = match &member.state {
+                State::Done(glut::FinishReason::Answered) => (tr!(arena_done).to_owned(), true),
+                State::Done(reason) => (format!("{reason:?}"), false),
+                State::Aborted(why) => (crate::transcript::clean(why), false),
+                _ => ("…".to_owned(), false),
+            };
+            let spent = spent.get(at).copied().unwrap_or_default();
+            Row {
+                name: crate::transcript::clean(&member.contender.named()),
+                state,
+                answered,
+                took: member.took.map_or_else(|| "—".to_owned(), clock),
+                cost: spent
+                    .cost
+                    .map_or_else(|| "—".to_owned(), |cost| format!("${cost:.2}")),
+                tokens: tr!(
+                    arena_tokens,
+                    tokens = crate::looping::tokens_shown(spent.tokens)
+                ),
+                calls: tr!(arena_calls, calls = spent.calls, tools = spent.tools),
+                changed: match changes.get(at) {
+                    Some(Ok(changes)) => tr!(
+                        arena_changed,
+                        files = changes.files,
+                        added = changes.added,
+                        removed = changes.removed
+                    ),
+                    Some(Err(reason)) => crate::transcript::clean(reason),
+                    None => String::new(),
+                },
+            }
+        })
+        .collect()
+}
+
+/// The comparison's lines for the stream: one per member, its numbers in columns, then what the owner can do.
+pub fn compared(arena: &Arena, rows: &[Row]) -> String {
+    let wide = rows
         .iter()
-        .map(|name| name.chars().count())
+        .map(|row| row.name.chars().count())
         .max()
         .unwrap_or(0);
     let mut lines = vec![tr!(
         arena_compared,
         task = crate::transcript::clean(&crate::transcript::cut(&arena.task, 70))
     )];
-    for (at, member) in arena.members.iter().enumerate() {
-        let state = match &member.state {
-            State::Done(glut::FinishReason::Answered) => format!("✓ {}", tr!(arena_done)),
-            State::Done(reason) => format!("✗ {reason:?}"),
-            State::Aborted(why) => format!("✗ {}", crate::transcript::clean(why)),
-            _ => "…".to_owned(),
-        };
-        let spent = spent.get(at).copied().unwrap_or_default();
-        let cost = spent
-            .cost
-            .map_or_else(|| "—".to_owned(), |cost| format!("${cost:.2}"));
-        let changed = match changes.get(at) {
-            Some(Ok(changes)) => tr!(
-                arena_changed,
-                files = changes.files,
-                added = changes.added,
-                removed = changes.removed
-            ),
-            Some(Err(reason)) => crate::transcript::clean(reason),
-            None => String::new(),
-        };
-        let took = member.took.map_or_else(|| "—".to_owned(), clock);
+    for (at, row) in rows.iter().enumerate() {
         lines.push(format!(
-            "  {n}  {name:<wide$}  {state}  {took}  {cost}  {tokens}  {calls}  {changed}",
+            "  {n}  {name:<wide$}  {mark} {state}  {took}  {cost}  {tokens}  {calls}  {changed}",
             n = at + 1,
-            name = names[at],
-            tokens = tr!(
-                arena_tokens,
-                tokens = crate::looping::tokens_shown(spent.tokens)
-            ),
-            calls = tr!(arena_calls, calls = spent.calls, tools = spent.tools),
+            name = row.name,
+            mark = if row.answered { "✓" } else { "✗" },
+            state = row.state,
+            took = row.took,
+            cost = row.cost,
+            tokens = row.tokens,
+            calls = row.calls,
+            changed = row.changed,
         ));
     }
     lines.push(tr!(arena_next).to_owned());
     lines.join("\n")
+}
+
+/// What a key on the comparison card does beyond moving in it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CardAction {
+    None,
+    Close,
+    /// Run the check command in every worktree.
+    Check,
+    /// Take this member's changes: shown and asked in the pane the arena started from.
+    Take(usize),
+}
+
+/// The comparison card over the screen (T61 step 1b): every model's numbers and check, below them one model's diff
+/// — or two side by side.
+#[derive(Debug, Clone)]
+pub struct Card {
+    pub rows: Vec<Row>,
+    /// Each member's diff lines, cleaned for the terminal once, each with what it is — or why there is none.
+    pub diffs: Vec<Vec<(Sign, String)>>,
+    /// When it came up: a key before [`SETTLE`] has passed starts nothing.
+    pub opened: Instant,
+    /// Whether the last frame showed it: a card not drawn (too small a window, a question open) takes no key.
+    pub drawn: bool,
+    pub selected: usize,
+    /// Two diffs side by side: the selected one and the next.
+    pub side: bool,
+    /// Lines the diff is scrolled down.
+    pub scroll: usize,
+    /// The diff's height at the last frame, for a page.
+    pub page: usize,
+}
+
+/// What a line of a diff is, as the card colours it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sign {
+    /// A file's header, or a note in its place.
+    Head,
+    /// A hunk's `@@` line.
+    Hunk,
+    Added,
+    Removed,
+    Same,
+}
+
+/// `diff`'s lines cleaned and told apart by where they stand, not by how they look: inside a hunk a removed line
+/// that reads `--- …` is still a removed line.
+fn signed(diff: &str) -> Vec<(Sign, String)> {
+    let mut in_hunk = false;
+    diff.lines()
+        .map(|line| {
+            let sign = if line.starts_with("diff --git ") {
+                in_hunk = false;
+                Sign::Head
+            } else if line.starts_with("@@") {
+                in_hunk = true;
+                Sign::Hunk
+            } else if !in_hunk {
+                Sign::Head
+            } else {
+                match line.chars().next() {
+                    Some('+') => Sign::Added,
+                    Some('-') => Sign::Removed,
+                    _ => Sign::Same,
+                }
+            };
+            (sign, crate::transcript::clean(line))
+        })
+        .collect()
+}
+
+/// How long after the card came up a key starts nothing: one typed for what stood there before must not.
+pub const SETTLE: Duration = Duration::from_millis(400);
+
+impl Card {
+    /// A card of these rows and diffs (each member's text, or why there is none), cleaned for the terminal now.
+    pub fn new(rows: Vec<Row>, diffs: Vec<Result<String, String>>, selected: usize) -> Self {
+        let diffs = diffs
+            .into_iter()
+            .map(|diff| match diff {
+                Ok(diff) if diff.trim().is_empty() => {
+                    vec![(Sign::Head, tr!(arena_nothing).to_owned())]
+                }
+                Ok(diff) => signed(&diff),
+                Err(reason) => vec![(Sign::Head, crate::transcript::clean(&reason))],
+            })
+            .collect();
+        let selected = selected.min(rows.len().saturating_sub(1));
+        Card {
+            rows,
+            diffs,
+            opened: Instant::now(),
+            drawn: false,
+            selected,
+            side: false,
+            scroll: 0,
+            page: 0,
+        }
+    }
+
+    /// A key on the card: ←/→ the model, ↑/↓, PgUp/PgDn, Home/End the diff, `s` side by side, `c` the check, `t`
+    /// take, Esc, `q` or ⌃C close. Only a plain press counts (Shift at most); `c` and `t` not before [`SETTLE`].
+    pub fn key(&mut self, key: crossterm::event::KeyEvent) -> CardAction {
+        use crossterm::event::{KeyCode, KeyEventKind, KeyModifiers};
+        if key.kind != KeyEventKind::Press {
+            return CardAction::None;
+        }
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            return if key.code == KeyCode::Char('c') {
+                CardAction::Close
+            } else {
+                CardAction::None
+            };
+        }
+        if !(key.modifiers - KeyModifiers::SHIFT).is_empty() {
+            return CardAction::None;
+        }
+        let settled = self.opened.elapsed() >= SETTLE;
+        let code = key.code;
+        let count = self.rows.len().max(1);
+        let page = self.page.max(1);
+        match code {
+            KeyCode::Esc | KeyCode::Char('q') => return CardAction::Close,
+            KeyCode::Right | KeyCode::Tab => {
+                self.selected = (self.selected + 1) % count;
+                self.scroll = 0;
+            }
+            KeyCode::Left | KeyCode::BackTab => {
+                self.selected = (self.selected + count - 1) % count;
+                self.scroll = 0;
+            }
+            KeyCode::Down | KeyCode::Char('j') => self.scroll += 1,
+            KeyCode::Up | KeyCode::Char('k') => self.scroll = self.scroll.saturating_sub(1),
+            KeyCode::PageDown | KeyCode::Char(' ') => self.scroll += page,
+            KeyCode::PageUp => self.scroll = self.scroll.saturating_sub(page),
+            KeyCode::Home => self.scroll = 0,
+            KeyCode::End => self.scroll = usize::MAX / 2,
+            KeyCode::Char('s') => self.side = !self.side && count > 1,
+            KeyCode::Char('c') if settled => return CardAction::Check,
+            KeyCode::Char('t') if settled => return CardAction::Take(self.selected),
+            _ => {}
+        }
+        CardAction::None
+    }
+
+    /// The member shown beside the selected one.
+    pub fn beside(&self) -> usize {
+        (self.selected + 1) % self.rows.len().max(1)
+    }
+
+    /// Member `at`'s diff lines.
+    pub fn diff_lines(&self, at: usize) -> &[(Sign, String)] {
+        self.diffs.get(at).map_or(&[], Vec::as_slice)
+    }
 }
 
 #[cfg(test)]
@@ -459,6 +684,88 @@ mod tests {
     }
 
     #[test]
+    fn the_card_moves_between_models_scrolls_and_says_what_a_plain_settled_key_asks_for() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+        let press = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        let mut card = Card::new(
+            vec![Row::default(), Row::default(), Row::default()],
+            vec![
+                Ok("+a\n".into()),
+                Ok(String::new()),
+                Err("too\x07 big".into()),
+            ],
+            7,
+        );
+        assert_eq!(card.selected, 2, "a selection past the rows is the last");
+        card.page = 10;
+        assert_eq!(
+            card.key(press(KeyCode::Char('t'))),
+            CardAction::None,
+            "too soon after it came up"
+        );
+        card.opened -= SETTLE;
+        assert_eq!(card.key(press(KeyCode::Right)), CardAction::None);
+        assert_eq!(card.selected, 0, "round the models");
+        card.key(press(KeyCode::PageDown));
+        assert_eq!(card.scroll, 10);
+        card.key(press(KeyCode::Left));
+        assert_eq!(
+            (card.selected, card.scroll),
+            (2, 0),
+            "another model starts at its top"
+        );
+        card.key(press(KeyCode::Char('s')));
+        assert!(card.side);
+        assert_eq!(card.beside(), 0);
+        assert_eq!(card.key(press(KeyCode::Char('t'))), CardAction::Take(2));
+        assert_eq!(card.key(press(KeyCode::Char('c'))), CardAction::Check);
+        let mut held = press(KeyCode::Char('c'));
+        held.kind = KeyEventKind::Repeat;
+        assert_eq!(
+            card.key(held),
+            CardAction::None,
+            "a held key starts nothing"
+        );
+        let ctrl = |code| KeyEvent::new(code, KeyModifiers::CONTROL);
+        assert_eq!(card.key(ctrl(KeyCode::Char('t'))), CardAction::None);
+        assert_eq!(card.key(ctrl(KeyCode::Char('c'))), CardAction::Close);
+        assert_eq!(card.key(press(KeyCode::Esc)), CardAction::Close);
+        assert_eq!(
+            card.diff_lines(0),
+            [(Sign::Head, "+a".to_owned())],
+            "no hunk yet"
+        );
+        assert_eq!(
+            card.diff_lines(1),
+            [(Sign::Head, tr!(arena_nothing).to_owned())]
+        );
+        assert_eq!(
+            card.diff_lines(2),
+            [(Sign::Head, "too  big".to_owned())],
+            "a control character is no terminal's command"
+        );
+        let diff =
+            "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n--- a comment\n+++ more\n same\n";
+        let signs: Vec<Sign> = signed(diff).into_iter().map(|(sign, _)| sign).collect();
+        assert_eq!(
+            signs,
+            [
+                Sign::Head,
+                Sign::Head,
+                Sign::Head,
+                Sign::Hunk,
+                Sign::Removed,
+                Sign::Added,
+                Sign::Same
+            ]
+        );
+        let alone = Card::new(vec![Row::default()], vec![Ok(String::new())], 0);
+        let mut alone = alone;
+        alone.key(press(KeyCode::Char('s')));
+        assert!(!alone.side, "one model has nothing beside it");
+    }
+
+    #[test]
     fn only_this_machine_counts_as_local() {
         assert!(is_local("http://localhost:11434/v1"));
         assert!(is_local("http://127.0.0.1:1234/v1"));
@@ -483,6 +790,7 @@ mod tests {
             pane: None,
             began: None,
             took: None,
+            snapshot: None,
         }
     }
 

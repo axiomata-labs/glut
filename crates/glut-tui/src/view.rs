@@ -104,6 +104,7 @@ pub fn draw_panes(frame: &mut Frame, panes: &mut crate::panes::Panes) {
         };
         draw_in(frame, &mut pane.app, area, &chrome);
         draw_peek(frame, panes, area);
+        draw_arena_card(frame, panes);
         return draw_tiles(frame, panes);
     }
     let [header, body] =
@@ -169,7 +170,147 @@ pub fn draw_panes(frame: &mut Frame, panes: &mut crate::panes::Panes) {
     }
     let area = panes.list[active].area;
     draw_peek(frame, panes, area);
+    draw_arena_card(frame, panes);
     draw_tiles(frame, panes);
+}
+
+/// The arena's comparison card (T61) over the whole window: a row per model with its numbers and check, below them
+/// the chosen model's diff — or two side by side.
+fn draw_arena_card(frame: &mut Frame, panes: &mut crate::panes::Panes) {
+    let area = frame.area();
+    // Too small to read, or a question open in a pane: the card stands aside for the frame, taking no key.
+    let asked = panes.list.iter().any(|pane| pane.app.waits_for_owner());
+    if let Some(card) = &mut panes.card {
+        card.drawn = area.width >= 40 && area.height >= 12 && !asked;
+        if !card.drawn {
+            return;
+        }
+    }
+    let (task, checks) = match &panes.arena {
+        Some(arena) => (
+            crate::transcript::clean(&crate::transcript::cut(&arena.task, 60)),
+            arena.checks.clone(),
+        ),
+        None => (String::new(), Vec::new()),
+    };
+    let Some(card) = &mut panes.card else { return };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(theme::glow())
+        .title(Span::styled(
+            format!(" {} ", tr!(arena_compared, task = task)),
+            theme::glow(),
+        ))
+        .title_bottom(Span::styled(
+            format!(" {} ", tr!(arena_card_keys)),
+            theme::quiet(),
+        ));
+    let inner = block.inner(area);
+    frame.render_widget(Clear, area);
+    frame.render_widget(block, area);
+    let table_rows = card.rows.len() as u16;
+    let [table, _, diff] = Layout::vertical([
+        Constraint::Length(table_rows),
+        Constraint::Length(1),
+        Constraint::Min(1),
+    ])
+    .areas(inner);
+    let wide = |pick: fn(&crate::arena::Row) -> &String| {
+        card.rows
+            .iter()
+            .map(|row| pick(row).chars().count())
+            .max()
+            .unwrap_or(0)
+    };
+    let (name_w, state_w, took_w, cost_w) = (
+        wide(|row| &row.name),
+        wide(|row| &row.state).min(28),
+        wide(|row| &row.took),
+        wide(|row| &row.cost),
+    );
+    let lines: Vec<Line> = card
+        .rows
+        .iter()
+        .enumerate()
+        .map(|(at, row)| {
+            let chosen = at == card.selected || (card.side && at == card.beside());
+            let style = if chosen {
+                theme::glow()
+            } else {
+                Style::default()
+            };
+            let check = checks.get(at).copied().unwrap_or_default();
+            let state: String = row.state.chars().take(state_w).collect();
+            Line::from(vec![
+                Span::styled(if at == card.selected { "▸ " } else { "  " }, theme::glow()),
+                Span::styled(format!("{} {:<name_w$}  ", at + 1, row.name), style),
+                Span::styled(format!("{} ", tr!(arena_check_label)), theme::quiet()),
+                Span::styled(
+                    format!("{}  ", check.mark()),
+                    match check {
+                        crate::arena::Check::Passed => Style::default().fg(theme::c().fine),
+                        crate::arena::Check::Failed => theme::fault(),
+                        _ => theme::quiet(),
+                    },
+                ),
+                Span::styled(
+                    format!("{} ", if row.answered { "✓" } else { "✗" }),
+                    if row.answered {
+                        Style::default().fg(theme::c().fine)
+                    } else {
+                        theme::fault()
+                    },
+                ),
+                Span::styled(format!("{state:<state_w$}  "), theme::quiet()),
+                Span::raw(format!("{:>took_w$}  {:>cost_w$}  ", row.took, row.cost)),
+                Span::styled(format!("{}  {}  ", row.tokens, row.calls), theme::quiet()),
+                Span::raw(format!("{}  ", row.changed)),
+            ])
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines), table);
+    let shown: Vec<usize> = if card.side {
+        vec![card.selected, card.beside()]
+    } else {
+        vec![card.selected]
+    };
+    let columns: Vec<Constraint> = shown.iter().map(|_| Constraint::Fill(1)).collect();
+    let places = Layout::horizontal(columns).spacing(1).split(diff);
+    let height = usize::from(diff.height.saturating_sub(1));
+    card.page = height;
+    let longest = shown
+        .iter()
+        .map(|at| card.diff_lines(*at).len())
+        .max()
+        .unwrap_or(0);
+    card.scroll = card.scroll.min(longest.saturating_sub(height));
+    for (at, place) in shown.iter().zip(places.iter()) {
+        let name = card
+            .rows
+            .get(*at)
+            .map(|row| row.name.clone())
+            .unwrap_or_default();
+        let mut lines = vec![Line::from(Span::styled(
+            format!("{} {name}", at + 1),
+            theme::strong(),
+        ))];
+        lines.extend(
+            card.diff_lines(*at)
+                .iter()
+                .skip(card.scroll)
+                .take(height)
+                .map(|(sign, row)| {
+                    let style = match sign {
+                        crate::arena::Sign::Added => Style::default().fg(theme::c().fine),
+                        crate::arena::Sign::Removed => Style::default().fg(theme::c().fault),
+                        crate::arena::Sign::Hunk => theme::glow(),
+                        crate::arena::Sign::Head | crate::arena::Sign::Same => theme::quiet(),
+                    };
+                    Line::from(Span::styled(row.clone(), style))
+                }),
+        );
+        frame.render_widget(Paragraph::new(lines), *place);
+    }
 }
 
 /// The tiles (T69) at the window's top right, over everything but the gate's questions.

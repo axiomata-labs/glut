@@ -241,7 +241,7 @@ pub const COMMANDS: [Command; 67] = [
     command(
         Topic::Panes,
         "arena",
-        "[<model>, <model>: <task>|take <n>|end]",
+        "[<model>, <model>: <task>|take <n>|check [command]|card|end]",
         "the same task on two to four models at once, each in a pane and a worktree of its own, then compared — /arena \
          alone picks the models",
     ),
@@ -1286,6 +1286,8 @@ mod tests {
                 "blocks",
                 "budget",
                 "calm",
+                "card",
+                "check",
                 "clean",
                 "clickable",
                 "close",
