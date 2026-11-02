@@ -228,6 +228,16 @@ fn draw_arena_card(frame: &mut Frame, panes: &mut crate::panes::Panes) {
         wide(|row| &row.took),
         wide(|row| &row.cost),
     );
+    let [fastest, cheapest, leanest] = crate::arena::best(&card.rows);
+    let best = |won: Option<usize>, at: usize, style: Style| {
+        if won == Some(at) {
+            Style::default()
+                .fg(theme::c().fine)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            style
+        }
+    };
     let lines: Vec<Line> = card
         .rows
         .iter()
@@ -262,8 +272,19 @@ fn draw_arena_card(frame: &mut Frame, panes: &mut crate::panes::Panes) {
                     },
                 ),
                 Span::styled(format!("{state:<state_w$}  "), theme::quiet()),
-                Span::raw(format!("{:>took_w$}  {:>cost_w$}  ", row.took, row.cost)),
-                Span::styled(format!("{}  {}  ", row.tokens, row.calls), theme::quiet()),
+                Span::styled(
+                    format!("{:>took_w$}  ", row.took),
+                    best(fastest, at, Style::default()),
+                ),
+                Span::styled(
+                    format!("{:>cost_w$}  ", row.cost),
+                    best(cheapest, at, Style::default()),
+                ),
+                Span::styled(
+                    format!("{}  ", row.tokens),
+                    best(leanest, at, theme::quiet()),
+                ),
+                Span::styled(format!("{}  ", row.calls), theme::quiet()),
                 Span::raw(format!("{}  ", row.changed)),
             ])
         })
@@ -2492,8 +2513,14 @@ fn draw_help(frame: &mut Frame, app: &mut App, area: Rect) {
 /// The picker over the stream: its title, what was typed, and the entries that match, the chosen one marked.
 fn draw_picker(frame: &mut Frame, app: &App, area: Rect) {
     let Some(picker) = &app.picker else { return };
-    let width = area.width.saturating_sub(4).min(100);
-    let height = area.height.saturating_sub(4).min(20);
+    // `/arena`'s list of every provider's models is a box of its own: wide and tall, as `/help`'s.
+    let (most_width, most_height) = if picker.marked.is_some() {
+        (area.width.saturating_sub(4), area.height.saturating_sub(4))
+    } else {
+        (100, 20)
+    };
+    let width = area.width.saturating_sub(4).min(most_width);
+    let height = area.height.saturating_sub(4).min(most_height);
     // Two rows above the input: the stream's last line, often what led to the picker, stays readable.
     let place = Rect {
         x: area.x + (area.width.saturating_sub(width)) / 2,

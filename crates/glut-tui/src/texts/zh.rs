@@ -2154,6 +2154,7 @@ pub const TEXTS: Texts = Texts {
     arena_end_yes: "是，结束",
     arena_end_title: "关闭竞技场的 {n} 个 Pane 并删除它们的 worktree？",
     arena_ended: "竞技场已结束：Pane 已关闭，worktree 已删除",
+    arena_best: "最快：{fastest} · 最便宜：{cheapest} · 最少 token：{leanest}",
     arena_checking: "worktree 中仍有检查在运行 — 结束后再 /arena end",
     arena_check_gate: "竞技场的检查，在此 worktree 的沙箱中",
     arena_check_kept: "此仓库的检查：{command}",

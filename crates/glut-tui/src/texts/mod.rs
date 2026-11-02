@@ -2341,6 +2341,9 @@ glut::catalog! {
         arena_end_title: &'static str,
         /// The arena ended.
         arena_ended: &'static str,
+        /// Below the arena's comparison: the best of the models that answered, by number: `{fastest}`, `{cheapest}`,
+        /// `{leanest}`.
+        arena_best: &'static str,
         /// `/arena end` while checks run in the worktrees.
         arena_checking: &'static str,
         /// Beside an arena's check in a model's pane.

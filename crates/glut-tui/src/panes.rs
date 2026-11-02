@@ -2136,15 +2136,6 @@ impl Panes {
         if self.list[self.active].id == self.grid.main {
             return self.active().tell(tr!(main_pane_stays));
         }
-        let number = self.list[self.active].number;
-        let armed = self
-            .close_armed
-            .is_some_and(|(armed, since)| armed == number && since.elapsed() < ARMED);
-        if self.active().working() && !armed {
-            self.close_armed = Some((number, Instant::now()));
-            return self.active().tell(tr!(close_working));
-        }
-        self.close_armed = None;
         // An arena's model's worktree ends with the arena (T61): taken through `/arena take`, removed by `/arena end`.
         let id = self.list[self.active].id;
         if self
@@ -2154,6 +2145,15 @@ impl Panes {
         {
             return self.active().tell(tr!(arena_member_close));
         }
+        let number = self.list[self.active].number;
+        let armed = self
+            .close_armed
+            .is_some_and(|(armed, since)| armed == number && since.elapsed() < ARMED);
+        if self.active().working() && !armed {
+            self.close_armed = Some((number, Instant::now()));
+            return self.active().tell(tr!(close_working));
+        }
+        self.close_armed = None;
         if let Some(tree) = self.list[self.active].tree.clone() {
             // Git goes over the worktree only once nothing writes there any more.
             if self.active().working() {

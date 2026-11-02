@@ -138,6 +138,8 @@ pub trait Tool: Send + Sync {
             Access::Read { .. } | Access::Network { .. }
         )
     }
+    /// A tool that keeps a folder between calls (the shell) starts its next call in the run's folder again.
+    fn back_to_top(&self) {}
 }
 
 /// The tools of a run.
@@ -160,6 +162,15 @@ pub struct Toolbox {
 impl Toolbox {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The next shell command starts in the run's folder again, wherever the last one ended: a command of the
+    /// screen's own (Glut-TUI's arena check, T61) runs from the top without naming the folder's path, which the gate
+    /// would judge as written.
+    pub fn back_to_top(&self) {
+        for tool in &self.tools {
+            tool.back_to_top();
+        }
     }
 
     /// Puts every call under `gate` (HS3a).

@@ -1445,6 +1445,14 @@ impl Tool for Bash {
         }
     }
 
+    fn back_to_top(&self) {
+        *self
+            .0
+            .cwd
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) = self.0.root.clone();
+    }
+
     fn call(&self, arguments: Value, context: CallContext) -> ToolFuture<'_> {
         let stop = context.stop;
         Box::pin(async move {
@@ -1745,6 +1753,16 @@ mod tests {
         bash(&tools, "cd sub").await;
         let (ok, text) = bash(&tools, "pwd").await;
         assert!(ok && text.trim_end().ends_with("/sub"), "{text}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn back_to_top_starts_the_next_command_in_the_runs_folder() {
+        let (dir, tools) = setup("/bin/bash", &[]);
+        bash(&tools, "cd sub").await;
+        tools.back_to_top();
+        let (ok, text) = bash(&tools, "pwd").await;
+        assert!(ok && !text.trim_end().ends_with("/sub"), "{text}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

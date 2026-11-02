@@ -5802,15 +5802,11 @@ impl App {
         });
         let parts = Arc::clone(&self.parts);
         let reports = self.reports.clone();
-        // From the worktree's top, whichever folder the model's last `cd` left the pane's shell in.
-        let root = self
-            .parts
-            .config
-            .cwd
-            .to_string_lossy()
-            .replace('\'', "'\\''");
-        let shown = command.to_owned();
-        let command = format!("cd -- '{root}' && {command}");
+        // From the worktree's top, whichever folder the model's last `cd` left the pane's shell in — without naming
+        // its path, which lies in `~/.glut` and would be asked about.
+        self.parts.tools.back_to_top();
+        let command = command.to_owned();
+        let shown = command.clone();
         let started = id.clone();
         tokio::spawn(async move {
             // A fresh worktree builds from nothing: the longest a command may run.

@@ -2255,6 +2255,7 @@ pub const TEXTS: Texts = Texts {
     arena_end_yes: "はい、終了する",
     arena_end_title: "アリーナの {n} 個の Pane を閉じ、worktree を削除しますか？",
     arena_ended: "アリーナを終了しました: Pane を閉じ、worktree を削除しました",
+    arena_best: "最速: {fastest} · 最安: {cheapest} · 最少 Token: {leanest}",
     arena_checking: "worktree でチェックがまだ実行中です — 終わったら /arena end",
     arena_check_gate: "アリーナのチェック (この worktree のサンドボックス内)",
     arena_check_kept: "このリポジトリのチェック: {command}",

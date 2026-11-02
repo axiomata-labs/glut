@@ -368,7 +368,7 @@ impl Check {
 }
 
 /// A member's numbers as the comparison shows them.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Row {
     /// `provider/model`, cleaned.
     pub name: String,
@@ -382,6 +382,29 @@ pub struct Row {
     pub tokens: String,
     pub calls: String,
     pub changed: String,
+    /// The time, cost and tokens as numbers, to find the best of each.
+    pub seconds: Option<u64>,
+    pub dollars: Option<f64>,
+    pub token_count: u64,
+}
+
+/// The best of the models that answered: the fastest, the cheapest, the one with the fewest tokens — each by its
+/// place, `None` where no answered model has the number.
+pub fn best(rows: &[Row]) -> [Option<usize>; 3] {
+    let answered = || rows.iter().enumerate().filter(|(_, row)| row.answered);
+    let fastest = answered()
+        .filter_map(|(at, row)| row.seconds.map(|seconds| (at, seconds)))
+        .min_by_key(|(_, seconds)| *seconds)
+        .map(|(at, _)| at);
+    let cheapest = answered()
+        .filter_map(|(at, row)| row.dollars.map(|dollars| (at, dollars)))
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(at, _)| at);
+    let leanest = answered()
+        .filter(|(_, row)| row.token_count > 0)
+        .min_by_key(|(_, row)| row.token_count)
+        .map(|(at, _)| at);
+    [fastest, cheapest, leanest]
 }
 
 /// Each member's row, from what it spent and changed.
@@ -425,6 +448,9 @@ pub fn rows(
                     Some(Err(reason)) => crate::transcript::clean(reason),
                     None => String::new(),
                 },
+                seconds: member.took.map(|took| took.as_secs()),
+                dollars: spent.cost,
+                token_count: spent.tokens,
             }
         })
         .collect()
@@ -453,6 +479,16 @@ pub fn compared(arena: &Arena, rows: &[Row]) -> String {
             tokens = row.tokens,
             calls = row.calls,
             changed = row.changed,
+        ));
+    }
+    let [fastest, cheapest, leanest] = best(rows);
+    if let (Some(fastest), Some(leanest)) = (fastest, leanest) {
+        let cheapest = cheapest.map_or_else(|| "—".to_owned(), |at| (at + 1).to_string());
+        lines.push(tr!(
+            arena_best,
+            fastest = fastest + 1,
+            cheapest = cheapest,
+            leanest = leanest + 1
         ));
     }
     lines.push(tr!(arena_next).to_owned());
@@ -763,6 +799,28 @@ mod tests {
         let mut alone = alone;
         alone.key(press(KeyCode::Char('s')));
         assert!(!alone.side, "one model has nothing beside it");
+    }
+
+    #[test]
+    fn the_best_are_found_among_the_models_that_answered() {
+        let row = |answered, seconds, dollars, tokens| Row {
+            answered,
+            seconds: Some(seconds),
+            dollars,
+            token_count: tokens,
+            ..Row::default()
+        };
+        let rows = [
+            row(true, 26, Some(0.02), 50_000),
+            row(true, 7, Some(0.03), 27_000),
+            row(false, 1, Some(0.0), 10),
+        ];
+        assert_eq!(
+            best(&rows),
+            [Some(1), Some(0), Some(1)],
+            "the aborted one wins nothing"
+        );
+        assert_eq!(best(&[row(true, 3, None, 5)]), [Some(0), None, Some(0)]);
     }
 
     #[test]
