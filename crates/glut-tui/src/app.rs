@@ -5780,6 +5780,7 @@ impl App {
             }
             ("card", "") => self.pane_request = Some(crate::panes::Request::ArenaCard),
             ("say", "") => self.tell(tr!(arena_say_usage)),
+            ("judge", "") => self.pane_request = Some(crate::panes::Request::ArenaJudge),
             ("say", text) => {
                 self.pane_request = Some(crate::panes::Request::ArenaSay(text.to_owned()))
             }
@@ -6698,6 +6699,27 @@ impl App {
         self.side = Some(crate::btw::Side::new(about, question, asked.prices, |id| {
             crate::btw::ask(model, messages, tools, id, reports)
         }));
+    }
+
+    /// The arena's judge (T61) on this pane's model: `prompt` alone, under the judge's own system prompt and with no
+    /// tool, its answer in the side question's card under `shown`. Paid like a side question.
+    pub fn ask_judge(&mut self, shown: String, prompt: String) {
+        if self.refused_spend() {
+            return;
+        }
+        self.close_side();
+        let messages = vec![
+            glut::Message::system(crate::arena::JUDGE_SYSTEM),
+            glut::Message::user(prompt),
+        ];
+        let reports = self.reports.clone();
+        let model = Arc::clone(&self.engine.model);
+        self.side = Some(crate::btw::Side::new(
+            None,
+            shown,
+            self.engine.prices,
+            |id| crate::btw::ask(model, messages, Vec::new(), id, reports),
+        ));
     }
 
     /// A piece of the side question's answer, or its end: what it used counts in the session's cost, in no context.

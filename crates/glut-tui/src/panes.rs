@@ -385,6 +385,8 @@ pub enum Request {
     ArenaCard,
     /// `/arena say <text>`: a follow-up to every model of the free arena that answered.
     ArenaSay(String),
+    /// `/arena judge`: a model's comment on the solutions, after the owner's pick.
+    ArenaJudge,
     /// `/arena tasks <set> [xN]` (step 2): the set's tasks one after another on these models, each judged by its
     /// check, and each `times` in a row.
     ArenaBench {
@@ -2005,6 +2007,7 @@ impl Panes {
                 Request::ArenaEnd(sure) => self.end_arena(sure),
                 Request::ArenaCard => self.open_card(),
                 Request::ArenaSay(text) => self.arena_say(&text),
+                Request::ArenaJudge => self.arena_judge(),
                 Request::ArenaBench {
                     set,
                     contenders,
@@ -3555,6 +3558,45 @@ impl Panes {
             }
             Err(reason) => self.active().transcript.note(reason, Tone::Fault),
         }
+    }
+
+    /// `/arena judge`: the pane the arena started from asks its own model, without tools, for two or three sentences
+    /// on the solutions — only after the owner's pick, so a comment never colours a choice (blind or not).
+    fn arena_judge(&mut self) {
+        let Some(arena) = &self.arena else {
+            return self.active().tell(tr!(arena_none));
+        };
+        if arena.taken.is_none() || !arena.compared {
+            return self.active().tell(tr!(arena_judge_after_pick));
+        }
+        let rows = self.rows(arena);
+        let diffs: Vec<Result<String, String>> = arena
+            .members
+            .iter()
+            .map(
+                |member| match (&member.tree, &member.start, &member.snapshot) {
+                    (Some(tree), Some(start), Some(now)) => {
+                        crate::worktree::diff_text(tree, start, now)
+                    }
+                    _ => Err(tr!(arena_no_tree).into()),
+                },
+            )
+            .collect();
+        let prompt = crate::arena::judge_prompt(arena, &rows, &diffs);
+        let home = arena.home;
+        let at = self
+            .list
+            .iter()
+            .position(|pane| pane.id == home)
+            .unwrap_or(self.active);
+        let app = &mut self.list[at].app;
+        // Models wrote the diffs: masked as any tool text is, and no `[glut]` of theirs speaks as Glut (T89).
+        let prompt = match &app.parts.config.masks {
+            Some(masks) => masks.mask(&prompt, "arena judge").text,
+            None => prompt,
+        };
+        let prompt = glut::planning::unforged(prompt);
+        app.ask_judge(tr!(arena_judge_asked).to_owned(), prompt);
     }
 
     /// `/arena say <text>`: the follow-up for every model that answered, once all are over — never on the bench, whose

@@ -2301,6 +2301,10 @@ glut::catalog! {
         arena_pick_title: &'static str,
         /// `/arena take` without a number.
         arena_take_usage: &'static str,
+        /// `/arena judge` before the owner's pick.
+        arena_judge_after_pick: &'static str,
+        /// The judge's card heading.
+        arena_judge_asked: &'static str,
         /// `/arena say` without text.
         arena_say_usage: &'static str,
         /// `/arena say` on the bench.

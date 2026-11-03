@@ -2236,6 +2236,8 @@ pub const TEXTS: Texts = Texts {
     arena_next: "/arena card で比較カードをもう一度表示します · /arena take <n> でモデルの変更をフォルダに取り込みます · /arena end で Pane を閉じ、worktree を削除します",
     arena_pick_title: "アリーナ — Space で最大 {most} 個のモデルを選択、⏎ で次へ",
     arena_take_usage: "/arena take <n> — 比較表にあるモデルの番号",
+    arena_judge_after_pick: "審査は 1 つのモデルを取り込んだ後にコメントします（/arena take）: あなたの選択に影響しません",
+    arena_judge_asked: "審査: 解決策について 2〜3 文",
     arena_say_usage: "/arena say <text> — 回答したすべてのモデルへの追加指示",
     arena_say_bench: "ベンチは各タスクを一度だけ出します: 追加指示はできません",
     arena_say_taken: "モデルが取り込まれました: 続けるには新しいアリーナを開始してください",

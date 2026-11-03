@@ -2135,6 +2135,8 @@ pub const TEXTS: Texts = Texts {
     arena_next: "/arena card 再次显示对比卡片 · /arena take <n> 把某个模型的改动应用到你的文件夹 · /arena end 关闭这些 Pane 并删除 worktree",
     arena_pick_title: "竞技场 — 空格键最多标记 {most} 个模型，⏎ 继续",
     arena_take_usage: "/arena take <n> — 模型在对比中的编号",
+    arena_judge_after_pick: "在你采用一个模型后评委才会点评（/arena take）：绝不影响你的选择",
+    arena_judge_asked: "评委：对各方案的两三句点评",
     arena_say_usage: "/arena say <text> — 向每个已回答的模型追加指示",
     arena_say_bench: "测试台每个任务只给一次：那里不能追加指示",
     arena_say_taken: "已采用一个模型：如需继续请开始新的竞技场",
