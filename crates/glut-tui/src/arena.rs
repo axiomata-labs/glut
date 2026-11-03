@@ -239,6 +239,8 @@ pub struct Arena {
     /// Each member's check (`/arena check`), in the members' order, and the stream id of the one running.
     pub checks: Vec<Check>,
     pub check_ids: Vec<Option<String>>,
+    /// Why each member's last check failed, in a line: the last its output said (a bench keeps it with the result).
+    pub check_said: Vec<Option<String>>,
     /// The member the owner was shown for `/arena take`, and its worktree as git's tree id then.
     pub offered: Option<(usize, String)>,
     /// The repository of the folder it started from, and its `HEAD` then: a winner is taken only while it stands.
@@ -257,6 +259,7 @@ impl Arena {
         Arena {
             checks: vec![Check::None; count],
             check_ids: vec![None; count],
+            check_said: vec![None; count],
             task: asked.task,
             stamp: chrono::Local::now().format("%Y%m%d-%H%M%S").to_string(),
             members: asked
@@ -467,6 +470,25 @@ pub fn rows(
             }
         })
         .collect()
+}
+
+/// The longest reason a failed check is told by.
+const SAID_CHARS: usize = 100;
+
+/// Why a check failed, in one line: the last its output said but the shell's own `[exit code …]` note, without the
+/// `error: ` the shell puts before a failing command's output; a check that said nothing is told so.
+pub fn check_reason(output: &str) -> String {
+    let line = output
+        .lines()
+        .map(str::trim)
+        .rev()
+        .find(|line| !line.is_empty() && !(line.starts_with("[exit code ") && line.ends_with(']')))
+        .unwrap_or_default();
+    let line = line.strip_prefix("error:").unwrap_or(line).trim();
+    if line.is_empty() {
+        return tr!(bench_check_silent).to_owned();
+    }
+    crate::transcript::clean(&crate::transcript::cut(line, SAID_CHARS))
 }
 
 /// The comparison's lines for the stream: one per member, its numbers in columns, then what the owner can do. A
@@ -872,6 +894,21 @@ mod tests {
         let lines: Vec<&str> = bench.lines().collect();
         assert!(lines[1].contains(&format!("{} ✓", tr!(arena_check_label))));
         assert!(lines[2].contains(&format!("{} —", tr!(arena_check_label))));
+    }
+
+    #[test]
+    fn a_failed_check_is_told_by_its_last_line() {
+        assert_eq!(
+            check_reason(
+                "error: running 3 tests\ntest result: FAILED. 2 passed; 1 failed\n\n[exit code 101]"
+            ),
+            "test result: FAILED. 2 passed; 1 failed"
+        );
+        assert_eq!(check_reason("error: only\n[exit code 1]"), "only");
+        assert_eq!(
+            check_reason("error: \n[exit code 1]"),
+            tr!(bench_check_silent)
+        );
     }
 
     #[test]

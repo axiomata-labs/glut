@@ -9,6 +9,7 @@
 //! starts from, made a fresh git repository for every run), `check.sh` and its `check/` files. The check runs in a
 //! copy Glut makes of the start and the model's checked patch (`worktree::check_copy`), never in the model's worktree.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -329,89 +330,298 @@ pub fn results(home: &Path) -> Vec<Record> {
         .collect()
 }
 
-/// `/arena results`: per set, a line per model — tasks passed of tasks run, mean time and cost —, the best first;
-/// then the free arena's wins counted.
+/// `/arena results`: per set, a grid of its tasks against its models (passed or not, and the time), each model's sums
+/// below, the one ahead and why the others failed; the free arena's wins per model.
 pub fn table(records: &[Record]) -> String {
-    use std::collections::BTreeMap;
-    #[derive(Default)]
-    struct Sum {
-        runs: usize,
-        passed: usize,
-        seconds: u64,
-        timed: usize,
-        dollars: f64,
-        priced: usize,
-    }
-    let mut sets: BTreeMap<&str, BTreeMap<&str, Sum>> = BTreeMap::new();
+    let mut sets: BTreeMap<&str, Vec<&Record>> = BTreeMap::new();
     for record in records {
-        let sum = sets
-            .entry(record.set.as_str())
-            .or_default()
-            .entry(record.model.as_str())
-            .or_default();
-        sum.runs += 1;
-        sum.passed += usize::from(record.passed);
-        if let Some(seconds) = record.seconds {
-            sum.seconds += seconds;
-            sum.timed += 1;
-        }
-        if let Some(dollars) = record.dollars {
-            sum.dollars += dollars;
-            sum.priced += 1;
-        }
+        sets.entry(record.set.as_str()).or_default().push(record);
     }
     if sets.is_empty() {
         return tr!(bench_no_results).to_owned();
     }
-    let mut lines = Vec::new();
-    for (set, models) in &sets {
-        let wide = models
-            .keys()
-            .map(|model| model.chars().count())
-            .max()
-            .unwrap_or(0);
-        // By the share passed (a model run more often has more runs, not more skill), then the mean time.
-        let rate = |sum: &Sum| sum.passed as f64 / sum.runs.max(1) as f64;
-        let mean = |sum: &Sum| {
-            if sum.timed > 0 {
-                sum.seconds / sum.timed as u64
-            } else {
-                u64::MAX
-            }
-        };
-        let mut ranked: Vec<(&&str, &Sum)> = models.iter().collect();
-        ranked.sort_by(|a, b| {
-            rate(b.1)
-                .total_cmp(&rate(a.1))
-                .then(mean(a.1).cmp(&mean(b.1)))
-        });
+    let mut blocks = Vec::new();
+    for (set, records) in &sets {
         if *set == FREE {
-            lines.push(tr!(bench_wins_title).to_owned());
-            for (model, sum) in ranked {
-                let model = crate::transcript::clean(model);
-                lines.push(format!(
-                    "  {model:<wide$}  {}",
-                    tr!(bench_wins, n = sum.passed)
-                ));
-            }
+            blocks.push(wins(records));
             continue;
         }
-        lines.push(tr!(bench_set_title, set = crate::transcript::clean(set)));
-        for (model, sum) in ranked {
-            let model = crate::transcript::clean(model);
-            let seconds = (sum.timed > 0).then(|| sum.seconds / sum.timed as u64);
-            let took = seconds.map_or_else(
-                || "—".to_owned(),
-                |secs| crate::arena::clock(Duration::from_secs(secs)),
-            );
-            let cost = (sum.priced > 0)
-                .then(|| sum.dollars / sum.priced as f64)
-                .map_or_else(|| "—".to_owned(), |dollars| format!("${dollars:.3}"));
+        let title = |tasks: usize, models: usize| {
+            tr!(
+                bench_set_title,
+                set = crate::transcript::clean(set),
+                tasks = tasks,
+                models = models
+            )
+        };
+        blocks.push(grid(records, title));
+    }
+    blocks.join("\n\n")
+}
+
+/// A bench run's end: the grid of the results it kept.
+pub fn finished(set: &str, records: &[Record]) -> String {
+    let records: Vec<&Record> = records.iter().collect();
+    if records.is_empty() {
+        return tr!(bench_no_results).to_owned();
+    }
+    grid(&records, |tasks, models| {
+        tr!(
+            bench_done,
+            set = crate::transcript::clean(set),
+            tasks = tasks,
+            models = models
+        )
+    })
+}
+
+/// What a model did across a set's records.
+#[derive(Default)]
+struct Sum {
+    runs: usize,
+    passed: usize,
+    seconds: u64,
+    timed: usize,
+    dollars: f64,
+    priced: usize,
+    tokens: u64,
+}
+
+impl Sum {
+    fn add(&mut self, record: &Record) {
+        self.runs += 1;
+        self.passed += usize::from(record.passed);
+        if let Some(seconds) = record.seconds {
+            self.seconds += seconds;
+            self.timed += 1;
+        }
+        if let Some(dollars) = record.dollars {
+            self.dollars += dollars;
+            self.priced += 1;
+        }
+        self.tokens += record.tokens;
+    }
+
+    /// The share passed: a model run more often has more runs, not more skill.
+    fn rate(&self) -> f64 {
+        self.passed as f64 / self.runs.max(1) as f64
+    }
+
+    fn mean(&self) -> Option<u64> {
+        (self.timed > 0).then(|| self.seconds / self.timed as u64)
+    }
+}
+
+/// A line of sums below the grid: its label and how a model's sum reads in it.
+type Measure = (&'static str, Box<dyn Fn(&Sum) -> String>);
+
+/// Seconds as the arena's clock, `—` when unknown.
+fn clock(seconds: Option<u64>) -> String {
+    seconds.map_or_else(
+        || "—".to_owned(),
+        |seconds| crate::arena::clock(Duration::from_secs(seconds)),
+    )
+}
+
+/// Each model's name for a column: the part after its last `/`, unless two models share it.
+fn short_names<'a>(models: &[&'a str]) -> Vec<String> {
+    let last = |model: &'a str| model.rsplit('/').next().unwrap_or(model);
+    models
+        .iter()
+        .map(|model| {
+            let short = last(model);
+            let shared = models.iter().filter(|other| last(other) == short).count() > 1;
+            crate::transcript::clean(if shared { model } else { short })
+        })
+        .collect()
+}
+
+/// `text` padded to `wide` cells.
+fn padded(text: &str, wide: usize) -> String {
+    let count = crate::transcript::text_width(text);
+    format!("{text}{}", " ".repeat(wide.saturating_sub(count)))
+}
+
+/// One set's grid: its tasks down, its models across (the best first), a line of sums per measure, then the model
+/// ahead and why each failure failed.
+fn grid(records: &[&Record], title: impl Fn(usize, usize) -> String) -> String {
+    let mut sums: BTreeMap<&str, Sum> = BTreeMap::new();
+    let mut cells: BTreeMap<(&str, &str), Sum> = BTreeMap::new();
+    let mut tasks = BTreeSet::new();
+    for record in records {
+        sums.entry(record.model.as_str()).or_default().add(record);
+        cells
+            .entry((record.task.as_str(), record.model.as_str()))
+            .or_default()
+            .add(record);
+        tasks.insert(record.task.as_str());
+    }
+    let mut models: Vec<&str> = sums.keys().copied().collect();
+    models.sort_by(|a, b| {
+        let (a, b) = (&sums[a], &sums[b]);
+        b.rate().total_cmp(&a.rate()).then(
+            a.mean()
+                .unwrap_or(u64::MAX)
+                .cmp(&b.mean().unwrap_or(u64::MAX)),
+        )
+    });
+    let names = short_names(&models);
+    let cell = |task: &str, model: &str| match cells.get(&(task, model)) {
+        None => String::new(),
+        Some(sum) if sum.runs == 1 => {
+            let mark = if sum.passed == 1 { "✓" } else { "✗" };
+            format!("{mark} {}", clock(sum.mean()))
+        }
+        Some(sum) => format!("{}/{} Ø {}", sum.passed, sum.runs, clock(sum.mean())),
+    };
+    let measures: [Measure; 4] = [
+        (
+            tr!(bench_sum_passed),
+            Box::new(|sum: &Sum| tr!(bench_of, passed = sum.passed, runs = sum.runs)),
+        ),
+        (
+            tr!(bench_sum_time),
+            Box::new(|sum: &Sum| clock((sum.timed > 0).then_some(sum.seconds))),
+        ),
+        (
+            tr!(bench_sum_cost),
+            Box::new(|sum: &Sum| {
+                // A run without a price makes the sum a floor.
+                if sum.priced == sum.runs {
+                    format!("${:.3}", sum.dollars)
+                } else if sum.priced > 0 {
+                    format!("≥ ${:.3}", sum.dollars)
+                } else {
+                    "—".to_owned()
+                }
+            }),
+        ),
+        (
+            tr!(bench_sum_tokens),
+            Box::new(|sum: &Sum| crate::meter::tokens(sum.tokens)),
+        ),
+    ];
+    let first = std::iter::once(crate::transcript::text_width(tr!(bench_task_column)))
+        .chain(tasks.iter().map(|task| crate::transcript::text_width(task)))
+        .chain(
+            measures
+                .iter()
+                .map(|(label, _)| crate::transcript::text_width(label)),
+        )
+        .max()
+        .unwrap_or(0);
+    let wide: Vec<usize> = models
+        .iter()
+        .zip(&names)
+        .map(|(model, name)| {
+            std::iter::once(crate::transcript::text_width(name))
+                .chain(
+                    tasks
+                        .iter()
+                        .map(|task| crate::transcript::text_width(&cell(task, model))),
+                )
+                .chain(
+                    measures
+                        .iter()
+                        .map(|(_, value)| crate::transcript::text_width(&value(&sums[model]))),
+                )
+                .max()
+                .unwrap_or(0)
+        })
+        .collect();
+    let row = |label: &str, values: Vec<String>| {
+        let mut line = format!("  {}", padded(label, first));
+        for (value, wide) in values.iter().zip(&wide) {
+            line.push_str("   ");
+            line.push_str(&padded(value, *wide));
+        }
+        line.trim_end().to_owned()
+    };
+    let mut lines = vec![title(tasks.len(), models.len()), String::new()];
+    lines.push(row(tr!(bench_task_column), names.clone()));
+    for task in &tasks {
+        let values = models.iter().map(|model| cell(task, model)).collect();
+        lines.push(row(&crate::transcript::clean(task), values));
+    }
+    let width = first + wide.iter().map(|wide| wide + 3).sum::<usize>();
+    lines.push(format!("  {}", "─".repeat(width)));
+    for (label, value) in &measures {
+        lines.push(row(
+            label,
+            models.iter().map(|model| value(&sums[model])).collect(),
+        ));
+    }
+    // Ahead only where it passed more than the next: a tie or nothing passed names no one.
+    if let [first, second, ..] = models[..]
+        && sums[first].passed > 0
+        && sums[first].rate() > sums[second].rate()
+    {
+        let sum = &sums[first];
+        lines.push(String::new());
+        lines.push(tr!(
+            bench_ahead,
+            model = names[0],
+            passed = sum.passed,
+            runs = sum.runs
+        ));
+    }
+    let failed: Vec<(&str, String, &str)> = records
+        .iter()
+        .filter(|record| !record.passed)
+        .filter_map(|record| {
+            let at = models.iter().position(|model| *model == record.model)?;
+            Some((
+                record.task.as_str(),
+                names[at].clone(),
+                record.ended.as_deref()?,
+            ))
+        })
+        .collect();
+    if !failed.is_empty() {
+        let task_wide = failed
+            .iter()
+            .map(|(task, ..)| crate::transcript::text_width(task))
+            .max()
+            .unwrap_or(0);
+        let name_wide = failed
+            .iter()
+            .map(|(_, name, _)| crate::transcript::text_width(name))
+            .max()
+            .unwrap_or(0);
+        lines.push(String::new());
+        lines.push(tr!(bench_failed_title).to_owned());
+        for (task, name, why) in failed {
             lines.push(format!(
-                "  {model:<wide$}  {}  Ø {took}  Ø {cost}",
-                tr!(bench_passed, passed = sum.passed, runs = sum.runs)
+                "  {}   {}   {}",
+                padded(&crate::transcript::clean(task), task_wide),
+                padded(&name, name_wide),
+                crate::transcript::clean(why)
             ));
         }
+    }
+    lines.join("\n")
+}
+
+/// The free arena's wins per model, the most first.
+fn wins(records: &[&Record]) -> String {
+    let mut won: BTreeMap<&str, usize> = BTreeMap::new();
+    for record in records {
+        *won.entry(record.model.as_str()).or_default() += usize::from(record.passed);
+    }
+    let mut ranked: Vec<(&str, usize)> = won.into_iter().collect();
+    ranked.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
+    let wide = ranked
+        .iter()
+        .map(|(model, _)| crate::transcript::text_width(model))
+        .max()
+        .unwrap_or(0);
+    let mut lines = vec![tr!(bench_wins_title).to_owned()];
+    for (model, n) in ranked {
+        lines.push(format!(
+            "  {}  {}",
+            padded(&crate::transcript::clean(model), wide),
+            tr!(bench_wins, n = n)
+        ));
     }
     lines.join("\n")
 }
@@ -451,6 +661,8 @@ pub struct Bench {
     pub current: Option<(Task, PathBuf)>,
     /// How many tasks the set has.
     pub total: usize,
+    /// The results this run kept so far, for its end.
+    pub kept: Vec<Record>,
 }
 
 #[cfg(test)]
@@ -561,12 +773,74 @@ mod tests {
         let kept = results(&home);
         assert_eq!(kept.len(), 5);
         let table = table(&kept);
-        let slow = table.find("p/slow").unwrap();
-        let fast = table.find("p/fast").unwrap();
+        let header = table.lines().nth(2).unwrap();
+        let slow = header.find("slow").unwrap();
+        let fast = header.find("fast").unwrap();
         assert!(slow < fast, "a higher share passed ranks first: {table}");
-        assert!(table.contains("1:15"), "slow's mean time: {table}");
+        assert!(
+            table.contains("2/2 Ø 1:15"),
+            "slow's runs and mean time: {table}"
+        );
+        assert!(
+            table.contains(&tr!(bench_of, passed = 2, runs = 2)),
+            "{table}"
+        );
         assert!(table.contains(&tr!(bench_wins, n = 1)), "{table}");
         assert_eq!(super::table(&[]), tr!(bench_no_results));
         let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn a_runs_end_shows_its_tasks_against_its_models_and_why_one_failed() {
+        let record = |task: &str, model: &str, passed, seconds, ended: Option<&str>| Record {
+            date: "2026-11-03".into(),
+            set: "2026-11".into(),
+            task: task.into(),
+            model: model.into(),
+            passed,
+            seconds: Some(seconds),
+            dollars: Some(0.001),
+            tokens: 30_000,
+            ended: ended.map(str::to_owned),
+        };
+        let said = finished(
+            "2026-11",
+            &[
+                record(
+                    "01-rust",
+                    "openrouter/deepseek/flash",
+                    false,
+                    117,
+                    Some("1 failed"),
+                ),
+                record("01-rust", "openrouter/openai/luna", true, 43, None),
+                record("02-ts", "openrouter/deepseek/flash", true, 158, None),
+                record("02-ts", "openrouter/openai/luna", true, 36, None),
+            ],
+        );
+        println!("{said}");
+        let lines: Vec<&str> = said.lines().collect();
+        assert_eq!(
+            lines[0],
+            tr!(bench_done, set = "2026-11", tasks = 2, models = 2)
+        );
+        let header = lines[2];
+        assert!(
+            header.find("luna").unwrap() < header.find("flash").unwrap(),
+            "the best first, by its short name: {said}"
+        );
+        assert!(
+            lines[3].starts_with("  01-rust")
+                && lines[3].contains("✗ 1:57")
+                && lines[3].contains("✓ 0:43")
+        );
+        // The columns stand under each other.
+        assert_eq!(lines[3].find('✓'), lines[4].find('✓'));
+        assert!(said.contains(&tr!(bench_ahead, model = "luna", passed = 2, runs = 2)));
+        let failed = said.lines().last().unwrap();
+        assert!(
+            failed.contains("01-rust") && failed.contains("flash") && failed.ends_with("1 failed")
+        );
+        assert_eq!(finished("2026-11", &[]), tr!(bench_no_results));
     }
 }

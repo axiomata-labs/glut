@@ -1064,6 +1064,19 @@ impl Panes {
             && arena.check_ids[at].as_ref() == Some(shell)
         {
             arena.check_ids[at] = None;
+            // Kept in the results: masked as any tool text is, since a model wrote the code the check ran.
+            let masks = self
+                .list
+                .iter()
+                .find(|pane| pane.id == id)
+                .and_then(|pane| pane.app.parts.config.masks.clone());
+            arena.check_said[at] = (!ran.ok).then(|| {
+                let reason = crate::arena::check_reason(&ran.output);
+                match &masks {
+                    Some(masks) => masks.mask(&reason, "arena check").text,
+                    None => reason,
+                }
+            });
             arena.checks[at] = if ran.ok {
                 crate::arena::Check::Passed
             } else {
@@ -2772,6 +2785,7 @@ impl Panes {
             total: tasks.len(),
             left: tasks.into(),
             current: None,
+            kept: Vec::new(),
         });
         self.next_task();
     }
@@ -2790,19 +2804,16 @@ impl Panes {
             {
                 return;
             }
-            let (home, set, total) = (bench.home.clone(), bench.set.clone(), bench.total);
+            let (set, total) = (bench.set.clone(), bench.total);
             let (home_pane, contenders) = (bench.home_pane, bench.contenders.clone());
             let Some(task) = self.bench.as_mut().and_then(|bench| bench.left.pop_front()) else {
-                self.bench = None;
-                let records: Vec<crate::bench::Record> = crate::bench::results(&home)
-                    .into_iter()
-                    .filter(|record| record.set == set)
-                    .collect();
-                let said = format!(
-                    "{}\n{}",
-                    tr!(bench_done, set = set),
-                    crate::bench::table(&records)
-                );
+                // This run's results alone: an earlier run of the set is `/arena results`' to show.
+                let kept = self
+                    .bench
+                    .take()
+                    .map(|bench| bench.kept)
+                    .unwrap_or_default();
+                let said = crate::bench::finished(&set, &kept);
                 return self.note_in(home_pane, said, Tone::Fine);
             };
             let number = total - self.bench.as_ref().map_or(0, |bench| bench.left.len());
@@ -2914,6 +2925,7 @@ impl Panes {
                         ),
                         Tone::Fault,
                     );
+                    arena.check_said[at] = Some(crate::transcript::clean(&reason));
                     arena.checks[at] = crate::arena::Check::Failed;
                 }
             }
@@ -2952,6 +2964,8 @@ impl Panes {
                     Some(row.state.clone())
                 } else if check == crate::arena::Check::None {
                     Some(tr!(bench_unchecked).to_owned())
+                } else if check == crate::arena::Check::Failed {
+                    arena.check_said[at].clone()
                 } else {
                     None
                 };
@@ -2982,6 +2996,9 @@ impl Panes {
         }
         if let Err(reason) = crate::bench::keep(&home, &records) {
             self.note_in(home_pane, reason, Tone::Fault);
+        }
+        if let Some(bench) = &mut self.bench {
+            bench.kept.extend(records.iter().cloned());
         }
         for at in 0..records.len() {
             let _ = std::fs::remove_dir_all(check_place(&home, &arena_now, at));
@@ -5532,6 +5549,7 @@ mod tests {
             left: std::collections::VecDeque::new(),
             current: Some((task, place.clone())),
             total: 1,
+            kept: Vec::new(),
         });
         panes.settle(&host);
         assert!(

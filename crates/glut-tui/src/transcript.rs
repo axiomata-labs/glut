@@ -1221,6 +1221,11 @@ pub(crate) fn hides(c: char) -> bool {
     )
 }
 
+/// A text's cells on the terminal: a Chinese or Japanese character takes two.
+pub(crate) fn text_width(text: &str) -> usize {
+    text.chars().map(cell_width).sum()
+}
+
 /// A character's cells.
 fn cell_width(c: char) -> usize {
     c.width().unwrap_or(0)

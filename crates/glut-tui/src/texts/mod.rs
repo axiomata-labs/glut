@@ -2349,6 +2349,8 @@ glut::catalog! {
         bench_check_refused: &'static str,
         /// A bench result whose check never ran.
         bench_unchecked: &'static str,
+        /// A bench check that failed without a word of output.
+        bench_check_silent: &'static str,
         /// `/arena check` while the bench runs.
         bench_no_check: &'static str,
         /// `/arena take` while the bench runs.
@@ -2363,10 +2365,21 @@ glut::catalog! {
         bench_wins_title: &'static str,
         /// `/arena results`: a model's wins in the free arena, `{n}`.
         bench_wins: &'static str,
-        /// `/arena results`: a set's heading, `{set}`.
+        /// `/arena results`: a set's heading, `{set}`, its `{tasks}` and `{models}` counted.
         bench_set_title: &'static str,
-        /// `/arena results`: a model's tasks passed, `{passed}` of `{runs}`.
-        bench_passed: &'static str,
+        /// The results' grid: the tasks' column heading.
+        bench_task_column: &'static str,
+        /// The results' grid: the sums' labels — tasks passed, time, cost and tokens in all.
+        bench_sum_passed: &'static str,
+        bench_sum_time: &'static str,
+        bench_sum_cost: &'static str,
+        bench_sum_tokens: &'static str,
+        /// The results' grid: a model's tasks passed, `{passed}` of `{runs}`.
+        bench_of: &'static str,
+        /// The results' grid: the model ahead, `{model}` with `{passed}` of `{runs}`.
+        bench_ahead: &'static str,
+        /// The results' grid: the heading over why each failure failed.
+        bench_failed_title: &'static str,
         /// `/arena tasks` without a set: where they are looked for, `{root}`.
         bench_no_sets: &'static str,
         /// `/arena tasks`: the heading, `{root}`.
@@ -2375,7 +2388,7 @@ glut::catalog! {
         bench_usage: &'static str,
         /// The bench starts: `{set}`, `{n}` tasks, `{models}`.
         bench_starts: &'static str,
-        /// The bench is through a set, `{set}`.
+        /// The bench is through a set, `{set}`, its `{tasks}` and `{models}` counted.
         bench_done: &'static str,
         /// The bench's next task: `{n}` of `{total}`, `{task}`.
         bench_task: &'static str,
