@@ -43,8 +43,8 @@ const KEY_ENV: &str = crate::config::API_KEY_ENV;
 pub enum Command {
     /// Runs one prompt and writes its events as JSON lines.
     Run(Box<RunArgs>),
-    /// Goes on with a run that was lost before it finished (durable runs, `docs/plans/durable.md`): from its journal in
-    /// `~/.glut/runs`, with the run's own flags. Without a run the newest unfinished one; --list shows them.
+    /// Goes on with a run that was lost before it finished (durable runs): from its journal in `~/.glut/runs`, with
+    /// the run's own flags. Without a run the newest unfinished one; --list shows them.
     Resume {
         /// The run, as `glut` named it when it started (on stderr).
         run: Option<String>,
@@ -55,8 +55,8 @@ pub enum Command {
         #[arg(long)]
         discard: bool,
     },
-    /// Puts a folder back as it was before a run, or before one of its steps (Glut 2): the snapshots a run took
-    /// before it changed anything. Without --run the newest run of the folder; --list shows the runs.
+    /// Puts a folder back as it was before a run, or before one of its steps: the snapshots a run took before it
+    /// changed anything. Without --run the newest run of the folder; --list shows the runs.
     Undo {
         #[arg(long, default_value = ".")]
         cwd: PathBuf,
@@ -70,17 +70,17 @@ pub enum Command {
         #[arg(long)]
         list: bool,
     },
-    /// What Glut lean saved (`docs/plans/glut-lean.md`, N9): compacted outputs, unchanged re-reads and relocated
-    /// results per kind, from `~/.glut/lean.jsonl` — every Glut run's, the app's too.
+    /// What Glut saved by keeping results lean: compacted outputs, unchanged re-reads and relocated results per
+    /// kind, from `~/.glut/lean.jsonl` — every Glut run's, the app's too.
     Gain {
         /// Only the last N days.
         #[arg(long)]
         days: Option<u32>,
     },
-    /// The model providers runs use (`docs/plans/glut-providers.md`): ~/.glut/providers.json, keys in a secret store.
+    /// The model providers runs use: ~/.glut/providers.json, keys in a secret store.
     #[command(subcommand)]
     Providers(providers::ProvidersCommand),
-    /// The models the providers offer (`docs/plans/glut-providers.md`, PV2), from lists kept in ~/.glut/models.
+    /// The models the providers offer, from lists kept in ~/.glut/models.
     #[command(subcommand)]
     Models(models::ModelsCommand),
     /// The MCP servers: ~/.glut/mcp.json and the project's .mcp.json, signing in to a hosted one and out again.
@@ -182,13 +182,12 @@ pub struct RunArgs {
     #[arg(long)]
     #[serde(default)]
     no_auto_compact: bool,
-    /// Send what the tools answer as it is, without hiding the keys in it (T58; `"mask": false` in
-    /// ~/.glut/secrets.json, which `/secrets off` writes).
+    /// Send what the tools answer as it is, without hiding the keys in it (`"mask": false` in ~/.glut/secrets.json,
+    /// which `/secrets off` writes).
     #[arg(long)]
     #[serde(default)]
     no_mask: bool,
-    /// Start no language server: no errors after an edit, no `lsp` tool (T62; `"lsp": false` in
-    /// ~/.glut/settings.json).
+    /// Start no language server: no errors after an edit, no `lsp` tool (`"lsp": false` in ~/.glut/settings.json).
     #[arg(long)]
     #[serde(default)]
     no_lsp: bool,
@@ -205,16 +204,16 @@ pub struct RunArgs {
     /// A rule the run refuses; repeatable.
     #[arg(long)]
     deny: Vec<String>,
-    /// Run a skill as the run's task (HS6, K1.1): its SKILL.md body becomes the run's instructions, and its
-    /// frontmatter may narrow the tools, pick the model and set the time limit (K5).
+    /// Run a skill as the run's task: its SKILL.md body becomes the run's instructions, and its frontmatter may
+    /// narrow the tools, pick the model and set the time limit.
     #[arg(long)]
     skill: Option<String>,
-    /// A folder of skills beside `~/.glut/skills` (HS6, K2); repeatable.
+    /// A folder of skills beside `~/.glut/skills`; repeatable.
     #[arg(long)]
     skill_dir: Vec<PathBuf>,
-    /// A folder the run works in beside --cwd (T60c), the owner's word alone: the file tools reach it by its full
-    /// path, commands write there, the snapshots record it. Refused: /, the home folder, one holding --cwd or a
-    /// secret; repeatable.
+    /// A folder the run works in beside --cwd, the owner's word alone: the file tools reach it by its full path,
+    /// commands write there, the snapshots record it. Refused: /, the home folder, one holding --cwd or a secret;
+    /// repeatable.
     #[arg(long)]
     #[serde(default)]
     folder: Vec<String>,
@@ -223,18 +222,18 @@ pub struct RunArgs {
     #[arg(long)]
     #[serde(default)]
     mcp_config: Option<PathBuf>,
-    /// Work as Glut's terminal session does in a project (TUI T35): its guides, the map of where plans, to-dos and
-    /// the memory are kept, and the `memory` tool. Off: the run knows only what its flags say.
+    /// Work as Glut's terminal session does in a project: its guides, the map of where plans, to-dos and the memory
+    /// are kept, and the `memory` tool. Off: the run knows only what its flags say.
     #[arg(long)]
     #[serde(default)]
     project: bool,
-    /// An image the prompt carries (T45: PNG, JPEG, GIF or WebP, scaled before it is sent); repeatable.
+    /// An image the prompt carries (PNG, JPEG, GIF or WebP, scaled before it is sent); repeatable.
     #[arg(long)]
     #[serde(default)]
     image: Vec<PathBuf>,
     /// The prompt — extra text beside `--skill`, or a slash command (`/review src/`), read from
-    /// `~/.glut/commands/` and, in a trusted folder, the project's `.glut/commands/` (HS4). Without `--skill` a
-    /// prompt is required; with one it defaults to "Run the skill.".
+    /// `~/.glut/commands/` and, in a trusted folder, the project's `.glut/commands/`. Without `--skill` a prompt is
+    /// required; with one it defaults to "Run the skill.".
     prompt: Option<String>,
 }
 

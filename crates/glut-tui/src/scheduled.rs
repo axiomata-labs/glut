@@ -95,7 +95,7 @@ pub struct AddArgs {
     /// A rule it is refused; repeatable.
     #[arg(long)]
     deny: Vec<String>,
-    /// A folder it works in beside its own (T60c); repeatable.
+    /// A folder it works in beside its own; repeatable.
     #[arg(long)]
     folder: Vec<String>,
     /// The most a run may cost in USD; 1 otherwise.

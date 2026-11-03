@@ -56,7 +56,7 @@ scripts/install.sh               # glut for every terminal: ~/.cargo/bin, linked
   quickjs-ng has an open heap-write advisory in its regex compiler (GHSA-rxpx-wj25-jhqq) — do not add `RegExp` back
   until rquickjs bundles a fixed engine; `cargo audit` cannot see GitHub advisories. A script's tool calls go through
   `run.rs` `perform` like direct ones — never call the toolbox from `codemode.rs`. Language servers asked after an
-  edit (`diagnostics.rs` `SAFE_SERVERS`) must never run the project's code: an agent writes the files they read.
+  edit (`diagnostics.rs` `SAFE_PROGRAMS`) must never run the project's code: an agent writes the files they read.
 - **The Linux sandbox holds what Seatbelt holds, by mounts** (T59, `crates/glut/src/sandbox/{bwrap,linux,scan}.rs`):
   every sandboxed start goes through `Policy::command` (the shell, hooks, jobs, language servers) — never spawn
   `sandbox-exec` or `bwrap` yourself. bubblewrap runs this build's `glut` as its helper (`sandbox::serve_helper`, first
@@ -76,7 +76,9 @@ scripts/install.sh               # glut for every terminal: ~/.cargo/bin, linked
   counts as on) keeps every git folder read-only on both systems and closes it for them — on Linux the ones the
   search found (not inside a build folder it skips). What was there at the start was mounted as it was, so a change to
   it came from outside (the owner's `git config` renames a new `config` in): neither the watch nor the check after
-  moves it — only a link, which no mount holds, is judged again. A protected name (`sandbox::PROTECTED_IN_ROOT`) is
+  moves it — only a link, which no mount holds, is judged again. On macOS too the search runs before every command and the check after it (a folder moved in whole passes
+  Seatbelt's path rules; it skips git folders' own parts, which only an outside tool changes there). A protected
+  name (`sandbox::PROTECTED_IN_ROOT`) is
   refused at any depth of the working folder on both systems, in any case and through APFS's Unicode folds (`ſ`, `K`),
   but a package's `.vscode` inside `node_modules` (`PACKAGES`/`PACKAGED`) — never widen that exemption: a folder made
   elsewhere and moved into place whole passes every path rule (security audit 2026-11-04). A covered secret is a

@@ -1363,8 +1363,8 @@ definiciones, usos y renombres",
             "Las reglas y carpetas dadas sustituyen a las del plan en lugar de sumarse a ellas",
         ),
         (
-            "Plans that run while Glut is closed: at a time of day, or every so often (T60b)",
-            "Planes que se ejecutan con Glut cerrado: a una hora del día, o cada cierto tiempo (T60b)",
+            "Plans that run while Glut is closed: at a time of day, or every so often",
+            "Planes que se ejecutan con Glut cerrado: a una hora del día, o cada cierto tiempo",
         ),
         (
             "Make a plan, or change the one of that name and keep what is not given again",
@@ -1413,8 +1413,8 @@ definiciones, usos y renombres",
             "Una regla que se le rechaza; repetible",
         ),
         (
-            "A folder it works in beside its own (T60c); repeatable",
-            "Una carpeta en la que trabaja junto a la suya (T60c); repetible",
+            "A folder it works in beside its own; repeatable",
+            "Una carpeta en la que trabaja junto a la suya; repetible",
         ),
         (
             "The most a run may cost in USD; 1 otherwise",
@@ -1458,15 +1458,15 @@ definiciones, usos y renombres",
             "Un plan y su registro de ejecuciones eliminados; sus sesiones se quedan",
         ),
         (
-            "Start no language server: no errors after an edit, no `lsp` tool (T62; `\"lsp\": false` in \
+            "Start no language server: no errors after an edit, no `lsp` tool (`\"lsp\": false` in \
              ~/.glut/settings.json)",
-            "No inicia ningún servidor de lenguaje: sin errores tras una edición, sin la herramienta `lsp` (T62; \
-             `\"lsp\": false` en ~/.glut/settings.json)",
+            "No inicia ningún servidor de lenguaje: sin errores tras una edición, sin la herramienta `lsp` (`\"lsp\": \
+             false` en ~/.glut/settings.json)",
         ),
         (
-            "Send what the tools answer as it is, without hiding the keys in it (T58; `\"mask\": false` in \
+            "Send what the tools answer as it is, without hiding the keys in it (`\"mask\": false` in \
              ~/.glut/secrets.json, which `/secrets off` writes)",
-            "Enviar lo que responden las herramientas tal cual, sin ocultar las claves (T58; `\"mask\": false` en \
+            "Enviar lo que responden las herramientas tal cual, sin ocultar las claves (`\"mask\": false` en \
              ~/.glut/secrets.json, que escribe `/secrets off`)",
         ),
         (
@@ -1697,23 +1697,22 @@ definiciones, usos y renombres",
             "Una regla que la ejecución rechaza; repetible",
         ),
         (
-            "Run a skill as the run's task (HS6, K1.1): its SKILL.md body becomes the run's instructions, and its \
-             frontmatter may narrow the tools, pick the model and set the time limit (K5)",
-            "Ejecutar un skill como tarea de la ejecución (HS6, K1.1): el cuerpo de su SKILL.md pasa a ser sus \
-             instrucciones, y su frontmatter puede restringir las herramientas, elegir el modelo y fijar el límite \
-             de tiempo (K5)",
+            "Run a skill as the run's task: its SKILL.md body becomes the run's instructions, and its frontmatter may \
+             narrow the tools, pick the model and set the time limit",
+            "Ejecutar un skill como tarea de la ejecución: el cuerpo de su SKILL.md pasa a ser sus instrucciones, y \
+             su frontmatter puede restringir las herramientas, elegir el modelo y fijar el límite de tiempo",
         ),
         (
-            "A folder the run works in beside --cwd (T60c), the owner's word alone: the file tools reach it by its \
-             full path, commands write there, the snapshots record it. Refused: /, the home folder, one holding --cwd \
-             or a secret; repeatable",
-            "Una carpeta en la que la ejecución trabaja junto a --cwd (T60c), solo por tu palabra: las herramientas de \
+            "A folder the run works in beside --cwd, the owner's word alone: the file tools reach it by its full \
+             path, commands write there, the snapshots record it. Refused: /, the home folder, one holding --cwd or a \
+             secret; repeatable",
+            "Una carpeta en la que la ejecución trabaja junto a --cwd, solo por tu palabra: las herramientas de \
              archivos la alcanzan por su ruta completa, los comandos escriben en ella, las instantáneas la guardan. \
              Rechazadas: /, la carpeta personal, una que contenga --cwd o un secreto; repetible",
         ),
         (
-            "A folder of skills beside `~/.glut/skills` (HS6, K2); repeatable",
-            "Una carpeta de skills junto a `~/.glut/skills` (HS6, K2); repetible",
+            "A folder of skills beside `~/.glut/skills`; repeatable",
+            "Una carpeta de skills junto a `~/.glut/skills`; repetible",
         ),
         (
             "The run's MCP servers from this file alone (`{\"mcpServers\": …}`, Claude Code's shape and flag), \
@@ -1722,31 +1721,29 @@ definiciones, usos y renombres",
              Claude Code), en lugar de ~/.glut/mcp.json y el .mcp.json del proyecto",
         ),
         (
-            "Work as Glut's terminal session does in a project (TUI T35): its guides, the map of where plans, \
-             to-dos and the memory are kept, and the `memory` tool. Off: the run knows only what its flags say",
-            "Trabajar como la sesión de terminal de Glut en un proyecto (TUI T35): sus guías, el mapa de dónde \
-             están planes, tareas y memoria, y la herramienta `memory`. Desactivado: la ejecución solo sabe lo que \
-             dicen sus opciones",
+            "Work as Glut's terminal session does in a project: its guides, the map of where plans, to-dos and the \
+             memory are kept, and the `memory` tool. Off: the run knows only what its flags say",
+            "Trabajar como la sesión de terminal de Glut en un proyecto: sus guías, el mapa de dónde están planes, \
+             tareas y memoria, y la herramienta `memory`. Desactivado: la ejecución solo sabe lo que dicen sus \
+             opciones",
         ),
         (
-            "An image the prompt carries (T45: PNG, JPEG, GIF or WebP, scaled before it is sent); repeatable",
-            "Una imagen que lleva el prompt (T45: PNG, JPEG, GIF o WebP, reducida antes de enviarla); repetible",
+            "An image the prompt carries (PNG, JPEG, GIF or WebP, scaled before it is sent); repeatable",
+            "Una imagen que lleva el prompt (PNG, JPEG, GIF o WebP, reducida antes de enviarla); repetible",
         ),
         (
             "The prompt — extra text beside `--skill`, or a slash command (`/review src/`), read from \
-             `~/.glut/commands/` and, in a trusted folder, the project's `.glut/commands/` (HS4). Without `--skill` \
-             a prompt is required; with one it defaults to \"Run the skill.\"",
+             `~/.glut/commands/` and, in a trusted folder, the project's `.glut/commands/`. Without `--skill` a \
+             prompt is required; with one it defaults to \"Run the skill.\"",
             "El prompt — texto extra junto a `--skill`, o un comando slash (`/review src/`), leído de \
-             `~/.glut/commands/` y, en una carpeta de confianza, del `.glut/commands/` del proyecto (HS4). Sin \
-             `--skill` hace falta un prompt; con uno, por defecto es \"Run the skill.\"",
+             `~/.glut/commands/` y, en una carpeta de confianza, del `.glut/commands/` del proyecto. Sin `--skill` \
+             hace falta un prompt; con uno, por defecto es \"Run the skill.\"",
         ),
         (
-            "Goes on with a run that was lost before it finished (durable runs, `docs/plans/durable.md`): from its \
-             journal in `~/.glut/runs`, with the run's own flags. Without a run the newest unfinished one; --list \
-             shows them",
-            "Sigue con una ejecución que se perdió antes de terminar (ejecuciones duraderas, \
-             `docs/plans/durable.md`): desde su journal en `~/.glut/runs`, con sus propias opciones. Sin ejecución, \
-             la más reciente sin terminar; --list las muestra",
+            "Goes on with a run that was lost before it finished (durable runs): from its journal in `~/.glut/runs`, \
+             with the run's own flags. Without a run the newest unfinished one; --list shows them",
+            "Sigue con una ejecución que se perdió antes de terminar (ejecuciones duraderas): desde su journal en \
+             `~/.glut/runs`, con sus propias opciones. Sin ejecución, la más reciente sin terminar; --list las muestra",
         ),
         (
             "The run, as `glut` named it when it started (on stderr)",
@@ -1761,11 +1758,11 @@ definiciones, usos y renombres",
             "Abandonar la ejecución: se elimina su journal",
         ),
         (
-            "Puts a folder back as it was before a run, or before one of its steps (Glut 2): the snapshots a run \
-             took before it changed anything. Without --run the newest run of the folder; --list shows the runs",
-            "Devuelve una carpeta a como estaba antes de una ejecución, o antes de uno de sus pasos (Glut 2): las \
-             instantáneas que tomó una ejecución antes de cambiar algo. Sin --run, la ejecución más reciente de la \
-             carpeta; --list muestra las ejecuciones",
+            "Puts a folder back as it was before a run, or before one of its steps: the snapshots a run took before \
+             it changed anything. Without --run the newest run of the folder; --list shows the runs",
+            "Devuelve una carpeta a como estaba antes de una ejecución, o antes de uno de sus pasos: las instantáneas \
+             que tomó una ejecución antes de cambiar algo. Sin --run, la ejecución más reciente de la carpeta; --list \
+             muestra las ejecuciones",
         ),
         (
             "The run, as its `snapshot` events name it",
@@ -1780,18 +1777,16 @@ definiciones, usos y renombres",
             "Listar las ejecuciones con instantáneas de la carpeta, las más recientes primero, sin cambiar nada",
         ),
         (
-            "What Glut lean saved (`docs/plans/glut-lean.md`, N9): compacted outputs, unchanged re-reads and \
-             relocated results per kind, from `~/.glut/lean.jsonl` — every Glut run's, the app's too",
-            "Lo que ahorró Glut lean (`docs/plans/glut-lean.md`, N9): salidas compactadas, relecturas sin cambios y \
-             resultados desplazados por tipo, de `~/.glut/lean.jsonl` — de cada ejecución de Glut, también las de \
-             la app",
+            "What Glut saved by keeping results lean: compacted outputs, unchanged re-reads and relocated results per \
+             kind, from `~/.glut/lean.jsonl` — every Glut run's, the app's too",
+            "Lo que ahorró Glut al mantener ligeros los resultados: salidas compactadas, relecturas sin cambios y \
+             resultados desplazados por tipo, de `~/.glut/lean.jsonl` — de cada ejecución de Glut, también las de la \
+             app",
         ),
         ("Only the last N days", "Solo los últimos N días"),
         (
-            "The model providers runs use (`docs/plans/glut-providers.md`): ~/.glut/providers.json, keys in a \
-             secret store",
-            "Los proveedores de modelos que usan las ejecuciones (`docs/plans/glut-providers.md`): \
-             ~/.glut/providers.json, claves en un almacén secreto",
+            "The model providers runs use: ~/.glut/providers.json, keys in a secret store",
+            "Los proveedores de modelos que usan las ejecuciones: ~/.glut/providers.json, claves en un almacén secreto",
         ),
         (
             "The configured providers, the default (marked *), and where each one's key comes from (never the key)",
@@ -1874,9 +1869,8 @@ definiciones, usos y renombres",
             "Mostrar esta ayuda o la de los subcomandos indicados",
         ),
         (
-            "The models the providers offer (`docs/plans/glut-providers.md`, PV2), from lists kept in ~/.glut/models",
-            "Los modelos que ofrecen los proveedores (`docs/plans/glut-providers.md`, PV2), de las listas guardadas \
-             en ~/.glut/models",
+            "The models the providers offer, from lists kept in ~/.glut/models",
+            "Los modelos que ofrecen los proveedores, de las listas guardadas en ~/.glut/models",
         ),
         (
             "The models of one provider or of all, with context window, price per million tokens and whether they \

@@ -87,7 +87,7 @@ enum Command {
         #[arg(long)]
         all: bool,
     },
-    /// Plans that run while Glut is closed: at a time of day, or every so often (T60b).
+    /// Plans that run while Glut is closed: at a time of day, or every so often.
     Schedule {
         #[command(subcommand)]
         what: glut_tui::ScheduleCommand,

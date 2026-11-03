@@ -1280,8 +1280,8 @@ pub const TEXTS: Texts = Texts {
             "指定したルールとフォルダーで、追加ではなくプランのものを置き換えます",
         ),
         (
-            "Plans that run while Glut is closed: at a time of day, or every so often (T60b)",
-            "Glut を閉じている間に実行されるプラン：決まった時刻、または一定の間隔で（T60b）",
+            "Plans that run while Glut is closed: at a time of day, or every so often",
+            "Glut を閉じている間に実行されるプラン：決まった時刻、または一定の間隔で",
         ),
         (
             "Make a plan, or change the one of that name and keep what is not given again",
@@ -1329,8 +1329,8 @@ pub const TEXTS: Texts = Texts {
             "拒否するルール。繰り返し指定できます",
         ),
         (
-            "A folder it works in beside its own (T60c); repeatable",
-            "自分のフォルダーの隣で作業するフォルダー（T60c）。繰り返し指定できます",
+            "A folder it works in beside its own; repeatable",
+            "自分のフォルダーの隣で作業するフォルダー。繰り返し指定できます",
         ),
         (
             "The most a run may cost in USD; 1 otherwise",
@@ -1374,14 +1374,14 @@ pub const TEXTS: Texts = Texts {
             "プランと実行の記録を削除します。セッションは残ります",
         ),
         (
-            "Start no language server: no errors after an edit, no `lsp` tool (T62; `\"lsp\": false` in \
+            "Start no language server: no errors after an edit, no `lsp` tool (`\"lsp\": false` in \
              ~/.glut/settings.json)",
-            "言語サーバーを起動しません: 編集後のエラーも `lsp` ツールもありません (T62; ~/.glut/settings.json の `\"lsp\": false`)",
+            "言語サーバーを起動しません: 編集後のエラーも `lsp` ツールもありません (~/.glut/settings.json の `\"lsp\": false`)",
         ),
         (
-            "Send what the tools answer as it is, without hiding the keys in it (T58; `\"mask\": false` in \
+            "Send what the tools answer as it is, without hiding the keys in it (`\"mask\": false` in \
              ~/.glut/secrets.json, which `/secrets off` writes)",
-            "ツールの応答をそのまま送り、キーを隠さない（T58; ~/.glut/secrets.json の `\"mask\": false`、`/secrets off` が書き込みます）",
+            "ツールの応答をそのまま送り、キーを隠さない（~/.glut/secrets.json の `\"mask\": false`、`/secrets off` が書き込みます）",
         ),
         (
             "The MCP servers: ~/.glut/mcp.json and the project's .mcp.json, signing in to a hosted one and out again",
@@ -1595,20 +1595,20 @@ pub const TEXTS: Texts = Texts {
             "実行が拒否するルール; 繰り返し可",
         ),
         (
-            "Run a skill as the run's task (HS6, K1.1): its SKILL.md body becomes the run's instructions, and its \
-             frontmatter may narrow the tools, pick the model and set the time limit (K5)",
-            "skill を実行のタスクとして動かす（HS6、K1.1）: その SKILL.md の本文が実行の指示になり、frontmatter でツールの制限、モデルの選択、制限時間の設定ができます（K5）",
+            "Run a skill as the run's task: its SKILL.md body becomes the run's instructions, and its frontmatter may \
+             narrow the tools, pick the model and set the time limit",
+            "skill を実行のタスクとして動かす: その SKILL.md の本文が実行の指示になり、frontmatter でツールの制限、モデルの選択、制限時間の設定ができます",
         ),
         (
-            "A folder the run works in beside --cwd (T60c), the owner's word alone: the file tools reach it by its \
-             full path, commands write there, the snapshots record it. Refused: /, the home folder, one holding --cwd \
-             or a secret; repeatable",
-            "--cwd の横で実行が作業するフォルダ（T60c）。指定できるのはオーナーだけ：ファイルツールはフルパスで届き、コマンドも書き込み、スナップショットにも記録されます。拒否：/、ホームフォルダ、--cwd \
+            "A folder the run works in beside --cwd, the owner's word alone: the file tools reach it by its full \
+             path, commands write there, the snapshots record it. Refused: /, the home folder, one holding --cwd or a \
+             secret; repeatable",
+            "--cwd の横で実行が作業するフォルダ。指定できるのはオーナーだけ：ファイルツールはフルパスで届き、コマンドも書き込み、スナップショットにも記録されます。拒否：/、ホームフォルダ、--cwd \
              や秘密を含むフォルダ。繰り返し指定可",
         ),
         (
-            "A folder of skills beside `~/.glut/skills` (HS6, K2); repeatable",
-            "`~/.glut/skills` に加える skill のフォルダー（HS6、K2）; 繰り返し可",
+            "A folder of skills beside `~/.glut/skills`; repeatable",
+            "`~/.glut/skills` に加える skill のフォルダー; 繰り返し可",
         ),
         (
             "The run's MCP servers from this file alone (`{\"mcpServers\": …}`, Claude Code's shape and flag), \
@@ -1617,27 +1617,25 @@ pub const TEXTS: Texts = Texts {
              .mcp.json の代わりに",
         ),
         (
-            "Work as Glut's terminal session does in a project (TUI T35): its guides, the map of where plans, \
-             to-dos and the memory are kept, and the `memory` tool. Off: the run knows only what its flags say",
-            "Glut のターミナルセッションのようにプロジェクトで作業する（TUI T35）: ガイド、プラン・タスク・記憶の置き場所の地図、`memory` ツール。オフ: 実行はフラグが伝えることしか知りません",
+            "Work as Glut's terminal session does in a project: its guides, the map of where plans, to-dos and the \
+             memory are kept, and the `memory` tool. Off: the run knows only what its flags say",
+            "Glut のターミナルセッションのようにプロジェクトで作業する: ガイド、プラン・タスク・記憶の置き場所の地図、`memory` ツール。オフ: 実行はフラグが伝えることしか知りません",
         ),
         (
-            "An image the prompt carries (T45: PNG, JPEG, GIF or WebP, scaled before it is sent); repeatable",
-            "プロンプトに添える画像（T45: PNG、JPEG、GIF、WebP、送信前に縮小）; 繰り返し可",
+            "An image the prompt carries (PNG, JPEG, GIF or WebP, scaled before it is sent); repeatable",
+            "プロンプトに添える画像（PNG、JPEG、GIF、WebP、送信前に縮小）; 繰り返し可",
         ),
         (
             "The prompt — extra text beside `--skill`, or a slash command (`/review src/`), read from \
-             `~/.glut/commands/` and, in a trusted folder, the project's `.glut/commands/` (HS4). Without `--skill` \
-             a prompt is required; with one it defaults to \"Run the skill.\"",
+             `~/.glut/commands/` and, in a trusted folder, the project's `.glut/commands/`. Without `--skill` a \
+             prompt is required; with one it defaults to \"Run the skill.\"",
             "プロンプト — `--skill` に添えるテキスト、またはスラッシュコマンド（`/review src/`）、`~/.glut/commands/` と、信頼されたフォルダーではプロジェクトの \
-             `.glut/commands/` から読み込み（HS4）。`--skill` がなければプロンプトが必要; あれば既定は \"Run the skill.\"",
+             `.glut/commands/` から読み込み。`--skill` がなければプロンプトが必要; あれば既定は \"Run the skill.\"",
         ),
         (
-            "Goes on with a run that was lost before it finished (durable runs, `docs/plans/durable.md`): from its \
-             journal in `~/.glut/runs`, with the run's own flags. Without a run the newest unfinished one; --list \
-             shows them",
-            "終わる前に失われた実行を続ける（永続実行、`docs/plans/durable.md`）: `~/.glut/runs` のジャーナルから、その実行のフラグで。実行の指定がなければ最新の未完了のもの; \
-             --list で一覧",
+            "Goes on with a run that was lost before it finished (durable runs): from its journal in `~/.glut/runs`, \
+             with the run's own flags. Without a run the newest unfinished one; --list shows them",
+            "終わる前に失われた実行を続ける（永続実行）: `~/.glut/runs` のジャーナルから、その実行のフラグで。実行の指定がなければ最新の未完了のもの; --list で一覧",
         ),
         (
             "The run, as `glut` named it when it started (on stderr)",
@@ -1652,9 +1650,9 @@ pub const TEXTS: Texts = Texts {
             "実行を諦める: そのジャーナルは削除されます",
         ),
         (
-            "Puts a folder back as it was before a run, or before one of its steps (Glut 2): the snapshots a run \
-             took before it changed anything. Without --run the newest run of the folder; --list shows the runs",
-            "フォルダーを実行の前、またはそのステップの前の状態に戻す（Glut 2）: 実行が何かを変える前に撮ったスナップショット。--run がなければフォルダーの最新の実行; --list で実行を一覧",
+            "Puts a folder back as it was before a run, or before one of its steps: the snapshots a run took before \
+             it changed anything. Without --run the newest run of the folder; --list shows the runs",
+            "フォルダーを実行の前、またはそのステップの前の状態に戻す: 実行が何かを変える前に撮ったスナップショット。--run がなければフォルダーの最新の実行; --list で実行を一覧",
         ),
         (
             "The run, as its `snapshot` events name it",
@@ -1669,16 +1667,14 @@ pub const TEXTS: Texts = Texts {
             "フォルダーのスナップショットがある実行を新しい順に一覧し、何も変えない",
         ),
         (
-            "What Glut lean saved (`docs/plans/glut-lean.md`, N9): compacted outputs, unchanged re-reads and \
-             relocated results per kind, from `~/.glut/lean.jsonl` — every Glut run's, the app's too",
-            "Glut lean が節約したもの（`docs/plans/glut-lean.md`、N9）: 種類ごとの圧縮した出力、変わらない再読み込み、移した結果、`~/.glut/lean.jsonl` から \
-             — すべての Glut の実行、アプリのものも",
+            "What Glut saved by keeping results lean: compacted outputs, unchanged re-reads and relocated results per \
+             kind, from `~/.glut/lean.jsonl` — every Glut run's, the app's too",
+            "Glut が結果を軽く保って節約したもの: 種類ごとの圧縮した出力、変わらない再読み込み、移した結果、`~/.glut/lean.jsonl` から — すべての Glut の実行、アプリのものも",
         ),
         ("Only the last N days", "直近 N 日だけ"),
         (
-            "The model providers runs use (`docs/plans/glut-providers.md`): ~/.glut/providers.json, keys in a \
-             secret store",
-            "実行が使うモデルのプロバイダー（`docs/plans/glut-providers.md`）: ~/.glut/providers.json、キーは秘密の保管場所に",
+            "The model providers runs use: ~/.glut/providers.json, keys in a secret store",
+            "実行が使うモデルのプロバイダー: ~/.glut/providers.json、キーは秘密の保管場所に",
         ),
         (
             "The configured providers, the default (marked *), and where each one's key comes from (never the key)",
@@ -1760,8 +1756,8 @@ pub const TEXTS: Texts = Texts {
             "このヘルプ、または指定したサブコマンドのヘルプを表示",
         ),
         (
-            "The models the providers offer (`docs/plans/glut-providers.md`, PV2), from lists kept in ~/.glut/models",
-            "プロバイダーが提供するモデル（`docs/plans/glut-providers.md`、PV2）、~/.glut/models に保存した一覧から",
+            "The models the providers offer, from lists kept in ~/.glut/models",
+            "プロバイダーが提供するモデル、~/.glut/models に保存した一覧から",
         ),
         (
             "The models of one provider or of all, with context window, price per million tokens and whether they \

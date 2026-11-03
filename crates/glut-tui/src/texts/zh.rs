@@ -1200,8 +1200,8 @@ pub const TEXTS: Texts = Texts {
             "给出的规则和文件夹替换计划中的，而不是加入其中",
         ),
         (
-            "Plans that run while Glut is closed: at a time of day, or every so often (T60b)",
-            "Glut 关闭时运行的计划：在每天的某个时刻，或每隔一段时间（T60b）",
+            "Plans that run while Glut is closed: at a time of day, or every so often",
+            "Glut 关闭时运行的计划：在每天的某个时刻，或每隔一段时间",
         ),
         (
             "Make a plan, or change the one of that name and keep what is not given again",
@@ -1243,8 +1243,8 @@ pub const TEXTS: Texts = Texts {
         ),
         ("A rule it is refused; repeatable", "拒绝的规则；可重复"),
         (
-            "A folder it works in beside its own (T60c); repeatable",
-            "在其文件夹之外工作的文件夹（T60c）；可重复",
+            "A folder it works in beside its own; repeatable",
+            "在其文件夹之外工作的文件夹；可重复",
         ),
         (
             "The most a run may cost in USD; 1 otherwise",
@@ -1288,14 +1288,14 @@ pub const TEXTS: Texts = Texts {
             "删除计划及其运行记录；其会话保留",
         ),
         (
-            "Start no language server: no errors after an edit, no `lsp` tool (T62; `\"lsp\": false` in \
+            "Start no language server: no errors after an edit, no `lsp` tool (`\"lsp\": false` in \
              ~/.glut/settings.json)",
-            "不启动任何语言服务器：编辑后不报错，没有 `lsp` 工具（T62；~/.glut/settings.json 中的 `\"lsp\": false`）",
+            "不启动任何语言服务器：编辑后不报错，没有 `lsp` 工具（~/.glut/settings.json 中的 `\"lsp\": false`）",
         ),
         (
-            "Send what the tools answer as it is, without hiding the keys in it (T58; `\"mask\": false` in \
+            "Send what the tools answer as it is, without hiding the keys in it (`\"mask\": false` in \
              ~/.glut/secrets.json, which `/secrets off` writes)",
-            "按原样发送工具的回答，不隐藏其中的密钥（T58；即 ~/.glut/secrets.json 中的 `\"mask\": false`，由 `/secrets off` 写入）",
+            "按原样发送工具的回答，不隐藏其中的密钥（即 ~/.glut/secrets.json 中的 `\"mask\": false`，由 `/secrets off` 写入）",
         ),
         (
             "The MCP servers: ~/.glut/mcp.json and the project's .mcp.json, signing in to a hosted one and out again",
@@ -1502,19 +1502,19 @@ pub const TEXTS: Texts = Texts {
             "运行拒绝的规则；可重复",
         ),
         (
-            "Run a skill as the run's task (HS6, K1.1): its SKILL.md body becomes the run's instructions, and its \
-             frontmatter may narrow the tools, pick the model and set the time limit (K5)",
-            "把一个 skill 作为运行的任务（HS6，K1.1）：其 SKILL.md 正文成为运行的指令，其 frontmatter 可以限制工具、选择模型并设置时间上限（K5）",
+            "Run a skill as the run's task: its SKILL.md body becomes the run's instructions, and its frontmatter may \
+             narrow the tools, pick the model and set the time limit",
+            "把一个 skill 作为运行的任务：其 SKILL.md 正文成为运行的指令，其 frontmatter 可以限制工具、选择模型并设置时间上限",
         ),
         (
-            "A folder the run works in beside --cwd (T60c), the owner's word alone: the file tools reach it by its \
-             full path, commands write there, the snapshots record it. Refused: /, the home folder, one holding --cwd \
-             or a secret; repeatable",
-            "运行在 --cwd 之外工作的文件夹（T60c），只凭所有者的指定：文件工具通过完整路径访问，命令可写入，快照会记录它。拒绝：/、主文件夹、包含 --cwd 或机密的文件夹；可重复",
+            "A folder the run works in beside --cwd, the owner's word alone: the file tools reach it by its full \
+             path, commands write there, the snapshots record it. Refused: /, the home folder, one holding --cwd or a \
+             secret; repeatable",
+            "运行在 --cwd 之外工作的文件夹，只凭所有者的指定：文件工具通过完整路径访问，命令可写入，快照会记录它。拒绝：/、主文件夹、包含 --cwd 或机密的文件夹；可重复",
         ),
         (
-            "A folder of skills beside `~/.glut/skills` (HS6, K2); repeatable",
-            "`~/.glut/skills` 之外的 skill 文件夹（HS6，K2）；可重复",
+            "A folder of skills beside `~/.glut/skills`; repeatable",
+            "`~/.glut/skills` 之外的 skill 文件夹；可重复",
         ),
         (
             "The run's MCP servers from this file alone (`{\"mcpServers\": …}`, Claude Code's shape and flag), \
@@ -1522,26 +1522,25 @@ pub const TEXTS: Texts = Texts {
             "运行的 MCP 服务器只来自此文件（`{\"mcpServers\": …}`，Claude Code 的格式和参数），代替 ~/.glut/mcp.json 和项目的 .mcp.json",
         ),
         (
-            "Work as Glut's terminal session does in a project (TUI T35): its guides, the map of where plans, \
-             to-dos and the memory are kept, and the `memory` tool. Off: the run knows only what its flags say",
-            "像 Glut 的终端会话那样在项目中工作（TUI T35）：其指南、计划、待办和记忆所在位置的地图，以及 `memory` 工具。关闭时：运行只知道参数告诉它的内容",
+            "Work as Glut's terminal session does in a project: its guides, the map of where plans, to-dos and the \
+             memory are kept, and the `memory` tool. Off: the run knows only what its flags say",
+            "像 Glut 的终端会话那样在项目中工作：其指南、计划、待办和记忆所在位置的地图，以及 `memory` 工具。关闭时：运行只知道参数告诉它的内容",
         ),
         (
-            "An image the prompt carries (T45: PNG, JPEG, GIF or WebP, scaled before it is sent); repeatable",
-            "提示词附带的一张图片（T45：PNG、JPEG、GIF 或 WebP，发送前缩小）；可重复",
+            "An image the prompt carries (PNG, JPEG, GIF or WebP, scaled before it is sent); repeatable",
+            "提示词附带的一张图片（PNG、JPEG、GIF 或 WebP，发送前缩小）；可重复",
         ),
         (
             "The prompt — extra text beside `--skill`, or a slash command (`/review src/`), read from \
-             `~/.glut/commands/` and, in a trusted folder, the project's `.glut/commands/` (HS4). Without `--skill` \
-             a prompt is required; with one it defaults to \"Run the skill.\"",
+             `~/.glut/commands/` and, in a trusted folder, the project's `.glut/commands/`. Without `--skill` a \
+             prompt is required; with one it defaults to \"Run the skill.\"",
             "提示词 — `--skill` 之外的额外文字，或斜杠命令（`/review src/`），从 `~/.glut/commands/` 读取，在可信文件夹中也从项目的 `.glut/commands/` \
-             读取（HS4）。没有 `--skill` 时必须提供提示词；有时默认为 \"Run the skill.\"",
+             读取。没有 `--skill` 时必须提供提示词；有时默认为 \"Run the skill.\"",
         ),
         (
-            "Goes on with a run that was lost before it finished (durable runs, `docs/plans/durable.md`): from its \
-             journal in `~/.glut/runs`, with the run's own flags. Without a run the newest unfinished one; --list \
-             shows them",
-            "继续一个未完成就中断的运行（持久运行，`docs/plans/durable.md`）：从其在 `~/.glut/runs` 中的日志，用该运行自己的参数。不指定运行时为最新的未完成运行；--list 列出它们",
+            "Goes on with a run that was lost before it finished (durable runs): from its journal in `~/.glut/runs`, \
+             with the run's own flags. Without a run the newest unfinished one; --list shows them",
+            "继续一个未完成就中断的运行（持久运行）：从其在 `~/.glut/runs` 中的日志，用该运行自己的参数。不指定运行时为最新的未完成运行；--list 列出它们",
         ),
         (
             "The run, as `glut` named it when it started (on stderr)",
@@ -1556,9 +1555,9 @@ pub const TEXTS: Texts = Texts {
             "放弃该运行：删除其日志",
         ),
         (
-            "Puts a folder back as it was before a run, or before one of its steps (Glut 2): the snapshots a run \
-             took before it changed anything. Without --run the newest run of the folder; --list shows the runs",
-            "把文件夹恢复到某次运行之前，或其某个步骤之前（Glut 2）：运行在做任何更改前拍下的快照。不指定 --run 时为该文件夹最新的运行；--list 列出运行",
+            "Puts a folder back as it was before a run, or before one of its steps: the snapshots a run took before \
+             it changed anything. Without --run the newest run of the folder; --list shows the runs",
+            "把文件夹恢复到某次运行之前，或其某个步骤之前：运行在做任何更改前拍下的快照。不指定 --run 时为该文件夹最新的运行；--list 列出运行",
         ),
         (
             "The run, as its `snapshot` events name it",
@@ -1573,16 +1572,14 @@ pub const TEXTS: Texts = Texts {
             "列出该文件夹有快照的运行，最新的在前，不做任何更改",
         ),
         (
-            "What Glut lean saved (`docs/plans/glut-lean.md`, N9): compacted outputs, unchanged re-reads and \
-             relocated results per kind, from `~/.glut/lean.jsonl` — every Glut run's, the app's too",
-            "Glut lean 节省了什么（`docs/plans/glut-lean.md`，N9）：按类别的压缩输出、未变的重复读取和移出的结果，来自 `~/.glut/lean.jsonl` — 每次 Glut \
-             运行的，包括应用的",
+            "What Glut saved by keeping results lean: compacted outputs, unchanged re-reads and relocated results per \
+             kind, from `~/.glut/lean.jsonl` — every Glut run's, the app's too",
+            "Glut 通过精简结果节省了什么：按类别的压缩输出、未变的重复读取和移出的结果，来自 `~/.glut/lean.jsonl` — 每次 Glut 运行的，包括应用的",
         ),
         ("Only the last N days", "仅最近 N 天"),
         (
-            "The model providers runs use (`docs/plans/glut-providers.md`): ~/.glut/providers.json, keys in a \
-             secret store",
-            "运行使用的模型提供商（`docs/plans/glut-providers.md`）：~/.glut/providers.json，密钥在安全存储中",
+            "The model providers runs use: ~/.glut/providers.json, keys in a secret store",
+            "运行使用的模型提供商：~/.glut/providers.json，密钥在安全存储中",
         ),
         (
             "The configured providers, the default (marked *), and where each one's key comes from (never the key)",
@@ -1663,8 +1660,8 @@ pub const TEXTS: Texts = Texts {
             "显示此帮助或指定子命令的帮助",
         ),
         (
-            "The models the providers offer (`docs/plans/glut-providers.md`, PV2), from lists kept in ~/.glut/models",
-            "提供商提供的模型（`docs/plans/glut-providers.md`，PV2），来自 ~/.glut/models 中保存的列表",
+            "The models the providers offer, from lists kept in ~/.glut/models",
+            "提供商提供的模型，来自 ~/.glut/models 中保存的列表",
         ),
         (
             "The models of one provider or of all, with context window, price per million tokens and whether they \

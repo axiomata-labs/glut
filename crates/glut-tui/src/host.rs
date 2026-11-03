@@ -30,7 +30,7 @@ pub struct Launch {
     /// The gate's start: `mode: None` takes the settings' (a session starts in build when they name none), and
     /// `trusted` decides whether the project's own `.glut/` rules, skills and servers count.
     pub gate: GateOptions,
-    /// The folder is trusted when the owner trusted it (`~/.glut/trust.json`), whatever `gate.trusted` says.
+    /// The folder is trusted when the owner trusted it (`~/.glut/trusted.json`), whatever `gate.trusted` says.
     pub owner_trust: bool,
     /// What the model is told before the conversation.
     pub instructions: Instructions,

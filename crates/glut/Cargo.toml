@@ -3,7 +3,13 @@ name = "glut"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
-description = "Glut, an agent harness: a lean tool-calling loop over an OpenAI-compatible model API, with guarded file tools, an OS sandbox and a network gate. Grown inside Axiomata-OS (its plans: docs/plans/harness.md there), an app of its own since 2026-10-21."
+description = "A coding-agent harness as a library: a tool-calling loop over OpenAI-compatible, Anthropic and Responses APIs, with guarded file tools, every command in an OS sandbox, a permission gate and a network proxy."
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+readme = "../../README.md"
+keywords = ["agent", "llm", "sandbox", "coding-agent", "harness"]
+categories = ["development-tools", "command-line-utilities"]
 
 [features]
 # T87: the secrets file read on macOS too (crates/glut/src/providers/secrets.rs `FILE_ALLOWED`) — the owner's builds
