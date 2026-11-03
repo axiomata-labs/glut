@@ -199,10 +199,20 @@ fn command_script(family: Family) -> String {
     } else {
         ""
     };
+    // The gate reads a glob as the shell's default does: `*` never matches a leading dot. A profile (`~/.zshenv`
+    // runs for every zsh) must not change that; a command that does is judged by its own words.
+    let globs = match family {
+        Family::Zsh => "builtin unsetopt glob_dots 2>/dev/null\n",
+        Family::Bash => {
+            "builtin shopt -u dotglob 2>/dev/null; builtin unset GLOBIGNORE 2>/dev/null\n"
+        }
+        Family::Posix => "unset GLOBIGNORE 2>/dev/null\n",
+    };
     let b = family.builtin();
     format!(
         "exec 2>&1\n{aliases}\
          if [ -n \"$AXH_SNAPSHOT\" ]; then . \"$AXH_SNAPSHOT\" >/dev/null 2>&1; fi\n\
+         {globs}\
          {b}cd \"$AXH_CWD\" || exit 1\n\
          {b}eval \"$AXH_COMMAND\"\n\
          __glut_status=$?\n\
@@ -739,7 +749,7 @@ impl Session {
             && analysis.writes.is_empty()
             && analysis.reads.is_empty()
             && analysis.nested.is_empty()
-            && !analysis.protected
+            && !analysis.may_name_protected()
             && part.assignments.is_empty();
         let (name, args) = part.words.split_first()?;
         let program = self.direct.iter().find(|program| program.name == *name)?;
@@ -1462,6 +1472,21 @@ impl Tool for Bash {
             unsandboxed: escape && self.0.policy.is_some(),
             sandboxed: self.0.policy.is_some() && !escape,
         }
+    }
+
+    fn here(&self) -> Option<PathBuf> {
+        let cwd = self
+            .0
+            .cwd
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone();
+        // A folder gone meanwhile: the command starts at the top (`Session::start_dir`).
+        Some(if cwd.is_dir() {
+            cwd
+        } else {
+            self.0.root.clone()
+        })
     }
 
     fn back_to_top(&self) {

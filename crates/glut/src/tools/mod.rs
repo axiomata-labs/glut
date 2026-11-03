@@ -140,6 +140,10 @@ pub trait Tool: Send + Sync {
     }
     /// A tool that keeps a folder between calls (the shell) starts its next call in the run's folder again.
     fn back_to_top(&self) {}
+    /// The folder the tool's next call starts in (the shell's): where the gate reads what a command's glob would find.
+    fn here(&self) -> Option<std::path::PathBuf> {
+        None
+    }
 }
 
 /// The tools of a run.
@@ -198,6 +202,18 @@ impl Toolbox {
         gate.set_beside(self.folders.clone());
         gate.set_keychain(self.keychain.clone());
         self.gate = Some(gate);
+        self.tie_here();
+    }
+
+    /// Tells the gate which tool's folder its commands run in, once both are there.
+    fn tie_here(&self) {
+        let (Some(gate), Some(tool)) = (
+            &self.gate,
+            self.tools.iter().find(|tool| tool.here().is_some()),
+        ) else {
+            return;
+        };
+        gate.set_here(Arc::downgrade(tool));
     }
 
     /// The folders beside the working one (T60c): what is added here, every tool of the box reaches at its next call.
@@ -228,6 +244,7 @@ impl Toolbox {
     /// Adds `tools`.
     pub fn extend(&mut self, tools: impl IntoIterator<Item = Box<dyn Tool>>) {
         self.tools.extend(tools.into_iter().map(Arc::from));
+        self.tie_here();
     }
 
     /// The MCP servers whose tools this box offers beside its own (T56).

@@ -9,6 +9,8 @@
 //! `xargs`, `noglob`), and inside `sh -c` strings. Best effort until the sandbox of HS3b: a command can always do more
 //! than its words say (two security reviews, 2026-10-13, shaped this list).
 
+use std::path::Path;
+
 use globset::GlobBuilder;
 
 /// Path components a command must not touch without the owner's say: version-control stores, the configuration a later
@@ -138,6 +140,10 @@ pub struct Analysis {
     pub reads: Vec<String>,
     /// A word or redirection names a protected path component, literally or through a glob.
     pub protected: bool,
+    /// Globs that could only name a protected file that already lies in a literal folder (`data/*` and an
+    /// `opencode.json` there): [`Analysis::protected_in`] looks. Everywhere a folder is not at hand they count as
+    /// [`Analysis::protected`] ([`Analysis::may_name_protected`]).
+    pub may_glob: Vec<String>,
     /// Whether a word holds an unquoted glob character the shell expands — into names the words do not show (a file
     /// called `-i` makes `sed -n 1p *` edit in place).
     pub globs: bool,
@@ -148,6 +154,52 @@ pub struct Analysis {
 impl Analysis {
     pub fn is_opaque(&self) -> bool {
         !self.opaque.is_empty()
+    }
+
+    /// Whether the command names a protected path or holds a glob that might expand to one, wherever it runs.
+    pub fn may_name_protected(&self) -> bool {
+        self.protected || !self.may_glob.is_empty()
+    }
+
+    /// Whether the command names a protected path when it runs in `folder`: a glob of [`Analysis::may_glob`] counts
+    /// only where its folder holds a protected name it matches now. A command that changes folder first, or a folder
+    /// that cannot be listed, counts as protected.
+    pub fn protected_in(&self, folder: &Path) -> bool {
+        if self.protected {
+            return true;
+        }
+        if self.may_glob.is_empty() {
+            return false;
+        }
+        // Looked up before the command runs, so only where nothing in it can change what lies there or where it
+        // stands: no other folder, no part that writes or runs something before the glob is expanded.
+        let others_read = self.parts.len() < 2
+            || self
+                .parts
+                .iter()
+                .all(|part| part.assignments.is_empty() && super::kinds::reader(&part.words));
+        if self.changes_folder()
+            || !others_read
+            || !self.writes.is_empty()
+            || !self.nested.is_empty()
+        {
+            return true;
+        }
+        self.may_glob
+            .iter()
+            .any(|word| glob_hits_protected(folder, word))
+    }
+
+    /// Whether a word of any part (behind its wrappers too), here or in a nested command, changes the folder its
+    /// relative paths are read in.
+    fn changes_folder(&self) -> bool {
+        self.parts.iter().any(|part| {
+            part.words.iter().any(|word| {
+                ["cd", "pushd", "popd", "chdir"]
+                    .iter()
+                    .any(|c| same_command(c, word))
+            })
+        }) || self.nested.iter().any(Analysis::changes_folder)
     }
 
     /// Every word list a deny or ask rule is held against: each part as written (assignments dropped), with its
@@ -247,12 +299,24 @@ fn analyze_at(command: &str, depth: usize) -> Analysis {
         .flat_map(|part| part.words.iter().chain(part.assignments.iter()))
         .chain(analysis.writes.iter())
         .chain(analysis.reads.iter())
-        .any(|word| names_protected(word))
-        || globbed.iter().any(|word| glob_may_name_protected(word));
+        .any(|word| names_protected(word));
+    // What the lexer cannot read may set an option (`eval`, `source`, a variable), a nested shell reads its own
+    // profile again (`~/.zshenv`) and takes options from its caller's words (`bash -O dotglob -c`): there a glob may
+    // reach a dotted name, and nothing it might name is looked up beforehand.
+    let unread = analysis.is_opaque() || depth > 0 || !nested_texts.is_empty();
+    let dots = unread || may_glob_dots(&analysis, &globbed);
+    for word in &globbed {
+        match glob_risk(word, dots) {
+            GlobRisk::None => {}
+            GlobRisk::IfPresent if !unread => analysis.may_glob.push(word.clone()),
+            GlobRisk::IfPresent | GlobRisk::Always => analysis.protected = true,
+        }
+    }
     if depth < MAX_NESTING {
         for text in nested_texts {
             let nested = analyze_at(&text, depth + 1);
             analysis.protected |= nested.protected;
+            analysis.may_glob.extend(nested.may_glob.iter().cloned());
             analysis.nested.push(nested);
         }
     }
@@ -272,18 +336,118 @@ pub fn names_protected(path: &str) -> bool {
         })
 }
 
-/// Whether a word with unquoted glob characters could expand to a protected name (`.gl?t`, `.[g]it`, `.gi*`).
-fn glob_may_name_protected(word: &str) -> bool {
-    word.split('/')
-        .filter(|component| component.contains(['*', '?', '[']))
-        .any(|component| {
-            GlobBuilder::new(component)
-                .case_insensitive(true)
-                .build()
-                .map(|glob| glob.compile_matcher())
-                // A component that is no valid glob is not expanded by the shell either.
-                .is_ok_and(|matcher| PROTECTED_NAMES.iter().any(|name| matcher.is_match(name)))
+/// What a glob may expand to, as far as protected names go.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GlobRisk {
+    /// No protected name, whatever lies there.
+    None,
+    /// Only a protected name without a leading dot, in the literal folder before the glob: looked up where it runs.
+    IfPresent,
+    /// Possibly a protected name, whatever lies there now.
+    Always,
+}
+
+/// What `word`'s unquoted glob may expand to (`.gl?t`, `.[g]it`, `.gi*`: always; `data/*`: only if `data` holds
+/// `opencode.json` or the like). A shell's `*`, `?` and `[…]` never match a name's leading dot unless `dots` (an
+/// option like `dotglob` may be on), so a dotted name counts only behind a component that starts with a dot.
+fn glob_risk(word: &str, dots: bool) -> GlobRisk {
+    let components: Vec<&str> = word.split('/').collect();
+    let mut risk = GlobRisk::None;
+    for (at, component) in components.iter().enumerate() {
+        if !component.contains(['*', '?', '[']) {
+            continue;
+        }
+        // A zsh glob qualifier (`*(D)`) or extended pattern changes what matches: no guess.
+        if component.contains(['(', '#', '^', '~']) {
+            return GlobRisk::Always;
+        }
+        let Ok(matcher) = GlobBuilder::new(component)
+            .case_insensitive(true)
+            .build()
+            .map(|glob| glob.compile_matcher())
+        else {
+            // A component that is no valid glob is not expanded by the shell either.
+            continue;
+        };
+        let dotted_reach = dots || component.starts_with(['.', '[']);
+        let named = PROTECTED_NAMES
+            .iter()
+            .filter(|name| matcher.is_match(name))
+            .any(|name| !name.starts_with('.') || dotted_reach);
+        let dotted = PROTECTED_NAMES
+            .iter()
+            .filter(|name| name.starts_with('.') && matcher.is_match(name))
+            .any(|_| dotted_reach);
+        if !named {
+            continue;
+        }
+        // Only the last component, behind literal folders, can be looked up before the command runs.
+        let last = at + 1 == components.len();
+        let before_literal = components[..at]
+            .iter()
+            .all(|before| !before.contains(['*', '?', '[', '{', '$', '`', '\\', '~']));
+        if dotted || !last || !before_literal || word.contains(['~', '{', '$', '`']) {
+            return GlobRisk::Always;
+        }
+        risk = GlobRisk::IfPresent;
+    }
+    risk
+}
+
+/// Whether the command may make a glob match a leading dot: a word of an option that can (`dotglob`, zsh's
+/// `globdots` or `-4`, bash's `GLOBIGNORE`), or any part that sets shell options at all.
+fn may_glob_dots(analysis: &Analysis, globbed: &[String]) -> bool {
+    if globbed.is_empty() {
+        return false;
+    }
+    let squeezed = |word: &str| word.to_ascii_lowercase().replace('_', "");
+    let mut words = analysis
+        .parts
+        .iter()
+        .flat_map(|part| part.words.iter().chain(part.assignments.iter()));
+    let named = words.any(|word| {
+        let word = squeezed(word);
+        word.contains("dotglob") || word.contains("globdots") || word.contains("globignore")
+    });
+    // Any word, so a wrapper (`builtin set -4`, `command shopt`) hides none.
+    let sets = analysis.parts.iter().any(|part| {
+        part.words.iter().any(|word| {
+            ["set", "setopt", "unsetopt", "shopt", "emulate", "options"]
+                .iter()
+                .any(|c| same_command(c, word))
         })
+    });
+    named || sets
+}
+
+/// Whether `word`'s glob, read in `folder`, matches a protected name that lies there now ([`GlobRisk::IfPresent`]).
+fn glob_hits_protected(folder: &Path, word: &str) -> bool {
+    let (dir, pattern) = match word.rsplit_once('/') {
+        Some(("", pattern)) => ("/", pattern),
+        Some((dir, pattern)) => (dir, pattern),
+        None => (".", word),
+    };
+    let Ok(matcher) = GlobBuilder::new(pattern)
+        .case_insensitive(true)
+        .build()
+        .map(|glob| glob.compile_matcher())
+    else {
+        return false;
+    };
+    let entries = match std::fs::read_dir(folder.join(dir)) {
+        Ok(entries) => entries,
+        // Nothing there: the glob expands to no protected name.
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return false,
+        Err(_) => return true,
+    };
+    entries.flatten().any(|entry| {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        matcher.is_match(name.as_ref())
+            && PROTECTED_NAMES
+                .iter()
+                .any(|protected| name.eq_ignore_ascii_case(protected))
+    })
 }
 
 /// `NAME=value`, `NAME+=value`, `NAME[index]=value`: an assignment in front of a command.
@@ -900,8 +1064,71 @@ mod tests {
             "git status",
             "ls .github/workflows",
             "ls *.rs",
+            "wc -l data/*",
+            "rm -f *",
         ] {
             assert!(!analyze(command).protected, "{command:?}");
         }
+    }
+
+    #[test]
+    fn a_glob_counts_for_a_dotted_name_only_behind_a_dot_or_where_the_command_may_widen_it() {
+        // `*` matches `opencode.json` too: looked up where it runs, never refused by its words alone.
+        assert_eq!(analyze("wc -l data/*").may_glob, ["data/*"]);
+        assert!(
+            analyze("ls *.rs").may_glob.is_empty(),
+            "no protected name ends in .rs"
+        );
+        for command in [
+            "shopt -s dotglob; rm -rf *",
+            "setopt globdots && rm -rf *",
+            "setopt GLOB_DOTS && rm -rf *",
+            "set -4; rm -rf *",
+            "GLOBIGNORE=x rm -rf *",
+            "rm -rf [.]git",
+            "cat */config",
+            "cat ~/*",
+            "bash -c 'shopt -s dotglob; rm -rf *'",
+            // Security audit 2026-11-03: options from outside a nested shell, unread words, wrappers.
+            "bash -O dotglob -c 'cp x sub/?cargo/config.toml'",
+            "zsh -c 'cp x sub/?cargo/config.toml'",
+            "eval x; cp x sub/?cargo/config.toml",
+            "builtin set -4; cp x sub/?cargo/config.toml",
+            "cp x $d/*",
+        ] {
+            assert!(analyze(command).protected, "{command:?}");
+        }
+        // A zsh glob qualifier reads as grouping: never allowed by its words.
+        assert!(analyze("rm -rf *(D)").is_opaque());
+    }
+
+    #[test]
+    fn a_glob_names_a_protected_file_only_where_one_lies() {
+        let dir = std::env::temp_dir().join(format!("glut-glob-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("data")).unwrap();
+        std::fs::write(dir.join("data/a.csv"), "").unwrap();
+        assert!(!analyze("wc -l data/*").protected_in(&dir));
+        assert!(
+            !analyze("wc -l missing/*").protected_in(&dir),
+            "nothing there to expand to"
+        );
+        assert!(
+            analyze("cd data && wc -l *").protected_in(&dir),
+            "a changed folder is not looked up"
+        );
+        assert!(analyze("builtin cd data; wc -l *").protected_in(&dir));
+        assert!(
+            analyze("mkdir -p x && wc -l data/*").protected_in(&dir),
+            "a part that writes may make what the glob finds"
+        );
+        assert!(
+            !analyze("ls -la data | head; wc -l data/* | tail -3").protected_in(&dir),
+            "readers alone"
+        );
+        std::fs::write(dir.join("data/OpenCode.json"), "").unwrap();
+        assert!(analyze("wc -l data/*").protected_in(&dir));
+        assert!(analyze("wc -l data/*").may_name_protected());
+        assert!(!analyze("wc -l data/*.csv").protected_in(&dir));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

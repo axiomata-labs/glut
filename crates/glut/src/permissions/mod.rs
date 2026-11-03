@@ -743,7 +743,7 @@ impl RuleSet {
                 analysis.opaque.join(", ")
             ));
         }
-        if analysis.protected {
+        if analysis.may_name_protected() {
             return Said::Unsure("the command names a protected path".into());
         }
         // Allowed by rules: no part with assignments in front (`DYLD_INSERT_LIBRARIES=… cargo test` is another
@@ -1206,6 +1206,9 @@ pub struct Gate {
     role: Mutex<Option<Arc<Narrowing>>>,
     /// The folders beside the working one (T60c), shared with the run's tools ([`crate::Toolbox::set_gate`]).
     beside: Mutex<Folders>,
+    /// The tool whose next command the gate judges as run where it stands (the shell), held weakly: it holds the gate.
+    /// What a command's glob finds there decides whether it names a protected file ([`Analysis::protected_in`]).
+    here: Mutex<Option<std::sync::Weak<dyn crate::tools::Tool>>>,
     /// The Keychain's list and switch (T74), shared with the run's shell ([`crate::Toolbox::set_gate`]); a gate
     /// without one keeps it shut and asks for every listed program.
     keychain: Mutex<Keychain>,
@@ -1251,6 +1254,7 @@ impl Gate {
             narrowings: Vec::new(),
             role: Mutex::new(None),
             beside: Mutex::new(Folders::default()),
+            here: Mutex::new(None),
             keychain: Mutex::new(Keychain::default()),
             keychain_given: Mutex::new(Vec::new()),
             judge: Mutex::new(None),
@@ -1396,6 +1400,30 @@ impl Gate {
             .beside
             .lock()
             .unwrap_or_else(|poison| poison.into_inner()) = folders;
+    }
+
+    /// Ties the gate to the tool whose folder a command runs in (the shell, [`crate::Toolbox::set_gate`]).
+    pub(crate) fn set_here(&self, tool: std::sync::Weak<dyn crate::tools::Tool>) {
+        *self
+            .here
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) = Some(tool);
+    }
+
+    /// Whether `analysis` names a protected path where the shell's next command runs; without a shell tied to the
+    /// gate, a glob that might expand to one counts.
+    fn names_protected_here(&self, analysis: &Analysis) -> bool {
+        let here = self
+            .here
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade)
+            .and_then(|tool| tool.here());
+        match here {
+            Some(folder) => analysis.protected_in(&folder),
+            None => analysis.may_name_protected(),
+        }
     }
 
     /// The folders beside the working one.
@@ -2136,17 +2164,18 @@ impl Gate {
             .is_opaque()
             .then(|| kinds::heavy_in_text(command))
             .flatten();
+        let protected = self.names_protected_here(&analysis);
         Some(match kinds::heavy(&analysis).or(hidden) {
             // T61: what the sandbox holds to the arena's own folder runs; a protected name stays as it was.
             Some(why)
                 if self.is_confined()
-                    && !analysis.protected
+                    && !protected
                     && kinds::reaches_out(&analysis, command).is_none() =>
             {
                 (Verdict::Allow, format!("{why}, in the arena's own folder"))
             }
             Some(why) => (Verdict::Ask, format!("{why}: asked even in auto mode")),
-            None if analysis.protected => (
+            None if protected => (
                 Verdict::Ask,
                 "the command names a protected path: asked even in auto mode".into(),
             ),
@@ -3846,6 +3875,53 @@ mod tests {
         );
         let reason = &auto.take_log()[1].reason;
         assert!(reason.contains("asked even in auto mode"), "{reason}");
+    }
+
+    /// A tool standing in a folder, as the shell does.
+    struct Standing(std::path::PathBuf);
+
+    impl crate::tools::Tool for Standing {
+        fn spec(&self) -> crate::ToolSpec {
+            crate::ToolSpec {
+                name: "bash".into(),
+                description: String::new(),
+                parameters: serde_json::json!({}),
+            }
+        }
+        fn access(&self, _arguments: &serde_json::Value) -> Access {
+            bash("")
+        }
+        fn call(
+            &self,
+            _arguments: serde_json::Value,
+            _context: crate::tools::CallContext,
+        ) -> crate::ToolFuture<'_> {
+            Box::pin(async { Ok(String::new()) })
+        }
+        fn here(&self) -> Option<std::path::PathBuf> {
+            Some(self.0.clone())
+        }
+    }
+
+    #[tokio::test]
+    async fn auto_runs_a_glob_where_it_finds_no_protected_file_and_asks_where_it_does() {
+        let dir = std::env::temp_dir().join(format!("glut-gate-glob-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("data")).unwrap();
+        let shell: Arc<dyn crate::tools::Tool> = Arc::new(Standing(dir.clone()));
+        let auto = Gate::new(RuleSet::default(), Mode::Auto, Arc::new(Nobody));
+        assert!(
+            auto.judge("bash", &bash("wc -l data/*")).await.is_err(),
+            "no shell tied: the glob counts"
+        );
+        auto.set_here(Arc::downgrade(&shell));
+        assert!(auto.judge("bash", &bash("wc -l data/*")).await.is_ok());
+        std::fs::write(dir.join("data/trusted.json"), "").unwrap();
+        assert!(auto.judge("bash", &bash("wc -l data/*")).await.is_err());
+        assert!(
+            auto.judge("bash", &bash("ls .gi*")).await.is_err(),
+            "a dotted name behind a dot, wherever"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

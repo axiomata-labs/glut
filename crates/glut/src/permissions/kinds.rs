@@ -163,7 +163,7 @@ pub fn judgeable(analysis: &Analysis) -> bool {
         || !analysis.writes.is_empty()
         || !analysis.reads.is_empty()
         || !analysis.nested.is_empty()
-        || analysis.protected
+        || analysis.may_name_protected()
     {
         return false;
     }
