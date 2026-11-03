@@ -2301,6 +2301,10 @@ glut::catalog! {
         arena_pick_title: &'static str,
         /// `/arena take` without a number.
         arena_take_usage: &'static str,
+        /// `/close` or `x` on a bench model in the background: `{name}`.
+        bench_member_close: &'static str,
+        /// The judge's card stands in another pane: `{pane}`.
+        arena_judge_there: &'static str,
         /// `/arena judge` before the owner's pick.
         arena_judge_after_pick: &'static str,
         /// The judge's card heading.
@@ -2423,6 +2427,8 @@ glut::catalog! {
         bench_done: &'static str,
         /// The bench's next task: `{n}` of `{total}`, `{task}`.
         bench_task: &'static str,
+        /// A bench in the background, said after its start.
+        bench_background: &'static str,
         /// A bench's task among several runs of it: `{n}`, `{total}`, `{task}`, `{round}`, `{times}`.
         bench_task_round: &'static str,
         /// A bench with repeated tasks starts: `{set}`, `{n}`, `{times}`, `{models}`.

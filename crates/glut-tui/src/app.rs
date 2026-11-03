@@ -5868,25 +5868,13 @@ impl App {
 
     /// `/arena tasks <set>[: <model>, <model>]`: the bench on the models named, else on the last arena's.
     fn bench_asked(&self, rest: &str) -> Result<crate::panes::Request, String> {
-        let (head, named) = match rest.split_once(':') {
-            Some((head, named)) => (head.trim(), Some(named)),
-            None => (rest.trim(), None),
-        };
-        // `<set> x3`: the times each task runs, 1 without the word.
-        let split = head
-            .rsplit_once(char::is_whitespace)
-            .and_then(|(set, word)| Some((set.trim(), crate::bench::times_word(word)?)));
-        let (set, times) = split.unwrap_or((head, 1));
-        if !(1..=crate::bench::MOST_TIMES).contains(&times) {
-            return Err(tr!(bench_times, most = crate::bench::MOST_TIMES));
-        }
+        let crate::bench::Asked {
+            set,
+            times,
+            background,
+            named,
+        } = crate::bench::asked(rest)?;
         let lists = crate::arena::listed(&self.parts.home);
-        let named: Vec<String> = named
-            .unwrap_or_default()
-            .split(',')
-            .map(|word| word.trim().to_owned())
-            .filter(|word| !word.is_empty())
-            .collect();
         // None named (or nothing after the colon): the last arena's.
         let words = if named.is_empty() {
             Prefs::load(&self.parts.home).arena
@@ -5912,9 +5900,10 @@ impl App {
         // A list not kept only costs the marks next time.
         let _ = prefs.save(&self.parts.home);
         Ok(crate::panes::Request::ArenaBench {
-            set: set.to_owned(),
+            set,
             contenders,
             times,
+            background,
         })
     }
 

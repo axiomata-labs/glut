@@ -262,6 +262,9 @@ pub struct Arena {
     pub prompt: String,
     /// How many rounds the models were given: 1 for the task, one more for each follow-up.
     pub rounds: u32,
+    /// Its models run as agents in the background (a bench's `--background`): no pane, no room needed, each a card
+    /// in the Agents tab.
+    pub background: bool,
 }
 
 impl Arena {
@@ -301,6 +304,7 @@ impl Arena {
             told_no_room: false,
             blind: false,
             rounds: 1,
+            background: false,
         }
     }
 
@@ -372,13 +376,14 @@ impl Arena {
     }
 
     /// `/arena say`: `text` for every model that answered, as its next round — its time, cost and tokens add up, its
-    /// limits count over every round. What the last round compared and checked is gone; the members that got it.
+    /// limits count over every round. What the last round compared and checked is cleared. Returns the members given
+    /// it.
     pub fn follow_up(&mut self, text: &str) -> Vec<usize> {
         let answering: Vec<usize> = self
             .members
             .iter()
             .enumerate()
-            .filter(|(_, member)| matches!(member.state, State::Done(_)))
+            .filter(|(_, member)| member.state == State::Done(glut::FinishReason::Answered))
             .map(|(at, _)| at)
             .collect();
         if answering.is_empty() {

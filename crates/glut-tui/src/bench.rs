@@ -684,6 +684,52 @@ pub fn round(number: usize, times: usize) -> usize {
     number.saturating_sub(1) % times.max(1) + 1
 }
 
+/// `/arena tasks <set> [xN] [--background][: <model>, <model>]`, read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Asked {
+    pub set: String,
+    /// How often each task runs: 1 without `xN`.
+    pub times: usize,
+    /// `--background` (or `--bg`) anywhere before the colon.
+    pub background: bool,
+    /// The models named after the colon; none: the last arena's.
+    pub named: Vec<String>,
+}
+
+/// Reads what follows `/arena tasks`.
+///
+/// # Errors
+///
+/// `xN` past 1 to [`MOST_TIMES`].
+pub fn asked(rest: &str) -> Result<Asked, String> {
+    let (head, named) = rest.split_once(':').unwrap_or((rest, ""));
+    let flag = |word: &&str| matches!(*word, "--background" | "--bg");
+    let words: Vec<&str> = head.split_whitespace().collect();
+    let background = words.iter().any(flag);
+    let mut words: Vec<&str> = words.into_iter().filter(|word| !flag(word)).collect();
+    // `<set> x3`: the last word, never the set's only one.
+    let times = match words.last().copied().and_then(times_word) {
+        Some(times) if words.len() > 1 => {
+            words.pop();
+            times
+        }
+        _ => 1,
+    };
+    if !(1..=MOST_TIMES).contains(&times) {
+        return Err(tr!(bench_times, most = MOST_TIMES));
+    }
+    Ok(Asked {
+        set: words.join(" "),
+        times,
+        background,
+        named: named
+            .split(',')
+            .map(|word| word.trim().to_owned())
+            .filter(|word| !word.is_empty())
+            .collect(),
+    })
+}
+
 /// A bench run under way: the set, its models and the tasks still to come.
 #[derive(Debug, Clone)]
 pub struct Bench {
@@ -701,6 +747,8 @@ pub struct Bench {
     pub total: usize,
     /// How often each task runs, in a row (`/arena tasks <set> x3`): 1 to [`MOST_TIMES`].
     pub times: usize,
+    /// Its models run in the background (`--background`): no pane each, their progress the Agents tab's cards.
+    pub background: bool,
     /// The results this run kept so far, for its end.
     pub kept: Vec<Record>,
 }
@@ -723,6 +771,27 @@ mod tests {
         std::fs::write(dir.join("start/src/a.txt"), "a\n").unwrap();
         if let Some(json) = json {
             std::fs::write(dir.join("task.json"), json).unwrap();
+        }
+    }
+
+    #[test]
+    fn what_follows_arena_tasks_is_read_into_set_times_background_and_models() {
+        let read = |rest: &str| asked(rest).unwrap();
+        assert_eq!(
+            read("2026-11-hard x3 --background: a/b, c"),
+            Asked {
+                set: "2026-11-hard".into(),
+                times: 3,
+                background: true,
+                named: vec!["a/b".into(), "c".into()],
+            }
+        );
+        assert_eq!(read("2026-11").times, 1);
+        assert!(!read("2026-11").background && read("2026-11").named.is_empty());
+        assert_eq!(read("--bg 2026-11 X2").set, "2026-11");
+        assert_eq!(read("x3").set, "x3", "a set's only word is its name");
+        for rest in ["2026-11 x0", "2026-11 x6", "2026-11 x99999999999999999999"] {
+            assert!(asked(rest).is_err(), "{rest}");
         }
     }
 

@@ -393,6 +393,7 @@ pub enum Request {
         set: String,
         contenders: Vec<crate::arena::Contender>,
         times: usize,
+        background: bool,
     },
     /// `/arena check [command]`: the check command kept for this repository and run in every worktree — the one
     /// kept, without a command.
@@ -1136,6 +1137,10 @@ impl Panes {
     /// a pane on the screen that ended.
     fn tile(&mut self, at: usize, tiled: Tiled) {
         use crate::tiles::{Goes, Stand, Tile};
+        // A bench's model in the background is told by the bench's own notes, never a tile per turn.
+        if self.background_member(at) {
+            return;
+        }
         let pane = &self.list[at];
         // A loop's round that ended is told only when the owner asked for it (T60a): its end is the loop's.
         let quiet_loop = pane
@@ -1232,6 +1237,9 @@ impl Panes {
     /// active pane when another one ends while the owner looks — an ask elsewhere shows in the footer already.
     fn notice(&mut self, at: usize, occasion: &crate::notify::Occasion, ran: Duration) {
         use glut::permissions::settings::NotifyWhen;
+        if self.background_member(at) {
+            return;
+        }
         let choice = crate::notify::choice();
         // A queued message started the next turn: the work is not done. A loop's round is told as its tile is.
         let quiet_loop = self.list[at]
@@ -2012,7 +2020,8 @@ impl Panes {
                     set,
                     contenders,
                     times,
-                } => self.start_bench(set, contenders, times),
+                    background,
+                } => self.start_bench(set, contenders, times, background),
                 Request::ArenaCheck(command) => self.arena_check(command),
                 Request::Peek(Some(name)) => match self.resolve_background(&name) {
                     Some(at) => self.peek = Some(self.list[at].id),
@@ -2257,6 +2266,25 @@ impl Panes {
     }
 
     /// Takes the active pane away; a turn under way is stopped.
+    /// Whether pane `at` is an arena's model running in the background (a bench's `--background`).
+    fn background_member(&self, at: usize) -> bool {
+        let pane = &self.list[at];
+        pane.background
+            && self.arena.as_ref().is_some_and(|arena| {
+                arena
+                    .members
+                    .iter()
+                    .any(|member| member.pane == Some(pane.id))
+            })
+    }
+
+    /// The agents in the background the owner counts: an arena's own are the bench's, not the owner's.
+    fn owners_background(&self) -> usize {
+        (0..self.list.len())
+            .filter(|at| self.list[*at].background && !self.background_member(*at))
+            .count()
+    }
+
     fn remove_active(&mut self) {
         let mut pane = self.list.remove(self.active);
         self.grid.remove(pane.id);
@@ -2291,6 +2319,10 @@ impl Panes {
             (false, Some(_)) => tr!(closed_kept),
             (false, None) => tr!(closed_resume),
         };
+        // Only an arena's model in the background leaves this way (`drop_pane` at its end): the bench says its end.
+        if pane.background {
+            return;
+        }
         self.active()
             .tell(tr!(pane_closed, n = number, kept = kept));
     }
@@ -2591,6 +2623,15 @@ impl Panes {
                 }
                 _ => said,
             };
+            // An arena's model in the background (a bench's `--background`): ready for its task, told nowhere.
+            let member = building
+                .arena
+                .and_then(|at| self.arena.as_mut()?.members.get_mut(at));
+            let quiet = member.is_some();
+            if let Some(member) = member {
+                member.state = crate::arena::State::Ready;
+                member.pane = Some(building.id);
+            }
             self.list.push(Pane {
                 looping,
                 id: building.id,
@@ -2602,6 +2643,9 @@ impl Panes {
                 tree: building.tree,
             });
             self.reorder();
+            if quiet {
+                return;
+            }
             return self.active().tell(said);
         }
         // Panes leave little room beside them: the side panel starts hidden (⌃B brings it, where there is room).
@@ -2744,7 +2788,7 @@ impl Panes {
             Err(reason) => return self.active().transcript.note(reason, Tone::Fault),
         };
         let home = self.list[self.active].id;
-        if let Err(reason) = self.begin_arena(asked, repo, home, None) {
+        if let Err(reason) = self.begin_arena(asked, repo, home, None, false) {
             self.active().transcript.note(reason, Tone::Fault);
         }
     }
@@ -2757,6 +2801,7 @@ impl Panes {
         repo: crate::worktree::Repo,
         home: u64,
         limits: Option<(Duration, f64)>,
+        background: bool,
     ) -> Result<(), String> {
         if self.arena.is_some() {
             return Err(tr!(arena_end_first).into());
@@ -2768,11 +2813,12 @@ impl Panes {
         {
             return Err(tr!(pane_starting).into());
         }
-        if self.visible() + asked.contenders.len() > MOST {
+        if !background && self.visible() + asked.contenders.len() > MOST {
             return Err(tr!(arena_no_room, n = asked.contenders.len(), most = MOST));
         }
         let head = crate::worktree::head(&repo)?;
         let mut arena = crate::arena::Arena::new(asked, home);
+        arena.background = background;
         arena.repo = Some(repo);
         arena.head = head;
         if let Some((time, cost)) = limits {
@@ -2812,7 +2858,13 @@ impl Panes {
     /// `/arena tasks <set>` (step 2): the set's tasks one after another on `contenders`, each an arena of its own on
     /// a fresh repository of the task's start, judged by the task's check — only where panes may split and a sandbox
     /// holds the models, as nobody watches them.
-    fn start_bench(&mut self, set: String, contenders: Vec<crate::arena::Contender>, times: usize) {
+    fn start_bench(
+        &mut self,
+        set: String,
+        contenders: Vec<crate::arena::Contender>,
+        times: usize,
+        background: bool,
+    ) {
         if !self.may_split {
             return self.active().tell(tr!(host_one_pane));
         }
@@ -2847,6 +2899,11 @@ impl Panes {
                 models = names.join(", ")
             )
         };
+        let said = if background {
+            tr!(clause_join, first = said, second = tr!(bench_background))
+        } else {
+            said
+        };
         self.active().tell(said);
         let left = crate::bench::queue(tasks, times);
         self.bench = Some(crate::bench::Bench {
@@ -2856,6 +2913,7 @@ impl Panes {
             contenders,
             total: left.len(),
             times,
+            background,
             left,
             current: None,
             kept: Vec::new(),
@@ -2873,11 +2931,12 @@ impl Panes {
             if self.arena.is_some()
                 || self.building.is_some()
                 || bench.current.is_some()
-                || self.visible() + bench.contenders.len() > MOST
+                || !bench.background && self.visible() + bench.contenders.len() > MOST
             {
                 return;
             }
             let (set, total, times) = (bench.set.clone(), bench.total, bench.times.max(1));
+            let background = bench.background;
             let (home_pane, contenders) = (bench.home_pane, bench.contenders.clone());
             let Some(task) = self.bench.as_mut().and_then(|bench| bench.left.pop_front()) else {
                 // This run's results alone: an earlier run of the set is `/arena results`' to show.
@@ -2901,6 +2960,7 @@ impl Panes {
                         repo,
                         home_pane,
                         Some((task.time_limit, task.cost_limit)),
+                        background,
                     ),
                     Ok(None) => Err(tr!(arena_no_repository).to_owned()),
                     Err(reason) => Err(reason),
@@ -3163,7 +3223,7 @@ impl Panes {
                 .position(|member| member.state == crate::arena::State::Waiting)
         {
             // A model without room waits for it, never counts as failed: a wider window or a closed pane starts it.
-            if !self.room_for_one_more() {
+            if !arena.background && !self.room_for_one_more() {
                 if !arena.told_no_room {
                     arena.told_no_room = true;
                     let model = arena.shown_name(next);
@@ -3220,7 +3280,7 @@ impl Panes {
         at: usize,
         host: &Arc<dyn Host>,
     ) -> Result<(), String> {
-        if !self.room_for_one_more() {
+        if !arena.background && !self.room_for_one_more() {
             return Err(tr!(no_room).into());
         }
         let Some(repo) = arena.repo.clone() else {
@@ -3282,7 +3342,10 @@ impl Panes {
             resume: false,
             tree: Some(tree),
             role: None,
-            background: None,
+            // In the background a model is an agent of its own name, its progress a card in the Agents tab.
+            background: arena
+                .background
+                .then(|| self.free_name(format!("bench-{}", at + 1))),
             restore: None,
             looping: None,
             arena: Some(at),
@@ -3597,6 +3660,10 @@ impl Panes {
         };
         let prompt = glut::planning::unforged(prompt);
         app.ask_judge(tr!(arena_judge_asked).to_owned(), prompt);
+        if at != self.active {
+            let label = self.shown_label(at);
+            self.active().tell(tr!(arena_judge_there, pane = label));
+        }
     }
 
     /// `/arena say <text>`: the follow-up for every model that answered, once all are over — never on the bench, whose
@@ -3611,7 +3678,8 @@ impl Panes {
         if arena.taken.is_some() {
             return self.active().tell(tr!(arena_say_taken));
         }
-        if !arena.over() || arena.checks.contains(&crate::arena::Check::Running) {
+        if !arena.over() || !arena.compared || arena.checks.contains(&crate::arena::Check::Running)
+        {
             return self.active().tell(tr!(arena_say_wait));
         }
         let given = arena.follow_up(text);
@@ -3978,7 +4046,7 @@ impl Panes {
         sure: bool,
         host: &Arc<dyn Host>,
     ) {
-        let background = self.list.iter().filter(|pane| pane.background).count();
+        let background = self.owners_background();
         self.background_sure |= sure;
         if background >= BACKGROUND_ASKED && !self.background_sure {
             let picker = more_picker(background + 1, name, role, place);
@@ -4015,7 +4083,7 @@ impl Panes {
     /// named `loop` or after its role.
     fn start_loop(&mut self, asked: crate::looping::Asked, host: &Arc<dyn Host>) {
         // Loops spend unattended: their own cap, whatever the owner said yes to for `/bg`.
-        let background = self.list.iter().filter(|pane| pane.background).count();
+        let background = self.owners_background();
         let loops = self
             .list
             .iter()
@@ -4236,6 +4304,9 @@ impl Panes {
             ));
         };
         let label = self.shown_label(at);
+        if self.background_member(at) {
+            return self.active().tell(tr!(bench_member_close, name = label));
+        }
         if self.list[at].tree.is_some() {
             return self.active().tell(tr!(agent_in_worktree, name = label));
         }
@@ -5788,6 +5859,7 @@ mod tests {
             current: Some((task, place.clone())),
             total: 1,
             times: 1,
+            background: false,
             kept: Vec::new(),
         });
         panes.settle(&host);

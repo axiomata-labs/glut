@@ -241,7 +241,8 @@ pub const COMMANDS: [Command; 67] = [
     command(
         Topic::Panes,
         "arena",
-        "[<model>, <model>: <task>|tasks [<set>]|results|say <text>|take <n>|judge|check [command]|card|blind [on|off]|end]",
+        "[<model>, <model>: <task>|tasks [<set> [<xN>] [--background]]|results|say <text>|take <n>|judge|\
+         check [command]|card|blind [on|off]|end]",
         "the same task on two to four models at once, each in a pane and a worktree of its own, then compared — /arena \
          alone picks the models",
     ),
@@ -1276,6 +1277,7 @@ mod tests {
         assert_eq!(
             words,
             [
+                "--background",
                 "1h",
                 "add",
                 "after",

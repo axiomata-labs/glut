@@ -251,6 +251,9 @@ scripts/install.sh               # glut for every terminal: ~/.cargo/bin, linked
   task's check runs only in `worktree::check_copy`'s folder in `~/.glut/arena/checks` through a shell of its own
   (`App::arena_check_in`), confined and contained as the model was, never in the worktree a model left (its jobs may
   outlive its turn and Glut writes the copy outside the sandbox).
+  A bench's `--background` builds its models through the same `start_member` and `on_built` path (no shortcut past
+  the confinement, the shut Keychain or the denied `tell`); `/arena judge` sends the diffs masked, then through
+  `planning::unforged`, with no tool, and only after a take.
 - **What a command *is* decides beside the rules** (TUI1e, `crates/glut/src/permissions/kinds.rs`): a command whose
   every part is a listed reader (`ls`, `grep`, `sed -n 1,9p`, `git status`, …) runs in every mode like `read_file`;
   in `auto` everything sandboxed runs but a `kinds::heavy` one (`rm -rf`, `git push`, `sudo`, …). A new reader needs
