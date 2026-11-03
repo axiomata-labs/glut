@@ -3451,11 +3451,12 @@ impl<'a, M: ChatModel> Loop<'a, M> {
             return Err(format!("{server} was refused to start in this run"));
         }
         if let Some(gate) = self.tools.gate() {
+            // Only reached with a sandbox for it (`with_servers`): the server runs sandboxed, judged as such.
             let access = Access::Bash {
                 command: launch.line.clone(),
                 folder: String::new(),
                 unsandboxed: false,
-                sandboxed: false,
+                sandboxed: true,
             };
             let judged = gate.judge("bash", &access).await;
             for entry in gate.take_log() {

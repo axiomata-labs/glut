@@ -535,6 +535,14 @@ impl Mode {
         use Verdict::{Allow, Ask, Deny};
         match (self, access) {
             (Mode::Auto, Access::Memory { .. } | Access::GlutFile { .. }) => Ask,
+            // `auto` trusts the sandbox to hold a command: where there is none, every command asks (security model
+            // review, 2026-11-04) — but what a rule of the owner's allows, which never reaches the fallback.
+            (
+                Mode::Auto,
+                Access::Bash {
+                    sandboxed: false, ..
+                },
+            ) => Ask,
             (Mode::Auto, _) => Allow,
             (_, Access::Read { .. }) => Allow,
             (Mode::Plan | Mode::Default | Mode::AcceptEdits, Access::Pane { .. }) => Ask,
@@ -2889,14 +2897,22 @@ mod tests {
         open.set_keychain(keychain);
         assert!(open.judge("bash", &bash("gh pr list")).await.is_ok());
         assert!(asker.0.lock().unwrap().is_empty());
-        // Outside the sandbox the Keychain was never shut: the command is judged as before.
+        // Outside the sandbox the Keychain was never shut, and `auto` asks every command: the mode's question, not
+        // the Keychain's.
         let mut unfenced = bash("gh pr list");
         if let Access::Bash { sandboxed, .. } = &mut unfenced {
             *sandboxed = false;
         }
         let auto = Gate::new(RuleSet::default(), Mode::Auto, asker.clone());
-        assert!(auto.judge("bash", &unfenced).await.is_ok());
-        assert!(asker.0.lock().unwrap().is_empty());
+        assert!(
+            auto.judge("bash", &unfenced).await.is_ok(),
+            "the asker allows"
+        );
+        assert_eq!(
+            asker.0.lock().unwrap().pop(),
+            Some(false),
+            "asked, and not for the Keychain"
+        );
     }
 
     #[tokio::test]
@@ -3838,7 +3854,13 @@ mod tests {
                 .is_err(),
             "without a sandbox auto asks what the rules cannot read, as before"
         );
-        assert_eq!(*asker.1.lock().unwrap(), before + 1);
+        assert!(
+            auto.judge("bash", &unfenced("rm -rf target"))
+                .await
+                .is_err(),
+            "without a sandbox auto asks a command the rules read too"
+        );
+        assert_eq!(*asker.1.lock().unwrap(), before + 2);
         let build = Gate::new(RuleSet::default(), Mode::AcceptEdits, asker.clone());
         assert!(
             build.judge("bash", &unfenced("ls")).await.is_err(),

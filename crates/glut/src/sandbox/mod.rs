@@ -816,7 +816,9 @@ mod tests {
     /// [`sandboxed`] with the Linux sandbox's way to the proxy at `relay`.
     fn sandboxed_relayed(policy: &Policy, script: &str, relay: Option<&Path>) -> String {
         let linux = cfg!(target_os = "linux");
-        let found = if linux {
+        // As the shell does: both systems search before a command and check after it.
+        let searched = linux || cfg!(target_os = "macos");
+        let found = if searched {
             scan::search(&policy.root, &policy.beside, &policy.git_dirs)
         } else {
             scan::Found::default()
@@ -828,7 +830,7 @@ mod tests {
             .current_dir(&policy.root)
             .output()
             .unwrap();
-        let settled = linux
+        let settled = searched
             .then(|| scan::Watch::new(policy, found).settle())
             .flatten()
             .unwrap_or_default();
@@ -948,6 +950,40 @@ mod tests {
         }
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// A folder made outside the working one and moved in whole passes Seatbelt's path rules (a rename is judged by
+    /// where it lands): the check after the command moves what it brought that the sandbox refuses (review 2026-11-04).
+    #[test]
+    fn a_protected_name_moved_in_inside_a_folder_is_moved_away_after_the_command() {
+        if !available() {
+            return;
+        }
+        let (home, root) = (temp("home"), temp("root"));
+        std::fs::create_dir_all(root.join("crates")).unwrap();
+        let outside = temp("outside");
+        // The temporary folder every command writes holds `outside` too.
+        let policy = Policy::new(&root, &home, &[], &[]);
+        let out = sandboxed(
+            &policy,
+            &format!(
+                "mkdir -p {o}/foo/.cargo && echo x > {o}/foo/.cargo/config.toml && mv {o}/foo crates/foo && echo moved",
+                o = outside.display()
+            ),
+        );
+        assert!(out.contains("moved"), "{out}");
+        assert!(!root.join("crates/foo/.cargo").exists(), "{out}");
+        assert!(refused(&out), "said: {out}");
+        // A folder made unlistable hides what it holds from the search: moved away whole.
+        let out = sandboxed(
+            &policy,
+            "mkdir -p crates/hide/inner && chmod 111 crates/hide && echo hidden",
+        );
+        assert!(out.contains("hidden"), "{out}");
+        assert!(!root.join("crates/hide").exists(), "{out}");
+        for dir in [root, home, outside] {
+            let _ = std::fs::remove_dir_all(dir);
+        }
     }
 
     /// T60c: a folder beside the working one is written as the working one is — its protected names, its `.git`

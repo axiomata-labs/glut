@@ -50,6 +50,9 @@ pub struct Found {
     pub folders: Vec<PathBuf>,
     /// Whether the search saw everything ([`MAX_ENTRIES`]).
     pub complete: bool,
+    /// The folders it could not list: one a command made unlistable (`chmod 111`) hides what lies in it, which a tool
+    /// entering it by its exact path still reads.
+    pub unreadable: Vec<PathBuf>,
 }
 
 /// One guarded path as the search saw it.
@@ -237,7 +240,25 @@ impl Watch {
             notes.extend(watcher.stop());
         }
         let after = search(&self.root, &self.beside, &self.git_dirs);
-        let made = appeared(&before, &after);
+        let mut made = appeared(&before, &after);
+        // A folder the command made unlistable hides what it holds: moved away whole (security audit 2026-11-04),
+        // its owner's rights given back first — a folder without them cannot change its parent.
+        for dir in after
+            .unreadable
+            .iter()
+            .filter(|dir| !before.unreadable.contains(dir))
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            if std::fs::symlink_metadata(dir).is_ok_and(|meta| meta.is_dir()) {
+                let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+            }
+            made.push(dir.clone());
+        }
+        // macOS: Seatbelt keeps commands out of every git folder's own parts, so what changes there came from
+        // outside — the owner's `git worktree add` in another pane — and stays. A new `.git` itself is still the
+        // command's.
+        #[cfg(not(target_os = "linux"))]
+        made.retain(|path| !inside_git_dir(path, &self.git_dirs));
         if !after.complete {
             notes.push_str(&format!(
                 "[the folders hold more than {MAX_ENTRIES} entries: what the command made past them was not checked]\n"
@@ -262,6 +283,18 @@ impl Watch {
         }
         (!notes.is_empty()).then_some(notes)
     }
+}
+
+/// Whether `path` lies inside a git folder (one named `.git` on the way, or one of `git_dirs`), not being one itself.
+#[cfg(not(target_os = "linux"))]
+fn inside_git_dir(path: &Path, git_dirs: &[PathBuf]) -> bool {
+    let parents = path.parent().map(Path::ancestors).into_iter().flatten();
+    parents.into_iter().any(|parent| {
+        parent
+            .file_name()
+            .is_some_and(|name| name.eq_ignore_ascii_case(".git"))
+            || git_dirs.iter().any(|dir| dir == parent)
+    })
 }
 
 /// A new folder's name in the quarantine: when, which Glut, and a count, so no two moves meet.
@@ -331,6 +364,7 @@ fn walk(top: &Path, beside: bool, found: &mut Found, seen: &mut usize) {
     while let Some((dir, filled)) = pending.pop_front() {
         found.folders.push(dir.clone());
         let Ok(entries) = std::fs::read_dir(&dir) else {
+            found.unreadable.push(dir.clone());
             continue;
         };
         for entry in entries.flatten() {

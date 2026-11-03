@@ -536,9 +536,12 @@ impl Session {
                     .push(self.scratch.parent().unwrap_or(&self.scratch).to_path_buf());
                 policy.notes.extend(cwd_file.map(Path::to_path_buf));
                 let linux = cfg!(target_os = "linux");
-                let found = if linux {
+                // macOS searches too: Seatbelt judges a rename by where it lands, so a folder made elsewhere and moved
+                // in whole brings a `.cargo` or a `.git` no rule saw — the check after the command moves it away.
+                let searched = linux || cfg!(target_os = "macos");
+                let found = if searched {
                     // Linux binds only what is there: the note too, before the command writes it.
-                    if let Some(file) = cwd_file {
+                    if linux && let Some(file) = cwd_file {
                         std::fs::File::create(file)
                             .map_err(|err| format!("no note for the command's folder: {err}"))?;
                     }
@@ -563,7 +566,8 @@ impl Session {
                     .map(crate::sandbox::proxy::Bridge::path);
                 let process =
                     Command::from(policy.command(&self.shell, &self.root, &found, relay)?);
-                if linux {
+                // On macOS a search cut short checks nothing after: the profile, not the search, holds there.
+                if linux || searched && found.complete {
                     // It follows every folder the search went through: off the async threads too.
                     let watched = policy.clone();
                     watch = Some(
