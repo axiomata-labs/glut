@@ -866,7 +866,8 @@ async fn read_stream(
             last_event = std::time::Instant::now();
         } else if last_event.elapsed() > PIECE_LIMIT {
             return Err(HarnessError::Transport(format!(
-                "the model sent only pings for {} s; the call was given up",
+                "{}{} s; the call was given up",
+                crate::model::KEPT_ALIVE,
                 PIECE_LIMIT.as_secs()
             )));
         }

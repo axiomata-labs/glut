@@ -24,10 +24,13 @@ pub(crate) const REQUEST_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 /// How the two ways a call is given up begin: silent past [`STALL_LIMIT`], or past [`REQUEST_TIMEOUT`].
 pub(crate) const STALLED: &str = "the model sent nothing for ";
 const OVERRAN: &str = "the call ran past its ";
+/// How a call ends that got only a provider's keep-alives past [`PIECE_LIMIT`]: hung as much as a silent one.
+pub(crate) const KEPT_ALIVE: &str = "the model sent only keep-alives for ";
 
 /// Whether `err` is a call given up because it hung (T73b): asked once more, the run need not end on it.
 pub(crate) fn is_stalled(err: &HarnessError) -> bool {
-    matches!(err, HarnessError::Transport(message) if message.starts_with(STALLED) || message.starts_with(OVERRAN))
+    matches!(err, HarnessError::Transport(message)
+        if message.starts_with(STALLED) || message.starts_with(OVERRAN) || message.starts_with(KEPT_ALIVE))
 }
 
 /// The most reasoning one message keeps, in bytes (E4): more is dropped whole — a block cut short is no longer the one
@@ -1029,7 +1032,7 @@ async fn read_stream(
             last_piece = std::time::Instant::now();
         } else if last_piece.elapsed() > PIECE_LIMIT {
             return Err(HarnessError::Transport(format!(
-                "the model sent only keep-alives for {} s; the call was given up",
+                "{KEPT_ALIVE}{} s; the call was given up",
                 PIECE_LIMIT.as_secs()
             )));
         }

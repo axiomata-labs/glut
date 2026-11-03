@@ -1511,14 +1511,18 @@ impl<'a, M: ChatModel> Loop<'a, M> {
         sink: &mut dyn EventSink,
     ) -> Result<Result<crate::model::Reply, HarnessError>, FinishReason> {
         let turn = self.turns;
-        let mut pieces = 0u32;
+        // Only the answer's text counts as shown: reasoning shown twice after a stall's second ask is folded away,
+        // and a provider that hangs mid-thought (OpenRouter, 2026-11-03) must not end the run for it.
+        let mut texts = 0u32;
         let mut on_text = |piece: crate::model::Piece<'_>| {
-            pieces += 1;
             sink.emit(match piece {
-                crate::model::Piece::Text(text) => Event::TextDelta {
-                    turn,
-                    text: text.to_owned(),
-                },
+                crate::model::Piece::Text(text) => {
+                    texts += 1;
+                    Event::TextDelta {
+                        turn,
+                        text: text.to_owned(),
+                    }
+                }
                 crate::model::Piece::Reasoning(text) => Event::ReasoningDelta {
                     turn,
                     text: text.to_owned(),
@@ -1544,7 +1548,7 @@ impl<'a, M: ChatModel> Loop<'a, M> {
             () = self.cancel.cancelled() => Err(FinishReason::Cancelled),
         };
         drop(on_text);
-        self.streamed = pieces > 0;
+        self.streamed = texts > 0;
         ended
     }
 
@@ -6238,6 +6242,23 @@ mod tests {
         )
         .await;
         assert_eq!(outcome.reason, FinishReason::Failed, "once, not again");
+
+        // OpenRouter keeping the line open with comments while its upstream hangs is hung as much.
+        let kept_alive = Err(HarnessError::Transport(format!(
+            "{}300 s; the call was given up",
+            crate::model::KEPT_ALIVE
+        )));
+        let model = Script::new(vec![kept_alive, Ok(text("done"))]);
+        let outcome = run(
+            &RunConfig::new("/w"),
+            &model,
+            &toolbox(),
+            "go",
+            &mut Vec::new(),
+            &Cancel::new(),
+        )
+        .await;
+        assert_eq!(outcome.reason, FinishReason::Answered);
     }
 
     /// `count` steps of one echo each and an answer: a run's calls without a task list.
