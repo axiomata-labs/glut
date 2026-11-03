@@ -1,0 +1,1 @@
+Glut beenden, wie /quit.

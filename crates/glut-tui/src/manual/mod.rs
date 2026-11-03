@@ -1,5 +1,6 @@
 //! The commands' manual pages (the help box, `/help`): what each `/` command does in full, in each of Glut's
-//! languages — one file per language, English the source, every command in `commands::COMMANDS`' order.
+//! languages — one file per language, English the source, every command in `commands::COMMANDS`' order. The texts
+//! are Markdown files in the package's `manual/<lang>/`, embedded here and rendered by the website.
 
 mod de;
 mod en;
@@ -34,9 +35,11 @@ pub fn page(name: &str) -> &'static str {
             .find(|(page, _)| *page == name)
             .map(|(_, text)| *text)
     };
-    find(pages(glut::lang::current()))
+    let text = find(pages(glut::lang::current()))
         .or_else(|| find(&en::PAGES))
-        .unwrap_or_default()
+        .unwrap_or_default();
+    // A Markdown file ends with a line break the help box does not show.
+    text.strip_suffix('\n').unwrap_or(text)
 }
 
 #[cfg(test)]
