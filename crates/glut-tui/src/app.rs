@@ -477,6 +477,8 @@ pub struct App {
     pub background: Vec<crate::agents::Behind>,
     /// The role this pane plays (T36c): a named agent's prompt and tools, never its model; `None` an all-rounder.
     pub role: Option<String>,
+    /// What the screen calls this pane's model instead of its name (a blind arena's `model A`, T61); `None`: its name.
+    pub disguise: Option<String>,
     /// Messages of another pane's model that wait for the owner's Enter here (T36c): never sent by a turn's end.
     pub held: Vec<String>,
     /// When the last of them came: an Enter right after it (meant for something else) lets none go.
@@ -746,6 +748,7 @@ impl App {
             tells_sent: 0,
             held: Vec::new(),
             role: None,
+            disguise: None,
             cache_mode,
             background: Vec::new(),
             keeper: None,
@@ -5755,6 +5758,26 @@ impl App {
                 _ => self.tell(tr!(arena_take_usage)),
             },
             ("end", "") => self.pane_request = Some(crate::panes::Request::ArenaEnd(false)),
+            ("blind", word) => {
+                let mut prefs = Prefs::load(&self.parts.home);
+                let on = match word {
+                    "" => prefs.arena_blind.unwrap_or(true),
+                    "on" => true,
+                    "off" => false,
+                    _ => return self.tell(tr!(arena_blind_usage)),
+                };
+                if !word.is_empty() {
+                    prefs.arena_blind = Some(on);
+                    if let Err(reason) = prefs.save(&self.parts.home) {
+                        return self.transcript.note(reason, Tone::Fault);
+                    }
+                }
+                self.tell(if on {
+                    tr!(arena_blind_on)
+                } else {
+                    tr!(arena_blind_off)
+                });
+            }
             ("card", "") => self.pane_request = Some(crate::panes::Request::ArenaCard),
             ("results", "") => {
                 let records = crate::bench::results(&self.parts.home);
@@ -5840,10 +5863,18 @@ impl App {
 
     /// `/arena tasks <set>[: <model>, <model>]`: the bench on the models named, else on the last arena's.
     fn bench_asked(&self, rest: &str) -> Result<crate::panes::Request, String> {
-        let (set, named) = match rest.split_once(':') {
-            Some((set, named)) => (set.trim(), Some(named)),
+        let (head, named) = match rest.split_once(':') {
+            Some((head, named)) => (head.trim(), Some(named)),
             None => (rest.trim(), None),
         };
+        // `<set> x3`: the times each task runs, 1 without the word.
+        let split = head
+            .rsplit_once(char::is_whitespace)
+            .and_then(|(set, word)| Some((set.trim(), crate::bench::times_word(word)?)));
+        let (set, times) = split.unwrap_or((head, 1));
+        if !(1..=crate::bench::MOST_TIMES).contains(&times) {
+            return Err(tr!(bench_times, most = crate::bench::MOST_TIMES));
+        }
         let lists = crate::arena::listed(&self.parts.home);
         let named: Vec<String> = named
             .unwrap_or_default()
@@ -5878,6 +5909,7 @@ impl App {
         Ok(crate::panes::Request::ArenaBench {
             set: set.to_owned(),
             contenders,
+            times,
         })
     }
 

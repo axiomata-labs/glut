@@ -2301,6 +2301,18 @@ glut::catalog! {
         arena_pick_title: &'static str,
         /// `/arena take` without a number.
         arena_take_usage: &'static str,
+        /// A blind arena's model: `{letter}`.
+        arena_blind_name: &'static str,
+        /// The names behind a blind arena's letters: `{models}`.
+        arena_revealed: &'static str,
+        /// One of them: `{letter}`, `{name}`.
+        arena_revealed_pair: &'static str,
+        /// `/arena blind`: on.
+        arena_blind_on: &'static str,
+        /// `/arena blind`: off.
+        arena_blind_off: &'static str,
+        /// `/arena blind` with another word.
+        arena_blind_usage: &'static str,
         /// `/arena` while the last arena still stands.
         arena_end_first: &'static str,
         /// An arena is still under way.
@@ -2395,6 +2407,12 @@ glut::catalog! {
         bench_done: &'static str,
         /// The bench's next task: `{n}` of `{total}`, `{task}`.
         bench_task: &'static str,
+        /// A bench's task among several runs of it: `{n}`, `{total}`, `{task}`, `{round}`, `{times}`.
+        bench_task_round: &'static str,
+        /// A bench with repeated tasks starts: `{set}`, `{n}`, `{times}`, `{models}`.
+        bench_starts_times: &'static str,
+        /// `xN` past the most: `{most}`.
+        bench_times: &'static str,
         /// A bench task that could not start: `{task}`, `{reason}`.
         bench_task_failed: &'static str,
         /// The owner ended the arena mid-bench.

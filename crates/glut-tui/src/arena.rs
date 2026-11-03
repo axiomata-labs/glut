@@ -256,6 +256,8 @@ pub struct Arena {
     pub checking: bool,
     /// The owner was told the next model waits for room on the screen (once per wait).
     pub told_no_room: bool,
+    /// The models go by letters until the owner took one or ended the arena (the free arena, by default).
+    pub blind: bool,
 }
 
 impl Arena {
@@ -292,7 +294,36 @@ impl Arena {
             cost_limit: COST_LIMIT,
             checking: false,
             told_no_room: false,
+            blind: false,
         }
+    }
+
+    /// Member `at` as the owner sees it: `provider/model`, or its letter while the arena is blind.
+    pub fn shown_name(&self, at: usize) -> String {
+        if self.blind {
+            return letter_name(at);
+        }
+        self.members
+            .get(at)
+            .map(|member| crate::transcript::clean(&member.contender.named()))
+            .unwrap_or_default()
+    }
+
+    /// The names behind the letters, once: the arena is no longer blind. `None` where it was not.
+    pub fn reveal(&mut self) -> Option<String> {
+        if !std::mem::take(&mut self.blind) {
+            return None;
+        }
+        let pairs: Vec<String> = (0..self.members.len())
+            .map(|at| {
+                tr!(
+                    arena_revealed_pair,
+                    letter = letter_name(at),
+                    name = self.shown_name(at)
+                )
+            })
+            .collect();
+        Some(tr!(arena_revealed, models = pairs.join(", ")))
     }
 
     /// The branch of member `at`'s worktree.
@@ -430,6 +461,25 @@ pub fn best(rows: &[Row]) -> [Option<usize>; 3] {
     [fastest, cheapest, leanest]
 }
 
+/// `members` in an order drawn at random (Fisher–Yates over the standard library's per-process random keys): a blind
+/// arena's letters must not follow the order the owner typed.
+pub fn shuffle(members: &mut [Member]) {
+    use std::hash::{BuildHasher as _, Hasher as _};
+    let keys = std::collections::hash_map::RandomState::new();
+    for at in (1..members.len()).rev() {
+        let mut hasher = keys.build_hasher();
+        hasher.write_usize(at);
+        let drawn = usize::try_from(hasher.finish() % (at as u64 + 1)).unwrap_or(0);
+        members.swap(at, drawn);
+    }
+}
+
+/// Member `at`'s name while the arena is blind: `model A`, `model B` …
+pub fn letter_name(at: usize) -> String {
+    let letter = char::from(b'A' + u8::try_from(at % 26).unwrap_or(0));
+    tr!(arena_blind_name, letter = letter)
+}
+
 /// Each member's row, from what it spent and changed.
 pub fn rows(
     arena: &Arena,
@@ -449,7 +499,7 @@ pub fn rows(
             };
             let spent = spent.get(at).copied().unwrap_or_default();
             Row {
-                name: crate::transcript::clean(&member.contender.named()),
+                name: arena.shown_name(at),
                 state,
                 answered,
                 took: member.took.map_or_else(|| "—".to_owned(), clock),
@@ -916,6 +966,44 @@ mod tests {
             check_reason("error: \n[exit code 1]"),
             tr!(bench_check_silent)
         );
+    }
+
+    #[test]
+    fn a_blind_arena_names_its_models_by_letter_until_it_tells_them_once() {
+        let contender = |model: &str| Contender {
+            provider: "p".into(),
+            model: model.into(),
+            local: false,
+        };
+        let asked = Asked {
+            contenders: vec![contender("fast"), contender("slow")],
+            task: "fix it".into(),
+        };
+        let mut arena = Arena::new(asked, 1);
+        assert_eq!(arena.shown_name(1), "p/slow", "seen by default");
+        arena.blind = true;
+        assert_eq!(arena.shown_name(0), "model A");
+        assert_eq!(arena.shown_name(1), "model B");
+        let rows = rows(&arena, &[], &[]);
+        assert_eq!(rows[1].name, "model B", "the card and the note too");
+        let told = arena.reveal().unwrap();
+        assert!(
+            told.contains("model A was p/fast") && told.contains("model B was p/slow"),
+            "{told}"
+        );
+        assert_eq!(arena.shown_name(0), "p/fast");
+        assert!(arena.reveal().is_none(), "told once");
+        // Drawn, the order loses no model and, over many draws, puts each first some time.
+        let mut firsts = std::collections::BTreeSet::new();
+        for _ in 0..64 {
+            let mut members = arena.members.clone();
+            shuffle(&mut members);
+            let mut names: Vec<String> = members.iter().map(|m| m.contender.named()).collect();
+            firsts.insert(names[0].clone());
+            names.sort();
+            assert_eq!(names, ["p/fast", "p/slow"]);
+        }
+        assert_eq!(firsts.len(), 2, "{firsts:?}");
     }
 
     #[test]

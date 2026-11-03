@@ -655,6 +655,35 @@ pub fn listing(root: &Path) -> String {
     lines.join("\n")
 }
 
+/// The most runs of each task one bench makes (`x5`): a set of six on three models is already 90 runs.
+pub const MOST_TIMES: usize = 5;
+
+/// `x3` → 3, the times a bench runs each task; `None` for any other word.
+pub fn times_word(word: &str) -> Option<usize> {
+    let digits = word
+        .strip_prefix(['x', 'X'])
+        .or_else(|| word.strip_prefix('×'))?;
+    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    // Too many digits still reads as a count: past the most, not a set's name.
+    Some(digits.parse().unwrap_or(usize::MAX))
+}
+
+/// The runs a bench makes of `tasks`: each its `times` in a row, a fresh start repository every time, the grid
+/// counting them together.
+pub fn queue(tasks: Vec<Task>, times: usize) -> std::collections::VecDeque<Task> {
+    tasks
+        .into_iter()
+        .flat_map(|task| std::iter::repeat_n(task, times.max(1)))
+        .collect()
+}
+
+/// Which run of its task the bench's run `number` (from 1) is, as [`queue`] lines them up.
+pub fn round(number: usize, times: usize) -> usize {
+    number.saturating_sub(1) % times.max(1) + 1
+}
+
 /// A bench run under way: the set, its models and the tasks still to come.
 #[derive(Debug, Clone)]
 pub struct Bench {
@@ -668,8 +697,10 @@ pub struct Bench {
     pub left: std::collections::VecDeque<Task>,
     /// The task the arena runs now, and its start repository.
     pub current: Option<(Task, PathBuf)>,
-    /// How many tasks the set has.
+    /// How many runs of tasks the bench makes: the set's tasks times [`Bench::times`].
     pub total: usize,
+    /// How often each task runs, in a row (`/arena tasks <set> x3`): 1 to [`MOST_TIMES`].
+    pub times: usize,
     /// The results this run kept so far, for its end.
     pub kept: Vec<Record>,
 }
@@ -693,6 +724,36 @@ mod tests {
         if let Some(json) = json {
             std::fs::write(dir.join("task.json"), json).unwrap();
         }
+    }
+
+    #[test]
+    fn a_bench_runs_each_task_its_times_in_a_row_and_counts_the_rounds() {
+        assert_eq!(times_word("x3"), Some(3));
+        assert_eq!(times_word("×2"), Some(2));
+        assert_eq!(times_word("X4"), Some(4));
+        assert_eq!(
+            times_word("x99999999999999999999"),
+            Some(usize::MAX),
+            "past the most, said so"
+        );
+        for word in ["x", "3", "x-1", "x3a", "2026-11"] {
+            assert_eq!(times_word(word), None, "{word}");
+        }
+        let task = |name: &str| Task {
+            name: name.into(),
+            text: String::new(),
+            time_limit: crate::arena::TIME_LIMIT,
+            cost_limit: crate::arena::COST_LIMIT,
+            folder: PathBuf::new(),
+        };
+        let names: Vec<String> = queue(vec![task("a"), task("b")], 3)
+            .into_iter()
+            .map(|task| task.name)
+            .collect();
+        assert_eq!(names, ["a", "a", "a", "b", "b", "b"]);
+        let rounds: Vec<usize> = (1..=6).map(|number| round(number, 3)).collect();
+        assert_eq!(rounds, [1, 2, 3, 1, 2, 3]);
+        assert_eq!(queue(vec![task("a")], 0).len(), 1, "never fewer than once");
     }
 
     #[test]

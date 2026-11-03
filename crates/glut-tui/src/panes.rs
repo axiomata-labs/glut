@@ -383,10 +383,12 @@ pub enum Request {
     ArenaEnd(bool),
     /// `/arena card`: the comparison card again.
     ArenaCard,
-    /// `/arena tasks <set>` (step 2): the set's tasks one after another on these models, each judged by its check.
+    /// `/arena tasks <set> [xN]` (step 2): the set's tasks one after another on these models, each judged by its
+    /// check, and each `times` in a row.
     ArenaBench {
         set: String,
         contenders: Vec<crate::arena::Contender>,
+        times: usize,
     },
     /// `/arena check [command]`: the check command kept for this repository and run in every worktree — the one
     /// kept, without a command.
@@ -1358,7 +1360,10 @@ impl Panes {
                     "{} · {} · {}",
                     tr!(send_here),
                     pane.app.role.as_deref().unwrap_or("all-rounder"),
-                    crate::transcript::clean(pane.app.engine.model_name())
+                    pane.app
+                        .disguise
+                        .clone()
+                        .unwrap_or_else(|| crate::transcript::clean(pane.app.engine.model_name()))
                 );
                 Item::plain(self.shown_label(at), detail, Pick::WriteTo(who))
             })
@@ -1997,7 +2002,11 @@ impl Panes {
                 Request::ArenaTake(at, sure) => self.arena_take(at, sure),
                 Request::ArenaEnd(sure) => self.end_arena(sure),
                 Request::ArenaCard => self.open_card(),
-                Request::ArenaBench { set, contenders } => self.start_bench(set, contenders),
+                Request::ArenaBench {
+                    set,
+                    contenders,
+                    times,
+                } => self.start_bench(set, contenders, times),
                 Request::ArenaCheck(command) => self.arena_check(command),
                 Request::Peek(Some(name)) => match self.resolve_background(&name) {
                     Some(at) => self.peek = Some(self.list[at].id),
@@ -2112,7 +2121,10 @@ impl Panes {
                 let mut detail = format!(
                     "{} · {}",
                     pane.app.role.as_deref().unwrap_or("all-rounder"),
-                    crate::transcript::clean(pane.app.engine.model_name())
+                    pane.app
+                        .disguise
+                        .clone()
+                        .unwrap_or_else(|| crate::transcript::clean(pane.app.engine.model_name()))
                 );
                 if *at == self.active {
                     detail = format!("{} · {detail}", tr!(close_this));
@@ -2407,7 +2419,7 @@ impl Panes {
         let Some(building) = self.building.take() else {
             return;
         };
-        let (parts, engine) = match result {
+        let (mut parts, engine) = match result {
             Ok(built) => built,
             Err(reason) => {
                 if let Some(restoring) = &mut self.restoring {
@@ -2489,7 +2501,19 @@ impl Panes {
                 .tools
                 .contain(tree.map(crate::worktree::Tree::private_home), hidden);
         }
+        let disguise = match (building.arena, &self.arena) {
+            (Some(at), Some(arena)) if arena.blind => arena.members.get(at).map(|member| {
+                // A note of the engine's build names the model or its provider: not shown while the arena is blind.
+                let contender = &member.contender;
+                parts.notes.retain(|note| {
+                    !note.contains(&contender.model) && !note.contains(&contender.provider)
+                });
+                arena.shown_name(at)
+            }),
+            _ => None,
+        };
         let mut app = App::new(Arc::new(parts), engine, building.reports);
+        app.disguise = disguise;
         // A worktree's pane belongs to the window's project (T44): `/projects` there marks and leaves that one.
         app.project = self.cwd.clone();
         if building.resume {
@@ -2749,10 +2773,18 @@ impl Panes {
             arena.time_limit = time;
             arena.cost_limit = cost;
         }
-        let names: Vec<String> = arena
-            .members
-            .iter()
-            .map(|member| crate::transcript::clean(&member.contender.named()))
+        // A free arena is blind unless the owner switched it off; a bench's check judges, not the owner's eye.
+        let home_dir = self.active().parts.home.clone();
+        arena.blind = limits.is_none()
+            && crate::prefs::Prefs::load(&home_dir)
+                .arena_blind
+                .unwrap_or(true);
+        // Letters in the order the owner typed or picked would name the models: blind, the order is drawn.
+        if arena.blind {
+            crate::arena::shuffle(&mut arena.members);
+        }
+        let names: Vec<String> = (0..arena.members.len())
+            .map(|at| arena.shown_name(at))
             .collect();
         let local = arena.members.iter().any(|member| member.contender.local);
         let said = tr!(
@@ -2774,7 +2806,7 @@ impl Panes {
     /// `/arena tasks <set>` (step 2): the set's tasks one after another on `contenders`, each an arena of its own on
     /// a fresh repository of the task's start, judged by the task's check — only where panes may split and a sandbox
     /// holds the models, as nobody watches them.
-    fn start_bench(&mut self, set: String, contenders: Vec<crate::arena::Contender>) {
+    fn start_bench(&mut self, set: String, contenders: Vec<crate::arena::Contender>, times: usize) {
         if !self.may_split {
             return self.active().tell(tr!(host_one_pane));
         }
@@ -2793,19 +2825,32 @@ impl Panes {
             .iter()
             .map(|contender| crate::transcript::clean(&contender.named()))
             .collect();
-        self.active().tell(tr!(
-            bench_starts,
-            set = set.clone(),
-            n = tasks.len(),
-            models = names.join(", ")
-        ));
+        let said = if times > 1 {
+            tr!(
+                bench_starts_times,
+                set = set.clone(),
+                n = tasks.len(),
+                times = times,
+                models = names.join(", ")
+            )
+        } else {
+            tr!(
+                bench_starts,
+                set = set.clone(),
+                n = tasks.len(),
+                models = names.join(", ")
+            )
+        };
+        self.active().tell(said);
+        let left = crate::bench::queue(tasks, times);
         self.bench = Some(crate::bench::Bench {
             home,
             home_pane: self.list[self.active].id,
             set,
             contenders,
-            total: tasks.len(),
-            left: tasks.into(),
+            total: left.len(),
+            times,
+            left,
             current: None,
             kept: Vec::new(),
         });
@@ -2826,7 +2871,7 @@ impl Panes {
             {
                 return;
             }
-            let (set, total) = (bench.set.clone(), bench.total);
+            let (set, total, times) = (bench.set.clone(), bench.total, bench.times.max(1));
             let (home_pane, contenders) = (bench.home_pane, bench.contenders.clone());
             let Some(task) = self.bench.as_mut().and_then(|bench| bench.left.pop_front()) else {
                 // This run's results alone: an earlier run of the set is `/arena results`' to show.
@@ -2861,12 +2906,23 @@ impl Panes {
             });
             match started {
                 Ok(place) => {
-                    let said = tr!(
-                        bench_task,
-                        n = number,
-                        total = total,
-                        task = task.name.clone()
-                    );
+                    let said = if times > 1 {
+                        tr!(
+                            bench_task_round,
+                            n = number,
+                            total = total,
+                            task = task.name.clone(),
+                            round = crate::bench::round(number, times),
+                            times = times
+                        )
+                    } else {
+                        tr!(
+                            bench_task,
+                            n = number,
+                            total = total,
+                            task = task.name.clone()
+                        )
+                    };
                     self.note_in(home_pane, said, Tone::Quiet);
                     if let Some(bench) = &mut self.bench {
                         bench.current = Some((task, place));
@@ -3098,7 +3154,7 @@ impl Panes {
             if !self.room_for_one_more() {
                 if !arena.told_no_room {
                     arena.told_no_room = true;
-                    let model = crate::transcript::clean(&arena.members[next].contender.named());
+                    let model = arena.shown_name(next);
                     self.note_in(
                         arena.home,
                         tr!(arena_waits_for_room, model = model),
@@ -3407,7 +3463,7 @@ impl Panes {
         {
             return self.active().tell(tr!(arena_still_writing, n = at + 1));
         }
-        let name = crate::transcript::clean(&member.contender.named());
+        let name = arena.shown_name(at);
         let head = arena.head.clone();
         if !sure {
             let snapshot = arena.members[at].snapshot.clone();
@@ -3486,9 +3542,34 @@ impl Panes {
                     files = files,
                     folder = folder
                 ));
+                self.reveal_arena();
             }
             Err(reason) => self.active().transcript.note(reason, Tone::Fault),
         }
+    }
+
+    /// A blind arena's names told, in the pane it started from, and every model's pane named again.
+    fn reveal_arena(&mut self) {
+        let Some(arena) = &mut self.arena else {
+            return;
+        };
+        let Some(said) = arena.reveal() else {
+            return;
+        };
+        let (home, panes): (u64, Vec<u64>) = (
+            arena.home,
+            arena
+                .members
+                .iter()
+                .filter_map(|member| member.pane)
+                .collect(),
+        );
+        for pane in &mut self.list {
+            if panes.contains(&pane.id) {
+                pane.app.disguise = None;
+            }
+        }
+        self.note_in(home, said, Tone::Fine);
     }
 
     /// `/arena end`: asked first, then every model's pane closed (a turn under way stopped) and its worktree removed
@@ -3547,6 +3628,7 @@ impl Panes {
             }
             return self.active().tell(tr!(arena_stopping));
         }
+        self.reveal_arena();
         let Some(arena) = self.arena.take() else {
             return;
         };
@@ -5626,6 +5708,7 @@ mod tests {
             left: std::collections::VecDeque::new(),
             current: Some((task, place.clone())),
             total: 1,
+            times: 1,
             kept: Vec::new(),
         });
         panes.settle(&host);

@@ -1039,7 +1039,9 @@ fn draw_welcome(frame: &mut Frame, app: &mut App, area: Rect) {
     lines.push(Line::default());
     lines.push(Line::from(Span::styled("Glut", theme::strong())));
     lines.push(Line::from(Span::styled(
-        format!("{} · {}", app.engine.provider, app.engine.model_name()),
+        app.disguise
+            .clone()
+            .unwrap_or_else(|| format!("{} · {}", app.engine.provider, app.engine.model_name())),
         theme::quiet(),
     )));
     lines.push(Line::from(Span::styled(app.folder.clone(), theme::quiet())));
@@ -1732,6 +1734,10 @@ fn draw_keys(frame: &mut Frame, app: &App, area: Rect, branch: Option<String>, c
     let mut model = format!("{} · {}", app.engine.provider, app.engine.model_name());
     if let Some(effort) = app.engine.endpoint.effort {
         model.push_str(&format!(" · {effort}"));
+    }
+    // A blind arena's model goes by its letter until the owner picked (T61).
+    if let Some(disguise) = &app.disguise {
+        model.clone_from(disguise);
     }
     segments.push(Segment::hued(
         crate::transcript::clean(&model).replace('\n', " "),
