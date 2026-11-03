@@ -2369,11 +2369,12 @@ glut::catalog! {
         bench_set_title: &'static str,
         /// The results' grid: the tasks' column heading.
         bench_task_column: &'static str,
-        /// The results' grid: the sums' labels — tasks passed, time, cost and tokens in all.
+        /// The results' grid: the sums' labels — tasks passed, time, cost, tokens and the gate's refusals in all.
         bench_sum_passed: &'static str,
         bench_sum_time: &'static str,
         bench_sum_cost: &'static str,
         bench_sum_tokens: &'static str,
+        bench_sum_refusals: &'static str,
         /// The results' grid: a model's tasks passed, `{passed}` of `{runs}`.
         bench_of: &'static str,
         /// The results' grid: the model ahead, `{model}` with `{passed}` of `{runs}`.

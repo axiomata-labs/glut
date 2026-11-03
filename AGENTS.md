@@ -228,14 +228,17 @@ scripts/install.sh               # glut for every terminal: ~/.cargo/bin, linked
   `panes.rs` `start_member`): every git call over a model's worktree goes through `git_alone` (no global or system
   config, no attributes file — a model's `.gitattributes` then names no filter that exists); the patch is made once
   from a written tree id, listed by `git apply --numstat/--summary` and its own header lines, refused for any link or
-  submodule mode (an edited link keeps its mode: the `index` line says it), a protected, tool or key name at any depth,
-  any `….git` part or a git folder's shape, then applied from the same bytes on stdin — the yes is bound to the tree
-  the owner was shown. A member runs in `auto` only where `session::sandboxed`, with no MCP server, `tell` denied and
-  the Keychain shut. Its check (`/arena check`) runs through the member's own `bash` tool from the worktree's top —
-  never the owner's `!!`, which runs outside the sandbox: what it builds is a model's code. The test bench's tasks live
-  in `~/.glut/arena/tasks` (no sandboxed command reads `~/.glut`), and a task's check runs only in
-  `worktree::check_copy`'s folder in `~/.glut/arena/checks` through a shell of its own (`App::arena_check_in`), never
-  in the worktree a model left (its jobs may outlive its turn and Glut writes the copy outside the sandbox).
+  submodule mode (an edited link keeps its mode: the `index` line says it), a protected, tool or key name at any
+  depth, any `….git` part or a git folder's shape, then applied from the same bytes on stdin — the yes is bound to the
+  tree the owner was shown. A member runs in `auto` only where `session::sandboxed`, with no MCP server, `tell`
+  denied, the Keychain shut and its gate contained (`Gate::set_contained`): nothing is asked, what would be is
+  refused, a heavy command too — never let one through by its words: the sandbox lets a worktree write the owner's
+  shared git folder, and a link made earlier, an option or a moved `HEAD` hides where a command lands. Its check
+  (`/arena check`) runs through the member's own `bash` tool from the worktree's top — never the owner's `!!`, which
+  runs outside the sandbox: what it builds is a model's code. The test bench's tasks live in `~/.glut/arena/tasks` (no
+  sandboxed command reads `~/.glut`), and a task's check runs only in `worktree::check_copy`'s folder in
+  `~/.glut/arena/checks` through a shell of its own (`App::arena_check_in`), never in the worktree a model left (its
+  jobs may outlive its turn and Glut writes the copy outside the sandbox).
 - **What a command *is* decides beside the rules** (TUI1e, `crates/glut/src/permissions/kinds.rs`): a command whose
   every part is a listed reader (`ls`, `grep`, `sed -n 1,9p`, `git status`, …) runs in every mode like `read_file`;
   in `auto` everything sandboxed runs but a `kinds::heavy` one (`rm -rf`, `git push`, `sudo`, …). A new reader needs

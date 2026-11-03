@@ -2173,6 +2173,7 @@ pub const TEXTS: Texts = Texts {
     bench_sum_time: "总耗时",
     bench_sum_cost: "总费用",
     bench_sum_tokens: "总 Token",
+    bench_sum_refusals: "拒绝",
     bench_of: "{passed} / {runs}",
     bench_ahead: "领先：{model} — {passed} / {runs}",
     bench_failed_title: "未通过：",

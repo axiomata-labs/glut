@@ -1045,13 +1045,16 @@ impl Panes {
         let Some(at) = self.list.iter().position(|pane| pane.id == id) else {
             return;
         };
-        // An arena's model whose turn ended is done with the task (T61); one a limit stopped stays aborted.
+        // An arena's model whose turn ended is done with the task (T61); one a limit stopped stays aborted. Its
+        // refusals count either way.
         if let Report::Done(outcome, _) = &report
             && let Some(member) = self.arena.as_mut().and_then(|arena| arena.member_of(id))
-            && member.state == crate::arena::State::Working
         {
-            member.state = crate::arena::State::Done(outcome.reason);
-            member.took = member.began.map(|began| began.elapsed());
+            member.refusals += outcome.refusals;
+            if member.state == crate::arena::State::Working {
+                member.state = crate::arena::State::Done(outcome.reason);
+                member.took = member.began.map(|began| began.elapsed());
+            }
         }
         // An arena's check ended in a model's worktree.
         // Only the check last started there: a slower earlier one ends unheard.
@@ -2463,9 +2466,13 @@ impl Panes {
             }
             return;
         }
-        // Nobody watches an arena's model (T61): the Keychain the owner keeps open for sessions stays shut to it.
+        // Nobody watches an arena's model (T61): the Keychain the owner keeps open for sessions stays shut to it, and
+        // its gate asks no one — what it would ask is refused, so no model waits on the owner while another works on.
         if building.arena.is_some() {
             parts.tools.keychain().set_session_open(false);
+            if let Some(gate) = parts.tools.gate() {
+                gate.set_contained();
+            }
         }
         let mut app = App::new(Arc::new(parts), engine, building.reports);
         // A worktree's pane belongs to the window's project (T44): `/projects` there marks and leaves that one.
@@ -2978,6 +2985,7 @@ impl Panes {
                     seconds: row.seconds,
                     dollars: row.dollars,
                     tokens: row.token_count,
+                    refusals: member.refusals,
                     ended,
                 }
             })
@@ -3435,6 +3443,7 @@ impl Panes {
                         seconds: arena.members[at].took.map(|took| took.as_secs()),
                         dollars: None,
                         tokens: 0,
+                        refusals: arena.members[at].refusals,
                         ended: None,
                     };
                     let _ = crate::bench::keep(&home, &[win]);
@@ -5405,9 +5414,14 @@ mod tests {
         panes.settle(&host);
         assert!(matches!(state(&panes, 1), crate::arena::State::Aborted(_)));
         assert_eq!(owners(&panes, 2), ["fix it"], "now the local one goes");
-        // A late end of the stopped one keeps it aborted.
-        panes.on_report(3, ended(glut::FinishReason::Cancelled));
+        // A late end of the stopped one keeps it aborted, its refusals counted.
+        let mut late = ended(glut::FinishReason::Cancelled);
+        if let Report::Done(outcome, _) = &mut late {
+            outcome.refusals = 2;
+        }
+        panes.on_report(3, late);
         assert!(matches!(state(&panes, 1), crate::arena::State::Aborted(_)));
+        assert_eq!(panes.arena.as_ref().unwrap().members[1].refusals, 2);
         // Its pane closes only with the arena.
         panes.active = panes.at(2);
         panes.active().pane_request = Some(Request::Close);

@@ -212,6 +212,9 @@ pub struct Member {
     /// Its worktree as git's tree id once every model was over: the card's numbers and diff and a take are read
     /// from it, not from what a check wrote there since.
     pub snapshot: Option<String>,
+    /// The calls its gate refused, from every turn it ended: a model that keeps running into the arena's limits
+    /// works worse than one that keeps inside them.
+    pub refusals: u32,
 }
 
 /// What a member spent, read from its pane when the arena is compared.
@@ -274,6 +277,7 @@ impl Arena {
                     began: None,
                     took: None,
                     snapshot: None,
+                    refusals: 0,
                 })
                 .collect(),
             home,
@@ -937,6 +941,7 @@ mod tests {
             began: None,
             took: None,
             snapshot: None,
+            refusals: 0,
         }
     }
 

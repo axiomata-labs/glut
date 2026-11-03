@@ -1195,6 +1195,9 @@ pub struct Gate {
     opinions: Mutex<HashMap<(String, String), Opinion>>,
     /// When the judge last gave no answer ([`JUDGE_RESTS`]).
     judge_failed: Mutex<Option<std::time::Instant>>,
+    /// An arena's model (T61, [`Gate::set_contained`]): nothing is ever asked — what would be is refused, so no model
+    /// waits for the owner while another works on.
+    contained: std::sync::atomic::AtomicBool,
 }
 
 /// One `allowed-tools` list and who declared it: only the calls these rules name are judged as usual, everything
@@ -1227,6 +1230,7 @@ impl Gate {
             judge: Mutex::new(None),
             opinions: Mutex::new(HashMap::new()),
             judge_failed: Mutex::new(None),
+            contained: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -1537,9 +1541,36 @@ impl Gate {
             .unwrap_or_else(|poison| poison.into_inner()) = mode;
     }
 
-    /// Whether anyone can be asked at all (a terminal, the app) — `false` for a headless run.
+    /// Whether anyone can be asked at all (a terminal, the app) — `false` for a headless run and an arena's model.
     pub fn can_ask(&self) -> bool {
-        self.asker.present()
+        self.present()
+    }
+
+    /// Makes this gate an arena model's (T61): every question is refused at once, with that reason. A heavy command
+    /// is refused, not let through: an arena's worktree shares its git folder with the owner's repository, and what a
+    /// command names cannot tell where it lands (a link made earlier, an option, a moved `HEAD`). Only the screen sets
+    /// it; it is never taken back.
+    pub fn set_contained(&self) {
+        self.contained
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn is_contained(&self) -> bool {
+        self.contained.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Someone to ask: an asker that is there, and no arena's model.
+    fn present(&self) -> bool {
+        !self.is_contained() && self.asker.present()
+    }
+
+    /// Why an ask was refused unasked.
+    fn nobody(&self) -> &'static str {
+        if self.is_contained() {
+            "an arena's model asks no one"
+        } else {
+            "no one to ask"
+        }
     }
 
     /// Asks the owner about something that is no single call (Glut 2: leaving Plan mode with a plan): one question at
@@ -1570,7 +1601,7 @@ impl Gate {
         scopes: Vec<String>,
         rename: Option<&serde_json::Value>,
     ) -> Answer {
-        if !self.asker.present() {
+        if !self.present() {
             return Answer::Deny;
         }
         let request = AskRequest {
@@ -1591,7 +1622,7 @@ impl Gate {
     /// owner answers it: the asker shows it, the model never sees it.
     pub async fn fill(&self, mut asked: crate::mcp::elicit::Asked) -> crate::mcp::elicit::Reply {
         use crate::mcp::elicit::{Reply, WAIT};
-        if !self.asker.present() {
+        if !self.present() {
             return Reply::Decline;
         }
         asked.from = subagent().map(|(_, label)| label);
@@ -1705,8 +1736,8 @@ impl Gate {
         let allowed = match verdict {
             Verdict::Allow => true,
             Verdict::Deny => false,
-            Verdict::Ask if !self.asker.present() => {
-                reason = format!("no one to ask ({reason})");
+            Verdict::Ask if !self.present() => {
+                reason = format!("{} ({reason})", self.nobody());
                 false
             }
             Verdict::Ask => {
@@ -1978,8 +2009,8 @@ impl Gate {
         }
         let asked = if !weighed.iter().any(|(_, said)| said.verdict == Verdict::Ask) {
             None
-        } else if !self.asker.present() {
-            Some((false, "no one to ask".to_owned()))
+        } else if !self.present() {
+            Some((false, self.nobody().to_owned()))
         } else {
             Some(
                 match self
@@ -3577,6 +3608,36 @@ mod tests {
                 .ends_with("from now on: git commit -m one"),
             "an index past the last scope takes the narrowest"
         );
+    }
+
+    /// T61: an arena's model is never asked — what would be asked is refused at once, the rest runs as in auto.
+    #[tokio::test]
+    async fn an_arena_gate_asks_nothing_and_refuses_what_it_would_ask() {
+        let asker = Arc::new(Always(Answer::Allow, Mutex::new(0)));
+        let gate = Gate::new(RuleSet::default(), Mode::Auto, asker.clone());
+        gate.set_contained();
+        assert!(!gate.can_ask());
+        for runs in ["cargo test", "rm -f a.txt", "git status && ls"] {
+            let judged = gate.judge("bash", &bash(runs)).await;
+            assert!(judged.is_ok(), "{runs}: {judged:?}");
+        }
+        for refused in [
+            "rm -rf build",
+            "git push origin main",
+            "git reset --hard HEAD",
+            "for f in a; do rm \"$f\"; done",
+        ] {
+            let judged = gate.judge("bash", &bash(refused)).await.unwrap_err();
+            assert!(
+                judged.contains("an arena's model asks no one"),
+                "{refused}: {judged}"
+            );
+        }
+        assert_eq!(gate.ask_owner("exit_plan", "plan").await, Answer::Deny);
+        assert_eq!(*asker.1.lock().unwrap(), 0, "no one was asked");
+        let open = Gate::new(RuleSet::default(), Mode::Auto, asker.clone());
+        assert!(open.judge("bash", &bash("rm -rf build")).await.is_ok());
+        assert_eq!(*asker.1.lock().unwrap(), 1, "another gate still asks");
     }
 
     #[tokio::test]

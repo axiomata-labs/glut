@@ -284,6 +284,9 @@ pub struct Record {
     pub seconds: Option<u64>,
     pub dollars: Option<f64>,
     pub tokens: u64,
+    /// The calls its gate refused (none in a result from before they were counted).
+    #[serde(default)]
+    pub refusals: u32,
     /// How it ended, in words, when it did not pass by its check.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ended: Option<String>,
@@ -385,6 +388,7 @@ struct Sum {
     dollars: f64,
     priced: usize,
     tokens: u64,
+    refusals: u32,
 }
 
 impl Sum {
@@ -400,6 +404,7 @@ impl Sum {
             self.priced += 1;
         }
         self.tokens += record.tokens;
+        self.refusals += record.refusals;
     }
 
     /// The share passed: a model run more often has more runs, not more skill.
@@ -474,7 +479,7 @@ fn grid(records: &[&Record], title: impl Fn(usize, usize) -> String) -> String {
         }
         Some(sum) => format!("{}/{} Ø {}", sum.passed, sum.runs, clock(sum.mean())),
     };
-    let measures: [Measure; 4] = [
+    let measures: [Measure; 5] = [
         (
             tr!(bench_sum_passed),
             Box::new(|sum: &Sum| tr!(bench_of, passed = sum.passed, runs = sum.runs)),
@@ -499,6 +504,10 @@ fn grid(records: &[&Record], title: impl Fn(usize, usize) -> String) -> String {
         (
             tr!(bench_sum_tokens),
             Box::new(|sum: &Sum| crate::meter::tokens(sum.tokens)),
+        ),
+        (
+            tr!(bench_sum_refusals),
+            Box::new(|sum: &Sum| sum.refusals.to_string()),
         ),
     ];
     let first = std::iter::once(crate::transcript::text_width(tr!(bench_task_column)))
@@ -757,6 +766,7 @@ mod tests {
             seconds: Some(seconds),
             dollars: Some(0.1),
             tokens: 10,
+            refusals: 0,
             ended: None,
         };
         keep(
@@ -801,6 +811,7 @@ mod tests {
             seconds: Some(seconds),
             dollars: Some(0.001),
             tokens: 30_000,
+            refusals: 1,
             ended: ended.map(str::to_owned),
         };
         let said = finished(

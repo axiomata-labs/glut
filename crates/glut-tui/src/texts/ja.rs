@@ -2274,6 +2274,7 @@ pub const TEXTS: Texts = Texts {
     bench_sum_time: "合計時間",
     bench_sum_cost: "合計コスト",
     bench_sum_tokens: "合計 Token",
+    bench_sum_refusals: "拒否",
     bench_of: "{runs} 中 {passed}",
     bench_ahead: "首位: {model} — {runs} 中 {passed}",
     bench_failed_title: "不合格:",
