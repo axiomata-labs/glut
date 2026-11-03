@@ -254,6 +254,8 @@ pub struct Arena {
     pub cost_limit: f64,
     /// Its checks were started (a bench task's, after every model was over).
     pub checking: bool,
+    /// The owner was told the next model waits for room on the screen (once per wait).
+    pub told_no_room: bool,
 }
 
 impl Arena {
@@ -289,6 +291,7 @@ impl Arena {
             time_limit: TIME_LIMIT,
             cost_limit: COST_LIMIT,
             checking: false,
+            told_no_room: false,
         }
     }
 

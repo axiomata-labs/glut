@@ -2239,6 +2239,7 @@ pub const TEXTS: Texts = Texts {
     arena_end_first: "前回のアリーナが残っています — 先に /arena take <n> か /arena end を実行してください",
     arena_running: "アリーナはまだ実行中です — /arena end で止めます",
     arena_no_room: "あと {n} 個の Pane を置く余地がありません（最大 {most} 個）— 先に /close でいくつか閉じてください",
+    arena_waits_for_room: "{model} は画面の空きを待っています — ウィンドウを広げる（または Pane を閉じる）と始まります",
     arena_no_repository: "アリーナには git リポジトリが必要です。各モデルが専用の worktree で動くためです",
     arena_starts: "アリーナ: {models} — それぞれ専用の worktree、auto、最大 {minutes} 分と ${dollars}",
     arena_local_later: "ローカルのモデルは、他が終わってから 1 つずつ実行します",

@@ -2138,6 +2138,7 @@ pub const TEXTS: Texts = Texts {
     arena_end_first: "上一个竞技场仍在 — 请先执行 /arena take <n> 或 /arena end",
     arena_running: "竞技场仍在运行 — /arena end 可将其停止",
     arena_no_room: "没有空间再放 {n} 个 Pane（最多 {most} 个）— 请先用 /close 关闭几个",
+    arena_waits_for_room: "{model} 正在等待屏幕空间 — 把窗口拉宽（或关闭一个 Pane）后即开始",
     arena_no_repository: "竞技场需要 git 仓库：每个模型都在自己的 worktree 中工作",
     arena_starts: "竞技场：{models} — 各在自己的 worktree 中，使用 auto，最多 {minutes} 分钟和 ${dollars}",
     arena_local_later: "本地模型在其他模型结束后依次运行",

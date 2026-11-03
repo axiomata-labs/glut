@@ -2307,6 +2307,8 @@ glut::catalog! {
         arena_running: &'static str,
         /// No room for the arena's panes: `{n}` models, `{most}` panes at most.
         arena_no_room: &'static str,
+        /// A model waits for room on the screen: `{model}`.
+        arena_waits_for_room: &'static str,
         /// `/arena` outside a git repository.
         arena_no_repository: &'static str,
         /// The arena starts: `{models}`, its limits `{minutes}` and `{dollars}`.

@@ -3093,10 +3093,25 @@ impl Panes {
                 .members
                 .iter()
                 .position(|member| member.state == crate::arena::State::Waiting)
-            && let Err(reason) = self.start_member(&mut arena, next, host)
         {
-            arena.members[next].state =
-                crate::arena::State::Aborted(crate::transcript::clean(&reason));
+            // A model without room waits for it, never counts as failed: a wider window or a closed pane starts it.
+            if !self.room_for_one_more() {
+                if !arena.told_no_room {
+                    arena.told_no_room = true;
+                    let model = crate::transcript::clean(&arena.members[next].contender.named());
+                    self.note_in(
+                        arena.home,
+                        tr!(arena_waits_for_room, model = model),
+                        Tone::Quiet,
+                    );
+                }
+            } else {
+                arena.told_no_room = false;
+                if let Err(reason) = self.start_member(&mut arena, next, host) {
+                    arena.members[next].state =
+                        crate::arena::State::Aborted(crate::transcript::clean(&reason));
+                }
+            }
         }
         // Compared once every model is over and no stopped turn still writes in its worktree.
         let resting = arena.members.iter().all(|member| {
@@ -5378,6 +5393,37 @@ mod tests {
         panes.settle(&(Arc::new(crate::Standalone) as Arc<dyn Host>));
         assert!(!tree.place.exists() && panes.list.len() == 1);
         let _ = std::fs::remove_dir_all(repo.top.parent().unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_model_without_room_on_the_screen_waits_and_is_never_counted_as_failed() {
+        let host: Arc<dyn Host> = Arc::new(crate::Standalone);
+        let (mut panes, _inlets) = split();
+        // Far too narrow for a second pane beside the main one.
+        panes.room = ratatui::layout::Rect::new(0, 0, 20, 40);
+        let asked = crate::arena::Asked {
+            contenders: vec![crate::arena::Contender {
+                provider: "p".into(),
+                model: "m".into(),
+                local: false,
+            }],
+            task: "fix it".into(),
+        };
+        panes.arena = Some(crate::arena::Arena::new(asked, panes.list[0].id));
+        panes.settle(&host);
+        panes.settle(&host);
+        let arena = panes.arena.as_ref().unwrap();
+        assert_eq!(arena.members[0].state, crate::arena::State::Waiting);
+        let told = panes.list[0]
+            .app
+            .transcript
+            .blocks
+            .iter()
+            .filter(|block| {
+                matches!(&block.kind, crate::transcript::Kind::Note { text, .. } if text.contains("waits for room"))
+            })
+            .count();
+        assert_eq!(told, 1, "said once, not at every turn of the loop");
     }
 
     #[tokio::test]
