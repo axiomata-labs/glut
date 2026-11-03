@@ -443,6 +443,7 @@ mod tests {
             direct: Vec::new(),
             beside: Default::default(),
             keychain: Default::default(),
+            confinement: Default::default(),
         };
         let session = Session::new(&dir, options).unwrap();
         (dir, session)

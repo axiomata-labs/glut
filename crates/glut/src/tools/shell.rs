@@ -87,6 +87,8 @@ pub struct ShellOptions {
     /// The Keychain's list and switch (T74), shared with the gate: a sandboxed command gets the Keychain only when
     /// it is open to all, or the command runs a listed program the gate let through.
     pub keychain: crate::keychain::Keychain,
+    /// An arena model's confinement (T61), shared with the toolbox: set, every command writes its own folder alone.
+    pub confinement: crate::sandbox::Confinement,
 }
 
 /// A program of the caller's own that a run starts directly — no shell, no sandbox, its words as its arguments — when
@@ -123,6 +125,7 @@ impl ShellOptions {
             direct: Vec::new(),
             beside: Default::default(),
             keychain: Default::default(),
+            confinement: Default::default(),
         }
     }
 }
@@ -261,6 +264,8 @@ pub(crate) struct Session {
     beside: crate::folders::Folders,
     /// The Keychain's list and switch (T74).
     keychain: crate::keychain::Keychain,
+    /// An arena model's confinement (T61): read before every command.
+    confinement: crate::sandbox::Confinement,
 }
 
 /// Settles a command's watch ([`crate::sandbox::scan::Watch`]) off the async threads — it walks the folders — and
@@ -379,6 +384,7 @@ impl Session {
             direct: options.direct,
             beside: options.beside,
             keychain: options.keychain,
+            confinement: options.confinement,
         })
     }
 
@@ -480,6 +486,10 @@ impl Session {
                 "no command runs without a sandbox here (the owner's /sandbox required is on): {why}"
             ));
         }
+        // An arena's model runs nothing outside the sandbox, whatever was asked.
+        if sandbox.is_none() && self.confinement.get().is_some() {
+            return Err("an arena's model runs no command outside the sandbox".into());
+        }
         // The owner's profile runs for the snapshot only once a command is going to run.
         let snapshot = self.snapshot().await;
         let mut process = match sandbox {
@@ -494,6 +504,14 @@ impl Session {
                     .policy
                     .with_beside(&self.beside.list())
                     .with_choices_now();
+                if let Some(confined) = self.confinement.get() {
+                    if !confined.intact() {
+                        return Err(
+                            "the arena's private home is no longer the folder it was: no command runs".into(),
+                        );
+                    }
+                    policy = policy.confined(&confined);
+                }
                 if !online {
                     policy.proxy_port = None;
                 }
@@ -555,6 +573,7 @@ impl Session {
             .arg(script)
             .env_clear()
             .envs(self.env.iter().cloned())
+            .envs(self.confinement.environment())
             .envs(proxy_env)
             .env("AXH_COMMAND", command)
             .env(SANDBOXED_ENV, "1")
@@ -1647,6 +1666,7 @@ mod tests {
             direct: Vec::new(),
             beside: Default::default(),
             keychain: Default::default(),
+            confinement: Default::default(),
         };
         let mut tools = Toolbox::new();
         tools.extend(shell_tools(&dir, options).unwrap());
@@ -1682,6 +1702,7 @@ mod tests {
             direct: Vec::new(),
             beside: Default::default(),
             keychain: keychain.clone(),
+            confinement: Default::default(),
         };
         let mut tools = Toolbox::new();
         tools.extend(shell_tools(&dir, options).unwrap());
@@ -1715,6 +1736,83 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// T61: a confined command writes its own folder and private home alone — not the shared temporary folder nor
+    /// anything beside it — and finds its temporary files and caches sent there.
+    #[tokio::test]
+    async fn a_confined_command_writes_its_folder_and_private_home_alone() {
+        if !crate::sandbox::available() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!(
+            "glut-shell-confined-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        let root = dir.join("clone");
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::create_dir_all(dir.join("beside")).unwrap();
+        let confinement = crate::sandbox::Confinement::default();
+        let options = ShellOptions {
+            shell: PathBuf::from("/bin/bash"),
+            profile: false,
+            ambient: std::env::vars_os()
+                .filter(|(key, _)| key == "PATH" || key == "HOME" || key == "TMPDIR")
+                .collect(),
+            sandbox: Some(Default::default()),
+            direct: Vec::new(),
+            beside: Default::default(),
+            keychain: Default::default(),
+            confinement: confinement.clone(),
+        };
+        let mut tools = Toolbox::new();
+        tools.extend(shell_tools(&root, options).unwrap());
+        let beside = dir.join("beside/x").display().to_string();
+        let (_, open) = bash(&tools, &format!("echo x > '{beside}' && echo WROTE")).await;
+        assert!(
+            open.contains("WROTE"),
+            "unconfined, the temporary folder is open: {open}"
+        );
+        confinement.confine(root.join(".git/glut-home"), vec![dir.join("beside")]);
+        let (_, text) = bash(
+            &tools,
+            &format!(
+                "echo x > '{beside}2' 2>/dev/null || echo BESIDE-REFUSED; \
+                 echo x > own.txt && echo OWN; \
+                 echo x > \"$TMPDIR/t\" && echo TMP; \
+                 echo x > \"$CARGO_HOME/c\" && echo CACHE; \
+                 rm -rf sub && mkdir -p sub/deep && rm -rf sub && echo REMOVED; \
+                 case \"$TMPDIR\" in */.git/glut-home/tmp) echo PRIVATE;; esac"
+            ),
+        )
+        .await;
+        for said in [
+            "BESIDE-REFUSED",
+            "OWN",
+            "TMP",
+            "CACHE",
+            "REMOVED",
+            "PRIVATE",
+        ] {
+            assert!(text.contains(said), "{said}: {text}");
+        }
+        assert!(!dir.join("beside/x2").exists());
+        // What it hides is not read; its home is neither moved nor replaced, and a home replaced runs nothing more.
+        let (_, hidden) = bash(&tools, &format!("cat '{beside}' || echo READ-REFUSED")).await;
+        assert!(hidden.contains("READ-REFUSED"), "{hidden}");
+        let (_, moved) = bash(
+            &tools,
+            "mv .git/glut-home .git/elsewhere 2>/dev/null || echo MOVE-REFUSED",
+        )
+        .await;
+        assert!(moved.contains("MOVE-REFUSED"), "{moved}");
+        let home = root.join(".git/glut-home");
+        std::fs::rename(&home, root.join(".git/kept")).unwrap();
+        std::os::unix::fs::symlink(&dir, &home).unwrap();
+        let (ok, swapped) = bash(&tools, "echo x > \"$TMPDIR/../../../escaped\"").await;
+        assert!(!ok && swapped.contains("no longer the folder"), "{swapped}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[tokio::test]
     async fn a_sandboxed_command_cannot_plant_code_in_the_scratch_folder_but_its_folder_carries_over()
      {
@@ -1737,6 +1835,7 @@ mod tests {
             direct: Vec::new(),
             beside: Default::default(),
             keychain: Default::default(),
+            confinement: Default::default(),
         };
         let mut tools = Toolbox::new();
         tools.extend(shell_tools(&dir, options).unwrap());
@@ -2020,6 +2119,7 @@ mod tests {
             direct: Vec::new(),
             beside: Default::default(),
             keychain: Default::default(),
+            confinement: Default::default(),
         };
         let mut tools = Toolbox::new();
         tools.extend(shell_tools(&dir, options).unwrap());
@@ -2270,6 +2370,7 @@ mod tests {
             sandbox: Some(Default::default()),
             beside: Default::default(),
             keychain: Default::default(),
+            confinement: Default::default(),
             direct: vec![DirectProgram {
                 name: "axiomata-cli".into(),
                 path: program,
@@ -2312,6 +2413,7 @@ mod tests {
                 sandbox: None,
                 beside: Default::default(),
                 keychain: Default::default(),
+                confinement: Default::default(),
                 direct: vec![DirectProgram {
                     name: "axiomata-cli".into(),
                     path: PathBuf::from("/bin/echo"),
@@ -2407,6 +2509,7 @@ mod tests {
             direct: Vec::new(),
             beside: Default::default(),
             keychain: Default::default(),
+            confinement: Default::default(),
         };
         let mut tools = Toolbox::new();
         tools.extend(shell_tools(&dir.join("work"), options).unwrap());
@@ -2452,6 +2555,7 @@ mod tests {
             direct: Vec::new(),
             beside: Default::default(),
             keychain: Default::default(),
+            confinement: Default::default(),
         };
         let mut tools = Toolbox::new();
         tools.extend(shell_tools(&dir.join("work"), options).unwrap());

@@ -5911,9 +5911,19 @@ impl App {
             let arguments =
                 serde_json::json!({ "command": command, "timeout_secs": ARENA_CHECK_SECS })
                     .to_string();
+            // The check runs the model's code (its tests, a build script): confined as the model was — its copy
+            // alone written, a private home for its temporary files and caches, the package registries alone
+            // reached, nobody asked.
+            let mut toolbox = glut::Toolbox::new();
+            toolbox.set_gate(Arc::new(glut::permissions::Gate::new(
+                glut::permissions::RuleSet::default(),
+                glut::permissions::Mode::Auto,
+                Arc::new(glut::permissions::Nobody),
+            )));
+            options.confinement = toolbox.confinement().clone();
+            toolbox.contain(Some(folder.join(".git").join("glut-home")), Vec::new());
             let (ok, output) = match glut::tools::shell::shell_tools(&folder, options) {
                 Ok(tools) => {
-                    let mut toolbox = glut::Toolbox::new();
                     toolbox.extend(tools);
                     toolbox.call("bash", &arguments).await
                 }

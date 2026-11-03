@@ -168,6 +168,94 @@ const APPLE_EVENT_TOOLS: [&str; 7] = [
     "/usr/bin/security",
 ];
 
+/// An arena model's confinement (T61): once set, its commands write their own folder alone — no shared temporary
+/// folder or package cache, no git folder but the one below it — with their temporary files and caches in a private
+/// home that goes with the folder, and read nothing of the places it hides (the owner's repository). Shared by a
+/// toolbox and its shell, set by the screen once, never taken back.
+#[derive(Debug, Clone, Default)]
+pub struct Confinement(std::sync::Arc<std::sync::Mutex<Option<Confined>>>);
+
+/// What a [`Confinement`] holds: the private home as resolved when it was set — never again, so a link the model puts
+/// in its place later widens nothing — and the places its commands may not read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Confined {
+    pub home: PathBuf,
+    pub hidden: Vec<PathBuf>,
+}
+
+impl Confined {
+    /// Whether the home is still the folder it was set to: a real folder at the same place, no link in or at it.
+    /// A command runs only while it is.
+    pub fn intact(&self) -> bool {
+        std::fs::symlink_metadata(&self.home).is_ok_and(|meta| meta.is_dir())
+            && self.home.canonicalize().is_ok_and(|real| real == self.home)
+    }
+}
+
+/// The variables that send a command's temporary files and the package managers' caches below a confined home.
+const CONFINED_PLACES: [(&str, &str); 17] = [
+    ("TMPDIR", "tmp"),
+    ("TMP", "tmp"),
+    ("TEMP", "tmp"),
+    ("XDG_CACHE_HOME", "cache"),
+    ("CARGO_HOME", "cargo"),
+    ("npm_config_cache", "npm"),
+    ("NPM_CONFIG_CACHE", "npm"),
+    ("YARN_CACHE_FOLDER", "yarn"),
+    ("PNPM_HOME", "pnpm"),
+    ("COREPACK_HOME", "corepack"),
+    ("PIP_CACHE_DIR", "pip"),
+    ("UV_CACHE_DIR", "uv"),
+    ("POETRY_CACHE_DIR", "poetry"),
+    ("GOCACHE", "go-build"),
+    ("GOMODCACHE", "go-mod"),
+    ("GOPATH", "go"),
+    ("SCCACHE_DIR", "sccache"),
+];
+
+/// Go writes its module cache read-only unless told otherwise: then the clone could not be removed with it.
+const CONFINED_FLAGS: [(&str, &str); 1] = [("GOFLAGS", "-modcacherw")];
+
+impl Confinement {
+    /// Confines every later command to its folder, with `home` as its private home (made here, resolved once) and
+    /// `hidden` kept from its reads.
+    pub fn confine(&self, home: PathBuf, hidden: Vec<PathBuf>) {
+        for (_, part) in CONFINED_PLACES {
+            let _ = std::fs::create_dir_all(home.join(part));
+        }
+        let home = home.canonicalize().unwrap_or(home);
+        let hidden = hidden
+            .into_iter()
+            .map(|path| path.canonicalize().unwrap_or(path))
+            .collect();
+        *self.0.lock().unwrap_or_else(|poison| poison.into_inner()) =
+            Some(Confined { home, hidden });
+    }
+
+    /// What it holds, once confined.
+    pub fn get(&self) -> Option<Confined> {
+        self.0
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone()
+    }
+
+    /// The variables a confined command gets on top of its environment; none while not confined.
+    pub fn environment(&self) -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
+        self.get().map_or_else(Vec::new, |confined| {
+            CONFINED_PLACES
+                .iter()
+                .map(|(name, part)| (name.into(), confined.home.join(part).into_os_string()))
+                .chain(
+                    CONFINED_FLAGS
+                        .iter()
+                        .map(|(name, value)| (name.into(), value.into())),
+                )
+                .collect()
+        })
+    }
+}
+
 /// Whether commands can run in the sandbox here.
 pub fn available() -> bool {
     unavailable().is_none()
@@ -261,6 +349,8 @@ pub struct Policy {
     pub git_read_only: bool,
     /// The owner's home folder, where the choices are read again ([`Policy::with_choices_now`]).
     pub home: PathBuf,
+    /// A confined command's private home ([`Policy::confined`]): written in, never itself moved or replaced.
+    pub confined_home: Option<PathBuf>,
 }
 
 impl Policy {
@@ -305,6 +395,7 @@ impl Policy {
             covers: home.join(crate::providers::DIR).join("sandbox"),
             git_read_only: choices::Choices::in_force(home).git_read_only,
             home: home.to_path_buf(),
+            confined_home: None,
         }
     }
 
@@ -323,6 +414,25 @@ impl Policy {
             }
         }
         policy
+    }
+
+    /// This policy for a confined command ([`Confinement`]): nothing written but the working folder, its own git
+    /// folder and the private home — not the shared temporary folder, the package caches, the folders beside it nor
+    /// the owner's extra writable places —, nothing read of what it hides, and no localhost beside the proxy. The home
+    /// is taken as it was resolved when set: never resolved again, where the model may have put a link.
+    pub fn confined(mut self, confined: &Confined) -> Policy {
+        self.writable = vec![confined.home.clone()];
+        self.read_denied.extend(confined.hidden.iter().cloned());
+        self.local_binding = false;
+        self.confined_home = Some(confined.home.clone());
+        self.writable_files.clear();
+        self.beside.clear();
+        self.git_dirs.retain(|dir| dir.starts_with(&self.root));
+        // The owner's `/sandbox git read-only` keeps the owner's tools from running what a command planted in a git
+        // folder; a confined command's git folder is its own clone's, which only Glut's git reads (hooks off) and
+        // which holds its private home — kept read-only, no temporary file could be made.
+        self.git_read_only = false;
+        self
     }
 
     /// This policy with the owner's choices as they stand now ([`choices::Choices`], read before every command): a
@@ -473,6 +583,13 @@ impl Policy {
             out.push_str(&format!("  (regex #\"^{root}/(.*/)?\\.envrc$\")\n"));
         }
         out.push_str(")\n");
+        // A confined home is written in, never moved, removed or replaced by a link of the command's.
+        if let Some(home) = &self.confined_home {
+            out.push_str(&format!(
+                "(deny file-write-unlink file-write-create (literal {}))\n",
+                quoted(home)
+            ));
+        }
         if !self.notes.is_empty() {
             out.push_str("(allow file-write*\n");
             for note in &self.notes {
@@ -697,6 +814,37 @@ mod tests {
     /// that was not there — moved away right after.
     fn refused(out: &str) -> bool {
         out.contains("REFUSED") || out.contains("refused by the sandbox")
+    }
+
+    /// T61: a confined policy writes its folder, its own git folder and the private home alone — the owner's
+    /// read-only switch for git folders aside, since that home lies in the clone's own.
+    #[test]
+    fn a_confined_policy_keeps_its_folder_and_private_home_alone() {
+        let root = PathBuf::from("/w/clone");
+        let home = PathBuf::from("/h");
+        let mut policy = Policy::new(&root, &home, &[PathBuf::from("/extra")], &[]);
+        policy.git_dirs = vec![root.join(".git"), PathBuf::from("/owner/.git")];
+        policy.beside = vec![PathBuf::from("/beside")];
+        policy.git_read_only = true;
+        let private = root.join(".git/glut-home");
+        let owner = PathBuf::from("/owner");
+        policy.local_binding = true;
+        let confined = policy.confined(&Confined {
+            home: private.clone(),
+            hidden: vec![owner.clone()],
+        });
+        assert_eq!(confined.writable, std::slice::from_ref(&private));
+        assert!(confined.read_denied.contains(&owner) && !confined.local_binding);
+        assert!(confined.writable_files.is_empty() && confined.beside.is_empty());
+        assert_eq!(confined.git_dirs, [root.join(".git")]);
+        assert!(!confined.git_read_only);
+        let profile = confined.profile();
+        assert!(
+            !profile.contains("/owner/.git") && !profile.contains("/extra"),
+            "{profile}"
+        );
+        let environment = Confinement::default();
+        assert!(environment.environment().is_empty());
     }
 
     #[test]

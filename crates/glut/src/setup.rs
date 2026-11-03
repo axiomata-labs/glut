@@ -48,6 +48,8 @@ pub async fn toolbox(
         tools.set_keychain(crate::keychain::Keychain::owner(&home));
     }
     let keychain = tools.keychain().clone();
+    // T61: an arena model's confinement, which the screen sets through `Toolbox::contain`.
+    let confinement = tools.confinement().clone();
     // T60c: the folders beside the working one, which the caller adds to through `Toolbox::folders`.
     let beside = tools.folders().clone();
     tools.extend(file_tools(
@@ -90,6 +92,7 @@ pub async fn toolbox(
             direct,
             beside,
             keychain,
+            confinement,
             ..ShellOptions::from_environment()
         },
     )?);

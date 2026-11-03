@@ -443,6 +443,53 @@ pub fn heavy_in_text(command: &str) -> Option<&'static str> {
     None
 }
 
+/// What in a heavy command reaches past a confined folder (T61, [`crate::sandbox::Confinement`]): the sandbox holds
+/// every write of an arena model's command to its own folder, so what stays heavy beyond it acts through another user,
+/// the system, the network or a service — `sudo`, a system program, a publish, GitHub, `git push`. Text the lexer
+/// could not read is searched for those words.
+pub fn reaches_out(analysis: &Analysis, command: &str) -> Option<&'static str> {
+    let named = analysis.deny_candidates().into_iter().find_map(|words| {
+        let first = base(words.first()?).to_ascii_lowercase();
+        let args = &words[1..];
+        let has = |word: &str| args.iter().any(|arg| arg == word);
+        match first.as_str() {
+            "sudo" | "doas" => Some("it runs as another user"),
+            name if name.starts_with("mkfs") || HEAVY_PROGRAMS.contains(&name) => {
+                Some("it changes the system")
+            }
+            "npm" | "cargo" | "pnpm" | "yarn" | "gem" | "twine"
+                if has("publish") || has("upload") =>
+            {
+                Some("it publishes a package")
+            }
+            "gh" => Some("it acts on GitHub"),
+            "git" => without_git_globals(&words)
+                .filter(|core| core.get(1).is_some_and(|sub| sub == "push"))
+                .map(|_| "git push publishes"),
+            _ => None,
+        }
+    });
+    if named.is_some() || !analysis.is_opaque() {
+        return named;
+    }
+    let words: Vec<String> = command
+        .split(|c: char| c.is_whitespace() || ";|&()`$\"'{}<>=".contains(c))
+        .filter(|word| !word.is_empty())
+        .map(|word| base(word).to_ascii_lowercase())
+        .collect();
+    let named = |names: &[&str]| words.iter().any(|word| names.contains(&word.as_str()));
+    let system = words
+        .iter()
+        .any(|word| word.starts_with("mkfs") || HEAVY_PROGRAMS.contains(&word.as_str()));
+    if named(&["sudo", "doas"]) || system {
+        Some("a command it hides may run as another user or change the system")
+    } else if named(&["gh", "publish", "upload"]) || (named(&["git"]) && named(&["push"])) {
+        Some("a command it hides may publish")
+    } else {
+        None
+    }
+}
+
 fn heavy_words(words: &[String]) -> Option<&'static str> {
     let first = base(words.first()?).to_ascii_lowercase();
     let args = &words[1..];

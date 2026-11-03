@@ -120,6 +120,8 @@ pub struct Tree {
     pub git_dir: PathBuf,
     pub repo: Repo,
     pub into: Option<String>,
+    /// An arena's clone of the repository ([`clone_for_arena`]), not a worktree of it: its git folder is its own.
+    pub cloned: bool,
 }
 
 /// What the closing pane's worktree holds that the repository's branch does not.
@@ -177,10 +179,37 @@ impl Tree {
         Pin {
             work_tree: &self.place,
             git_dir: &self.git_dir,
-            common: &self.repo.common,
+            common: if self.cloned {
+                &self.git_dir
+            } else {
+                &self.repo.common
+            },
         }
     }
+
+    /// The pin for comparing two of its trees (T61): an arena clone's store as its own work tree, so no attribute the
+    /// model wrote in its files (`* -diff`, which would show the owner no line of a change it still applies) bears
+    /// on what Glut shows and takes.
+    fn objects_pin(&self) -> Pin<'_> {
+        if !self.cloned {
+            return self.pin();
+        }
+        Pin {
+            work_tree: &self.git_dir,
+            git_dir: &self.git_dir,
+            common: &self.git_dir,
+        }
+    }
+
+    /// The private home of an arena's clone (T61): its temporary files and package caches, inside the copy's own git
+    /// folder — beside its files, never among them — and gone with it.
+    pub fn private_home(&self) -> PathBuf {
+        self.place.join(".git").join(PRIVATE_HOME)
+    }
 }
+
+/// Where in an arena clone's git folder its private home lies ([`Tree::private_home`]).
+const PRIVATE_HOME: &str = "glut-home";
 
 /// Git on the pinned folders, its hooks, file monitor, maintenance and network off, never asking, ended after
 /// [`TIMEOUT`] (a changing call after [`TIMEOUT_CHANGING`]); its output, or its error's first lines.
@@ -212,7 +241,7 @@ fn alone(pin: &Pin, args: &[&str]) -> (Command, Duration) {
         .args(["-c", "core.attributesFile=/dev/null"])
         .args(args);
     let limit = match args.first() {
-        Some(&("add" | "apply")) => TIMEOUT_CHANGING,
+        Some(&("add" | "apply" | "checkout")) => TIMEOUT_CHANGING,
         _ => limit,
     };
     (command, limit)
@@ -582,7 +611,153 @@ pub fn add(home: &Path, repo: &Repo, branch: &str) -> Result<Tree, String> {
         git_dir,
         repo: repo.clone(),
         into,
+        cloned: false,
     })
+}
+
+/// An arena model's own repository (T61): a copy of `repo`'s current branch (over `file://`: only what it reaches, no
+/// `origin`, no borrowed objects — the owner's repository stays hidden from the model) on `branch` from its `HEAD`, with refs, index, stash and
+/// history of its own. Glut's own git over it never uses that git folder, which the model writes: it works in a store
+/// of Glut's beside it (`<place>.store`, a bare repository in `~/.glut`, which no sandboxed command reads), whose
+/// objects borrow the owner's and whose index follows the model's files — so what Glut snapshots, shows and applies
+/// is hashed by Glut alone, never read through a link or an object the model planted.
+///
+/// # Errors
+///
+/// A message when the repository's config could run a program, a name is no branch name, the place is taken, or git
+/// fails.
+pub fn clone_for_arena(home: &Path, repo: &Repo, branch: &str) -> Result<Tree, String> {
+    checked(&repo.pin())?;
+    plain_branch(repo, branch)?;
+    let name = repo
+        .top
+        .file_name()
+        .map_or("repo".into(), |name| name.to_string_lossy());
+    let dir = home.join(DIR);
+    let place = dir.join(format!("{name}-{}", branch.replace('/', "-")));
+    let store = store_of(&place);
+    if place.exists() || store.exists() {
+        return Err(tr!(there_already, place = place.display()));
+    }
+    own_dir(&dir)?;
+    let into = git(&repo.pin(), &["symbolic-ref", "--quiet", "--short", "HEAD"]).ok();
+    let head = git(&repo.pin(), &["rev-parse", "--verify", "HEAD^{commit}"])?;
+    let outside = |args: &[&std::ffi::OsStr]| {
+        let mut command = Command::new("git");
+        command.current_dir(&dir);
+        scrub(&mut command);
+        command
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .args(args);
+        run(command, TIMEOUT_CHANGING)
+    };
+    // Over `file://`, not a plain path: only what the branch reaches travels — no object no ref holds (a secret staged
+    // and taken back, a dropped stash), no other branch, no borrowed object store.
+    let mut source = std::ffi::OsString::from("file://");
+    source.push(&repo.top);
+    let made = (|| {
+        outside(&[
+            "-c".as_ref(),
+            "protocol.file.allow=always".as_ref(),
+            "clone".as_ref(),
+            "--single-branch".as_ref(),
+            "--no-tags".as_ref(),
+            "--no-checkout".as_ref(),
+            "--quiet".as_ref(),
+            "--".as_ref(),
+            source.as_os_str(),
+            place.as_os_str(),
+        ])?;
+        outside(&[
+            "init".as_ref(),
+            "--bare".as_ref(),
+            "--quiet".as_ref(),
+            store.as_os_str(),
+        ])?;
+        let place = place.canonicalize().map_err(|err| err.to_string())?;
+        let store = store.canonicalize().map_err(|err| err.to_string())?;
+        let own = place.join(".git");
+        let model = Pin {
+            work_tree: &place,
+            git_dir: &own,
+            common: &own,
+        };
+        git_alone_text(&model, &["remote", "remove", "origin"])?;
+        git_alone_text(&model, &["checkout", "--quiet", "-b", branch, &head])?;
+        own_dir(&place.join(".git").join(PRIVATE_HOME))?;
+        // Glut's store reads the owner's objects and starts from the files as checked out.
+        std::fs::write(
+            store.join("objects/info/alternates"),
+            format!("{}\n", repo.common.join("objects").display()),
+        )
+        .map_err(|err| err.to_string())?;
+        // What the owner's own exclude file keeps out of git, the copy and the store keep out too: a worktree shared
+        // it, and a model's file the owner ignores must not come back in a take.
+        if let Ok(exclude) = std::fs::read(repo.common.join("info/exclude")) {
+            let _ = std::fs::write(own.join("info/exclude"), &exclude);
+            let _ = std::fs::write(store.join("info/exclude"), exclude);
+        }
+        let tree = Tree {
+            place,
+            branch: branch.to_owned(),
+            git_dir: store,
+            repo: repo.clone(),
+            into,
+            cloned: true,
+        };
+        git_alone_text(&tree.pin(), &["read-tree", &head])?;
+        Ok(tree)
+    })();
+    if made.is_err() {
+        let _ = remove_writable(&place);
+        let _ = remove_writable(&store);
+    }
+    made
+}
+
+/// Where Glut keeps its store beside an arena's copy at `place` ([`clone_for_arena`]).
+fn store_of(place: &Path) -> PathBuf {
+    let mut name = place.file_name().unwrap_or_default().to_os_string();
+    name.push(".store");
+    place.with_file_name(name)
+}
+
+/// `dir` removed with everything in it, its folders made writable first where a tool left them read-only (Go's module
+/// cache) — links never followed, so nothing outside it changes.
+fn remove_writable(dir: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+    if std::fs::remove_dir_all(dir).is_ok() || !dir.exists() {
+        return Ok(());
+    }
+    let mut left = vec![dir.to_path_buf()];
+    while let Some(folder) = left.pop() {
+        let meta = std::fs::symlink_metadata(&folder)?;
+        if !meta.is_dir() {
+            continue;
+        }
+        let _ = std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700));
+        for entry in std::fs::read_dir(&folder)?.flatten() {
+            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                left.push(entry.path());
+            }
+        }
+    }
+    std::fs::remove_dir_all(dir)
+}
+
+/// A folder of the owner's alone (0700), made with its parents where missing.
+fn own_dir(dir: &Path) -> Result<(), String> {
+    use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir)
+        .map_err(|err| format!("{}: {err}", dir.display()))?;
+    // One made before keeps the owner's alone too.
+    let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+    Ok(())
 }
 
 /// The worktree Glut made for `branch` of `repo` before (TUI9e, a layout kept for the next start), found again: its
@@ -650,6 +825,7 @@ pub fn reopen(
         git_dir,
         repo: repo.clone(),
         into,
+        cloned: false,
     };
     // The worktree's own config is read too before git runs there.
     checked(&tree.pin())?;
@@ -879,6 +1055,24 @@ pub fn remove(tree: &Tree, force: bool) -> Result<(), String> {
         }
     }
     let repo = tree.repo.pin();
+    // An arena's clone holds nothing of the repository's: it goes with its folder, no branch of the owner's beside it.
+    if tree.cloned {
+        if !tree.place.exists() {
+            let store = store_of(&tree.place);
+            return remove_writable(&store).map_err(|err| format!("{}: {err}", store.display()));
+        }
+        let ours = tree.place.canonicalize().ok().is_some_and(|place| {
+            place
+                .parent()
+                .is_some_and(|dir| dir.ends_with(DIR) && dir.is_dir())
+        });
+        if !ours {
+            return Err(tr!(not_glut_worktree, place = tree.place.display()));
+        }
+        remove_writable(&tree.place).map_err(|err| format!("{}: {err}", tree.place.display()))?;
+        let store = store_of(&tree.place);
+        return remove_writable(&store).map_err(|err| format!("{}: {err}", store.display()));
+    }
     if tree.place.exists() {
         // Only ever a place of Glut's own making.
         let ours = tree.place.canonicalize().ok().is_some_and(|place| {
@@ -1160,7 +1354,7 @@ fn written(tree: &Tree) -> Result<String, String> {
 pub fn changes(tree: &Tree, start: &str, now: &str) -> Result<Changes, String> {
     checked(&tree.pin())?;
     let stat = git_alone(
-        &tree.pin(),
+        &tree.objects_pin(),
         &[
             "diff",
             "--numstat",
@@ -1196,7 +1390,7 @@ pub fn changes(tree: &Tree, start: &str, now: &str) -> Result<Changes, String> {
 pub fn diff_text(tree: &Tree, start: &str, now: &str) -> Result<String, String> {
     checked(&tree.pin())?;
     let out = git_alone(
-        &tree.pin(),
+        &tree.objects_pin(),
         &[
             "diff",
             "--no-color",
@@ -1267,7 +1461,7 @@ fn arena_patch(tree: &Tree, start: &str, now: Option<&str>) -> Result<(Vec<u8>, 
         None => written(tree)?,
     };
     let patch = git_alone(
-        &tree.pin(),
+        &tree.objects_pin(),
         &[
             "diff",
             "--binary",
@@ -1547,6 +1741,127 @@ mod tests {
         repo_of(dir).unwrap().unwrap()
     }
 
+    /// T61: an arena's clone has a git folder of its own — what a model does to its refs, its stash or its objects
+    /// never reaches the owner's repository — and goes with its folder.
+    #[test]
+    fn an_arena_clone_keeps_its_git_folder_apart_from_the_owners() {
+        let (home, top) = repo("arena-clone");
+        commit(&top, "c.txt", "three\n");
+        let repo = pinned(&top);
+        let branches = || git_in(&top, &["branch", "--list"]).unwrap();
+        let before = branches();
+        let objects = || {
+            let mut found = Vec::new();
+            let mut left = vec![repo.common.join("objects")];
+            while let Some(dir) = left.pop() {
+                for entry in std::fs::read_dir(dir).unwrap().flatten() {
+                    match entry.file_type().unwrap().is_dir() {
+                        true => left.push(entry.path()),
+                        false => found.push(entry.path()),
+                    }
+                }
+            }
+            found.sort();
+            found
+        };
+        // A secret staged and taken back is an object no ref reaches: it stays behind.
+        std::fs::write(top.join("secret.txt"), "KEY=hidden\n").unwrap();
+        let blob = git_in(&top, &["hash-object", "-w", "secret.txt"]).unwrap();
+        std::fs::remove_file(top.join("secret.txt")).unwrap();
+        let objects_before = objects();
+        let tree = clone_for_arena(&home, &repo, "glut/arena-1").unwrap();
+        let all = git_in(
+            &tree.place,
+            &[
+                "cat-file",
+                "--batch-all-objects",
+                "--batch-check=%(objectname)",
+            ],
+        )
+        .unwrap();
+        assert!(!all.contains(&blob), "no unreachable object travels");
+        assert!(tree.cloned && tree.git_dir == store_of(&tree.place).canonicalize().unwrap());
+        assert!(tree.private_home().is_dir());
+        assert!(
+            !repo.common.join("worktrees").exists(),
+            "no worktree of the owner's"
+        );
+        assert_eq!(branches(), before, "no branch in the owner's repository");
+        let model = |args: &[&str]| git_in(&tree.place, args);
+        assert_eq!(
+            model(&["symbolic-ref", "--short", "HEAD"]).unwrap(),
+            "glut/arena-1"
+        );
+        assert_eq!(
+            model(&["remote"]).unwrap(),
+            "",
+            "no way back to the owner's repository"
+        );
+        assert!(
+            !tree.place.join(".git/objects/info/alternates").exists(),
+            "no object borrowed: the owner's folder stays hidden"
+        );
+        // A model's commit and branch stay in the copy; Glut's store never reads its git folder.
+        std::fs::write(tree.place.join("b.txt"), "two\n").unwrap();
+        for args in [
+            &["add", "b.txt"][..],
+            &[
+                "-c",
+                "user.name=m",
+                "-c",
+                "user.email=m@m",
+                "commit",
+                "-qm",
+                "m",
+            ],
+            &["branch", "other"],
+        ] {
+            model(args).unwrap();
+        }
+        let start = written(&tree).unwrap();
+        // Attributes the model writes and hides show the owner every line all the same.
+        std::fs::write(tree.place.join(".gitattributes"), "* -diff\n").unwrap();
+        std::fs::write(tree.place.join(".gitignore"), ".gitattributes\n").unwrap();
+        std::fs::write(tree.place.join("b.txt"), "two\nthree\n").unwrap();
+        let now = written(&tree).unwrap();
+        let shown = diff_text(&tree, &start, &now).unwrap();
+        assert!(
+            shown.contains("+three") && !shown.contains("Binary"),
+            "{shown}"
+        );
+        assert_eq!(changes(&tree, &start, &now).unwrap().added, 2, "{shown}");
+        let ours = git_alone_text(&tree.pin(), &["ls-tree", "--name-only", &now]).unwrap();
+        assert!(
+            ours.contains("b.txt"),
+            "the store hashes the files as they are: {ours}"
+        );
+        assert_eq!(branches(), before);
+        assert_eq!(
+            objects(),
+            objects_before,
+            "the owner's objects are read, never written"
+        );
+        assert_eq!(
+            head(&repo).unwrap(),
+            git_in(&top, &["rev-parse", "HEAD"]).unwrap()
+        );
+        // A tool's read-only folders (Go's module cache) go with the clone.
+        let locked = tree.private_home().join("go-mod/m/v1");
+        std::fs::create_dir_all(&locked).unwrap();
+        std::fs::write(locked.join("f"), "x").unwrap();
+        std::fs::set_permissions(&locked, std::os::unix::fs::PermissionsExt::from_mode(0o555))
+            .unwrap();
+        remove(&tree, true).unwrap();
+        assert!(!tree.place.exists());
+        assert_eq!(branches(), before);
+        let taken = clone_for_arena(&home, &repo, "glut/arena-1").unwrap();
+        assert!(
+            clone_for_arena(&home, &repo, "glut/arena-1").is_err(),
+            "a place taken is refused"
+        );
+        remove(&taken, true).unwrap();
+    }
+
     #[test]
     fn an_arena_worktree_starts_from_the_folder_as_it_is_and_its_changes_go_back_as_a_diff() {
         let (home, top) = repo("arena-mirror");
@@ -1558,7 +1873,7 @@ mod tests {
         std::fs::remove_file(top.join("gone.txt")).unwrap();
         let repo = pinned(&top);
         let head_then = head(&repo).unwrap();
-        let tree = add(&home, &repo, "glut/arena-1").unwrap();
+        let tree = clone_for_arena(&home, &repo, "glut/arena-1").unwrap();
         let mirrored = mirror(&tree).unwrap();
         let read = |path: PathBuf| std::fs::read_to_string(path).unwrap();
         assert_eq!(read(tree.place.join("a.txt")), "one changed\n");
@@ -1632,7 +1947,7 @@ mod tests {
         let (home, top) = repo("arena-refuse");
         let repo = pinned(&top);
         let head_then = head(&repo).unwrap();
-        let tree = add(&home, &repo, "glut/arena-1").unwrap();
+        let tree = clone_for_arena(&home, &repo, "glut/arena-1").unwrap();
         let start = mirror(&tree).unwrap().start;
         assert!(
             apply(&tree, &start, &written(&tree).unwrap(), &head_then).is_err(),
@@ -1691,7 +2006,7 @@ mod tests {
         .unwrap();
         let repo = pinned(&top);
         let head_then = head(&repo).unwrap();
-        let tree = add(&home, &repo, "glut/arena-1").unwrap();
+        let tree = clone_for_arena(&home, &repo, "glut/arena-1").unwrap();
         let start = mirror(&tree).unwrap().start;
         std::fs::remove_file(tree.place.join("lk")).unwrap();
         std::os::unix::fs::symlink("/etc/hosts", tree.place.join("lk")).unwrap();
@@ -1709,7 +2024,7 @@ mod tests {
     #[test]
     fn a_check_copy_holds_the_tasks_start_the_checked_patch_and_the_check_alone() {
         let (home, top) = repo("arena-check-copy");
-        let tree = add(&home, &pinned(&top), "glut/arena-1").unwrap();
+        let tree = clone_for_arena(&home, &pinned(&top), "glut/arena-1").unwrap();
         let start = mirror(&tree).unwrap().start;
         std::fs::write(tree.place.join("a.txt"), "changed\n").unwrap();
         std::fs::write(tree.place.join("b.txt"), "new\n").unwrap();
@@ -1759,7 +2074,7 @@ mod tests {
     #[test]
     fn an_arena_snapshot_runs_no_filter_the_models_attributes_name() {
         let (home, top) = repo("arena-filter");
-        let tree = add(&home, &pinned(&top), "glut/arena-1").unwrap();
+        let tree = clone_for_arena(&home, &pinned(&top), "glut/arena-1").unwrap();
         // A filter in the owner's own git config, chosen by the model's attributes for every file it writes.
         let owner = top.parent().unwrap().join("owner-home");
         let mark = top.parent().unwrap().join("ran");

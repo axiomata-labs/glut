@@ -2468,11 +2468,26 @@ impl Panes {
         }
         // Nobody watches an arena's model (T61): the Keychain the owner keeps open for sessions stays shut to it, and
         // its gate asks no one — what it would ask is refused, so no model waits on the owner while another works on.
+        // Its commands write its copy alone and read nothing of the owner's repository: the copy holds what it needs.
         if building.arena.is_some() {
             parts.tools.keychain().set_session_open(false);
-            if let Some(gate) = parts.tools.gate() {
-                gate.set_contained();
-            }
+            let tree = building.tree.as_ref();
+            // A linked worktree's repository holds the main checkout beside its git folder: hidden too.
+            let hidden = tree.map_or_else(Vec::new, |tree| {
+                let mut hidden = vec![tree.repo.top.clone(), tree.repo.common.clone()];
+                if let Some(main) = tree
+                    .repo
+                    .common
+                    .parent()
+                    .filter(|_| tree.repo.common.ends_with(".git"))
+                {
+                    hidden.push(main.to_path_buf());
+                }
+                hidden
+            });
+            parts
+                .tools
+                .contain(tree.map(crate::worktree::Tree::private_home), hidden);
         }
         let mut app = App::new(Arc::new(parts), engine, building.reports);
         // A worktree's pane belongs to the window's project (T44): `/projects` there marks and leaves that one.
@@ -3134,7 +3149,7 @@ impl Panes {
             .position(|pane| pane.id == arena.home)
             .unwrap_or(self.active);
         let home = self.list[from].app.parts.home.clone();
-        let tree = crate::worktree::add(&home, &repo, &arena.branch(at))?;
+        let tree = crate::worktree::clone_for_arena(&home, &repo, &arena.branch(at))?;
         let mirrored = match crate::worktree::mirror(&tree) {
             Ok(mirrored) => mirrored,
             Err(reason) => {
@@ -3589,11 +3604,13 @@ impl Panes {
             return;
         }
         let home = self.list[0].app.parts.home.clone();
+        // An arena's model works in a clone that goes with the arena (T61): nothing of it comes back.
+        let arena = |at: &usize| self.list[*at].tree.as_ref().is_some_and(|tree| tree.cloned);
         let mut shown: Vec<usize> = (0..self.list.len())
-            .filter(|at| !self.list[*at].background)
+            .filter(|at| !self.list[*at].background && !arena(at))
             .collect();
         let behind: Vec<usize> = (0..self.list.len())
-            .filter(|at| self.list[*at].background)
+            .filter(|at| self.list[*at].background && !arena(at))
             .collect();
         if shown.len() <= 1 && behind.is_empty() {
             if self.offered {

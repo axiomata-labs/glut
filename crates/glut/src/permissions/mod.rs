@@ -1149,6 +1149,29 @@ pub struct Granted {
     pub rules: Vec<String>,
 }
 
+/// The hosts an arena's model reaches (T61): the package registries of the languages its tasks are in, each only
+/// serving what it holds — not Go's module proxy, which fetches from any host a module path names (security audit:
+/// a way out for anything a model reads).
+pub const ARENA_HOSTS: [&str; 7] = [
+    "crates.io",
+    "index.crates.io",
+    "static.crates.io",
+    "registry.npmjs.org",
+    "pypi.org",
+    "files.pythonhosted.org",
+    "registry.yarnpkg.com",
+];
+
+/// Whether `host` is one of [`ARENA_HOSTS`], on the web's own ports or none named.
+fn arena_host(host: &str) -> bool {
+    let name = match host.rsplit_once(':') {
+        Some((name, "443" | "80")) => name,
+        Some(_) => return false,
+        None => host,
+    };
+    ARENA_HOSTS.contains(&name.to_ascii_lowercase().as_str())
+}
+
 /// Judges every tool call of a run.
 pub struct Gate {
     rules: Mutex<RuleSet>,
@@ -1198,6 +1221,9 @@ pub struct Gate {
     /// An arena's model (T61, [`Gate::set_contained`]): nothing is ever asked — what would be is refused, so no model
     /// waits for the owner while another works on.
     contained: std::sync::atomic::AtomicBool,
+    /// Its commands write their own folder alone ([`crate::sandbox::Confinement`]): a heavy one that reaches no further
+    /// ([`kinds::reaches_out`]) runs.
+    confined: std::sync::atomic::AtomicBool,
 }
 
 /// One `allowed-tools` list and who declared it: only the calls these rules name are judged as usual, everything
@@ -1231,6 +1257,7 @@ impl Gate {
             opinions: Mutex::new(HashMap::new()),
             judge_failed: Mutex::new(None),
             contained: std::sync::atomic::AtomicBool::new(false),
+            confined: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -1546,13 +1573,21 @@ impl Gate {
         self.present()
     }
 
-    /// Makes this gate an arena model's (T61): every question is refused at once, with that reason. A heavy command
-    /// is refused, not let through: an arena's worktree shares its git folder with the owner's repository, and what a
-    /// command names cannot tell where it lands (a link made earlier, an option, a moved `HEAD`). Only the screen sets
-    /// it; it is never taken back.
-    pub fn set_contained(&self) {
-        self.contained
-            .store(true, std::sync::atomic::Ordering::Relaxed);
+    /// Makes this gate an arena model's (T61): every question is refused at once, with that reason, and the network
+    /// reaches the package registries alone ([`ARENA_HOSTS`]). `confined`: the sandbox holds its commands to their own
+    /// folder ([`crate::sandbox::Confinement`], set through [`crate::Toolbox::contain`]), so a heavy command that
+    /// reaches no further runs — never judged by its words alone, which cannot tell where a write lands (a link made
+    /// earlier, an option, a moved `HEAD`). Never taken back.
+    pub fn set_contained(&self, confined: bool) {
+        use std::sync::atomic::Ordering::Relaxed;
+        self.contained.store(true, Relaxed);
+        if confined {
+            self.confined.store(true, Relaxed);
+        }
+    }
+
+    fn is_confined(&self) -> bool {
+        self.confined.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     fn is_contained(&self) -> bool {
@@ -1716,6 +1751,15 @@ impl Gate {
             keychain,
             judgeable,
         } = self.weigh(tool, access, &target)?;
+        // T61: an arena's model reaches the package registries alone — a fair comparison fetches no page, and its code
+        // sends nothing elsewhere.
+        if self.is_contained()
+            && let Access::Network { host } = access
+            && !arena_host(host)
+        {
+            verdict = Verdict::Deny;
+            reason = format!("an arena's model reaches only the package registries, not {host}");
+        }
         // T52: what only the mode would ask about, a second model may find only reading — then it runs as a listed
         // reader does, in the sandbox; else its word goes beside the question.
         let mut note = None;
@@ -1829,7 +1873,10 @@ impl Gate {
             allowed,
             reason: reason.clone(),
         });
-        if let (true, Some(program), Access::Bash { command, .. }) = (allowed, keychain, access) {
+        // An arena's model is never given the Keychain, whatever rule of the owner's let its command run.
+        if let (true, Some(program), Access::Bash { command, .. }, false) =
+            (allowed, keychain, access, self.is_contained())
+        {
             self.keychain_given
                 .lock()
                 .unwrap_or_else(|poison| poison.into_inner())
@@ -2090,6 +2137,14 @@ impl Gate {
             .then(|| kinds::heavy_in_text(command))
             .flatten();
         Some(match kinds::heavy(&analysis).or(hidden) {
+            // T61: what the sandbox holds to the arena's own folder runs; a protected name stays as it was.
+            Some(why)
+                if self.is_confined()
+                    && !analysis.protected
+                    && kinds::reaches_out(&analysis, command).is_none() =>
+            {
+                (Verdict::Allow, format!("{why}, in the arena's own folder"))
+            }
             Some(why) => (Verdict::Ask, format!("{why}: asked even in auto mode")),
             None if analysis.protected => (
                 Verdict::Ask,
@@ -3615,7 +3670,7 @@ mod tests {
     async fn an_arena_gate_asks_nothing_and_refuses_what_it_would_ask() {
         let asker = Arc::new(Always(Answer::Allow, Mutex::new(0)));
         let gate = Gate::new(RuleSet::default(), Mode::Auto, asker.clone());
-        gate.set_contained();
+        gate.set_contained(false);
         assert!(!gate.can_ask());
         for runs in ["cargo test", "rm -f a.txt", "git status && ls"] {
             let judged = gate.judge("bash", &bash(runs)).await;
@@ -3638,6 +3693,68 @@ mod tests {
         let open = Gate::new(RuleSet::default(), Mode::Auto, asker.clone());
         assert!(open.judge("bash", &bash("rm -rf build")).await.is_ok());
         assert_eq!(*asker.1.lock().unwrap(), 1, "another gate still asks");
+    }
+
+    /// T61: a confined arena's model runs a heavy command its own folder holds, never one that reaches past it, and
+    /// reaches the package registries alone.
+    #[tokio::test]
+    async fn a_confined_arena_gate_runs_heavy_commands_that_reach_no_further() {
+        let asker = Arc::new(Always(Answer::Allow, Mutex::new(0)));
+        let gate = Gate::new(RuleSet::default(), Mode::Auto, asker.clone());
+        gate.set_contained(true);
+        for runs in [
+            "rm -rf build",
+            "git reset --hard HEAD~2",
+            "git branch -D old && git clean -fdx",
+            "for f in a b; do rm -rf \"$f\"; done",
+            "find . -name '*.pyc' -delete",
+        ] {
+            let judged = gate.judge("bash", &bash(runs)).await;
+            assert!(judged.is_ok(), "{runs}: {judged:?}");
+        }
+        for refused in [
+            "sudo rm -rf build",
+            "git push origin main",
+            "rm -rf x && git push",
+            "npm publish",
+            "gh release create v1",
+            "killall node",
+            "eval \"git push\"",
+            "for h in a; do sudo \"$h\"; done",
+            "rm -rf build && cp x .cargo/config.toml",
+        ] {
+            let judged = gate.judge("bash", &bash(refused)).await;
+            assert!(judged.is_err(), "{refused}: {judged:?}");
+        }
+        let net = |host: &str| Access::Network { host: host.into() };
+        assert!(
+            gate.judge("network", &net("index.crates.io:443"))
+                .await
+                .is_ok()
+        );
+        assert!(gate.judge("network", &net("pypi.org")).await.is_ok());
+        assert!(
+            gate.judge("network", &net("pypi.org:8080")).await.is_err(),
+            "the web's ports alone"
+        );
+        let elsewhere = gate
+            .judge("network", &net("example.com:443"))
+            .await
+            .unwrap_err();
+        assert!(
+            elsewhere.contains("only the package registries"),
+            "{elsewhere}"
+        );
+        assert_eq!(*asker.1.lock().unwrap(), 0, "no one was asked");
+        // Contained without its folder confined: a heavy command stays refused.
+        let unconfined = Gate::new(RuleSet::default(), Mode::Auto, asker.clone());
+        unconfined.set_contained(false);
+        assert!(
+            unconfined
+                .judge("bash", &bash("rm -rf build"))
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]

@@ -155,6 +155,8 @@ pub struct Toolbox {
     folders: crate::folders::Folders,
     /// The Keychain's list and switch (T74), shared by the gate and the shell.
     keychain: crate::keychain::Keychain,
+    /// An arena model's confinement (T61), shared with the shell ([`Toolbox::contain`]).
+    confinement: crate::sandbox::Confinement,
     /// The editor the file tools ask about its open files (T64b), when Glut is an editor's agent.
     editor: crate::editor::Editor,
 }
@@ -170,6 +172,24 @@ impl Toolbox {
     pub fn back_to_top(&self) {
         for tool in &self.tools {
             tool.back_to_top();
+        }
+    }
+
+    /// The confinement the shell reads before every command (T61): what is set here holds from its next command.
+    pub fn confinement(&self) -> &crate::sandbox::Confinement {
+        &self.confinement
+    }
+
+    /// Makes this box an arena model's (T61): its gate asks no one, and with a private `home` its commands write their
+    /// own folder alone and read nothing of `hidden` ([`crate::sandbox::Confinement`]) — which then lets the gate run
+    /// a heavy command that only the folder holds. Without a home, only the asking stops. Never taken back.
+    pub fn contain(&self, home: Option<std::path::PathBuf>, hidden: Vec<std::path::PathBuf>) {
+        let confined = home.is_some();
+        if let Some(home) = home {
+            self.confinement.confine(home, hidden);
+        }
+        if let Some(gate) = &self.gate {
+            gate.set_contained(confined);
         }
     }
 
