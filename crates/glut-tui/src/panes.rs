@@ -2968,7 +2968,7 @@ impl Panes {
                 }
             })
             .collect();
-        let said = crate::arena::compared(arena, &rows);
+        let said = crate::arena::compared(arena, &rows, Some(&arena.checks));
         let arena_now = arena.clone();
         // The task counts once its arena is gone: taken out of the bench first, as `end_arena` reads an owner's end
         // there; put back when something still holds the arena, for the next turn of the loop to try again.
@@ -3069,10 +3069,13 @@ impl Panes {
         if compared_now {
             arena.compared = true;
             snapshots(&mut arena);
-            let said = crate::arena::compared(&arena, &self.rows(&arena));
-            match self.list.iter().position(|pane| pane.id == arena.home) {
-                Some(at) => self.list[at].app.transcript.note(said, Tone::Fine),
-                None => self.active().transcript.note(said, Tone::Fine),
+            // A bench's task is told once, with its checks, when they are done (`step_bench`).
+            if self.bench.is_none() {
+                let said = crate::arena::compared(&arena, &self.rows(&arena), None);
+                match self.list.iter().position(|pane| pane.id == arena.home) {
+                    Some(at) => self.list[at].app.transcript.note(said, Tone::Fine),
+                    None => self.active().transcript.note(said, Tone::Fine),
+                }
             }
         }
         self.arena = Some(arena);

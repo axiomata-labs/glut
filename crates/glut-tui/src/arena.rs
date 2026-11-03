@@ -469,8 +469,10 @@ pub fn rows(
         .collect()
 }
 
-/// The comparison's lines for the stream: one per member, its numbers in columns, then what the owner can do.
-pub fn compared(arena: &Arena, rows: &[Row]) -> String {
+/// The comparison's lines for the stream: one per member, its numbers in columns, then what the owner can do. A
+/// bench's task gives its checks: each line then leads with its result, and no hint follows, as the bench ends the
+/// arena itself.
+pub fn compared(arena: &Arena, rows: &[Row], checks: Option<&[Check]>) -> String {
     let wide = rows
         .iter()
         .map(|row| row.name.chars().count())
@@ -481,8 +483,16 @@ pub fn compared(arena: &Arena, rows: &[Row]) -> String {
         task = crate::transcript::clean(&crate::transcript::cut(&arena.task, 70))
     )];
     for (at, row) in rows.iter().enumerate() {
+        let check = checks.map_or_else(String::new, |checks| {
+            let mark = match checks.get(at) {
+                Some(Check::Passed) => "✓",
+                Some(Check::Failed) => "✗",
+                _ => "—",
+            };
+            format!("{} {mark}  ", tr!(arena_check_label))
+        });
         lines.push(format!(
-            "  {n}  {name:<wide$}  {mark} {state}  {took}  {cost}  {tokens}  {calls}  {changed}",
+            "  {n}  {name:<wide$}  {check}{mark} {state}  {took}  {cost}  {tokens}  {calls}  {changed}",
             n = at + 1,
             name = row.name,
             mark = if row.answered { "✓" } else { "✗" },
@@ -504,7 +514,9 @@ pub fn compared(arena: &Arena, rows: &[Row]) -> String {
             leanest = leanest + 1
         ));
     }
-    lines.push(tr!(arena_next).to_owned());
+    if checks.is_none() {
+        lines.push(tr!(arena_next).to_owned());
+    }
     lines.join("\n")
 }
 
@@ -834,6 +846,32 @@ mod tests {
             "the aborted one wins nothing"
         );
         assert_eq!(best(&[row(true, 3, None, 5)]), [Some(0), None, Some(0)]);
+    }
+
+    #[test]
+    fn a_bench_task_is_told_with_its_checks_and_without_the_owners_next_steps() {
+        let asked = Asked {
+            contenders: Vec::new(),
+            task: "t".into(),
+        };
+        let arena = Arena::new(asked, 0);
+        let rows = [
+            Row {
+                answered: true,
+                ..Row::default()
+            },
+            Row::default(),
+        ];
+        let free = compared(&arena, &rows, None);
+        assert!(free.ends_with(tr!(arena_next)));
+        let bench = compared(&arena, &rows, Some(&[Check::Passed, Check::None]));
+        assert!(
+            !bench.contains(tr!(arena_next)),
+            "a bench ends its arena itself"
+        );
+        let lines: Vec<&str> = bench.lines().collect();
+        assert!(lines[1].contains(&format!("{} ✓", tr!(arena_check_label))));
+        assert!(lines[2].contains(&format!("{} —", tr!(arena_check_label))));
     }
 
     #[test]
