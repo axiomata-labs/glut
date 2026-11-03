@@ -2301,6 +2301,18 @@ glut::catalog! {
         arena_pick_title: &'static str,
         /// `/arena take` without a number.
         arena_take_usage: &'static str,
+        /// `/arena say` without text.
+        arena_say_usage: &'static str,
+        /// `/arena say` on the bench.
+        arena_say_bench: &'static str,
+        /// `/arena say` after a take.
+        arena_say_taken: &'static str,
+        /// `/arena say` while models work.
+        arena_say_wait: &'static str,
+        /// `/arena say` with no model that answered.
+        arena_say_none: &'static str,
+        /// A follow-up went out: `{n}` models, round `{round}`.
+        arena_say_sent: &'static str,
         /// A blind arena's model: `{letter}`.
         arena_blind_name: &'static str,
         /// The names behind a blind arena's letters: `{models}`.

@@ -5779,6 +5779,10 @@ impl App {
                 });
             }
             ("card", "") => self.pane_request = Some(crate::panes::Request::ArenaCard),
+            ("say", "") => self.tell(tr!(arena_say_usage)),
+            ("say", text) => {
+                self.pane_request = Some(crate::panes::Request::ArenaSay(text.to_owned()))
+            }
             ("results", "") => {
                 let records = crate::bench::results(&self.parts.home);
                 self.transcript

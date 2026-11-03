@@ -258,6 +258,10 @@ pub struct Arena {
     pub told_no_room: bool,
     /// The models go by letters until the owner took one or ended the arena (the free arena, by default).
     pub blind: bool,
+    /// What each model is given when its turn comes: the task, then the owner's follow-up (`/arena say`).
+    pub prompt: String,
+    /// How many rounds the models were given: 1 for the task, one more for each follow-up.
+    pub rounds: u32,
 }
 
 impl Arena {
@@ -267,6 +271,7 @@ impl Arena {
             checks: vec![Check::None; count],
             check_ids: vec![None; count],
             check_said: vec![None; count],
+            prompt: asked.task.clone(),
             task: asked.task,
             stamp: chrono::Local::now().format("%Y%m%d-%H%M%S").to_string(),
             members: asked
@@ -295,6 +300,7 @@ impl Arena {
             checking: false,
             told_no_room: false,
             blind: false,
+            rounds: 1,
         }
     }
 
@@ -363,6 +369,34 @@ impl Arena {
             member.state == State::Ready
                 && (!member.contender.local || (cloud_over && !any_working))
         })
+    }
+
+    /// `/arena say`: `text` for every model that answered, as its next round — its time, cost and tokens add up, its
+    /// limits count over every round. What the last round compared and checked is gone; the members that got it.
+    pub fn follow_up(&mut self, text: &str) -> Vec<usize> {
+        let answering: Vec<usize> = self
+            .members
+            .iter()
+            .enumerate()
+            .filter(|(_, member)| matches!(member.state, State::Done(_)))
+            .map(|(at, _)| at)
+            .collect();
+        if answering.is_empty() {
+            return answering;
+        }
+        for at in &answering {
+            let member = &mut self.members[*at];
+            member.state = State::Ready;
+            member.snapshot = None;
+            self.checks[*at] = Check::None;
+            self.check_ids[*at] = None;
+            self.check_said[*at] = None;
+        }
+        text.clone_into(&mut self.prompt);
+        self.rounds += 1;
+        self.compared = false;
+        self.offered = None;
+        answering
     }
 
     /// Whether every member is over.
@@ -1004,6 +1038,40 @@ mod tests {
             assert_eq!(names, ["p/fast", "p/slow"]);
         }
         assert_eq!(firsts.len(), 2, "{firsts:?}");
+    }
+
+    #[test]
+    fn a_follow_up_goes_to_the_models_that_answered_and_clears_the_last_comparison() {
+        let contender = |model: &str| Contender {
+            provider: "p".into(),
+            model: model.into(),
+            local: false,
+        };
+        let asked = Asked {
+            contenders: vec![contender("a"), contender("b")],
+            task: "fix it".into(),
+        };
+        let mut arena = Arena::new(asked, 1);
+        assert_eq!(arena.prompt, "fix it");
+        arena.members[0].state = State::Done(glut::FinishReason::Answered);
+        arena.members[0].snapshot = Some("tree".into());
+        arena.members[1].state = State::Aborted("over its time".into());
+        arena.compared = true;
+        arena.checks = vec![Check::Passed, Check::Failed];
+        arena.offered = Some((0, "tree".into()));
+        assert_eq!(arena.follow_up("now add a test"), [0]);
+        assert_eq!(arena.members[0].state, State::Ready);
+        assert!(arena.members[0].snapshot.is_none());
+        assert!(
+            matches!(arena.members[1].state, State::Aborted(_)),
+            "a stopped one stays stopped"
+        );
+        assert_eq!(arena.checks, [Check::None, Check::Failed]);
+        assert!(!arena.compared && arena.offered.is_none());
+        assert_eq!((arena.prompt.as_str(), arena.rounds), ("now add a test", 2));
+        arena.members[0].state = State::Aborted("x".into());
+        assert!(arena.follow_up("again").is_empty(), "nobody left to ask");
+        assert_eq!(arena.rounds, 2);
     }
 
     #[test]

@@ -383,6 +383,8 @@ pub enum Request {
     ArenaEnd(bool),
     /// `/arena card`: the comparison card again.
     ArenaCard,
+    /// `/arena say <text>`: a follow-up to every model of the free arena that answered.
+    ArenaSay(String),
     /// `/arena tasks <set> [xN]` (step 2): the set's tasks one after another on these models, each judged by its
     /// check, and each `times` in a row.
     ArenaBench {
@@ -2002,6 +2004,7 @@ impl Panes {
                 Request::ArenaTake(at, sure) => self.arena_take(at, sure),
                 Request::ArenaEnd(sure) => self.end_arena(sure),
                 Request::ArenaCard => self.open_card(),
+                Request::ArenaSay(text) => self.arena_say(&text),
                 Request::ArenaBench {
                     set,
                     contenders,
@@ -3137,9 +3140,15 @@ impl Panes {
                 // A pane busy otherwise (a list open, a message waiting) gets it once free: its clock starts then.
                 Some(at) if !self.list[at].app.takes_now() => break,
                 Some(at) => {
-                    self.list[at].app.deliver(arena.task.clone());
+                    self.list[at].app.deliver(arena.prompt.clone());
                     member.state = crate::arena::State::Working;
-                    member.began = Some(Instant::now());
+                    // A later round goes on from the time the earlier ones took: the clock and its limit add up.
+                    let before = member.took.unwrap_or_default();
+                    member.began = Some(
+                        Instant::now()
+                            .checked_sub(before)
+                            .unwrap_or_else(Instant::now),
+                    );
                 }
                 None => member.state = crate::arena::State::Aborted(tr!(arena_closed).into()),
             }
@@ -3546,6 +3555,34 @@ impl Panes {
             }
             Err(reason) => self.active().transcript.note(reason, Tone::Fault),
         }
+    }
+
+    /// `/arena say <text>`: the follow-up for every model that answered, once all are over — never on the bench, whose
+    /// tasks are told once, nor after a model was taken.
+    fn arena_say(&mut self, text: &str) {
+        if self.bench.is_some() {
+            return self.active().tell(tr!(arena_say_bench));
+        }
+        let Some(arena) = &mut self.arena else {
+            return self.active().tell(tr!(arena_none));
+        };
+        if arena.taken.is_some() {
+            return self.active().tell(tr!(arena_say_taken));
+        }
+        if !arena.over() || arena.checks.contains(&crate::arena::Check::Running) {
+            return self.active().tell(tr!(arena_say_wait));
+        }
+        let given = arena.follow_up(text);
+        if given.is_empty() {
+            return self.active().tell(tr!(arena_say_none));
+        }
+        let (home, round) = (arena.home, arena.rounds);
+        self.card = None;
+        self.note_in(
+            home,
+            tr!(arena_say_sent, n = given.len(), round = round),
+            Tone::Quiet,
+        );
     }
 
     /// A blind arena's names told, in the pane it started from, and every model's pane named again.
