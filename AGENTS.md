@@ -76,8 +76,11 @@ scripts/install.sh               # glut for every terminal: ~/.cargo/bin, linked
   counts as on) keeps every git folder read-only on both systems and closes it for them — on Linux the ones the
   search found (not inside a build folder it skips). What was there at the start was mounted as it was, so a change to
   it came from outside (the owner's `git config` renames a new `config` in): neither the watch nor the check after
-  moves it — only a link, which no mount holds, is judged again. A protected name (`sandbox::PROTECTED_IN_ROOT`) is refused at any depth of the working folder on both systems, in any case and through APFS's Unicode folds (`ſ`, `K`), but a package's `.vscode` inside `node_modules` (`PACKAGES`/`PACKAGED`) — never widen that exemption: a folder made elsewhere and moved into place whole passes every path rule (security audit 2026-11-04). A covered secret is a mode-000
-  placeholder from `~/.glut/sandbox`, so a read is refused rather than empty; a secret made after a job started stays
+  moves it — only a link, which no mount holds, is judged again. A protected name (`sandbox::PROTECTED_IN_ROOT`) is
+  refused at any depth of the working folder on both systems, in any case and through APFS's Unicode folds (`ſ`, `K`),
+  but a package's `.vscode` inside `node_modules` (`PACKAGES`/`PACKAGED`) — never widen that exemption: a folder made
+  elsewhere and moved into place whole passes every path rule (security audit 2026-11-04). A covered secret is a
+  mode-000 placeholder from `~/.glut/sandbox`, so a read is refused rather than empty; a secret made after a job started stays
   open to that job. Every session's scratch folder lies in one `glut-shells-<uid>` no command writes (macOS too).
   `allowLocalBinding` means nothing there (a command's localhost is its own). Tested in Docker only (`--security-opt
   seccomp=unconfined --security-opt systempaths=unconfined`); the library's own tests reach the helper through
