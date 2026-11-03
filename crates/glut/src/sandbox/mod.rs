@@ -133,6 +133,13 @@ pub const PROTECTED_IN_ROOT: [&str; 11] = [
     ".hg",
 ];
 
+/// Where a package manager unpacks packages, and the one protected name a package may ship there (an editor's
+/// `.vscode` a package forgot to leave out): written there as anything else. Only that one — a folder of any name can
+/// be made and then moved into place whole, which no path rule sees (security audit 2026-11-04), so nothing a build
+/// or a later session obeys is let through, whatever folder it lies in.
+pub(crate) const PACKAGES: &str = "node_modules";
+pub(crate) const PACKAGED: &str = ".vscode";
+
 /// The parts of a git folder that make the owner's git run code: never written by a command. `commondir` and
 /// `gitdir` point git at another git folder — with a config of the command's making (security audit, 2026-10-24).
 pub(crate) const GIT_RUNS: [&str; 6] = [
@@ -520,6 +527,23 @@ impl Policy {
             out.push_str(&format!("  (literal {})\n", quoted(file)));
         }
         out.push_str("  (regex #\"^/dev/(null|tty|zero|fd/[0-9]+|stdout|stderr)$\"))\n");
+        // Inside the working folder, a protected name at any depth and in any case: a project below the top keeps its
+        // own `.cargo/config.toml` or `.vscode/tasks.json` that the owner's next build or editor there obeys, and a
+        // command can build such a path the gate never reads (`d=.cargo; cp x sub/$d/config.toml`, security audit
+        // 2026-11-03). Except a package's `.vscode` where packages are unpacked ([`PACKAGED`]).
+        let root = regex_escape(&self.root);
+        let (packages, packaged) = (any_case(PACKAGES), any_case(PACKAGED));
+        let names: Vec<String> = PROTECTED_IN_ROOT
+            .iter()
+            .map(|name| any_case(name))
+            .collect();
+        out.push_str(&format!(
+            "(deny file-write*\n  (regex #\"^{root}/(.*/)?({})(/.*)?$\"))\n",
+            names.join("|")
+        ));
+        out.push_str(&format!(
+            "(allow file-write*\n  (regex #\"^{root}/(.*/)?{packages}/(.*/)?{packaged}(/.*)?$\"))\n"
+        ));
         out.push_str("(deny file-write*\n");
         for path in &self.write_denied {
             out.push_str(&format!("  (subpath {})\n", quoted(path)));
@@ -725,7 +749,12 @@ pub(crate) fn git_dirs(root: &Path) -> Vec<PathBuf> {
 fn any_case(name: &str) -> String {
     let mut out = String::new();
     for c in name.chars() {
-        if c.is_ascii_alphabetic() {
+        // APFS folds more than ASCII: the long s and the Kelvin sign open `s` and `k` (`.vſcode` is `.vscode`).
+        if c.eq_ignore_ascii_case(&'s') {
+            out.push_str("(s|S|\u{17F})");
+        } else if c.eq_ignore_ascii_case(&'k') {
+            out.push_str("(k|K|\u{212A})");
+        } else if c.is_ascii_alphabetic() {
             out.push_str(&format!(
                 "[{}{}]",
                 c.to_ascii_lowercase(),
@@ -876,6 +905,49 @@ mod tests {
             "no proxy, no network: {profile}"
         );
         assert!(regex_escape(Path::new("/a.b+c")).ends_with("a\\.b\\+c"));
+    }
+
+    /// Security audit 2026-11-03: below the working folder's top a protected name is refused as at it — a build or an
+    /// editor there obeys it —, but not inside what a package manager fills; a `.git` or an `.envrc` there still is.
+    #[test]
+    fn a_protected_name_is_refused_at_any_depth_but_in_a_dependency_folder() {
+        if !available() {
+            return;
+        }
+        let (home, root) = (temp("home"), temp("root"));
+        std::fs::create_dir_all(root.join("crates/foo")).unwrap();
+        std::fs::create_dir_all(root.join("node_modules/pkg")).unwrap();
+        let policy = Policy::new(&root, &home, &[], &[]);
+        let write = |path: &str| {
+            sandboxed(
+                &policy,
+                &format!(
+                    "mkdir -p \"$(dirname {path})\" && echo x > {path} && echo wrote || echo REFUSED"
+                ),
+            )
+        };
+        for path in [
+            "crates/foo/.cargo/config.toml",
+            "crates/foo/.VSCODE/tasks.json",
+            "crates/foo/opencode.json",
+            "node_modules/pkg/.envrc",
+            "node_modules/pkg/.cargo/config.toml",
+            "target/p/.cargo/config.toml",
+            "venv/p/.claude/settings.json",
+            "crates/foo/.v\u{17F}code/tasks.json",
+        ] {
+            let out = write(path);
+            assert!(refused(&out), "{path}: {out}");
+        }
+        for path in [
+            "crates/foo/src.rs",
+            "node_modules/pkg/.vscode/settings.json",
+        ] {
+            let out = write(path);
+            assert!(out.contains("wrote") && !refused(&out), "{path}: {out}");
+        }
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     /// T60c: a folder beside the working one is written as the working one is — its protected names, its `.git`

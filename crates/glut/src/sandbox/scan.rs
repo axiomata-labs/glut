@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
-use super::{GIT_RUNS, PROTECTED_IN_ROOT};
+use super::{GIT_RUNS, PACKAGED, PACKAGES, PROTECTED_IN_ROOT};
 
 /// Folders searched no further where they carry their tool's mark: what a build or a package manager fills, where a
 /// project keeps no `.env` of its own. One of such a name without its mark is searched like any other — a command
@@ -322,12 +322,13 @@ fn is_env(name: &str) -> bool {
         || name.starts_with(".envrc.")
 }
 
-/// Searches `top` without following a link; `beside`: a folder beside the working one, where a protected name counts
-/// at any depth and in any case.
+/// Searches `top` without following a link. A protected name counts at any depth and in any case — in the working
+/// folder but a package's `.vscode` where packages are unpacked ([`PACKAGED`]), in a folder `beside` it everywhere.
 fn walk(top: &Path, beside: bool, found: &mut Found, seen: &mut usize) {
-    // Breadth first: past the limit, what is left uncovered lies deepest.
-    let mut pending = std::collections::VecDeque::from([top.to_path_buf()]);
-    while let Some(dir) = pending.pop_front() {
+    // Breadth first: past the limit, what is left uncovered lies deepest. Each folder with whether it lies where
+    // packages are unpacked.
+    let mut pending = std::collections::VecDeque::from([(top.to_path_buf(), false)]);
+    while let Some((dir, filled)) = pending.pop_front() {
         found.folders.push(dir.clone());
         let Ok(entries) = std::fs::read_dir(&dir) else {
             continue;
@@ -352,7 +353,10 @@ fn walk(top: &Path, beside: bool, found: &mut Found, seen: &mut usize) {
                 }
                 continue;
             }
-            if beside && (PROTECTED_IN_ROOT.contains(&lower.as_str()) || lower == ".jj")
+            let protected = PROTECTED_IN_ROOT.contains(&lower.as_str());
+            let packaged = filled && !beside && lower == PACKAGED;
+            if beside && (protected || lower == ".jj")
+                || protected && !packaged
                 || lower == ".envrc"
             {
                 guard(found, path.clone(), false);
@@ -368,7 +372,8 @@ fn walk(top: &Path, beside: bool, found: &mut Found, seen: &mut usize) {
                 found.env_files.push(path.clone());
             }
             if kind.is_dir() && !skipped(&name, &path) {
-                pending.push_back(path);
+                let filled = filled || lower == PACKAGES;
+                pending.push_back((path, filled));
             }
         }
     }
@@ -429,7 +434,17 @@ impl Rules {
         if holds_git_dirs {
             return true;
         }
-        if dir == self.root && PROTECTED_IN_ROOT.contains(&name) {
+        // Below the working folder's top as at it, but a package's `.vscode` where packages are unpacked.
+        if PROTECTED_IN_ROOT.contains(&lower.as_str())
+            && dir.strip_prefix(&self.root).is_ok_and(|inside| {
+                lower != PACKAGED
+                    || !inside.components().any(|part| {
+                        part.as_os_str()
+                            .to_string_lossy()
+                            .eq_ignore_ascii_case(PACKAGES)
+                    })
+            })
+        {
             return true;
         }
         if lower == ".git" || lower == ".envrc" {
@@ -620,6 +635,8 @@ mod tests {
         std::fs::create_dir_all(root.join("a")).unwrap();
         std::fs::write(root.join("a/.envrc"), "").unwrap();
         std::fs::create_dir_all(beside.join("p/.Cargo")).unwrap();
+        std::fs::create_dir_all(root.join("a/.claude")).unwrap();
+        std::fs::create_dir_all(root.join("node_modules/x/.vscode")).unwrap();
         let git = [root.join(".git")];
         let found = search(&root, std::slice::from_ref(&beside), &git);
         let rules = Rules::new(&root, std::slice::from_ref(&beside), &git, &found);
@@ -634,10 +651,30 @@ mod tests {
             );
         }
         assert!(found.folders.contains(&root.join("a")));
+        assert!(
+            found.guarded.contains_key(&root.join("a/.claude")),
+            "guarded below the top"
+        );
+        assert!(
+            !found
+                .guarded
+                .contains_key(&root.join("node_modules/x/.vscode")),
+            "not in a package's folder"
+        );
+        // Below the top as at it, but in what a package manager fills.
+        assert!(rules.refuses(&root.join("a"), ".cargo"));
+        assert!(rules.refuses(&root.join("a"), "OpenCode.json"));
+        assert!(rules.refuses(&root.join("node_modules/x"), ".envrc"));
+        assert!(
+            rules.refuses(&root.join("node_modules/x"), ".cargo"),
+            "only a package's .vscode"
+        );
+        assert!(rules.refuses(&root.join("a/target/b"), ".cargo"));
         for (dir, name) in [
             (root.clone(), "src"),
             (root.join("a"), "main.rs"),
             (root.join(".git"), "objects"),
+            (root.join("node_modules/x"), ".vscode"),
         ] {
             assert!(!rules.refuses(&dir, name), "{dir:?} {name}");
         }
