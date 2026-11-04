@@ -2280,6 +2280,7 @@ code",
     plan_footer: "abonnement {name}",
     meter_plan: "abonnement ChatGPT : pas de prix par appel — gérer l'usage sur {page}",
     meter_plan_named: "abonnement {name} : pas de prix par appel — ses limites s'appliquent",
+    schedule_unit_writable: "{file} se trouverait là où les commandes du plan écrivent : un passage pourrait changer ce que launchd ou systemd lance hors du bac à sable",
     schedule_program_writable: "{program} se trouve là où les commandes du plan écrivent : un passage pourrait laisser \
                                 au suivant un programme à lui — lance un Glut installé ailleurs (cargo install)",
     schedule_path_writable: "son PATH atteint un dossier où ses commandes écrivent — glut schedule add <name> le \

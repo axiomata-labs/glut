@@ -2007,6 +2007,7 @@ pub const TEXTS: Texts = Texts {
     plan_footer: "{name} 套餐",
     meter_plan: "ChatGPT 套餐：每次调用无价格 — 在 {page} 管理用量",
     meter_plan_named: "{name} 套餐：每次调用无价格 — 适用其上限",
+    schedule_unit_writable: "{file} 将位于计划的命令可写入的位置：一次运行可能改变 launchd 或 systemd 在沙箱外启动的内容",
     schedule_program_writable: "{program} 位于计划的命令可写入的位置：一次运行可能给下一次留下自己的程序 — 请使用安装在别处的 Glut（cargo install）",
     schedule_path_writable: "其 PATH 指向其命令可写入的文件夹 — glut schedule add <name> 会用安全的 PATH 重新创建它",
     schedule_auto_unsandboxed: "auto 只在沙箱之后运行，而这里沙箱已关闭",

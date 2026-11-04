@@ -2259,6 +2259,7 @@ usi e rinomine",
     plan_footer: "piano {name}",
     meter_plan: "piano ChatGPT: nessun prezzo per chiamata — gestisci l'uso su {page}",
     meter_plan_named: "piano {name}: nessun prezzo per chiamata — valgono i suoi limiti",
+    schedule_unit_writable: "{file} starebbe dove scrivono i comandi del piano: un'esecuzione potrebbe cambiare ciò che launchd o systemd avvia fuori dalla sandbox",
     schedule_program_writable: "{program} si trova dove scrivono i comandi del piano: un'esecuzione potrebbe lasciare \
                                 alla successiva un programma suo — avvia un Glut installato altrove (cargo install)",
     schedule_path_writable: "il suo PATH arriva a una cartella in cui scrivono i suoi comandi — glut schedule add \

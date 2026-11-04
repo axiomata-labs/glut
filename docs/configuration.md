@@ -14,7 +14,9 @@ Two rules shape the whole layout:
   in a folder you trusted, and a project's hooks never run at all.
 
 `$GLUT_HOME` replaces your home folder for everything below: with `GLUT_HOME=/tmp/test`, Glut reads
-`/tmp/test/.glut/settings.json` and so on.
+`/tmp/test/.glut/settings.json` and so on. What is yours stays in your own home all the same: a `~` you write (in a
+path below, in `/folder add`), the caches commands write and the places whose files run as programs. Plans made by
+a Glut whose home is moved keep their launchd and systemd files in that home, apart from your own plans.
 
 ## Contents
 
@@ -210,8 +212,8 @@ takes one back. `/rule` keeps an instruction for the model for the session; it i
 | `denyRead` | array of paths | `[]` | Extra places no command may read |
 | `allowLocalBinding` | boolean | `false` | Commands may listen on and connect to anything on localhost |
 
-Paths starting with `~/` are below your home folder; relative paths are below your home folder in your file and
-below the project in a project's file. A project's file may only add `denyRead` entries: it can neither switch the
+Paths starting with `~/` are below your home folder (also where `GLUT_HOME` moves Glut's); relative paths are below
+Glut's home folder in your file and below the project in a project's file. A project's file may only add `denyRead` entries: it can neither switch the
 sandbox off nor open places to write or localhost. `/sandbox` shows how commands are held.
 
 Two further switches, read-only git folders and a required sandbox, live in [`sandbox.json`](#sandboxjson).

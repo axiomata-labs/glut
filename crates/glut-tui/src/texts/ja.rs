@@ -2107,6 +2107,7 @@ pub const TEXTS: Texts = Texts {
     plan_footer: "{name} プラン",
     meter_plan: "ChatGPT プラン：呼び出しごとの料金なし — 利用の管理は {page}",
     meter_plan_named: "{name} プラン：呼び出しごとの料金なし — プランの上限が適用されます",
+    schedule_unit_writable: "{file} はプランのコマンドが書き込める場所になります。実行が、launchd や systemd がサンドボックスの外で起動するものを変えられてしまいます",
     schedule_program_writable: "{program} はプランのコマンドが書き込める場所にあります。実行が次回用に別のプログラムを仕込めてしまいます — 別の場所にインストールした Glut \
                                 を使ってください（cargo install）",
     schedule_path_writable: "PATH がコマンドの書き込めるフォルダーに届いています — glut schedule add <name> で安全な PATH で作り直せます",

@@ -125,6 +125,7 @@ impl Folders {
     /// to `cwd`); the one taken, if there was one.
     pub fn remove(&self, named: &str, cwd: &Path, home: &Path) -> Option<Folder> {
         let named = named.trim().trim_end_matches('/');
+        let home = &crate::permissions::settings::user_home_beside(home);
         let real = typed_path(named, cwd, home).canonicalize().ok();
         let mut folders = self.0.write().unwrap_or_else(|poison| poison.into_inner());
         let at = folders.iter().position(|folder| {
@@ -257,6 +258,8 @@ pub fn check(
     if typed.is_empty() {
         return Err("name a folder".into());
     }
+    // `~` and the places whose files run are the user's, also where Glut's own home is moved.
+    let home = &crate::permissions::settings::user_home_beside(home);
     let real = typed_path(typed, cwd, home)
         .canonicalize()
         .map_err(|err| format!("{typed}: {err}"))?;
@@ -317,6 +320,7 @@ pub fn check(
 /// Why the folder is refused, for the owner to read.
 pub fn check_working(typed: &Path, home: &Path, deny_read: &[PathBuf]) -> Result<PathBuf, String> {
     let shown = typed.display().to_string();
+    let home = &crate::permissions::settings::user_home_beside(home);
     let real = typed
         .canonicalize()
         .map_err(|err| format!("{shown}: {err}"))?;
@@ -352,13 +356,22 @@ fn refuse_reached(
         ));
     }
     let resolved = |path: PathBuf| path.canonicalize().unwrap_or(path);
-    let documents = HOME_DOCUMENTS
+    // The places whose files run, below the user's home and below Glut's where that is moved: a plan's launchd and
+    // systemd files lie in Glut's.
+    let homes: Vec<PathBuf> = std::iter::once(home.to_path_buf())
+        .chain(crate::sandbox::moved_glut_home(home))
+        .collect();
+    let runs: Vec<PathBuf> = homes
         .iter()
-        .any(|rel| real.starts_with(resolved(home.join(rel))));
-    let runs = HOME_RUNS
-        .iter()
-        .map(|rel| home.join(rel))
-        .filter(|_| !documents)
+        .filter(|home| {
+            !HOME_DOCUMENTS
+                .iter()
+                .any(|rel| real.starts_with(resolved(home.join(rel))))
+        })
+        .flat_map(|home| HOME_RUNS.iter().map(move |rel| home.join(rel)))
+        .collect();
+    let runs = runs
+        .into_iter()
         .chain(SYSTEM_RUNS.iter().map(PathBuf::from))
         .map(resolved);
     // A folder on the `PATH`, or one holding a folder on it: what is written there runs as a command.

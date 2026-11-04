@@ -1171,6 +1171,7 @@ renames",
     plan_footer: "{name} plan",
     meter_plan: "ChatGPT plan: no price per call — manage usage at {page}",
     meter_plan_named: "{name} plan: no price per call — its limits hold",
+    schedule_unit_writable: "{file} would lie where the plan's commands write: a run could change what launchd or systemd starts outside the sandbox",
     schedule_program_writable: "{program} lies where the plan's commands write: a run could leave the next one a \
                                 program of its own — start a Glut installed elsewhere (cargo install)",
     schedule_path_writable: "its PATH reaches a folder its commands write — glut schedule add <name> makes it again \

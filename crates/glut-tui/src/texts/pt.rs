@@ -2222,6 +2222,7 @@ usos e renomeações",
     plan_footer: "plano {name}",
     meter_plan: "plano do ChatGPT: sem preço por chamada — gerencie o uso em {page}",
     meter_plan_named: "plano {name}: sem preço por chamada — valem seus limites",
+    schedule_unit_writable: "{file} ficaria onde os comandos do plano escrevem: uma execução poderia mudar o que o launchd ou o systemd inicia fora do sandbox",
     schedule_program_writable: "{program} fica onde os comandos do plano escrevem: uma execução poderia deixar para a \
                                 próxima um programa próprio — inicie um Glut instalado em outro lugar (cargo install)",
     schedule_path_writable: "o PATH dele alcança uma pasta onde seus comandos escrevem — glut schedule add <name> o \

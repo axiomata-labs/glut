@@ -81,7 +81,8 @@ scripts/install-dev.sh           # glut for every terminal: ~/.cargo/bin, linked
   name (`sandbox::PROTECTED_IN_ROOT`) is
   refused at any depth of the working folder on both systems, in any case and through APFS's Unicode folds (`ſ`, `K`),
   but a package's `.vscode` inside `node_modules` (`PACKAGES`/`PACKAGED`) — never widen that exemption: a folder made
-  elsewhere and moved into place whole passes every path rule (security audit 2026-11-04). Where `GLUT_HOME` is moved, its `.glut` is read- and write-denied as the real one
+  elsewhere and moved into place whole passes every path rule (security audit 2026-11-04). Where `GLUT_HOME` is moved (what is the user's — a `~`, the
+  caches, the folder checks — is `settings::user_home_beside`, the real `$HOME`), its `.glut` is read- and write-denied as the real one
   (`sandbox::secrets`, `glut_state`), and the `/sandbox` switches hold as the stricter of both files. A covered secret is a
   mode-000 placeholder from `~/.glut/sandbox`, so a read is refused rather than empty; a secret made after a job started stays
   open to that job. Every session's scratch folder lies in one `glut-shells-<uid>` no command writes (macOS too).

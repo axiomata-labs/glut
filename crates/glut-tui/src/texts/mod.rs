@@ -2028,6 +2028,8 @@ glut::catalog! {
         /// The meter's line for a coding plan where the price would stand: `{name}` the subscription.
         meter_plan_named: &'static str,
         /// The program a plan would start lies where its commands write.
+        /// A plan's launchd or systemd file would lie where its commands write: `{file}`.
+        schedule_unit_writable: &'static str,
         schedule_program_writable: &'static str,
         /// A plan's run whose PATH reaches where its commands write.
         schedule_path_writable: &'static str,

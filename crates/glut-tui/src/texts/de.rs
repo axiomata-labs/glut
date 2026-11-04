@@ -2254,6 +2254,7 @@ einen",
     plan_footer: "{name}-Abo",
     meter_plan: "ChatGPT-Abo: kein Preis pro Aufruf — Nutzung verwalten unter {page}",
     meter_plan_named: "{name}-Abo: kein Preis pro Aufruf — seine Grenzen gelten",
+    schedule_unit_writable: "{file} läge dort, wo die Befehle des Plans schreiben: ein Lauf könnte ändern, was launchd oder systemd außerhalb der Sandbox startet",
     schedule_program_writable: "{program} liegt dort, wo die Befehle des Plans schreiben: ein Lauf könnte dem nächsten \
                                 ein eigenes Programm hinterlassen — starte ein anderswo installiertes Glut (cargo \
                                 install)",

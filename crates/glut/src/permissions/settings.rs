@@ -43,6 +43,38 @@ pub fn home_dir() -> Result<PathBuf, HarnessError> {
     home_from_env(std::env::var_os(HOME_ENV), std::env::var_os("HOME"))
 }
 
+/// The user's own home folder beside Glut's `glut_home`: `$HOME` where `GLUT_HOME` moves Glut's folder elsewhere,
+/// else `glut_home` itself. A `~` the owner writes, the caches a command writes and the places whose files run as
+/// programs are the user's, wherever Glut keeps its own `.glut`.
+pub fn user_home_beside(glut_home: &Path) -> PathBuf {
+    // Only Glut's own moved home has a user's home beside it: a home a caller names otherwise (an embedder's, a
+    // test's) is left as it is.
+    if home_dir().ok().as_deref() != Some(glut_home) {
+        return glut_home.to_path_buf();
+    }
+    user_home_from_env(
+        std::env::var_os(HOME_ENV),
+        std::env::var_os("HOME"),
+        glut_home,
+    )
+}
+
+/// [`user_home_beside`] with the environment values handed in, testable without touching the environment.
+fn user_home_from_env(
+    glut_home_env: Option<OsString>,
+    home_env: Option<OsString>,
+    glut_home: &Path,
+) -> PathBuf {
+    let moved = glut_home_env.is_some_and(|value| !value.is_empty());
+    match home_env
+        .map(PathBuf::from)
+        .filter(|home| home.is_absolute())
+    {
+        Some(home) if moved => home,
+        _ => glut_home.to_path_buf(),
+    }
+}
+
 /// [`home_dir`] with the two environment values handed in, so the resolution is testable without touching the
 /// environment. An empty variable (`GLUT_HOME=`) counts as unset — a script that exports an empty override must
 /// not point every run at `""` below the drive root.
@@ -275,7 +307,8 @@ impl Default for SandboxSettings {
     }
 }
 
-/// A path from a settings file: `~/…` below the home folder, a relative one below `base`.
+/// A path from a settings file: `~/…` below the user's home folder (`home`, see [`user_home_beside`]), a relative one
+/// below `base`.
 fn settings_path(text: &str, home: &Path, base: &Path) -> PathBuf {
     match text.strip_prefix("~/") {
         Some(rest) => home.join(rest),
@@ -661,17 +694,19 @@ pub fn load(home: &Path, project: &Path, trusted: bool) -> Result<Loaded, Harnes
     }
     let ceiling = user.mode.unwrap_or_default().looseness();
     let owner = &user.sandbox;
+    // A `~` in a path is the user's home, also where Glut's own is moved (`GLUT_HOME`); a relative one is Glut's.
+    let users = user_home_beside(home);
     let mut sandbox = SandboxSettings {
         enabled: owner.enabled.unwrap_or(true),
         allow_write: owner
             .allow_write
             .iter()
-            .map(|path| settings_path(path, home, home))
+            .map(|path| settings_path(path, &users, home))
             .collect(),
         deny_read: owner
             .deny_read
             .iter()
-            .map(|path| settings_path(path, home, home))
+            .map(|path| settings_path(path, &users, home))
             .collect(),
         allow_local_binding: owner.allow_local_binding.unwrap_or(false),
     };
@@ -714,7 +749,7 @@ pub fn load(home: &Path, project: &Path, trusted: bool) -> Result<Loaded, Harnes
                 .sandbox
                 .deny_read
                 .iter()
-                .map(|path| settings_path(path, home, project)),
+                .map(|path| settings_path(path, &users, project)),
         );
         loaded.rules.deny.extend(settings.rules.deny);
         loaded.rules.ask.extend(settings.rules.ask);
@@ -914,6 +949,38 @@ mod tests {
         }
         // A valid GLUT_HOME never consults HOME, whatever HOME says.
         assert!(home_from_env(Some("/scratch/glut".into()), Some("relative".into())).is_ok());
+    }
+
+    #[test]
+    fn the_user_s_home_is_home_where_glut_s_is_moved_and_glut_s_own_otherwise() {
+        let glut = Path::new("/scratch/glut");
+        let moved = user_home_from_env(
+            Some("/scratch/glut".into()),
+            Some("/Users/owner".into()),
+            glut,
+        );
+        assert_eq!(
+            moved,
+            PathBuf::from("/Users/owner"),
+            "a `~` the owner writes is the owner's"
+        );
+        assert_eq!(
+            user_home_from_env(None, Some("/Users/owner".into()), Path::new("/Users/owner")),
+            PathBuf::from("/Users/owner")
+        );
+        // An empty override is none; a HOME that is not absolute leaves Glut's own.
+        assert_eq!(
+            user_home_from_env(Some(OsString::new()), Some("/Users/owner".into()), glut),
+            glut
+        );
+        assert_eq!(
+            user_home_from_env(Some("/scratch/glut".into()), Some("relative".into()), glut),
+            glut
+        );
+        assert_eq!(
+            user_home_from_env(Some("/scratch/glut".into()), None, glut),
+            glut
+        );
     }
 
     #[test]

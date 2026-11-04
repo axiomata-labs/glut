@@ -166,15 +166,23 @@ fn writable_places(
     allow_write: &[PathBuf],
     deny_read: &[PathBuf],
 ) -> Vec<PathBuf> {
-    let mut places = glut::sandbox::Policy::new(&plan.folder, home, allow_write, &[]).writable;
-    places.push(plan.folder.clone());
-    places.extend(
-        plan.folders
-            .iter()
-            .filter_map(|typed| glut::folders::check(typed, &plan.folder, home, deny_read).ok())
-            .map(|folder| folder.real().to_path_buf()),
-    );
+    // A plan's command writes the caches of the user's home, also where Glut's own is moved.
+    let users = glut::permissions::settings::user_home_beside(home);
+    let mut places = glut::sandbox::Policy::new(&plan.folder, &users, allow_write, &[]).writable;
+    places.extend(plan_places(plan, home, deny_read));
     places
+}
+
+/// The places a plan itself opens to its commands: its folder and the folders beside it.
+fn plan_places(plan: &Plan, home: &Path, deny_read: &[PathBuf]) -> Vec<PathBuf> {
+    std::iter::once(plan.folder.clone())
+        .chain(
+            plan.folders
+                .iter()
+                .filter_map(|typed| glut::folders::check(typed, &plan.folder, home, deny_read).ok())
+                .map(|folder| folder.real().to_path_buf()),
+        )
+        .collect()
 }
 
 /// Whether `path` lies in one of `places`, by its real path — a folder not made yet by its nearest one that is
@@ -218,6 +226,14 @@ fn add(home: &Path, args: AddArgs, here: &Path, agents: &dyn Agents) -> Result<S
     let places = writable_places(&plan, home, &[], &[]);
     let program = program()?;
     program_outside(&program, &places)?;
+    // Nor may the files launchd or systemd starts it by lie in a folder the plan opens to its commands: a run could
+    // change the next run's program line. (The places every command writes are the agents' own check, `unready`.)
+    let opened = plan_places(&plan, home, &[]);
+    for (file, _) in agents.files(home, &plan, &program) {
+        if reached(file.parent().unwrap_or(&file), &opened) {
+            return Err(tr!(schedule_unit_writable, file = file.display()));
+        }
+    }
     plan.path = path_outside(&std::env::var("PATH").unwrap_or_default(), &places);
     // launchd and systemd open the log there before the run makes the folder.
     glut::providers::make_private_dir(&schedule::dir(home)).map_err(|err| err.to_string())?;
@@ -1335,6 +1351,43 @@ mod tests {
         let places = writable_places(&plan, &home, &[], &[]);
         assert!(program_outside(&plan.folder.join("target/release/glut"), &places).is_err());
         assert!(program_outside(Path::new("/usr/local/bin/glut"), &places).is_ok());
+        // A plan whose own folder would hold the file launchd or systemd starts it by is not made.
+        struct Inside(PathBuf, Seen);
+        impl Agents for Inside {
+            fn start(&self, label: &str, file: &Path) -> Result<(), String> {
+                self.1.start(label, file)
+            }
+            fn stop(&self, label: &str) {
+                self.1.stop(label);
+            }
+            fn files(&self, _home: &Path, plan: &Plan, _program: &Path) -> Vec<(PathBuf, String)> {
+                vec![(
+                    self.0.join(format!("{}.plist", plan.label())),
+                    String::new(),
+                )]
+            }
+        }
+        let inside = Inside(
+            project.canonicalize().unwrap().join("units"),
+            Seen::default(),
+        );
+        let refused = add_here(
+            &home,
+            add_args(&[
+                "u",
+                "--every",
+                "1h",
+                "--cwd",
+                &project.to_string_lossy(),
+                "x",
+            ]),
+            &inside,
+        );
+        assert!(
+            refused.as_ref().is_err_and(|why| why.contains("units")),
+            "{refused:?}"
+        );
+        assert!(inside.1.0.borrow().is_empty(), "nothing installed");
         let tmp = std::env::temp_dir();
         let path = format!(
             "/usr/bin:{}:bin:{}:/bin",

@@ -996,7 +996,9 @@ impl Agents for Systemd {
         // Units a command could write would run its program outside the sandbox at the plan's times.
         let home = glut::permissions::settings::home_dir().ok()?;
         let units = user_units(&home);
-        let writable = glut::sandbox::Policy::new(&home, &home, &[], &[]).writable;
+        // A command writes the caches of the user's home, also where Glut's own is moved.
+        let users = glut::permissions::settings::user_home_beside(&home);
+        let writable = glut::sandbox::Policy::new(&home, &users, &[], &[]).writable;
         if let Some(place) = writable.iter().find(|place| units.starts_with(place)) {
             return Some(
                 tr!(

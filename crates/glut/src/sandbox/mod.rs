@@ -315,10 +315,12 @@ pub fn secrets(home: &Path, extra: &[PathBuf]) -> Vec<PathBuf> {
 }
 
 /// Glut's own home (`GLUT_HOME`) where it is not `home`: the second place its `.glut` lies.
-fn moved_glut_home(home: &Path) -> Option<PathBuf> {
+pub(crate) fn moved_glut_home(home: &Path) -> Option<PathBuf> {
     crate::permissions::settings::home_dir()
         .ok()
         .filter(|glut| glut.as_path() != home)
+        // By its real path: a home reached through a link would otherwise hold its `.glut` unseen until it exists.
+        .map(|glut| glut.canonicalize().unwrap_or(glut))
 }
 
 /// What of a moved home's `.glut` no command writes: the whole folder, or — where the working folder lies inside it
