@@ -57,6 +57,9 @@ pub fn record(repo: &Path, name: &str) -> Result<(), String> {
         Some(project) => fresh_project(repo, Path::new(&home), project, scene.origin)?,
         None => return Err("a scene runs in a demo project, never in the repository".to_owned()),
     };
+    for other in &scene.beside {
+        fresh_project(repo, Path::new(&home), other, false)?;
+    }
 
     // The owner's keys and sign-ins as the take is given them, to tell afterwards which it renewed.
     let given = stored_secrets(&Path::new(&home).join(".glut").join(CREDENTIALS));

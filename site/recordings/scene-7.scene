@@ -1,0 +1,30 @@
+# Scene 7: Glut's tools beyond files and the shell — an MCP server added in the session, a rename across the project
+# through the language server (one change, asked once for every file), and code mode: one short script that calls the
+# server's tools for every product and hands back only what matters.
+size 130 37
+project shop
+beside stock
+home fresh
+allow "Bash(python3 *)"
+on "Glut asks" key y
+run glut --provider anthropic --model claude-sonnet-5-5 --lang en
+wait 20 "⏎ send"
+pause 1.2
+type "/mcp add stock -- python3 ../stock/server.py"
+pause 0.6
+key enter
+wait 15 "is connected"
+pause 3
+type "rename discounted to apply_discount everywhere: use lsp's rename, then run the tests"
+pause 0.6
+key enter
+wait 15 "⌃C stops"
+wait-gone 300 "⌃C stops"
+pause 4
+type "with codemode: ask the stock server for every product's level and print only those below 5, lowest first"
+pause 0.6
+key enter
+wait 15 "⌃C stops"
+wait-gone 300 "⌃C stops"
+pause 6
+end

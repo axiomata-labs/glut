@@ -253,7 +253,10 @@ impl Server {
         let id = server.request(
             "initialize",
             json!({
-                "processId": std::process::id(),
+                // No parent to watch: from inside the sandbox Glut's process is out of reach (Seatbelt refuses the
+                // signal, Linux's namespace hides the PID), and pyright takes one it cannot see for dead and ends.
+                // Glut ends its servers itself, with the process group.
+                "processId": null,
                 "rootUri": uri,
                 "workspaceFolders": [{ "uri": uri, "name": "work" }],
                 "capabilities": {
@@ -962,6 +965,39 @@ mod tests {
         let renamed = lsp::apply(&text, &edits[&root.join("src/main.rs")], Some("Letter")).unwrap();
         assert_eq!(renamed.matches("Note").count(), 3, "{renamed}");
         assert!(!renamed.contains("Letter"), "{renamed}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Live against pyright (or basedpyright) when it is installed: it still answers seconds after it started — it
+    /// was given no parent to watch, which from inside the sandbox it could not see and took for dead.
+    #[test]
+    #[ignore = "needs pyright"]
+    fn pyright_stays_and_answers_about_a_symbol() {
+        use crate::lsp::{self, Op};
+        let dir = std::env::temp_dir().join(format!("glut-pyright-live-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("prices.py"),
+            "def discounted(price):\n    return price * 0.9\n\n\nprint(discounted(10))\n",
+        )
+        .unwrap();
+        let root = dir.canonicalize().unwrap();
+        let home = std::path::PathBuf::from(std::env::var_os("HOME").unwrap());
+        let policy = crate::sandbox::Policy::new(&root, &home, &[], &[]);
+        let mut servers = Diagnostics::new(&root, policy);
+        servers.allow("pyright");
+        let mut ask = |line: u32| {
+            servers
+                .ask("prices.py", Op::References.method(), |uri, text| {
+                    let spot = lsp::position(text, line, "discounted", 1, false)?;
+                    Ok(lsp::params(Op::References, uri, spot.position, None))
+                })
+                .unwrap()
+        };
+        assert_eq!(lsp::places(&ask(1)).len(), 2);
+        // Past the moment a server that watched a parent it cannot see ends itself.
+        std::thread::sleep(std::time::Duration::from_secs(6));
+        assert_eq!(lsp::places(&ask(5)).len(), 2, "the server stayed");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

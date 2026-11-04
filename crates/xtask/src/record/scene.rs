@@ -4,6 +4,7 @@
 //! # a comment
 //! size 120 34                  the terminal, columns and rows
 //! project prices               site/demo/prices, copied fresh to ~/glut-demo/prices and committed
+//! beside stock                site/demo/stock, copied fresh to ~/glut-demo/stock beside the project (a tool it uses)
 //! origin                       the project gets a remote of its own (a bare repository beside it), pushed to
 //! home fresh                   Glut's own folder new for the take: the owner's providers and keys, nothing else
 //! allow "Bash(python3 *)"      a rule of that fresh home's settings, so the scene is not held by a question
@@ -69,6 +70,8 @@ pub struct Scene {
     pub rows: u16,
     /// The demo project under `site/demo/` the take runs in.
     pub project: Option<String>,
+    /// Other folders of `site/demo/` copied beside the project, such as a demo MCP server.
+    pub beside: Vec<String>,
     /// Whether Glut gets a fresh home of its own (`GLUT_HOME`): no sessions, projects or settings of the owner's.
     pub fresh_home: bool,
     /// Whether the project gets a remote to push to.
@@ -97,6 +100,7 @@ pub fn parse(text: &str) -> Result<Scene, String> {
         cols: 120,
         rows: 34,
         project: None,
+        beside: Vec::new(),
         fresh_home: false,
         origin: false,
         allow: Vec::new(),
@@ -132,6 +136,12 @@ pub fn parse(text: &str) -> Result<Scene, String> {
                 scene.project = Some(rest.to_owned());
             }
             "home" if rest == "fresh" => scene.fresh_home = true,
+            "beside"
+                if !rest.is_empty()
+                    && rest.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') =>
+            {
+                scene.beside.push(rest.to_owned());
+            }
             "tasks"
                 if !rest.is_empty()
                     && rest.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') =>
@@ -367,6 +377,9 @@ mod tests {
     fn a_task_set_is_a_plain_name() {
         let scene = parse("project shop\nhome fresh\ntasks demo\nrun glut\nend\n").unwrap();
         assert_eq!(scene.tasks, ["demo"]);
+        let scene = parse("project shop\nbeside stock\nhome fresh\nrun glut\nend\n").unwrap();
+        assert_eq!(scene.beside, ["stock"]);
+        assert!(parse("project shop\nbeside ../x\nhome fresh\nrun glut\n").is_err());
         assert!(parse("project shop\nhome fresh\ntasks ../private\nrun glut\n").is_err());
         assert!(
             parse("project shop\nsetting lsp false\nrun glut\n").is_err(),
