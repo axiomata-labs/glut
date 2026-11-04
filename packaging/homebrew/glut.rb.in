@@ -1,0 +1,41 @@
+# The formula of the tap NamorX68/homebrew-tap, written by the release workflow (.github/workflows/release.yml) from
+# this template: the version and the checksums of the release's own archives. `brew install NamorX68/tap/glut`.
+class Glut < Formula
+  desc "Coding agent for the terminal that runs every command in an OS sandbox"
+  homepage "https://github.com/NamorX68/glut"
+  version "@VERSION@"
+  license any_of: ["MIT", "Apache-2.0"]
+
+  on_macos do
+    on_arm do
+      url "https://github.com/NamorX68/glut/releases/download/v@VERSION@/glut-aarch64-apple-darwin.tar.gz"
+      sha256 "@SHA_MAC_ARM@"
+    end
+    on_intel do
+      url "https://github.com/NamorX68/glut/releases/download/v@VERSION@/glut-x86_64-apple-darwin.tar.gz"
+      sha256 "@SHA_MAC_INTEL@"
+    end
+  end
+
+  on_linux do
+    # Glut's sandbox on Linux: bubblewrap and unprivileged user namespaces.
+    depends_on "bubblewrap"
+
+    on_arm do
+      url "https://github.com/NamorX68/glut/releases/download/v@VERSION@/glut-aarch64-unknown-linux-musl.tar.gz"
+      sha256 "@SHA_LINUX_ARM@"
+    end
+    on_intel do
+      url "https://github.com/NamorX68/glut/releases/download/v@VERSION@/glut-x86_64-unknown-linux-musl.tar.gz"
+      sha256 "@SHA_LINUX_INTEL@"
+    end
+  end
+
+  def install
+    bin.install "glut"
+  end
+
+  test do
+    assert_match version.to_s, shell_output("#{bin}/glut --version")
+  end
+end

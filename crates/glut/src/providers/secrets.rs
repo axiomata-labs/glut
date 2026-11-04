@@ -19,7 +19,7 @@ pub const FILE: &str = "credentials.json";
 const MAX_FILE_BYTES: u64 = 64 * 1024;
 
 /// Whether this build reads secrets from the file where the system has a store of its own (T87, owner 2026-10-30):
-/// on macOS only a build with the feature `dev-keys` (`scripts/install.sh`, the bench) — every new build is a new
+/// on macOS only a build with the feature `dev-keys` (`scripts/install-dev.sh`, the bench) — every new build is a new
 /// program to the Keychain, which asks again and leaves an unattended run hanging while Glut is developed; a build
 /// that goes to others keeps the Keychain as the one place of truth. Elsewhere the file is the only store yet. Tests
 /// keep theirs in a scratch home's file, never in the owner's Keychain.

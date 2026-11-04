@@ -397,8 +397,8 @@ in the file finds no key instead of sending the old one to a new host. The store
 | `file` | `~/.glut/credentials.json`, mode 0600 |
 
 On macOS, a regular build ignores `file` and uses the Keychain; only a build with the `dev-keys` feature reads the
-file store (`scripts/install.sh` builds with it, and such a build adds `glut providers store file|keychain` to move the
-keys). On Linux the file is the only store for now.
+file store (`scripts/install-dev.sh` builds with it, and such a build adds `glut providers store file|keychain` to move
+the keys). On Linux the file is the only store for now.
 
 `credentials.json` has the shape `{"secrets": {"<account>": "<secret>"}}`; a file others may read is refused. MCP
 tokens are kept in the same store (accounts `mcp-token:<name>@<host>` and `mcp-oauth:<name>@<url>`).

@@ -1,44 +1,122 @@
-#!/usr/bin/env bash
-# Builds glut and installs it where every terminal finds it, as Axiomata's `build-app.sh --install` does for the app.
+#!/bin/sh
+# Installs glut from a release: the program for this system, checked against the release's SHA-256 checksums, into
+# ~/.local/bin (no password asked). It is the release's `install.sh`, the same file at that release's tag:
 #
-#   scripts/install.sh
+#   curl -fsSL https://github.com/NamorX68/glut/releases/latest/download/install.sh | sh
+#   curl -fsSL https://github.com/NamorX68/glut/releases/latest/download/install.sh | sh -s -- --version 0.1.0 --to ~/bin
 #
-# The program goes to cargo's own folder (`~/.cargo/bin`, no password), by `cargo install`: a copy, never a link into
-# `target/`, which agents write to — a plan (`glut schedule`) refuses a program there. A terminal finds it through
-# `/usr/local/bin`, which macOS puts on every PATH (`/etc/paths`): the first run asks once to link `glut` there (`sudo`);
-# every later install updates the file the link points at, without a password.
-set -euo pipefail
+# POSIX sh on purpose: it is piped into whatever `sh` the system has.
+set -eu
 
-cd "$(dirname "$0")/.."
-bin="${CARGO_INSTALL_ROOT:-${CARGO_HOME:-$HOME/.cargo}}/bin"
-installed="$bin/glut"
-link=/usr/local/bin/glut
+REPO="NamorX68/glut"
 
-# The release build first: the owner also starts target/release/glut, and `cargo install` then only copies it. Both
-# with `dev-keys` while Glut is developed (T87): `glut providers store file` keeps the keys out of the Keychain, which
-# asks again after every new build — a build for others leaves the feature out.
-cargo build --release --locked -p glut-tui --features dev-keys
-cargo install --path crates/glut-tui --locked --quiet --features dev-keys
-echo "installed: $installed ($("$installed" --version))"
+usage() {
+  cat <<'EOF'
+install.sh — installs glut from a GitHub release
 
-found="$(command -v glut || true)"
-if [[ -n "$found" && "$(realpath "$found")" == "$(realpath "$installed")" ]]; then
-  echo "found as: $found"
-  exit 0
-fi
+  --version X.Y.Z   that release instead of the newest
+  --to DIR          the folder for the program (default: ~/.local/bin)
+  -h, --help        this text
+EOF
+}
 
-if [[ -e "$link" || -L "$link" ]]; then
-  # Somebody else's glut, or an old link: never replaced without the owner's look.
-  echo "$link exists and is not this glut ($(realpath "$link" 2>/dev/null || echo "a broken link"))." >&2
-  echo "Remove it, or put $bin first on your PATH." >&2
+fail() {
+  echo "install.sh: $*" >&2
   exit 1
+}
+
+version=""
+to="${HOME:?HOME is not set}/.local/bin"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --version)
+      [ $# -ge 2 ] || fail "--version needs a version, such as 0.1.0"
+      version="${2#v}"
+      shift 2
+      ;;
+    --to)
+      [ $# -ge 2 ] || fail "--to needs a folder"
+      to="$2"
+      shift 2
+      ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    *) fail "unknown option $1 (see --help)" ;;
+  esac
+done
+
+# A version is digits and dots (and a pre-release tail): it goes into a URL.
+case "$version" in
+  "" | [0-9]*) ;;
+  *) fail "not a version: $version" ;;
+esac
+case "$version" in
+  *[!0-9A-Za-z.+-]*) fail "not a version: $version" ;;
+esac
+
+case "$(uname -s)/$(uname -m)" in
+  Darwin/arm64) target="aarch64-apple-darwin" ;;
+  Darwin/x86_64) target="x86_64-apple-darwin" ;;
+  Linux/x86_64 | Linux/amd64) target="x86_64-unknown-linux-musl" ;;
+  Linux/aarch64 | Linux/arm64) target="aarch64-unknown-linux-musl" ;;
+  *) fail "no prebuilt glut for $(uname -s) $(uname -m); build it with: cargo install glut-tui" ;;
+esac
+
+if [ -n "$version" ]; then
+  base="https://github.com/$REPO/releases/download/v$version"
+else
+  base="https://github.com/$REPO/releases/latest/download"
 fi
 
-read -r -p "Link $link to $installed, so every terminal finds glut? This asks for your password once. [y/N] " answer
-if [[ "$answer" =~ ^[yYjJ]$ ]]; then
-  sudo ln -s "$installed" "$link"
-  echo "linked: $link → $installed"
-  echo "A terminal that was open before finds it after 'hash -r' or in a new window."
+command -v curl >/dev/null 2>&1 || fail "curl is needed"
+command -v tar >/dev/null 2>&1 || fail "tar is needed"
+if command -v sha256sum >/dev/null 2>&1; then
+  sum() { sha256sum "$1" | cut -d ' ' -f 1; }
+elif command -v shasum >/dev/null 2>&1; then
+  sum() { shasum -a 256 "$1" | cut -d ' ' -f 1; }
 else
-  echo "Not linked. Start it as $installed, or put $bin on your PATH."
+  fail "sha256sum or shasum is needed to check the download"
+fi
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT INT TERM
+
+archive="glut-$target.tar.gz"
+fetch() {
+  # HTTPS only, also after a redirect.
+  curl -fsSL --proto '=https' --tlsv1.2 -o "$work/$1" "$base/$1" || fail "could not download $base/$1"
+}
+echo "glut: downloading $archive${version:+ (v$version)}"
+fetch "$archive"
+fetch SHA256SUMS
+
+expected="$(awk -v name="$archive" '$2 == name || $2 == "*" name { print $1 }' "$work/SHA256SUMS")"
+[ -n "$expected" ] || fail "SHA256SUMS names no $archive"
+actual="$(sum "$work/$archive")"
+[ "$expected" = "$actual" ] || fail "checksum mismatch for $archive: expected $expected, got $actual"
+
+tar -xzf "$work/$archive" -C "$work"
+[ -f "$work/glut-$target/glut" ] || fail "the archive holds no glut-$target/glut"
+
+mkdir -p "$to"
+# Written beside the old program and renamed over it: a running glut keeps its file.
+cp "$work/glut-$target/glut" "$to/.glut.new"
+chmod 0755 "$to/.glut.new"
+mv -f "$to/.glut.new" "$to/glut"
+echo "glut: installed $("$to/glut" --version 2>/dev/null || echo glut) to $to/glut"
+
+case ":${PATH:-}:" in
+  *":$to:"*) ;;
+  *)
+    echo
+    echo "$to is not on your PATH. Add this line to your shell's profile (~/.zshrc, ~/.bashrc …):"
+    echo "  export PATH=\"$to:\$PATH\""
+    ;;
+esac
+
+if [ "$(uname -s)" = "Linux" ] && ! command -v bwrap >/dev/null 2>&1; then
+  echo
+  echo "Glut's sandbox on Linux needs bubblewrap (bwrap): sudo apt install bubblewrap, dnf install bubblewrap …"
 fi

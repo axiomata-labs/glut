@@ -1,0 +1,139 @@
+# Every push and pull request: the gate (fmt, clippy, the tests) on macOS and Linux, and the website built with every
+# internal link and anchor checked.
+#
+# Axiomata-Foundation (the guarded file service) is a git dependency. While it is private, the secret FOUNDATION_TOKEN
+# (a fine-grained token that may read it) checks it out beside this repository; once it is public, cargo fetches it
+# itself. Where neither works the run is skipped with a note, never red.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  gate:
+    name: gate (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      # The token reaches only this look and the checkout below, never the build and the tests.
+      - id: foundation
+        env:
+          FOUNDATION_TOKEN: ${{ secrets.FOUNDATION_TOKEN }}
+        run: |
+          if [ -n "$FOUNDATION_TOKEN" ]; then
+            echo "use=checkout" >> "$GITHUB_OUTPUT"
+          elif git ls-remote https://github.com/NamorX68/Axiomata-Foundation HEAD >/dev/null 2>&1; then
+            echo "use=git" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Axiomata-Foundation cannot be read (private, no FOUNDATION_TOKEN): the run is skipped."
+            echo "use=none" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.foundation.outputs.use != 'none'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: glut
+          persist-credentials: false
+      - if: steps.foundation.outputs.use == 'checkout'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: NamorX68/Axiomata-Foundation
+          path: Axiomata-Foundation
+          token: ${{ secrets.FOUNDATION_TOKEN }}
+          persist-credentials: false
+      - if: steps.foundation.outputs.use == 'checkout'
+        name: Foundation from the checkout beside, as on the owner's machine
+        run: |
+          mkdir -p glut/.cargo
+          printf '[patch."https://github.com/NamorX68/Axiomata-Foundation"]\naxiomata-files = { path = "../Axiomata-Foundation/crates/axiomata-files" }\n' \
+            > glut/.cargo/config.toml
+      - if: steps.foundation.outputs.use != 'none'
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      - if: steps.foundation.outputs.use != 'none'
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: glut
+      - if: steps.foundation.outputs.use != 'none' && runner.os == 'Linux'
+        name: bubblewrap, and Ubuntu's AppArmor rule against unprivileged namespaces lifted for this machine
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends bubblewrap netcat-openbsd
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - if: steps.foundation.outputs.use != 'none'
+        name: fmt
+        working-directory: glut
+        run: cargo fmt --check
+      - if: steps.foundation.outputs.use != 'none'
+        name: clippy
+        working-directory: glut
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - if: steps.foundation.outputs.use != 'none'
+        name: tests
+        working-directory: glut
+        run: |
+          cargo build -p glut-tui --locked
+          GLUT_TEST_HELPER="$PWD/target/debug/glut" cargo test --workspace --locked
+
+  site:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - id: foundation
+        env:
+          FOUNDATION_TOKEN: ${{ secrets.FOUNDATION_TOKEN }}
+        run: |
+          if [ -n "$FOUNDATION_TOKEN" ]; then
+            echo "use=checkout" >> "$GITHUB_OUTPUT"
+          elif git ls-remote https://github.com/NamorX68/Axiomata-Foundation HEAD >/dev/null 2>&1; then
+            echo "use=git" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Axiomata-Foundation cannot be read (private, no FOUNDATION_TOKEN): the run is skipped."
+            echo "use=none" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.foundation.outputs.use != 'none'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: glut
+          persist-credentials: false
+      - if: steps.foundation.outputs.use == 'checkout'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: NamorX68/Axiomata-Foundation
+          path: Axiomata-Foundation
+          token: ${{ secrets.FOUNDATION_TOKEN }}
+          persist-credentials: false
+      - if: steps.foundation.outputs.use == 'checkout'
+        run: |
+          mkdir -p glut/.cargo
+          printf '[patch."https://github.com/NamorX68/Axiomata-Foundation"]\naxiomata-files = { path = "../Axiomata-Foundation/crates/axiomata-files" }\n' \
+            > glut/.cargo/config.toml
+      - if: steps.foundation.outputs.use != 'none'
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+      - if: steps.foundation.outputs.use != 'none'
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: glut
+      - if: steps.foundation.outputs.use != 'none'
+        name: the site built, every internal link and anchor checked
+        working-directory: glut
+        run: cargo run -p xtask --locked -- site check

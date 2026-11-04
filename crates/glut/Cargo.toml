@@ -13,7 +13,7 @@ categories = ["development-tools", "command-line-utilities"]
 
 [features]
 # T87: the secrets file read on macOS too (crates/glut/src/providers/secrets.rs `FILE_ALLOWED`) — the owner's builds
-# while Glut is developed (scripts/install.sh, the bench); a build that goes to others keeps the Keychain alone.
+# while Glut is developed (scripts/install-dev.sh, the bench); a build that goes to others keeps the Keychain alone.
 dev-keys = []
 
 [dependencies]

@@ -47,7 +47,7 @@ cargo test                       # live tests are #[ignore]d (tests/live.rs: GLU
 cargo run --bin glut -- run --base-url https://openrouter.ai/api --model <id> "prompt"   # key in GLUT_API_KEY
 cargo run --bin glut -- providers add openrouter --model <id>   # once: a provider, its key in the Keychain
 cargo run --release --bin glut   # the TUI in the current folder, on the default provider
-scripts/install.sh               # glut for every terminal: ~/.cargo/bin, linked once into /usr/local/bin (asks, sudo)
+scripts/install-dev.sh           # glut for every terminal: ~/.cargo/bin, linked once into /usr/local/bin (asks, sudo)
 ```
 
 ## Traps worth knowing before you touch things
@@ -119,8 +119,8 @@ scripts/install.sh               # glut for every terminal: ~/.cargo/bin, linked
   never the owner's `settings.json`), keys in the Keychain or `~/.glut/credentials.json` (0600 from the first byte,
   `write_replacing`) under the account `<id>@<host>`, so a root changed in the file finds no key instead of sending
   the old one elsewhere. `GLUT_API_KEY` belongs to a one-off `--base-url` (and to hosts like Axiomata) only. On macOS
-  the file store is read only by a build with the feature `dev-keys` (T87, `secrets::FILE_ALLOWED`; `scripts/install.sh`
-  sets it, `glut providers store file|keychain` moves the keys): a build for others keeps the Keychain alone. Every
+  the file store is read only by a build with the feature `dev-keys` (T87, `secrets::FILE_ALLOWED`;
+  `scripts/install-dev.sh` sets it, `glut providers store file|keychain` moves the keys): a build for others keeps the Keychain alone. Every
   provider key variable — the catalog's and the owner's `keyEnv` — is kept out of MCP headers' `${…}`
   (`mcp::client::header_value`); a new catalog entry gets a variable of its own (a coding plan's key is not its
   pay-as-you-go key). `ModelEndpoint.versioned`: a provider's root already holds its version.
