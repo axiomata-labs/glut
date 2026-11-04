@@ -14,7 +14,6 @@
 //! wait 20 "build"              until the screen shows the text, at most so many seconds
 //! wait 300 "passed" x6         the same, its time played six times faster
 //! wait-gone 20 "⏎ send"       until the text is no longer on the screen (Glut started working)
-//! settle 2                     until the screen has not changed for so many seconds (at most a minute)
 //! pause 1.5                    nothing for so long
 //! type "fix the tests"         typed at a person's pace
 //! key enter                    keys: enter, esc, tab, backtab, up, down, left, right, space, ctrl-<letter>
@@ -40,8 +39,6 @@ pub enum Step {
         text: String,
         limit: Duration,
     },
-    /// Until the screen has not changed for so long.
-    Settle(Duration),
     /// Nothing for so long.
     Pause(Duration),
     Type(String),
@@ -210,9 +207,6 @@ pub fn parse(text: &str) -> Result<Scene, String> {
                     limit: seconds_of(seconds).ok_or_else(|| fail("not a number of seconds"))?,
                 });
             }
-            "settle" => scene.steps.push(Step::Settle(
-                seconds_of(rest).ok_or_else(|| fail("seconds"))?,
-            )),
             "pause" => scene.steps.push(Step::Pause(
                 seconds_of(rest).ok_or_else(|| fail("seconds"))?,
             )),
@@ -314,7 +308,7 @@ mod tests {
     fn a_scene_reads_line_by_line() {
         let scene = parse(
             "# first\nsize 100 30\nproject prices\nhome fresh\nrun glut --lang en\nwait 20 \"say \\\"hi\\\"\"\n\
-             wait 300 \"passed\" x6\nsettle 2\npause 1.5\ntype \"fix it\"\nkey ctrl-c enter\nend\n",
+             wait 300 \"passed\" x6\npause 1.5\ntype \"fix it\"\nkey ctrl-c enter\nend\n",
         )
         .unwrap();
         assert_eq!((scene.cols, scene.rows), (100, 30));
@@ -329,8 +323,8 @@ mod tests {
             }
         );
         assert!(matches!(scene.steps[1], Step::Wait { faster, .. } if faster == 6.0));
-        assert_eq!(scene.steps[5], Step::Keys(vec![3, b'\r']));
-        assert_eq!(scene.steps[6], Step::End);
+        assert_eq!(scene.steps[4], Step::Keys(vec![3, b'\r']));
+        assert_eq!(scene.steps[5], Step::End);
     }
 
     #[test]

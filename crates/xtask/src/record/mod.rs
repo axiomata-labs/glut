@@ -98,7 +98,6 @@ pub fn record(repo: &Path, name: &str) -> Result<(), String> {
                 faster,
             } => take.wait_for(&mut terminal, text, *limit, *faster),
             Step::WaitGone { text, limit } => take.wait_gone(&mut terminal, text, *limit),
-            Step::Settle(quiet) => take.settle(&mut terminal, *quiet),
             Step::Pause(span) => take.run_for(&mut terminal, *span, 1.0),
             Step::Type(text) => text.chars().try_for_each(|c| {
                 terminal.send(c.encode_utf8(&mut [0; 4]).as_bytes())?;
@@ -230,20 +229,6 @@ impl Take {
                 (Instant::now() + Duration::from_millis(100)).min(until),
                 1.0,
             )?;
-        }
-        Ok(())
-    }
-
-    /// Until no screen was kept for `quiet`, at most a minute.
-    fn settle(&mut self, terminal: &mut Terminal, quiet: Duration) -> Result<(), String> {
-        let until = Instant::now() + Duration::from_secs(60);
-        let started = Instant::now();
-        while Instant::now() < until {
-            let calm_since = self.kept.unwrap_or(started).max(started);
-            if calm_since.elapsed() >= quiet {
-                return Ok(());
-            }
-            self.pump(terminal, Instant::now() + Duration::from_millis(100), 1.0)?;
         }
         Ok(())
     }

@@ -1,6 +1,6 @@
 # Scene 3: the modes, plan mode — a plan written, approved and built —, the diff reviewed hunk by hunk, and a step put
 # back with /steps.
-size 120 34
+size 130 37
 project shop
 home fresh
 allow "Bash(python3 *)"
@@ -30,7 +30,7 @@ pause 2
 type "/diff"
 pause 0.6
 key enter
-settle 1
+wait 10 "↑↓ hunk"
 pause 2.5
 key down
 pause 2.5
@@ -41,6 +41,6 @@ pause 1.5
 type "/steps"
 pause 0.6
 key enter
-settle 1
+wait 10 "Steps that changed files"
 pause 2.5
 end

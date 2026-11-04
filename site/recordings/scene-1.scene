@@ -1,5 +1,5 @@
 # Scene 1: a first task — Glimm, the task list, diffs, the tests green. The site's hero.
-size 120 34
+size 130 37
 project prices
 home fresh
 allow "Bash(python3 *)"
