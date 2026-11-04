@@ -83,7 +83,7 @@
         <p class="hud"><span>fragile</span><b>[03]</b></p>
         <h3>A change you cannot take back.</h3>
         <p>An edit too many, a run that dies halfway, and an afternoon is gone.</p>
-        <p class="answer">A snapshot before every change, <code>/undo</code>, and journals that let a lost run resume.</p>
+        <p class="answer">A snapshot before every change, <code>/steps</code> to put files back, and journals that let a lost run resume.</p>
       </article>
       <article class="card" data-reveal>
         <p class="hud"><span>cut</span><b>[04]</b></p>
@@ -132,8 +132,8 @@
           <pre><span class="say">◆ edit</span> src/parser.rs  <span class="ok">+12</span> <span class="no">−4</span>
 <span class="say">◆ edit</span> src/lexer.rs   <span class="ok">+3</span>  <span class="no">−1</span>
 
-<span class="you">/undo</span>
-<span class="ok">2 files back as they were before this turn</span></pre>
+<span class="you">/steps</span>  ⏎ on the first edit
+<span class="ok">2 files back as they were before it</span></pre>
         </div>
         <div class="panel" data-panel="masks">
           <div class="bar"><i></i><i></i><i></i></div>
@@ -163,8 +163,8 @@ that holds the key puts the key back.</span></pre>
         <article class="step" data-step="snapshot">
           <p class="hud"><b>03</b> / 04</p>
           <h3>The snapshot</h3>
-          <p><strong>Before every change, Glut keeps your files as they were.</strong> <code>/undo</code> puts back a
-            turn or a single step; <code>/diff</code> shows the session's changes file by file, and a hunk can go back
+          <p><strong>Before every change, Glut keeps your files as they were.</strong> <code>/steps</code> puts them back
+            as they were before any step; <code>/diff</code> shows the session's changes file by file, and a hunk can go back
             alone.</p>
         </article>
         <article class="step" data-step="masks">

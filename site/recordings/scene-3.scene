@@ -1,0 +1,45 @@
+# Scene 3: the modes, plan mode — a plan written, approved and built —, the diff reviewed hunk by hunk, and a step put
+# back with /steps.
+size 120 34
+project shop
+home fresh
+allow "Bash(python3 *)"
+on "Glut asks" key y
+run glut --provider anthropic --model claude-sonnet-5-5 --lang en
+wait 20 "⏎ send"
+pause 1.2
+key backtab
+pause 1.0
+key backtab
+pause 1.0
+key backtab
+pause 1.0
+key backtab
+pause 1.0
+key backtab
+pause 1.0
+key backtab
+pause 1.5
+type "cap discounts at 50 %: discounted should refuse a larger one, with a test for it"
+pause 0.8
+key enter
+wait-gone 30 "⏎ send"
+wait 600 "⏎ send" x3
+pause 2
+type "/diff"
+pause 0.6
+key enter
+settle 1
+pause 2.5
+key down
+pause 2.5
+key down
+pause 2.5
+key esc
+pause 1.5
+type "/steps"
+pause 0.6
+key enter
+settle 1
+pause 2.5
+end

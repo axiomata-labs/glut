@@ -355,6 +355,18 @@ impl Toolbox {
         };
         // A tool the run does not offer stays refused when the model guesses its name.
         if !self.offers(tool.as_ref()) {
+            // In plan mode a change waits for the owner's yes: the model is told the way there, not only the no.
+            let in_plan = self
+                .gate
+                .as_ref()
+                .is_some_and(|gate| gate.mode() == crate::permissions::Mode::Plan);
+            if in_plan {
+                return refused(format!(
+                    "error: not permitted in plan mode: {name} changes nothing until the owner approves a plan — \
+                     send your plan with {}, and once approved you can carry it out",
+                    crate::planning::EXIT_PLAN
+                ));
+            }
             return refused(format!(
                 "error: not permitted: this run does not offer {name}"
             ));
@@ -621,6 +633,52 @@ mod tests {
         assert!(!tools.replay_safe("reader", "[1]"));
         assert!(!tools.replay_safe("echo", "{}"));
         assert!(!tools.replay_safe("nope", "{}"));
+    }
+
+    /// A tool that would change a file.
+    struct Writer;
+
+    impl Tool for Writer {
+        fn spec(&self) -> ToolSpec {
+            ToolSpec {
+                name: "writer".into(),
+                description: "Writes `path`.".into(),
+                parameters: json!({"type": "object"}),
+            }
+        }
+
+        fn access(&self, arguments: &Value) -> Access {
+            Access::Edit {
+                path: arguments["path"].as_str().unwrap_or_default().to_owned(),
+            }
+        }
+
+        fn offered_as(&self) -> Access {
+            Access::Edit {
+                path: String::new(),
+            }
+        }
+
+        fn call(&self, _arguments: Value, _context: CallContext) -> ToolFuture<'_> {
+            Box::pin(async { Ok(String::new()) })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_change_asked_in_plan_mode_points_the_model_to_its_plan() {
+        use crate::permissions::{Mode, Nobody, RuleSet};
+        let mut tools = toolbox();
+        tools.extend([Box::new(Writer) as Box<dyn Tool>]);
+        tools.set_gate(Arc::new(Gate::new(
+            RuleSet::default(),
+            Mode::Plan,
+            Arc::new(Nobody),
+        )));
+        let (ok, text) = tools.call("writer", r#"{"path": "a.rs"}"#).await;
+        assert!(
+            !ok && text.contains("plan mode") && text.contains(crate::planning::EXIT_PLAN),
+            "{text}"
+        );
     }
 
     #[tokio::test]

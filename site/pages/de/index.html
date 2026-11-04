@@ -83,7 +83,7 @@
         <p class="hud"><span>zerbrechlich</span><b>[03]</b></p>
         <h3>Eine Änderung ohne Weg zurück.</h3>
         <p>Eine Änderung zu viel, ein Lauf, der mittendrin stirbt, und ein Nachmittag ist weg.</p>
-        <p class="answer">Ein Snapshot vor jeder Änderung, <code>/undo</code>, und Journale, mit denen ein verlorener Lauf weitergeht.</p>
+        <p class="answer">Ein Snapshot vor jeder Änderung, <code>/steps</code> zum Zurücklegen, und Journale, mit denen ein verlorener Lauf weitergeht.</p>
       </article>
       <article class="card" data-reveal>
         <p class="hud"><span>gekürzt</span><b>[04]</b></p>
@@ -133,8 +133,8 @@
           <pre><span class="say">◆ edit</span> src/parser.rs  <span class="ok">+12</span> <span class="no">−4</span>
 <span class="say">◆ edit</span> src/lexer.rs   <span class="ok">+3</span>  <span class="no">−1</span>
 
-<span class="you">/undo</span>
-<span class="ok">2 Dateien wieder wie vor dieser Runde</span></pre>
+<span class="you">/steps</span>  ⏎ auf der ersten Änderung
+<span class="ok">2 Dateien wieder wie vor ihr</span></pre>
         </div>
         <div class="panel" data-panel="masks">
           <div class="bar"><i></i><i></i><i></i></div>
@@ -165,8 +165,8 @@ Datei, die den Schlüssel hält, setzt ihn wieder ein.</span></pre>
         <article class="step" data-step="snapshot">
           <p class="hud"><b>03</b> / 04</p>
           <h3>Der Snapshot</h3>
-          <p><strong>Vor jeder Änderung bewahrt Glut deine Dateien, wie sie waren.</strong> <code>/undo</code> nimmt eine
-            Runde oder einen einzelnen Schritt zurück; <code>/diff</code> zeigt die Änderungen der Session Datei für
+          <p><strong>Vor jeder Änderung bewahrt Glut deine Dateien, wie sie waren.</strong> <code>/steps</code> legt die Dateien
+            zurück, wie sie vor einem beliebigen Schritt waren; <code>/diff</code> zeigt die Änderungen der Session Datei für
             Datei, und ein einzelner Abschnitt kann allein zurück.</p>
         </article>
         <article class="step" data-step="masks">

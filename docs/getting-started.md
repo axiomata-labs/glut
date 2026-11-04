@@ -82,8 +82,8 @@ leaves git's hooks and the like alone, and reaches the network only through Glut
 
 ## 5. When something went wrong
 
-- `/undo` — Glut snapshots your files before every change; this puts them back as they were before a turn, or before
-  one of its steps.
+- `/steps` — Glut snapshots your files before every change; this lists the steps that changed files, and puts them
+  back as they were before one of them (`glut undo` does the same outside Glut, for a whole run or one step).
 - `⎋ ⎋` — rewind the conversation to an earlier message and go on from there (or fork it).
 - `/diff` — what changed in this session, file by file; a hunk can go back alone.
 - `glut -c` — the newest session of this folder, as you left it; `glut -r` picks an older one, `/search` finds one by
