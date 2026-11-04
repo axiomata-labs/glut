@@ -126,6 +126,10 @@ pub fn record(repo: &Path, name: &str) -> Result<(), String> {
     }
     // The program and all it started are stopped however the scene ended; what it showed last is kept.
     terminal.end();
+    // A plan the scene made is the system's job until it is booted out: none outlives its take, however it ended.
+    if let Some(fresh) = &glut_home {
+        unload_plans(fresh);
+    }
     take.keep_now(true);
     // A sign-in the take renewed holds the only good refresh token now: it goes back to the owner before the copy goes.
     if let Some(fresh) = &glut_home {
@@ -457,6 +461,30 @@ fn take_out_keys(fresh: &Path) -> Result<Vec<String>, String> {
     // Short values (a provider's name, a date) are no secret worth refusing a recording for.
     values.retain(|value| value.len() >= MIN_SECRET);
     Ok(values)
+}
+
+/// Every LaunchAgent the take's Glut wrote into its fresh home (`schedule::agent_file`) booted out of the owner's
+/// launchd, and its file removed. Only Glut's own labels, and only from that home: none of the owner's plans.
+fn unload_plans(fresh: &Path) {
+    let dir = fresh.join("Library").join("LaunchAgents");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return;
+    };
+    let uid = rustix::process::getuid().as_raw();
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some(label) = name
+            .strip_suffix(".plist")
+            .filter(|label| label.starts_with("local.glut.schedule."))
+        else {
+            continue;
+        };
+        let _ = Command::new("launchctl")
+            .args(["bootout", &format!("gui/{uid}/{label}")])
+            .output();
+        let _ = std::fs::remove_file(entry.path());
+        eprintln!("record: the scene's plan {label} is booted out of launchd");
+    }
 }
 
 /// The keys' file of a Glut home, below its `.glut`.

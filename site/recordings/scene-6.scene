@@ -1,0 +1,45 @@
+# Scene 6: work that comes back — a loop in a background agent while Glut is open, round after round until its goal is
+# reached, and a plan that runs while Glut is closed: made, run once now, its result in the Runs tab, removed again.
+size 130 37
+project shop
+home fresh
+setting lsp false
+allow "Bash(python3 *)"
+on "Glut asks" key y
+run glut --provider anthropic --model claude-sonnet-5-5 --lang en
+wait 20 "⏎ send"
+pause 1.2
+type "/loop 20s add one edge-case test a round to test_prices.py (zero, rounding, an empty cart), run the tests; end the loop once three are in"
+pause 0.8
+key enter
+wait 10 "starts: every"
+pause 4
+type "/schedule add nightly --at 02:00 --mode build --provider anthropic --model claude-sonnet-5-5 --allow \"Bash(python3 *)\" run the tests and say in one line what fails"
+pause 0.8
+key enter
+wait 10 "plan nightly made:"
+pause 5
+type "/schedule run nightly"
+pause 0.6
+key enter
+wait 10 "runs now beside Glut"
+pause 2
+type "/schedule"
+pause 0.6
+key enter
+wait 300 "✓ answered" x3
+pause 5
+key esc
+pause 1
+type "/loop"
+pause 0.6
+key enter
+pause 4
+wait 600 "loop loop ended" x3
+pause 5
+type "/schedule remove nightly"
+pause 0.6
+key enter
+wait 10 "plan nightly removed"
+pause 3
+end
