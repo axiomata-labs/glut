@@ -1,5 +1,5 @@
 // Glut's site: Glimm drawn from the terminal's own frames (glimm.js, made at build time), the start sequence, the
-// reveals on scroll, the sticky steps, the scroll readout and the copy buttons. No library. Everything here only adds
+// reveals on scroll, the sticky steps, the closing reel, the scroll readout and the copy buttons. No library. Everything here only adds
 // motion: without it, or with reduced motion asked for, every word of the page is there and readable.
 (() => {
   "use strict";
@@ -159,6 +159,37 @@
       { rootMargin: "-45% 0px -45% 0px" },
     );
     steps.querySelectorAll("[data-step]").forEach((step) => watch.observe(step));
+  });
+
+  // The closing reel: its terminal stands still while the page scrolls through its track, a line more for every step
+  // of the scroll — the last one in before the track ends. With reduced motion, or where the terminal is taller than
+  // the screen, every line simply stands.
+  document.querySelectorAll("[data-reel]").forEach((track) => {
+    if (still) return;
+    const lines = [...track.querySelectorAll(".reel li")];
+    const term = track.querySelector(".reel-term");
+    track.style.setProperty("--lines", lines.length);
+    let queued = false;
+    const build = () => {
+      queued = false;
+      // Built only where the whole terminal fits the screen: a taller one (a phone) would build out of sight.
+      const fits = term.offsetHeight < innerHeight * 0.85;
+      track.classList.toggle("building", fits);
+      if (!fits) return;
+      const box = track.getBoundingClientRect();
+      const span = box.height - innerHeight;
+      const part = span > 0 ? Math.min(1, Math.max(0, -box.top / span)) : 1;
+      const shown = Math.ceil(part * 1.15 * lines.length);
+      lines.forEach((line, at) => line.classList.toggle("on", at < shown));
+    };
+    addEventListener("scroll", () => {
+      if (!queued) {
+        queued = true;
+        requestAnimationFrame(build);
+      }
+    }, { passive: true });
+    addEventListener("resize", build, { passive: true });
+    build();
   });
 
   // The readout: which numbered section is read, and how far down the page.

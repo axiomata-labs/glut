@@ -424,18 +424,30 @@ figure.player figcaption { font: 0.75rem/1.4 var(--mono); color: var(--dim); let
 figure.player.missing .screen::before { content: "—"; color: var(--dim); padding: 1em; display: block; }
 html:not(.js) figure.player { display: none; }
 
-/* The closing reel: a list built line by line. */
-.reel { list-style: none; padding: 0; margin: 0; columns: 2 24em; column-gap: 3em; }
-.reel li {
-  break-inside: avoid;
-  padding: 0.9em 0;
-  border-top: 1px solid var(--line);
-  font-family: var(--mono);
-  font-size: 0.9rem;
+/* The closing reel: a terminal whose lines come in one by one as the page scrolls past it. Its track is as tall as
+   the scroll that builds it; without site.js or with reduced motion every line simply stands. */
+.reel-term {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  font: 0.86rem/1.75 var(--mono);
+  max-width: 64em;
+  margin: 0 auto;
 }
-.reel li b { color: var(--ink); font-weight: 600; font-family: var(--sans); font-size: 1.05rem; display: block; }
-.reel li span { color: var(--dim); font-family: var(--sans); }
-.reel li::before { content: attr(data-n) "  "; color: var(--ember); }
+.reel-term .bar { display: flex; gap: 0.4em; align-items: center; padding: 0.7em 0.9em; border-bottom: 1px solid var(--line); }
+.reel-term .bar i { width: 0.6em; height: 0.6em; border-radius: 50%; background: var(--line); }
+.reel-term .bar span { margin-left: 1em; color: var(--dim); font-size: 0.75rem; letter-spacing: 0.06em; }
+.reel { list-style: none; padding: 1em 1.3em 0; margin: 0; }
+.reel li { display: grid; grid-template-columns: 2.6em minmax(12em, 17em) minmax(0, 1fr); gap: 0 1em; }
+.reel li::before { content: attr(data-n); color: var(--ember); }
+.reel li b { color: var(--ink); font-weight: 600; }
+.reel li span { color: var(--dim); }
+.reel-cursor { margin: 0; padding: 0.2em 1.3em 1.2em; color: var(--ember); }
+.reel-cursor i { display: inline-block; width: 0.55em; height: 1.1em; margin-left: 0.6em; vertical-align: -0.2em; background: var(--ember); animation: blink 1.1s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+.js .reel-track.building { height: calc(100vh + var(--lines, 18) * 7vh); }
+.js .reel-track.building .reel-term { position: sticky; top: max(5.5em, calc(50vh - 17em)); }
+.js .reel-track.building .reel li { opacity: 0; transform: translateX(-0.6em); transition: opacity 0.25s, transform 0.25s; }
+.js .reel-track.building .reel li.on { opacity: 1; transform: none; }
 
 .closing { text-align: center; padding: clamp(6em, 16vh, 11em) 0; }
 .closing .install { margin: 2.4em auto 0; text-align: left; }
@@ -491,6 +503,8 @@ html:not(.js) figure.player { display: none; }
   .panel-stack { position: relative; top: 0; }
   .step { min-height: auto; padding-bottom: 2em; }
   .top .links a.wide { display: none; }
+  .reel li { grid-template-columns: 2.6em minmax(0, 1fr); }
+  .reel li span { grid-column: 2; margin-bottom: 0.5em; }
 }
 
 @media (prefers-reduced-motion: reduce) {
