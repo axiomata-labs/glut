@@ -4,6 +4,7 @@
 //! any folder of a host and from the disk.
 
 mod check;
+mod glimm;
 mod links;
 mod manual;
 mod markdown;
@@ -76,6 +77,27 @@ struct Words {
     source: &'static str,
     /// The manual's topics in the order of `commands.rs`'s `Topic`, as the terminal UI names them.
     topics: [&'static str; 8],
+    /// The side navigation's name for a screen reader.
+    side_label: &'static str,
+    home_getting_started: &'static str,
+    /// The footer's headings and links.
+    project: &'static str,
+    legal: &'static str,
+    legal_notice: &'static str,
+    privacy: &'static str,
+    /// The footer's last line.
+    fine: &'static str,
+    /// The footer's links to documents and the skip link.
+    install: &'static str,
+    security: &'static str,
+    changelog: &'static str,
+    contributing: &'static str,
+    security_policy: &'static str,
+    skip: &'static str,
+    /// The top navigation's name for a screen reader.
+    site_label: &'static str,
+    /// The home page's description for search engines and link previews.
+    description: &'static str,
 }
 
 const EN: Words = Words {
@@ -89,6 +111,22 @@ const EN: Words = Words {
     topics: [
         "Session", "Model", "View", "Panes", "Changes", "Project", "Settings", "Help",
     ],
+    side_label: "Documentation",
+    home_getting_started: "Getting started",
+    project: "Project",
+    legal: "Legal",
+    legal_notice: "Legal notice",
+    privacy: "Privacy",
+    fine: "MIT OR Apache-2.0 · no cookies, no tracking, no fonts from elsewhere",
+    install: "Install",
+    security: "Security model",
+    changelog: "Changelog",
+    contributing: "Contributing",
+    security_policy: "Security policy",
+    skip: "Skip to the content",
+    site_label: "Site",
+    description: "Glut, a coding agent for your terminal: every command in an OS sandbox, a gate you can read, any \
+                  model you choose.",
 };
 
 const DE: Words = Words {
@@ -110,6 +148,23 @@ const DE: Words = Words {
         "Einstellungen",
         "Hilfe",
     ],
+    side_label: "Dokumentation",
+    home_getting_started: "Erste Schritte",
+    project: "Projekt",
+    legal: "Rechtliches",
+    legal_notice: "Impressum",
+    privacy: "Datenschutz",
+    fine: "MIT OR Apache-2.0 · keine Cookies, kein Tracking, keine fremden Schriften",
+    // The documents behind these links are English.
+    install: "Installation (englisch)",
+    security: "Sicherheitsmodell (englisch)",
+    changelog: "Änderungen (englisch)",
+    contributing: "Mitwirken (englisch)",
+    security_policy: "Sicherheitslücken melden (englisch)",
+    skip: "Zum Inhalt springen",
+    site_label: "Website",
+    description: "Glut, ein Coding-Agent für dein Terminal: jeder Befehl in einer Betriebssystem-Sandbox, ein Tor, \
+                  das du lesen kannst, jedes Modell, das du willst.",
 };
 
 /// One page to write: where it goes, its title and body, and the page of the same content in the other language.
@@ -122,6 +177,9 @@ struct Page {
     other: Option<String>,
     /// The repository file it is made from, for the link to its source.
     source: Option<String>,
+    /// The layout it goes into: `site/layout.html`, or `site/layout-<name>.html` for a hand-written page that names
+    /// one in its first line (`<!-- layout: home -->`).
+    layout: Option<String>,
 }
 
 /// Builds every page into `out` (emptied first); how many pages.
@@ -156,6 +214,7 @@ pub fn build(repo: &Path, out: &Path) -> Result<usize, String> {
             body: rendered.body,
             other: None,
             source: Some(source.to_owned()),
+            layout: None,
         });
     }
 
@@ -204,6 +263,7 @@ pub fn build(repo: &Path, out: &Path) -> Result<usize, String> {
                     ),
                     other: other(name),
                     source: Some(source),
+                    layout: None,
                 });
             }
             index.push_str("</dl>\n");
@@ -215,6 +275,7 @@ pub fn build(repo: &Path, out: &Path) -> Result<usize, String> {
             body: index,
             other: other("index"),
             source: None,
+            layout: None,
         });
 
         // The hand-written pages of `site/pages/<lang>/`, each with its twin in the other language when it has one.
@@ -233,7 +294,10 @@ pub fn build(repo: &Path, out: &Path) -> Result<usize, String> {
                         .is_file()
                 })
                 .map(|other| format!("{}{name}", other.folder()));
+            let layout = named_layout(&body)
+                .map_err(|err| format!("site/pages/{}/{name}: {err}", lang.code()))?;
             pages.push(Page {
+                layout,
                 title: title_of(&body).unwrap_or_else(|| "Glut".to_owned()),
                 path,
                 lang,
@@ -246,10 +310,20 @@ pub fn build(repo: &Path, out: &Path) -> Result<usize, String> {
 
     empty_output(out)?;
     for page in &pages {
-        let html = framed(&layout, page, &pages);
+        let html = match &page.layout {
+            Some(name) => framed(
+                &read(&repo.join(format!("site/layout-{name}.html")))?,
+                page,
+                &pages,
+            ),
+            None => framed(&layout, page, &pages),
+        };
         write(&out.join(&page.path), &html)?;
     }
     copy_tree(&repo.join("site/static"), &out.join("static"))?;
+    // Glimm on the site is the terminal's Glimm: its frames and colours read from the program's own sources.
+    write(&out.join("static/glimm.js"), &glimm::script(repo)?)?;
+    write(&out.join("static/glimm.svg"), &glimm::svg(repo)?)?;
     Ok(pages.len())
 }
 
@@ -362,6 +436,49 @@ fn framed(layout: &str, page: &Page, pages: &[Page]) -> String {
             words.source
         )
     });
+    let link = |to: &str| relative(&page.path, to);
+    let folder = page.lang.folder();
+    let top = format!(
+        "<header class=\"top\">\n<a class=\"brand\" href=\"{}\">Glut</a>\n<nav class=\"links\" aria-label=\"{}\">\
+         <a href=\"{}\">{}</a><a href=\"{}\">{}</a><a class=\"wide\" href=\"{}\">GitHub</a>\
+         <span class=\"lang\">{switch}</span></nav>\n</header>",
+        link(&home),
+        words.site_label,
+        link("docs/getting-started.html"),
+        words.docs,
+        link(&manual),
+        words.manual,
+        links::GITHUB,
+    );
+    let foot = format!(
+        "<footer class=\"foot\">\n<div><h2>{}</h2><a href=\"{}\">{}</a><a href=\"{}\">{}</a>\
+         <a href=\"{}\">{}</a><a href=\"{}\">{}</a></div>\n<div><h2>{}</h2><a href=\"{}\">GitHub</a>\
+         <a href=\"{}\">{}</a><a href=\"{}\">{}</a><a href=\"{}\">{}</a></div>\n\
+         <div><h2>{}</h2><a href=\"{}\">{}</a><a href=\"{}\">{}</a></div>\n<p class=\"fine\">{}</p>\n</footer>",
+        words.docs,
+        link("docs/getting-started.html"),
+        words.home_getting_started,
+        link("docs/install.html"),
+        words.install,
+        link(&manual),
+        words.manual,
+        link("docs/security.html"),
+        words.security,
+        words.project,
+        links::GITHUB,
+        link("docs/changelog.html"),
+        words.changelog,
+        link("docs/contributing.html"),
+        words.contributing,
+        link("docs/security-policy.html"),
+        words.security_policy,
+        words.legal,
+        link(&format!("{folder}legal.html")),
+        words.legal_notice,
+        link(&format!("{folder}privacy.html")),
+        words.privacy,
+        words.fine,
+    );
     // The content goes in last, so the words `{{root}}` or `{{nav}}` written in a document stay as written.
     layout
         .replace("{{lang}}", page.lang.code())
@@ -369,6 +486,11 @@ fn framed(layout: &str, page: &Page, pages: &[Page]) -> String {
         .replace("{{nav}}", &nav)
         .replace("{{switch}}", &switch)
         .replace("{{source}}", &source)
+        .replace("{{top}}", &top)
+        .replace("{{foot}}", &foot)
+        .replace("{{side_label}}", words.side_label)
+        .replace("{{skip}}", words.skip)
+        .replace("{{description}}", words.description)
         .replace("{{root}}", &root(&page.path))
         .replace("{{content}}", &page.body)
 }
@@ -417,6 +539,31 @@ fn topics(repo: &Path) -> Result<HashMap<String, usize>, String> {
     Ok(found)
 }
 
+/// The layout a hand-written page names in its first line, `<!-- layout: name -->` (a plain word); `None` for a page
+/// that names none.
+///
+/// # Errors
+///
+/// A first line that tries to name one and fails: the page would go out in the wrong frame unnoticed.
+fn named_layout(body: &str) -> Result<Option<String>, String> {
+    let first = body.trim_start().lines().next().unwrap_or_default().trim();
+    if !first.starts_with("<!--") || !first.contains("layout") {
+        return Ok(None);
+    }
+    let name = first
+        .strip_prefix("<!--")
+        .and_then(|rest| rest.strip_suffix("-->"))
+        .and_then(|rest| rest.trim().strip_prefix("layout:"))
+        .map(str::trim)
+        .filter(|name| {
+            !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        });
+    match name {
+        Some(name) => Ok(Some(name.to_owned())),
+        None => Err(format!("a layout line that names no layout: {first}")),
+    }
+}
+
 /// The text of a hand-written page's first `<h1>`, without its tags.
 fn title_of(body: &str) -> Option<String> {
     let start = body.find("<h1")?;
@@ -424,7 +571,12 @@ fn title_of(body: &str) -> Option<String> {
     let close = body[open..].find("</h1>")? + open;
     let mut text = String::new();
     let mut in_tag = false;
-    for c in body[open..close].chars() {
+    // A line break between words parts them; any other tag (`<em>`, `<code>`) stands inside a word's run.
+    let inner = body[open..close]
+        .replace("<br>", " ")
+        .replace("<br/>", " ")
+        .replace("<br />", " ");
+    for c in inner.chars() {
         match c {
             '<' => in_tag = true,
             '>' => in_tag = false,
@@ -439,7 +591,7 @@ fn title_of(body: &str) -> Option<String> {
         .replace("&quot;", "\"")
         .replace("&#39;", "'")
         .replace("&amp;", "&");
-    Some(text.trim().to_owned())
+    Some(text.split_whitespace().collect::<Vec<_>>().join(" "))
 }
 
 /// The files of `dir` ending in `.{extension}`, sorted; none when the folder is missing.
@@ -541,10 +693,29 @@ mod tests {
     }
 
     #[test]
+    fn a_page_may_name_its_layout() {
+        assert_eq!(
+            named_layout("<!-- layout: home -->\n<h1>x</h1>"),
+            Ok(Some("home".to_owned()))
+        );
+        assert_eq!(
+            named_layout("\n<!--layout:home-->\n"),
+            Ok(Some("home".to_owned()))
+        );
+        assert_eq!(named_layout("<h1>x</h1>"), Ok(None));
+        assert_eq!(named_layout("<!-- a draft -->\n<h1>x</h1>"), Ok(None));
+        assert!(named_layout("<!-- layout: ../x -->").is_err());
+    }
+
+    #[test]
     fn a_hand_written_pages_title_is_its_heading() {
         assert_eq!(
             title_of("<main><h1 class=\"x\">Glut <em>now</em></h1></main>").as_deref(),
             Some("Glut now")
+        );
+        assert_eq!(
+            title_of("<h1>Foo <code>bar</code>, baz<br>qux</h1>").as_deref(),
+            Some("Foo bar, baz qux")
         );
         assert_eq!(title_of("<p>none</p>"), None);
     }

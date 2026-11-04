@@ -1,6 +1,247 @@
-<h1 id="glut">Glut</h1>
-<p class="lead">Ein Agenten-Harness für das Terminal: Jeden Befehl, den ein Modell ausführt, hält eine
-Betriebssystem-Sandbox und ein Netzwerk-Tor, jede Änderung lässt sich zurücknehmen, und die Arbeit macht das Modell,
-das du willst.</p>
-<p><a href="{{root}}docs/install.html">Installation</a> · <a href="{{root}}docs/getting-started.html">Erste Schritte</a>
-· <a href="{{root}}de/manual/index.html">Handbuch</a> · <a href="https://github.com/NamorX68/glut">GitHub</a></p>
+<!-- layout: home -->
+<div class="boot" hidden aria-hidden="true">
+  <div class="inner">
+    <canvas class="glimm" data-unit="3" data-mood="work"></canvas>
+    <div data-line><b>001</b>$ glut</div>
+    <div data-line><b>002</b>provider openrouter · model anthropic/claude-sonnet-5-5</div>
+    <div data-line><b>003</b>sandbox seatbelt · netz über den proxy</div>
+    <div data-line><b>004</b>leitfaden AGENTS.md gelesen · 68 befehle</div>
+    <div data-line><b>005</b>modus build · snapshots an</div>
+    <div data-line><b>006</b>bereit</div>
+    <div class="boot-count">000%</div>
+    <div class="skip">eine Taste überspringt</div>
+  </div>
+</div>
+
+<div class="wrap">
+  <section class="hero">
+    <div>
+      <p class="hud"><b>[glut 0.1.0]</b> · macOS · Linux · Open Source</p>
+      <h1 class="display">Ein Coding-Agent,<br>der seine Hände<br><em>in der Sandbox<br>behält.</em></h1>
+      <p class="lead"><strong>Glut läuft in deinem Terminal, arbeitet mit dem Modell, das du willst, und führt jeden Befehl,
+        den es schreibt, in einer Sandbox des Betriebssystems aus</strong> (Seatbelt auf macOS, bubblewrap auf Linux) —
+        hinter einem Tor, das nachfragt, bevor etwas Wichtiges passiert, mit einem Snapshot vor jeder Änderung.</p>
+      <ul class="tags">
+        <li><b>01</b>Jedes Modell</li>
+        <li><b>02</b>OS-Sandbox</li>
+        <li><b>03</b>Änderungen rücknehmbar</li>
+      </ul>
+      <div class="install">
+        <code id="install-hero">curl -fsSL https://github.com/NamorX68/glut/releases/latest/download/install.sh | sh</code>
+        <button class="copy" type="button" data-copy="install-hero" data-done="kopiert" data-failed="markieren" aria-live="polite" aria-label="Installationsbefehl kopieren">kopieren</button>
+      </div>
+      <div class="actions">
+        <a class="button hot" href="{{root}}docs/getting-started.html">Loslegen</a>
+        <a class="button" href="{{root}}docs/security.html">Das Sicherheitsmodell</a>
+      </div>
+    </div>
+    <div class="stage">
+      <i class="corner a"></i><i class="corner b"></i><i class="corner c"></i><i class="corner d"></i>
+      <canvas class="glimm" data-unit="9" data-mood="work" role="img" aria-label="Glimm, die Flamme von Glut"></canvas>
+      <span class="coords hud">glimm · 32 × 20 px</span>
+    </div>
+  </section>
+
+  <section class="part" data-section="01" aria-labelledby="problem">
+    <div class="part-head">
+      <p class="hud"><b>[01]</b> das Problem</p>
+      <h2 class="display" id="problem">Ein Agent<br>führt Befehle auf<br><em>deinem</em> Rechner aus.</h2>
+    </div>
+    <div class="cards">
+      <article class="card" data-reveal>
+        <p class="hud"><span>blind</span><b>[01]</b></p>
+        <h3>Er führt aus, was er schreibt.</h3>
+        <p>Ein Modell liest eine Datei, die ihm sagt, was es tun soll, und tut es — mit deinen Rechten, deinen Schlüsseln, deinem Netz.</p>
+        <p class="answer">Jeder Befehl in Seatbelt (macOS) oder bubblewrap (Linux), das Netz über einen Proxy, der fragt.</p>
+      </article>
+      <article class="card" data-reveal>
+        <p class="hud"><span>gebunden</span><b>[02]</b></p>
+        <h3>Ein Anbieter, ein Modell.</h3>
+        <p>Das Werkzeug entscheidet, welches Modell du nutzen darfst und was es dich kostet.</p>
+        <p class="answer">Zwei Dutzend Anbieter, lokale Modelle, dein ChatGPT-Abo — und die Kosten jeder Runde in der Fußzeile.</p>
+      </article>
+      <article class="card" data-reveal>
+        <p class="hud"><span>zerbrechlich</span><b>[03]</b></p>
+        <h3>Eine Änderung ohne Weg zurück.</h3>
+        <p>Eine Änderung zu viel, ein Lauf, der mittendrin stirbt, und ein Nachmittag ist weg.</p>
+        <p class="answer">Ein Snapshot vor jeder Änderung, <code>/undo</code>, und Journale, mit denen ein verlorener Lauf weitergeht.</p>
+      </article>
+      <article class="card" data-reveal>
+        <p class="hud"><span>gekürzt</span><b>[04]</b></p>
+        <h3>Er rät, was man ihm nicht zeigte.</h3>
+        <p>Lange Ausgaben werden abgeschnitten, und das Modell füllt die Lücke mit dem, was richtig klingt.</p>
+        <p class="answer">Nichts wird abgeschnitten: Das ganze Ergebnis liegt in einem Speicher, in dem das Modell blättern kann.</p>
+      </article>
+    </div>
+  </section>
+
+  <section class="part" aria-label="Wofür Glut da ist">
+    <p class="manifesto" data-words data-reveal>Glut ist für alle, die einen Agenten in ihren echten Projekten auf ihren
+      echten Rechnern arbeiten lassen — und bei jedem Schritt wissen wollen, was er darf, was er getan hat und wie man
+      es zurücknimmt.</p>
+    <p class="hud">[weiterscrollen]</p>
+  </section>
+
+  <section class="part" data-section="02" aria-labelledby="held">
+    <div class="part-head">
+      <p class="hud"><b>[02]</b> wie ein Befehl gehalten wird</p>
+      <h2 class="display" id="held">Vier Wände<br>um jeden<br><em>Befehl.</em></h2>
+    </div>
+    <div class="steps" data-steps>
+      <div class="panel-stack" aria-hidden="true">
+        <div class="panel on" data-panel="sandbox">
+          <div class="bar"><i></i><i></i><i></i></div>
+          <pre><span class="say">$</span> cat .env
+<span class="no">cat: .env: Operation not permitted</span>
+<span class="say">$</span> echo x &gt;&gt; .git/hooks/pre-commit
+<span class="no">verweigert: ein geschützter Name, in jeder Tiefe</span>
+<span class="say">$</span> cargo test
+<span class="ok">test result: ok. 112 passed</span></pre>
+        </div>
+        <div class="panel" data-panel="gate">
+          <div class="bar"><i></i><i></i><i></i></div>
+          <pre><span class="ask">? einen Befehl ausführen</span>
+  git push origin main
+
+  <span class="you">y</span> einmal · <span class="you">n</span> ablehnen
+  oder für diese Session erlauben:
+    diesen Befehl
+    git push *
+    git *</pre>
+        </div>
+        <div class="panel" data-panel="snapshot">
+          <div class="bar"><i></i><i></i><i></i></div>
+          <pre><span class="say">◆ edit</span> src/parser.rs  <span class="ok">+12</span> <span class="no">−4</span>
+<span class="say">◆ edit</span> src/lexer.rs   <span class="ok">+3</span>  <span class="no">−1</span>
+
+<span class="you">/undo</span>
+<span class="ok">2 Dateien wieder wie vor dieser Runde</span></pre>
+        </div>
+        <div class="panel" data-panel="masks">
+          <div class="bar"><i></i><i></i><i></i></div>
+          <pre><span class="say">$</span> env | grep KEY
+OPENROUTER_API_KEY=<span class="ask">‹secret 1: openrouter key, 73 chars›</span>
+
+<span class="say">das Modell sieht die Maske; ein Schreiben in die
+Datei, die den Schlüssel hält, setzt ihn wieder ein.</span></pre>
+        </div>
+      </div>
+      <div>
+        <article class="step on" data-step="sandbox">
+          <p class="hud"><b>01</b> / 04</p>
+          <h3>Die Sandbox</h3>
+          <p><strong>Jeder Befehl läuft in der Sandbox des Betriebssystems</strong> — Seatbelt auf macOS, bubblewrap mit
+            dem eigenen seccomp-Filter von Glut auf Linux. Er schreibt nur in dein Projekt und die üblichen Caches.
+            Er liest keine <code>.env</code> und lässt Git-Hooks, <code>.cargo/config.toml</code> oder
+            <code>.vscode/tasks.json</code> in jeder Tiefe in Ruhe. Wo keine Sandbox laufen kann, fragt jeder Befehl dich
+            vorher.</p>
+        </article>
+        <article class="step" data-step="gate">
+          <p class="hud"><b>02</b> / 04</p>
+          <h3>Das Tor</h3>
+          <p><strong>Lesen ist frei; Ändern fragt — oder nicht, im Modus, den du wählst.</strong> Ein Befehl, der nur
+            liest, läuft sofort; <code>rm -rf</code>, <code>git push</code> und <code>sudo</code> fragen immer. „Immer“
+            heißt die Reichweite, die du wählst, nie eine, die Glut erweitert.</p>
+        </article>
+        <article class="step" data-step="snapshot">
+          <p class="hud"><b>03</b> / 04</p>
+          <h3>Der Snapshot</h3>
+          <p><strong>Vor jeder Änderung bewahrt Glut deine Dateien, wie sie waren.</strong> <code>/undo</code> nimmt eine
+            Runde oder einen einzelnen Schritt zurück; <code>/diff</code> zeigt die Änderungen der Session Datei für
+            Datei, und ein einzelner Abschnitt kann allein zurück.</p>
+        </article>
+        <article class="step" data-step="masks">
+          <p class="hud"><b>04</b> / 04</p>
+          <h3>Die Masken</h3>
+          <p><strong>Ein versehentlich gezeigter Schlüssel erreicht das Modell nie.</strong> Geheimnisse werden maskiert,
+            wo ein Ergebnis ins Gespräch kommt; deine Anbieter-Schlüssel liegen im Schlüsselbund, an ihren Host
+            gebunden.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section class="part" data-section="03" aria-labelledby="models">
+    <div class="part-head">
+      <p class="hud"><b>[03]</b> jedes Modell</p>
+      <h2 class="display" id="models">Dein Modell.<br>Deine Schlüssel.<br><em>Deine Rechnung.</em></h2>
+    </div>
+    <ul class="tiles" data-reveal>
+      <li>OpenRouter</li><li>Anthropic</li><li>OpenAI</li><li>ChatGPT-Abo</li><li>Gemini</li><li>DeepSeek</li>
+      <li>Mistral</li><li>Ollama</li><li>LM Studio</li><li>OpenCode Zen</li><li>jedes OpenAI-kompatible</li>
+      <li>+ zwei Dutzend mehr</li>
+    </ul>
+    <p class="note">Schlüssel bleiben im macOS-Schlüsselbund, an den Host ihres Anbieters gebunden. Die Fußzeile zählt
+      Tokens, Cache-Treffer und Kosten, während sie entstehen; ein Budget stoppt einen Lauf, bevor er zu viel ausgibt.</p>
+  </section>
+
+  <section class="part" data-section="04" aria-labelledby="agents">
+    <div class="part-head">
+      <p class="hud"><b>[04]</b> viele Agenten</p>
+      <h2 class="display" id="agents">Mehr als<br>ein Agent<br><em>zugleich.</em></h2>
+    </div>
+    <div class="cards">
+      <article class="card" data-reveal>
+        <p class="hud"><span>panes</span><b>[01]</b></p>
+        <h3>Nebeneinander.</h3>
+        <p>Bis zu sieben Panes in einem Fenster, jedes mit eigener Session, eigenem Modell und Modus — und Agenten im Hintergrund.</p>
+      </article>
+      <article class="card" data-reveal>
+        <p class="hud"><span>arena</span><b>[02]</b></p>
+        <h3>Modelle gegeneinander.</h3>
+        <p>Eine Aufgabe, zwei bis vier Modelle, standardmäßig blind, jedes in einer abgeschotteten Kopie deines Repositorys. Nimm den Sieger.</p>
+      </article>
+      <article class="card" data-reveal>
+        <p class="hud"><span>reden</span><b>[03]</b></p>
+        <h3>Agenten, die sich schreiben.</h3>
+        <p>Innerhalb eines Fensters und über Glut-Fenster hinweg — ohne sich je ein Recht zu leihen.</p>
+      </article>
+      <article class="card" data-reveal>
+        <p class="hud"><span>während du schläfst</span><b>[04]</b></p>
+        <h3>Schleifen und Zeitpläne.</h3>
+        <p><code>/loop</code> wiederholt eine Aufgabe, bis sie erledigt ist; <code>/schedule</code> führt eine aus, während Glut geschlossen ist.</p>
+      </article>
+    </div>
+  </section>
+
+  <section class="part" data-section="05" aria-labelledby="reel">
+    <div class="part-head">
+      <p class="hud"><b>[05]</b> und der Rest</p>
+      <h2 class="display" id="reel">Was kein<br>Screenshot<br><em>zeigt.</em></h2>
+    </div>
+    <ol class="reel">
+      <li data-n="01" data-reveal><b>Journale</b><span>ein mittendrin verlorener Lauf macht dort weiter, wo er stand</span></li>
+      <li data-n="02" data-reveal><b>Rechtzeitiges Verdichten</b><span>der Kontext wird zusammengefasst, bevor er überläuft, ganze Schritte bleiben</span></li>
+      <li data-n="03" data-reveal><b>Grenzen für Ablehnungen</b><span>ein Modell, das immer wieder gegen dieselbe Wand läuft, wird gestoppt</span></li>
+      <li data-n="04" data-reveal><b>Nichts gekürzt</b><span>jedes Werkzeug-Ergebnis ganz, in einem Speicher zum Blättern</span></li>
+      <li data-n="05" data-reveal><b>Language Server</b><span>Fehler nach jeder Änderung, Umbenennen als eine Änderung</span></li>
+      <li data-n="06" data-reveal><b>Code-Modus</b><span>ein Skript aus Werkzeug-Aufrufen in einem Schritt, in QuickJS</span></li>
+      <li data-n="07" data-reveal><b>MCP</b><span>lokale und gehostete Server, OAuth, ihre Formulare beantwortest du</span></li>
+      <li data-n="08" data-reveal><b>Skills, Hooks, Subagenten</b><span>Hooks dürfen verbieten, nie erlauben</span></li>
+      <li data-n="09" data-reveal><b>Abos</b><span>dein ChatGPT-Abo, angemeldet im Browser</span></li>
+      <li data-n="10" data-reveal><b>Zusätzliche Ordner</b><span>nur auf dein Wort, nie auf das des Modells</span></li>
+      <li data-n="11" data-reveal><b>Der Schlüsselbund auf Anfrage</b><span>für Befehle zu, außer für die Programme, die du nennst</span></li>
+      <li data-n="12" data-reveal><b>Dein Editor</b><span>Neovim, VS Code, JetBrains und das Agent Client Protocol</span></li>
+      <li data-n="13" data-reveal><b>Acht Sprachen</b><span>die ganze Oberfläche und das Handbuch</span></li>
+      <li data-n="14" data-reveal><b>Ein Modus für Screenreader</b><span>dieselbe Session, der Reihe nach gelesen</span></li>
+      <li data-n="15" data-reveal><b>glut clean</b><span>hält den eigenen Datenordner sauber, nach deinen Regeln</span></li>
+      <li data-n="16" data-reveal><b>Eine Bibliothek</b><span>die Schleife in deinem eigenen Programm, ihre Ereignisse als JSON-Zeilen</span></li>
+    </ol>
+  </section>
+
+  <section class="closing" aria-labelledby="try">
+    <div class="stage">
+      <canvas class="glimm" data-unit="6" data-mood="rest" role="img" aria-label="Glimm in Ruhe"></canvas>
+    </div>
+    <h2 class="display" id="try">Probier es in<br><em>deinem</em> Projekt.</h2>
+    <div class="install">
+      <code id="install-end">curl -fsSL https://github.com/NamorX68/glut/releases/latest/download/install.sh | sh</code>
+      <button class="copy" type="button" data-copy="install-end" data-done="kopiert" data-failed="markieren" aria-live="polite" aria-label="Installationsbefehl kopieren">kopieren</button>
+    </div>
+    <div class="actions" style="justify-content:center">
+      <a class="button" href="{{root}}docs/install.html">Andere Wege zur Installation</a>
+      <a class="button" href="{{root}}de/manual/index.html">Das Handbuch</a>
+      <a class="button" href="https://github.com/NamorX68/glut">GitHub</a>
+    </div>
+  </section>
+</div>

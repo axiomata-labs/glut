@@ -5,20 +5,20 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{title}} · Glut</title>
 <link rel="stylesheet" href="{{root}}static/style.css">
+<link rel="icon" href="{{root}}static/glimm.svg" type="image/svg+xml">
 </head>
 <body>
-<header class="top">
-<a class="brand" href="{{root}}index.html">Glut</a>
-<nav class="lang">{{switch}}</nav>
-</header>
+<a class="skip-link" href="#main">{{skip}}</a>
+{{top}}
 <div class="frame">
-<nav class="side">
+<nav class="side" aria-label="{{side_label}}">
 {{nav}}
 </nav>
-<main>
+<main class="doc" id="main">
 {{content}}
 <footer class="page">{{source}}</footer>
 </main>
 </div>
+{{foot}}
 </body>
 </html>

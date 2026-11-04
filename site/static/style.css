@@ -1,20 +1,430 @@
-/* The site's frame until its design (launch step L4): readable, dark, no fonts loaded from elsewhere. */
-:root { color-scheme: dark; --ink: #e8e3da; --dim: #9a948a; --ember: #ff7a3d; --ground: #121110; --line: #2a2725; }
+/* Glut's site. Colours from Glimm and the terminal UI's theme; no font loaded from elsewhere; every motion below is
+   dropped under prefers-reduced-motion, and every reveal only applies once site.js has run (.js on <html>). */
+
+:root {
+  color-scheme: dark;
+  --ground: #0c0b0a;
+  --panel: #151311;
+  --line: #2a2522;
+  --ink: #ece6dc;
+  --dim: #8a8f98;
+  --deep: #b8360f;
+  --ember: #ff7a1a;
+  --amber: #ffa040;
+  --gold: #ffd36b;
+  --white-hot: #fff2cc;
+  --fine: #8cc88c;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --read: 0;
+}
+
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--ground); color: var(--ink); font: 16px/1.6 system-ui, sans-serif; }
-a { color: var(--ember); }
-code, pre { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.92em; }
-pre { background: #1b1918; padding: 0.8em 1em; overflow-x: auto; border: 1px solid var(--line); }
-.top { display: flex; justify-content: space-between; padding: 0.8em 1.5em; border-bottom: 1px solid var(--line); }
-.brand { font-weight: 700; text-decoration: none; }
-.frame { display: grid; grid-template-columns: 15em minmax(0, 52em); gap: 2em; padding: 1.5em; }
-.side { display: flex; flex-direction: column; gap: 0.3em; }
-.side details a { display: block; padding-left: 1em; }
-.side [aria-current] { color: var(--ink); }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font: 17px/1.6 var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+/* A grain over the ground, drawn here rather than loaded. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.06;
+  z-index: 50;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+body.booting { overflow: hidden; }
+
+a { color: var(--amber); text-underline-offset: 0.2em; }
+a:hover { color: var(--gold); }
+:focus-visible { outline: 2px solid var(--gold); outline-offset: 3px; }
+code, pre, kbd { font-family: var(--mono); font-size: 0.9em; }
+pre {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  padding: 0.9em 1.1em;
+  overflow-x: auto;
+  line-height: 1.5;
+}
+::selection { background: var(--deep); color: var(--white-hot); }
+
+/* ---- The frame shared by every page ------------------------------------------------------------------------- */
+
+.top {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 1.5em;
+  padding: 0.9em clamp(1em, 4vw, 3em);
+  background: color-mix(in srgb, var(--ground) 82%, transparent);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--line);
+  font: 0.8rem/1 var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+.top::after {
+  /* How far down the page: a line of glow under the bar. */
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: -1px;
+  height: 1px;
+  width: calc(var(--read) * 100%);
+  background: linear-gradient(90deg, var(--deep), var(--ember), var(--gold));
+}
+.top a { color: var(--ink); text-decoration: none; }
+.top a:hover { color: var(--gold); }
+.brand { font-weight: 700; letter-spacing: 0.3em; white-space: nowrap; }
+.brand::before { content: "▲ "; color: var(--ember); }
+.top .links { display: flex; gap: 1.4em; margin-left: auto; }
+.top .lang a { color: var(--dim); }
+.top .links a { white-space: nowrap; }
+
+.foot {
+  margin-top: 6em;
+  padding: 3em clamp(1em, 4vw, 3em) 2em;
+  border-top: 1px solid var(--line);
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12em, 1fr));
+  gap: 2em;
+  font-size: 0.9rem;
+  color: var(--dim);
+}
+.foot h2 {
+  font: 0.75rem/1 var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--ink);
+  margin: 0 0 1em;
+}
+.foot a { display: block; color: var(--dim); text-decoration: none; margin: 0.3em 0; }
+.foot a:hover { color: var(--gold); }
+.foot .fine { grid-column: 1 / -1; font: 0.75rem/1.6 var(--mono); letter-spacing: 0.06em; }
+
+/* ---- Documents and the manual: quiet --------------------------------------------------------------------------- */
+
+.frame {
+  display: grid;
+  grid-template-columns: 15em minmax(0, 50em);
+  gap: clamp(1.5em, 4vw, 4em);
+  padding: 2.5em clamp(1em, 4vw, 3em);
+}
+.side {
+  position: sticky;
+  top: 5em;
+  align-self: start;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35em;
+  font: 0.85rem/1.4 var(--mono);
+}
+.side a { color: var(--dim); text-decoration: none; }
+.side a:hover, .side [aria-current] { color: var(--ink); }
+.side [aria-current]::before { content: "› "; color: var(--ember); }
+.side summary { cursor: pointer; color: var(--ink); margin-top: 0.6em; }
+.side details a { display: block; padding: 0.15em 0 0.15em 1em; }
+main.doc h1 {
+  font: 700 clamp(1.8rem, 3vw, 2.4rem)/1.15 var(--sans);
+  letter-spacing: -0.01em;
+  margin-top: 0;
+}
+main.doc h2 { margin-top: 2.2em; padding-top: 0.6em; border-top: 1px solid var(--line); }
+main.doc h2, main.doc h3 { scroll-margin-top: 5em; }
+main.doc table { border-collapse: collapse; display: block; overflow-x: auto; }
+main.doc th, main.doc td { border: 1px solid var(--line); padding: 0.35em 0.7em; text-align: left; vertical-align: top; }
+main.doc blockquote { margin: 1.2em 0; padding: 0.2em 1.2em; border-left: 2px solid var(--ember); color: var(--dim); }
 .lead { font-size: 1.15em; color: var(--ink); }
-dl.forms dt, dl.commands dt { margin-top: 0.7em; }
-dd { margin-left: 1.5em; color: var(--dim); }
-table { border-collapse: collapse; }
-th, td { border: 1px solid var(--line); padding: 0.3em 0.6em; text-align: left; }
-footer.page { margin-top: 3em; color: var(--dim); font-size: 0.9em; }
-@media (max-width: 50em) { .frame { grid-template-columns: 1fr; } }
+dl.forms dt, dl.commands dt { margin-top: 0.8em; }
+dl.forms dd, dl.commands dd { margin-left: 1.5em; color: var(--dim); }
+pre.example { border-left: 2px solid var(--ember); }
+footer.page { margin-top: 4em; font-size: 0.85rem; color: var(--dim); }
+@media (max-width: 52em) {
+  .frame { grid-template-columns: 1fr; }
+  .side { position: static; }
+}
+
+/* ---- The home page ----------------------------------------------------------------------------------------------- */
+
+.hud {
+  font: 0.75rem/1.4 var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--dim);
+}
+.hud b { color: var(--ember); font-weight: 400; }
+.readout {
+  position: fixed;
+  left: clamp(1em, 4vw, 3em);
+  bottom: 1.2em;
+  z-index: 30;
+}
+
+.wrap { padding: 0 clamp(1em, 4vw, 3em); max-width: 90em; margin: 0 auto; }
+section.part { padding: clamp(5em, 12vh, 9em) 0; border-bottom: 1px solid var(--line); }
+.part-head {
+  display: grid;
+  grid-template-columns: 8em 1fr;
+  gap: 1.5em;
+  align-items: baseline;
+  margin-bottom: 3em;
+}
+.part-head .hud { padding-top: 0.6em; }
+.display {
+  margin: 0;
+  font: 700 clamp(2.2rem, 6vw, 5.2rem)/0.98 var(--sans);
+  text-transform: uppercase;
+  letter-spacing: -0.02em;
+}
+.display em { font-style: normal; color: var(--ember); }
+h2.display { font-size: clamp(1.8rem, 4.2vw, 3.6rem); }
+
+/* The hero. */
+.hero {
+  min-height: calc(100vh - 3em);
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 2em;
+  padding-top: 3em;
+  padding-bottom: 3em;
+}
+.hero .lead { max-width: 34em; margin: 1.8em 0; color: var(--dim); font-size: 1.15rem; }
+.hero .lead strong { color: var(--ink); font-weight: 600; }
+.stage {
+  position: relative;
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1;
+}
+.stage::before {
+  /* The glow out of the flame into the ground, as the terminal draws it into its background. */
+  content: "";
+  position: absolute;
+  inset: 8%;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, color-mix(in srgb, var(--deep) 42%, transparent), transparent);
+  filter: blur(18px);
+}
+.stage canvas { position: relative; image-rendering: pixelated; }
+.stage .coords { position: absolute; bottom: 4%; right: 2%; }
+.stage .corner { position: absolute; width: 1.2em; height: 1.2em; border: 1px solid var(--line); }
+.stage .corner.a { top: 0; left: 0; border-width: 1px 0 0 1px; }
+.stage .corner.b { top: 0; right: 0; border-width: 1px 1px 0 0; }
+.stage .corner.c { bottom: 0; left: 0; border-width: 0 0 1px 1px; }
+.stage .corner.d { bottom: 0; right: 0; border-width: 0 1px 1px 0; }
+
+.tags { display: flex; flex-wrap: wrap; gap: 0.6em; padding: 0; margin: 0 0 2em; list-style: none; }
+.tags li {
+  font: 0.75rem/1 var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  border: 1px solid var(--line);
+  padding: 0.6em 0.8em;
+  color: var(--ink);
+}
+.tags li b { color: var(--ember); font-weight: 400; margin-right: 0.5em; }
+
+.install {
+  display: flex;
+  align-items: stretch;
+  max-width: 44em;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  font-family: var(--mono);
+  font-size: 0.85rem;
+}
+.install code { flex: 1; padding: 1em 1.1em; overflow-x: auto; white-space: nowrap; font-size: 1em; }
+.install code::before { content: "$ "; color: var(--ember); }
+button.copy, .button {
+  font: 0.75rem/1 var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  border: 0;
+  border-left: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink);
+  padding: 0 1.2em;
+  cursor: pointer;
+}
+button.copy:hover { color: var(--gold); }
+html:not(.js) button.copy { display: none; }
+.skip-link { position: absolute; left: -999em; }
+.skip-link:focus { left: 1em; top: 0.6em; z-index: 200; background: var(--ember); color: var(--ground); padding: 0.5em 0.8em; }
+.actions { display: flex; gap: 1em; margin-top: 1.4em; flex-wrap: wrap; }
+.button {
+  display: inline-block;
+  border: 1px solid var(--line);
+  padding: 1em 1.4em;
+  text-decoration: none;
+}
+.button.hot { background: var(--ember); color: var(--ground); border-color: var(--ember); }
+.button.hot:hover { background: var(--gold); border-color: var(--gold); color: var(--ground); }
+
+/* Numbered cards. */
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16em, 1fr));
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+}
+.card { background: var(--ground); padding: 2em 1.6em 2.2em; min-height: 17em; display: flex; flex-direction: column; }
+.card .hud { display: flex; justify-content: space-between; margin-bottom: 3em; }
+.card h3 { margin: 0 0 0.6em; font-size: 1.25rem; }
+.card p { margin: 0; color: var(--dim); }
+.card .answer { margin-top: auto; padding-top: 1.4em; color: var(--ink); }
+.card .answer::before { content: "→ "; color: var(--ember); font-family: var(--mono); }
+
+/* The manifesto, lit word by word. */
+.manifesto {
+  font: 600 clamp(1.6rem, 3.4vw, 2.9rem)/1.2 var(--sans);
+  letter-spacing: -0.01em;
+  max-width: 28em;
+  margin: 0;
+}
+.manifesto + .hud { margin-top: 2em; }
+
+/* The steps beside their sticky panel. */
+.steps { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: clamp(2em, 5vw, 5em); }
+.panel-stack { position: sticky; top: 18vh; align-self: start; min-height: 22em; }
+.panel {
+  position: absolute;
+  inset: 0 0 auto;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  font: 0.95rem/1.65 var(--mono);
+  opacity: 0;
+  transform: translateY(0.8em);
+  transition: opacity 0.4s, transform 0.4s;
+}
+.panel.on, html:not(.js) .panel:first-child { opacity: 1; transform: none; }
+.panel .bar { display: flex; gap: 0.4em; padding: 0.7em 0.9em; border-bottom: 1px solid var(--line); }
+.panel .bar i { width: 0.6em; height: 0.6em; border-radius: 50%; background: var(--line); }
+.panel pre { border: 0; background: none; margin: 0; padding: 1.1em 1.2em 1.4em; white-space: pre-wrap; }
+.say { color: var(--dim); }
+.you { color: #9cc8e8; }
+.ok { color: var(--fine); }
+.no { color: #e06c6c; }
+.ask { color: var(--gold); }
+.step { min-height: 62vh; padding-top: 2em; opacity: 0.6; transition: opacity 0.4s; }
+.step.on, html:not(.js) .step { opacity: 1; }
+.step h3 { font: 700 clamp(1.4rem, 2.6vw, 2.2rem)/1.1 var(--sans); text-transform: uppercase; margin: 0.5em 0; }
+.step p { color: var(--dim); max-width: 30em; }
+.step p strong { color: var(--ink); }
+
+/* Tiles: lines drawn by each tile, so a row left short shows ground, not a block of line. */
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(11em, 1fr));
+  border-top: 1px solid var(--line);
+  border-left: 1px solid var(--line);
+  padding: 0;
+  margin: 0;
+}
+.tiles li {
+  list-style: none;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  padding: 1.6em 1.2em;
+  font: 0.8rem/1.3 var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  transition: background 0.3s, color 0.3s;
+}
+.tiles li:hover { background: var(--panel); color: var(--gold); }
+.note { color: var(--dim); max-width: 40em; margin-top: 1.6em; }
+
+/* A drawn terminal. */
+.terminal {
+  border: 1px solid var(--line);
+  background: var(--panel);
+  font: 0.85rem/1.6 var(--mono);
+  box-shadow: 0 2em 6em -2em color-mix(in srgb, var(--deep) 35%, transparent);
+}
+.terminal .bar { display: flex; gap: 0.4em; padding: 0.7em 0.9em; border-bottom: 1px solid var(--line); }
+.terminal .bar i { width: 0.6em; height: 0.6em; border-radius: 50%; background: var(--line); }
+.terminal .bar span { margin-left: auto; color: var(--dim); font-size: 0.85em; }
+.terminal pre { margin: 0; border: 0; background: none; padding: 1.2em 1.4em; }
+
+/* The closing reel: a list built line by line. */
+.reel { list-style: none; padding: 0; margin: 0; columns: 2 24em; column-gap: 3em; }
+.reel li {
+  break-inside: avoid;
+  padding: 0.9em 0;
+  border-top: 1px solid var(--line);
+  font-family: var(--mono);
+  font-size: 0.9rem;
+}
+.reel li b { color: var(--ink); font-weight: 600; font-family: var(--sans); font-size: 1.05rem; display: block; }
+.reel li span { color: var(--dim); font-family: var(--sans); }
+.reel li::before { content: attr(data-n) "  "; color: var(--ember); }
+
+.closing { text-align: center; padding: clamp(6em, 16vh, 11em) 0; }
+.closing .install { margin: 2.4em auto 0; text-align: left; }
+.closing .stage { width: min(14em, 50vw); margin: 0 auto 2em; }
+
+/* The start sequence. */
+.boot {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: var(--ground);
+  display: grid;
+  place-items: center;
+  font: 0.8rem/1.9 var(--mono);
+  letter-spacing: 0.08em;
+  transition: opacity 0.5s, visibility 0.5s;
+}
+.boot[hidden] { display: none; }
+.boot.gone { opacity: 0; visibility: hidden; }
+.boot .inner { width: min(46em, 90vw); }
+.boot canvas { display: block; margin-bottom: 1.6em; image-rendering: pixelated; }
+.boot [data-line] { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: 0; color: var(--dim); transition: opacity 0.15s; }
+.boot [data-line].on { opacity: 1; }
+.boot [data-line] b { color: var(--ember); font-weight: 400; margin-right: 1.2em; }
+.boot .boot-count { font-size: clamp(2.6rem, 8vw, 5rem); color: var(--ink); letter-spacing: 0; margin-top: 0.4em; }
+.boot .skip { color: var(--dim); margin-top: 1em; }
+
+/* Reveals, only once site.js runs. */
+.js [data-reveal] { opacity: 0; transform: translateY(1.6em); transition: opacity 0.8s ease, transform 0.8s ease; }
+.js [data-reveal].in { opacity: 1; transform: none; }
+.js .reel [data-reveal] { transform: translateX(-0.8em); transition-duration: 0.5s; }
+.js [data-words] span { opacity: 0.18; transition: opacity 0.3s; }
+.js [data-words].in span { opacity: 1; }
+@supports (animation-timeline: view()) {
+  /* Where the browser ties an animation to the scroll, each word lights as the manifesto passes. */
+  .js [data-words] span {
+    opacity: 1;
+    animation: light linear both;
+    animation-timeline: view();
+    animation-range: cover calc(10% + var(--at) * 35%) cover calc(18% + var(--at) * 35%);
+  }
+  @keyframes light { from { opacity: 0.18; } to { opacity: 1; } }
+}
+
+@media (max-width: 56em) {
+  .hero { grid-template-columns: minmax(0, 1fr); min-height: auto; }
+  .top { gap: 1em; padding: 0.9em 1em; }
+  .top .links { gap: 0.9em; letter-spacing: 0.06em; }
+  .brand { letter-spacing: 0.15em; }
+  .hero .stage { width: min(20em, 70vw); margin: 0 auto; }
+  .part-head { grid-template-columns: 1fr; }
+  .steps { grid-template-columns: minmax(0, 1fr); }
+  .panel-stack { position: relative; top: 0; }
+  .step { min-height: auto; padding-bottom: 2em; }
+  .top .links a.wide { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+  .js [data-reveal], .js [data-words] span, .step { opacity: 1; transform: none; }
+}
