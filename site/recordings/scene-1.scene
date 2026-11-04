@@ -1,0 +1,18 @@
+# Scene 1: a first task — Glimm, the task list, diffs, the tests green. The site's hero.
+size 120 34
+project prices
+home fresh
+allow "Bash(python3 *)"
+on "Glut asks" key y
+run glut --provider anthropic --model claude-sonnet-5-5 --lang en
+wait 20 "⏎ send"
+pause 1.2
+key ctrl-b
+pause 1
+type "the tests fail since yesterday — find out why and fix them"
+pause 0.8
+key enter
+wait-gone 30 "⏎ send"
+wait 600 "⏎ send" x3
+pause 5
+end

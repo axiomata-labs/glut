@@ -16,7 +16,7 @@
 <div class="wrap">
   <section class="hero">
     <div>
-      <p class="hud"><b>[glut 0.1.0]</b> · macOS · Linux · Open Source</p>
+      <p class="hud"><b>[glut 0.1.0]</b> · in Rust geschrieben · macOS · Linux · Open Source</p>
       <h1 class="display">Ein Coding-Agent,<br>der seine Hände<br><em>in der Sandbox<br>behält.</em></h1>
       <p class="lead"><strong>Glut läuft in deinem Terminal, arbeitet mit dem Modell, das du willst, und führt jeden Befehl,
         den es schreibt, in einer Sandbox des Betriebssystems aus</strong> (Seatbelt auf macOS, bubblewrap auf Linux) —
@@ -34,12 +34,31 @@
         <a class="button hot" href="{{root}}docs/getting-started.html">Loslegen</a>
         <a class="button" href="{{root}}docs/security.html">Das Sicherheitsmodell</a>
       </div>
+      <dl class="facts">
+        <div><dt>1</dt><dd>Programm, in Rust geschrieben</dd></div>
+        <div><dt>&lt;50<small>MB</small></dt><dd>alles inklusive</dd></div>
+        <div><dt>0</dt><dd>Laufzeitumgebungen nötig — kein Node, kein Python</dd></div>
+        <div><dt>8</dt><dd>Sprachen, Oberfläche und Handbuch</dd></div>
+      </dl>
+      <p class="facts-note">Drei Teile darin sind C — QuickJS, die tree-sitter-Grammatiken und die Kryptografie von ring —, über ihre Rust-Crates eingebaut. <a href="{{root}}docs/architecture.html#the-workspace">Architektur (englisch)</a></p>
     </div>
     <div class="stage">
       <i class="corner a"></i><i class="corner b"></i><i class="corner c"></i><i class="corner d"></i>
       <canvas class="glimm" data-unit="9" data-mood="work" role="img" aria-label="Glimm, die Flamme von Glut"></canvas>
       <span class="coords hud">glimm · 32 × 20 px</span>
     </div>
+  </section>
+
+  <section class="showcase" aria-label="Aufnahme">
+    <p class="hud"><span><b>[▶]</b> Szene 01 · eine erste Aufgabe</span><span>echter Lauf · claude-sonnet-5-5 · Zeit verkürzt, während das Modell arbeitet</span></p>
+    <figure class="player" data-src="{{root}}recordings/scene-1.json">
+      <div class="bar"><i></i><i></i><i></i><span>glut — ~/glut-demo/prices</span></div>
+      <pre class="screen" aria-label="Aufnahme"></pre>
+      <div class="controls">
+        <button class="play" type="button" aria-label="Abspielen" data-play="Abspielen" data-pause="Anhalten"></button>
+        <div class="progress"><i></i></div>
+      </div>
+    </figure>
   </section>
 
   <section class="part" data-section="01" aria-labelledby="problem">
@@ -210,22 +229,23 @@ Datei, die den Schlüssel hält, setzt ihn wieder ein.</span></pre>
       <h2 class="display" id="reel">Was kein<br>Screenshot<br><em>zeigt.</em></h2>
     </div>
     <ol class="reel">
-      <li data-n="01" data-reveal><b>Journale</b><span>ein mittendrin verlorener Lauf macht dort weiter, wo er stand</span></li>
-      <li data-n="02" data-reveal><b>Rechtzeitiges Verdichten</b><span>der Kontext wird zusammengefasst, bevor er überläuft, ganze Schritte bleiben</span></li>
-      <li data-n="03" data-reveal><b>Grenzen für Ablehnungen</b><span>ein Modell, das immer wieder gegen dieselbe Wand läuft, wird gestoppt</span></li>
-      <li data-n="04" data-reveal><b>Nichts gekürzt</b><span>jedes Werkzeug-Ergebnis ganz, in einem Speicher zum Blättern</span></li>
-      <li data-n="05" data-reveal><b>Language Server</b><span>Fehler nach jeder Änderung, Umbenennen als eine Änderung</span></li>
-      <li data-n="06" data-reveal><b>Code-Modus</b><span>ein Skript aus Werkzeug-Aufrufen in einem Schritt, in QuickJS</span></li>
-      <li data-n="07" data-reveal><b>MCP</b><span>lokale und gehostete Server, OAuth, ihre Formulare beantwortest du</span></li>
-      <li data-n="08" data-reveal><b>Skills, Hooks, Subagenten</b><span>Hooks dürfen verbieten, nie erlauben</span></li>
-      <li data-n="09" data-reveal><b>Abos</b><span>dein ChatGPT-Abo, angemeldet im Browser</span></li>
-      <li data-n="10" data-reveal><b>Zusätzliche Ordner</b><span>nur auf dein Wort, nie auf das des Modells</span></li>
-      <li data-n="11" data-reveal><b>Der Schlüsselbund auf Anfrage</b><span>für Befehle zu, außer für die Programme, die du nennst</span></li>
-      <li data-n="12" data-reveal><b>Dein Editor</b><span>Neovim, VS Code, JetBrains und das Agent Client Protocol</span></li>
-      <li data-n="13" data-reveal><b>Acht Sprachen</b><span>die ganze Oberfläche und das Handbuch</span></li>
-      <li data-n="14" data-reveal><b>Ein Modus für Screenreader</b><span>dieselbe Session, der Reihe nach gelesen</span></li>
-      <li data-n="15" data-reveal><b>glut clean</b><span>hält den eigenen Datenordner sauber, nach deinen Regeln</span></li>
-      <li data-n="16" data-reveal><b>Eine Bibliothek</b><span>die Schleife in deinem eigenen Programm, ihre Ereignisse als JSON-Zeilen</span></li>
+      <li data-n="01" data-reveal><b>Aufgabenliste und Plan-Modus</b><span>die geplanten Schritte stehen neben der Arbeit; im Plan-Modus schreibt Glut einen Plan und wartet auf dein Ja</span></li>
+      <li data-n="02" data-reveal><b>Journale</b><span>ein mittendrin verlorener Lauf macht dort weiter, wo er stand</span></li>
+      <li data-n="03" data-reveal><b>Rechtzeitiges Verdichten</b><span>der Kontext wird zusammengefasst, bevor er überläuft, ganze Schritte bleiben</span></li>
+      <li data-n="04" data-reveal><b>Grenzen für Ablehnungen</b><span>ein Modell, das immer wieder gegen dieselbe Wand läuft, wird gestoppt</span></li>
+      <li data-n="05" data-reveal><b>Nichts gekürzt</b><span>jedes Werkzeug-Ergebnis ganz, in einem Speicher zum Blättern</span></li>
+      <li data-n="06" data-reveal><b>Language Server</b><span>Fehler nach jeder Änderung, Umbenennen als eine Änderung</span></li>
+      <li data-n="07" data-reveal><b>Code-Modus</b><span>ein Skript aus Werkzeug-Aufrufen in einem Schritt, in QuickJS</span></li>
+      <li data-n="08" data-reveal><b>MCP</b><span>lokale und gehostete Server, OAuth, ihre Formulare beantwortest du</span></li>
+      <li data-n="09" data-reveal><b>Skills, Hooks, Subagenten</b><span>Hooks dürfen verbieten, nie erlauben</span></li>
+      <li data-n="10" data-reveal><b>Abos</b><span>dein ChatGPT-Abo, angemeldet im Browser</span></li>
+      <li data-n="11" data-reveal><b>Zusätzliche Ordner</b><span>nur auf dein Wort, nie auf das des Modells</span></li>
+      <li data-n="12" data-reveal><b>Der Schlüsselbund auf Anfrage</b><span>für Befehle zu, außer für die Programme, die du nennst</span></li>
+      <li data-n="13" data-reveal><b>Dein Editor</b><span>Neovim, VS Code, JetBrains und das Agent Client Protocol</span></li>
+      <li data-n="14" data-reveal><b>Acht Sprachen</b><span>die ganze Oberfläche und das Handbuch</span></li>
+      <li data-n="15" data-reveal><b>Ein Modus für Screenreader</b><span>dieselbe Session, der Reihe nach gelesen</span></li>
+      <li data-n="16" data-reveal><b>glut clean</b><span>hält den eigenen Datenordner sauber, nach deinen Regeln</span></li>
+      <li data-n="17" data-reveal><b>Eine Bibliothek</b><span>die Schleife in deinem eigenen Programm, ihre Ereignisse als JSON-Zeilen</span></li>
     </ol>
   </section>
 

@@ -16,7 +16,7 @@
 <div class="wrap">
   <section class="hero">
     <div>
-      <p class="hud"><b>[glut 0.1.0]</b> · macOS · Linux · open source</p>
+      <p class="hud"><b>[glut 0.1.0]</b> · written in Rust · macOS · Linux · open source</p>
       <h1 class="display">A coding agent<br>that keeps<br>its hands <em>inside<br>the sandbox.</em></h1>
       <p class="lead"><strong>Glut runs in your terminal, works with whatever model you choose, and runs every command it
         writes in an OS sandbox</strong> (Seatbelt on macOS, bubblewrap on Linux) — behind a gate that asks before anything
@@ -34,12 +34,31 @@
         <a class="button hot" href="{{root}}docs/getting-started.html">Get started</a>
         <a class="button" href="{{root}}docs/security.html">The security model</a>
       </div>
+      <dl class="facts">
+        <div><dt>1</dt><dd>binary, written in Rust</dd></div>
+        <div><dt>&lt;50<small>MB</small></dt><dd>everything included</dd></div>
+        <div><dt>0</dt><dd>runtimes to install — no Node, no Python</dd></div>
+        <div><dt>8</dt><dd>languages, interface and manual</dd></div>
+      </dl>
+      <p class="facts-note">Three parts inside are C — QuickJS, the tree-sitter grammars and ring's cryptography — compiled in through their Rust crates. <a href="{{root}}docs/architecture.html#the-workspace">Architecture</a></p>
     </div>
     <div class="stage">
       <i class="corner a"></i><i class="corner b"></i><i class="corner c"></i><i class="corner d"></i>
       <canvas class="glimm" data-unit="9" data-mood="work" role="img" aria-label="Glimm, Glut's flame"></canvas>
       <span class="coords hud">glimm · 32 × 20 px</span>
     </div>
+  </section>
+
+  <section class="showcase" aria-label="Recording">
+    <p class="hud"><span><b>[▶]</b> scene 01 · a first task</span><span>real run · claude-sonnet-5-5 · time shortened while the model works</span></p>
+    <figure class="player" data-src="{{root}}recordings/scene-1.json">
+      <div class="bar"><i></i><i></i><i></i><span>glut — ~/glut-demo/prices</span></div>
+      <pre class="screen" aria-label="Recording"></pre>
+      <div class="controls">
+        <button class="play" type="button" aria-label="Play" data-play="Play" data-pause="Pause"></button>
+        <div class="progress"><i></i></div>
+      </div>
+    </figure>
   </section>
 
   <section class="part" data-section="01" aria-labelledby="problem">
@@ -207,22 +226,23 @@ that holds the key puts the key back.</span></pre>
       <h2 class="display" id="reel">What no<br>screenshot<br><em>shows.</em></h2>
     </div>
     <ol class="reel">
-      <li data-n="01" data-reveal><b>Journals</b><span>a run lost midway resumes where it stopped</span></li>
-      <li data-n="02" data-reveal><b>Compaction ahead of time</b><span>the context is summed up before it overflows, whole steps kept</span></li>
-      <li data-n="03" data-reveal><b>Refusal limits</b><span>a model that keeps hitting the same wall is stopped</span></li>
-      <li data-n="04" data-reveal><b>Nothing cut</b><span>every tool result whole, in a store the model can page through</span></li>
-      <li data-n="05" data-reveal><b>Language servers</b><span>errors after every edit, renames as one change</span></li>
-      <li data-n="06" data-reveal><b>Code mode</b><span>a script of tool calls in one step, in QuickJS</span></li>
-      <li data-n="07" data-reveal><b>MCP</b><span>local and hosted servers, OAuth, their forms answered by you</span></li>
-      <li data-n="08" data-reveal><b>Skills, hooks, subagents</b><span>hooks may veto, never permit</span></li>
-      <li data-n="09" data-reveal><b>Subscriptions</b><span>your ChatGPT plan, signed in in the browser</span></li>
-      <li data-n="10" data-reveal><b>Extra folders</b><span>only by your word, never the model's</span></li>
-      <li data-n="11" data-reveal><b>The Keychain on request</b><span>shut to commands but the programs you list</span></li>
-      <li data-n="12" data-reveal><b>Your editor</b><span>Neovim, VS Code, JetBrains, and the Agent Client Protocol</span></li>
-      <li data-n="13" data-reveal><b>Eight languages</b><span>the whole interface and the manual</span></li>
-      <li data-n="14" data-reveal><b>A screen-reader mode</b><span>the same session, read in order</span></li>
-      <li data-n="15" data-reveal><b>glut clean</b><span>keeps its own data folder tidy, by your terms</span></li>
-      <li data-n="16" data-reveal><b>A library</b><span>the loop in your own program, its events as JSON lines</span></li>
+      <li data-n="01" data-reveal><b>A task list and plan mode</b><span>the steps it plans stand beside the work; plan mode writes a plan and waits for your yes</span></li>
+      <li data-n="02" data-reveal><b>Journals</b><span>a run lost midway resumes where it stopped</span></li>
+      <li data-n="03" data-reveal><b>Compaction ahead of time</b><span>the context is summed up before it overflows, whole steps kept</span></li>
+      <li data-n="04" data-reveal><b>Refusal limits</b><span>a model that keeps hitting the same wall is stopped</span></li>
+      <li data-n="05" data-reveal><b>Nothing cut</b><span>every tool result whole, in a store the model can page through</span></li>
+      <li data-n="06" data-reveal><b>Language servers</b><span>errors after every edit, renames as one change</span></li>
+      <li data-n="07" data-reveal><b>Code mode</b><span>a script of tool calls in one step, in QuickJS</span></li>
+      <li data-n="08" data-reveal><b>MCP</b><span>local and hosted servers, OAuth, their forms answered by you</span></li>
+      <li data-n="09" data-reveal><b>Skills, hooks, subagents</b><span>hooks may veto, never permit</span></li>
+      <li data-n="10" data-reveal><b>Subscriptions</b><span>your ChatGPT plan, signed in in the browser</span></li>
+      <li data-n="11" data-reveal><b>Extra folders</b><span>only by your word, never the model's</span></li>
+      <li data-n="12" data-reveal><b>The Keychain on request</b><span>shut to commands but the programs you list</span></li>
+      <li data-n="13" data-reveal><b>Your editor</b><span>Neovim, VS Code, JetBrains, and the Agent Client Protocol</span></li>
+      <li data-n="14" data-reveal><b>Eight languages</b><span>the whole interface and the manual</span></li>
+      <li data-n="15" data-reveal><b>A screen-reader mode</b><span>the same session, read in order</span></li>
+      <li data-n="16" data-reveal><b>glut clean</b><span>keeps its own data folder tidy, by your terms</span></li>
+      <li data-n="17" data-reveal><b>A library</b><span>the loop in your own program, its events as JSON lines</span></li>
     </ol>
   </section>
 

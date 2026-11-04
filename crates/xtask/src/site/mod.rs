@@ -321,6 +321,7 @@ pub fn build(repo: &Path, out: &Path) -> Result<usize, String> {
         write(&out.join(&page.path), &html)?;
     }
     copy_tree(&repo.join("site/static"), &out.join("static"))?;
+    copy_recordings(&repo.join("site/recordings"), &out.join("recordings"))?;
     // Glimm on the site is the terminal's Glimm: its frames and colours read from the program's own sources.
     write(&out.join("static/glimm.js"), &glimm::script(repo)?)?;
     write(&out.join("static/glimm.svg"), &glimm::svg(repo)?)?;
@@ -609,6 +610,17 @@ fn files(dir: &Path, extension: &str) -> Result<Vec<String>, String> {
     }
     names.sort();
     Ok(names)
+}
+
+/// The recordings the owner kept (`site/recordings/*.json`) — their scripts stay in the repository.
+fn copy_recordings(from: &Path, to: &Path) -> Result<(), String> {
+    for name in files(from, "json")? {
+        std::fs::create_dir_all(to)
+            .map_err(|err| format!("cannot make {}: {err}", to.display()))?;
+        std::fs::copy(from.join(&name), to.join(&name))
+            .map_err(|err| format!("cannot copy {name}: {err}"))?;
+    }
+    Ok(())
 }
 
 fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {

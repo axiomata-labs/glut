@@ -3,10 +3,15 @@ name = "xtask"
 version = "0.0.0"
 edition.workspace = true
 license.workspace = true
-description = "Glut's own build tasks: the website (cargo run -p xtask -- site build|serve|check)"
+description = "Glut's own build tasks: the website (cargo run -p xtask -- site build|serve|check) and its recordings"
 publish = false
 
 [dependencies]
 clap.workspace = true
 # The website's pages are written in Markdown, the same CommonMark the terminal UI reads.
 pulldown-cmark = { workspace = true, features = ["html"] }
+# The recordings' pseudo-terminal, opened and handed to Glut without a crate of its own for it.
+rustix = { workspace = true, features = ["pty", "process", "termios", "stdio"] }
+serde_json.workspace = true
+# The recordings (`record`): a terminal emulator that turns Glut's output into screens, cell by cell.
+vt100 = "0.18"

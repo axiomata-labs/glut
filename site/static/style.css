@@ -268,6 +268,15 @@ html:not(.js) button.copy { display: none; }
 .button.hot { background: var(--ember); color: var(--ground); border-color: var(--ember); }
 .button.hot:hover { background: var(--gold); border-color: var(--gold); color: var(--ground); }
 
+/* The facts under the hero's buttons. */
+.facts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1.4em; margin: 2.6em 0 0; max-width: 44em; }
+.facts div { border-top: 1px solid var(--line); padding-top: 0.8em; }
+.facts dt { font: 700 clamp(1.6rem, 3vw, 2.4rem)/1 var(--sans); color: var(--ink); }
+.facts dt small { font-size: 0.45em; margin-left: 0.15em; color: var(--ember); letter-spacing: 0.08em; }
+.facts dd { margin: 0.5em 0 0; font: 0.72rem/1.4 var(--mono); text-transform: uppercase; letter-spacing: 0.08em; color: var(--dim); }
+.facts-note { margin: 1em 0 0; max-width: 44em; font-size: 0.78rem; color: var(--dim); opacity: 0.75; }
+@media (max-width: 40em) { .facts { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
 /* Numbered cards. */
 .cards {
   display: grid;
@@ -353,6 +362,67 @@ html:not(.js) button.copy { display: none; }
 .terminal .bar i { width: 0.6em; height: 0.6em; border-radius: 50%; background: var(--line); }
 .terminal .bar span { margin-left: auto; color: var(--dim); font-size: 0.85em; }
 .terminal pre { margin: 0; border: 0; background: none; padding: 1.2em 1.4em; }
+
+/* The player of Glut's recordings: a drawn terminal of text rows. */
+.showcase { padding: 0 0 clamp(4em, 10vh, 7em); border-bottom: 1px solid var(--line); }
+.showcase .hud { margin-bottom: 1.2em; display: flex; justify-content: space-between; }
+figure.player {
+  margin: 0;
+  border: 1px solid var(--line);
+  background: var(--ground);
+  box-shadow: 0 3em 8em -3em color-mix(in srgb, var(--deep) 45%, transparent);
+}
+figure.player .bar {
+  display: flex;
+  align-items: center;
+  gap: 0.4em;
+  padding: 0.6em 0.9em;
+  border-bottom: 1px solid var(--line);
+  font: 0.72rem/1 var(--mono);
+  color: var(--dim);
+  letter-spacing: 0.08em;
+}
+figure.player .bar i { width: 0.6em; height: 0.6em; border-radius: 50%; background: var(--line); }
+figure.player .bar span { margin-left: 0.8em; }
+figure.player .screen {
+  margin: 0;
+  padding: 0.6em 0;
+  border: 0;
+  background: none;
+  font-family: var(--mono);
+  line-height: 1.22;
+  white-space: pre;
+  overflow: hidden;
+  min-height: 12em;
+}
+figure.player .row { height: 1.22em; }
+figure.player .row b { display: inline-block; width: 1ch; overflow: hidden; text-align: center; font-weight: inherit; vertical-align: top; height: 1.22em; }
+figure.player .row b.c2 { width: 2ch; }
+figure.player .row span { display: inline-block; height: 1.22em; vertical-align: top; }
+figure.player .row b.q { background-size: 50% 50%; background-repeat: no-repeat; }
+figure.player .controls {
+  display: flex;
+  align-items: center;
+  gap: 1em;
+  padding: 0.6em 0.9em;
+  border-top: 1px solid var(--line);
+}
+figure.player button.play {
+  width: 2.2em;
+  height: 2.2em;
+  border: 1px solid var(--line);
+  background: none;
+  color: var(--ink);
+  cursor: pointer;
+  font: 0.8rem/1 var(--mono);
+}
+figure.player button.play::before { content: "▶"; }
+figure.player.playing button.play::before { content: "❚❚"; }
+figure.player .progress { flex: 1; height: 2px; background: var(--line); }
+figure.player .progress i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--deep), var(--gold)); }
+figure.player figcaption { font: 0.75rem/1.4 var(--mono); color: var(--dim); letter-spacing: 0.06em; }
+figure.player.missing .screen::before { content: "—"; color: var(--dim); padding: 1em; display: block; }
+html:not(.js) figure.player { display: none; }
 
 /* The closing reel: a list built line by line. */
 .reel { list-style: none; padding: 0; margin: 0; columns: 2 24em; column-gap: 3em; }

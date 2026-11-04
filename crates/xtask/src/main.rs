@@ -1,6 +1,7 @@
 //! Glut's own build tasks, run from the repository's top as `cargo run -p xtask -- <task>`. Nothing here is shipped:
 //! the program `glut` never depends on it.
 
+mod record;
 mod site;
 
 use std::path::PathBuf;
@@ -21,6 +22,12 @@ enum Task {
     Site {
         #[command(subcommand)]
         what: SiteTask,
+    },
+    /// Records a scene of `site/recordings/<name>.scene`: Glut run for real in a pseudo-terminal, its screens kept in
+    /// `site/recordings/<name>.json` for the site's player.
+    Record {
+        /// The scene's name.
+        name: String,
     },
 }
 
@@ -61,6 +68,7 @@ fn main() -> ExitCode {
             SiteTask::Check { out } => site::check(&repo, &repo.join(out)),
             SiteTask::Serve { out, port } => site::serve(&repo, &repo.join(out), port),
         },
+        Task::Record { name } => record::record(&repo, &name),
     };
     match done {
         Ok(()) => ExitCode::SUCCESS,

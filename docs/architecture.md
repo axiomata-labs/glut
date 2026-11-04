@@ -13,6 +13,8 @@ library in another program, read [`library.md`](library.md). The security model 
 - **`crates/glut-tui`** (binary `glut`, library `glut_tui`): the terminal UI. Every headless command is also a
   subcommand of it (`glut run …` reaches `glut::cli::dispatch`). It adds its own subcommands: `watch`, `export`,
   `search`, `schedule`, `clean` and `acp`.
+- **`crates/xtask`** (binary `xtask`, never published): the website (`site build|check|serve`) and its recordings
+  (`record <scene>`), built from the repository's own files.
 - **`crates/glut-probe`** (binary `glut-probe`): a standalone tool that measures what a terminal offers a full-screen
   TUI (queries, colours, keys, mouse, paste, clipboard) and writes a Markdown report. It depends only on `crossterm`
   and `rustix`, not on `glut`. Its reports are in `docs/probe/`.
@@ -23,6 +25,11 @@ Every file tool opens paths through its `Root` (`Root::dir(cwd, LinkPolicy::Cont
 through a raw path, and containment is checked there. The workspace manifest names the git repository. A local
 `.cargo/config.toml`, which is not checked in, patches the dependency to the `../Axiomata-Foundation` checkout next
 door.
+
+**What is not Rust.** Glut is written in Rust and ships as one binary. Three parts compiled into it are C, through
+their Rust crates: QuickJS for code mode (`rquickjs`), the tree-sitter grammars that colour code blocks, and the
+cryptography of `ring` (C and assembly) under TLS and the sign-in's token checks. Nothing runs outside the binary:
+no Node, no Python, no runtime to install.
 
 Glut depends on nothing else of Axiomata's. Axiomata-OS builds Glut as a path dependency. Whatever Axiomata adds comes
 in as plain values (fields of `RunConfig`) or as traits the caller implements (see [`library.md`](library.md)).
