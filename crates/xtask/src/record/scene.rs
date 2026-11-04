@@ -21,6 +21,7 @@
 //! wait-gone 20 "⏎ send"       until the text is no longer on the screen (Glut started working)
 //! pause 1.5                    nothing for so long
 //! type "fix the tests"         typed at a person's pace
+//! paste "~/glut-demo/a.png"    pasted at once, as a dropped file is (a leading ~/ is the owner's home)
 //! key enter                    keys: enter, esc, tab, backtab, up, down, left, right, space, ctrl-<letter>, ctrl-backslash
 //! end                          the recording ends; the program is stopped
 //! ```
@@ -47,6 +48,8 @@ pub enum Step {
     /// Nothing for so long.
     Pause(Duration),
     Type(String),
+    /// Pasted at once, as a terminal pastes (bracketed); a leading `~/` is the owner's home.
+    Paste(String),
     /// The bytes the keys send.
     Keys(Vec<u8>),
     End,
@@ -251,13 +254,17 @@ pub fn parse(text: &str) -> Result<Scene, String> {
             "pause" => scene.steps.push(Step::Pause(
                 seconds_of(rest).ok_or_else(|| fail("seconds"))?,
             )),
-            "type" => {
+            "type" | "paste" => {
                 let (text, after) =
                     quoted(rest).ok_or_else(|| fail("the text goes in double quotes"))?;
                 if !after.trim().is_empty() {
                     return Err(fail("nothing after the text"));
                 }
-                scene.steps.push(Step::Type(text));
+                scene.steps.push(if word == "type" {
+                    Step::Type(text)
+                } else {
+                    Step::Paste(text)
+                });
             }
             "key" => {
                 let mut bytes = Vec::new();

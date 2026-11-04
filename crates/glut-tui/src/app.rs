@@ -234,6 +234,8 @@ struct Lent {
     from: usize,
     /// The owner's message a turn works on; `None` for a compaction or a handoff.
     prompt: Option<String>,
+    /// The images that message carries (T45): a side question shows them to the model too.
+    images: Vec<glut::images::Image>,
 }
 
 pub struct App {
@@ -1942,6 +1944,9 @@ impl App {
         // What waits for the model (a `/secrets` change, a review comment) goes before this message, not after it.
         self.conversation.append(&mut self.pending);
         self.lend(Some(prompt.clone()));
+        if let Some(lent) = &mut self.lent {
+            lent.images = images.clone();
+        }
         // Where this message begins, to rewind to before it; its run is known with its first snapshot.
         self.session.marks.push(crate::store::Mark {
             at: Some(self.conversation.len()),
@@ -6611,6 +6616,7 @@ impl App {
             conversation: self.conversation.clone(),
             from: self.transcript.blocks.len(),
             prompt,
+            images: Vec::new(),
         });
     }
 
@@ -6623,6 +6629,7 @@ impl App {
                 lent.prompt.as_deref().map(|prompt| {
                     crate::btw::under_way(
                         prompt,
+                        &lent.images,
                         self.transcript.blocks.get(lent.from..).unwrap_or(&[]),
                     )
                 }),

@@ -128,6 +128,16 @@ pub fn record(repo: &Path, name: &str) -> Result<(), String> {
                 terminal.send(c.encode_utf8(&mut [0; 4]).as_bytes())?;
                 take.run_for(&mut terminal, typing.next(), 1.0)
             }),
+            Step::Paste(text) => {
+                // A path from the owner's home, written without it: no scene names the owner's folder.
+                let text = match text.strip_prefix("~/") {
+                    Some(rest) => format!("{home}/{rest}"),
+                    None => text.clone(),
+                };
+                terminal
+                    .send(format!("\x1b[200~{text}\x1b[201~").as_bytes())
+                    .and_then(|()| take.run_for(&mut terminal, Duration::from_millis(300), 1.0))
+            }
             Step::Keys(bytes) => terminal
                 .send(bytes)
                 .and_then(|()| take.run_for(&mut terminal, Duration::from_millis(120), 1.0)),

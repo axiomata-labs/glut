@@ -47,6 +47,8 @@ pub struct Asked {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnderWay {
     pub prompt: String,
+    /// The images that message carries: the conversation the turn began with holds them not yet.
+    pub images: Vec<glut::images::Image>,
     /// Its steps as text, a line each.
     pub steps: String,
 }
@@ -72,10 +74,14 @@ pub fn request(asked: &Asked, question: &str) -> (Vec<Message>, Vec<ToolSpec>) {
             let text = crate::session::as_text(&asked.conversation, AS_TEXT_CHARS);
             let messages = vec![
                 Message::system(SYSTEM),
-                Message::user(format!(
-                    "The conversation so far, between the lines:\n----\n{text}\n----\n\n{ask}"
-                )),
+                with_turn_images(
+                    Message::user(format!(
+                        "The conversation so far, between the lines:\n----\n{text}\n----\n\n{ask}"
+                    )),
+                    asked.under_way.as_ref(),
+                ),
             ];
+            let messages = glut::run::sendable(&messages, asked.sees_images).into_owned();
             (messages, Vec::new())
         }
         tools => {
@@ -86,11 +92,22 @@ pub fn request(asked: &Asked, question: &str) -> (Vec<Message>, Vec<ToolSpec>) {
             {
                 messages.insert(0, Message::system(SYSTEM));
             }
-            messages.push(Message::user(ask));
+            messages.push(with_turn_images(
+                Message::user(ask),
+                asked.under_way.as_ref(),
+            ));
             let messages = glut::run::sendable(&messages, asked.sees_images).into_owned();
             (messages, tools.clone().unwrap_or_default())
         }
     }
+}
+
+/// The question with the images of the message under way: the model sees what the owner showed it, as the turn does.
+fn with_turn_images(mut message: Message, under_way: Option<&UnderWay>) -> Message {
+    if let Some(turn) = under_way {
+        message.images = turn.images.clone();
+    }
+    message
 }
 
 /// The system prompt of a side question that has no session's own to go after.
@@ -133,7 +150,7 @@ fn framed(question: &str, under_way: Option<&UnderWay>, asked_before: bool) -> S
 /// The turn under way on `prompt`, as its stream shows it in `blocks` (those after the owner's message): the owner's
 /// words sent while it worked, Glut's, each tool call and subagent with how it stands — the newest part where it is
 /// long.
-pub fn under_way(prompt: &str, blocks: &[Block]) -> UnderWay {
+pub fn under_way(prompt: &str, images: &[glut::images::Image], blocks: &[Block]) -> UnderWay {
     let mut steps = String::new();
     for block in blocks {
         let line = match &block.kind {
@@ -162,6 +179,7 @@ pub fn under_way(prompt: &str, blocks: &[Block]) -> UnderWay {
     }
     UnderWay {
         prompt: prompt.to_owned(),
+        images: images.to_vec(),
         steps,
     }
 }
@@ -465,7 +483,7 @@ mod tests {
                 Message::system("You are a reviewer."),
                 Message::user("Review it"),
             ],
-            Some(under_way("Review it", &[])),
+            Some(under_way("Review it", &[], &[])),
         );
         assert!(!working.contains("not working on anything"), "{working}");
     }
@@ -496,6 +514,40 @@ mod tests {
     }
 
     #[test]
+    fn the_images_of_the_message_under_way_go_with_the_question() {
+        let image = glut::images::Image {
+            number: 1,
+            path: "/kept/receipt".into(),
+            media: "image/png".into(),
+            width: 420,
+            height: 440,
+            bytes: 24_911,
+        };
+        let turn = under_way(
+            "does total() agree with [image #1]?",
+            std::slice::from_ref(&image),
+            &[],
+        );
+        for tools in [Some(vec![tool("bash")]), None] {
+            let (messages, _) = request(
+                &asked(called(), tools, Some(turn.clone())),
+                "what is on it?",
+            );
+            let last = messages.last().unwrap();
+            assert_eq!(
+                last.images,
+                std::slice::from_ref(&image),
+                "the question shows the image the turn was given"
+            );
+        }
+        let (messages, _) = request(&asked(called(), None, None), "what is on it?");
+        assert!(
+            messages.iter().all(|message| message.images.is_empty()),
+            "between turns none is added"
+        );
+    }
+
+    #[test]
     fn tool_calls_without_their_tools_go_as_text_and_a_new_session_gets_a_system_prompt() {
         let (messages, tools) = request(&asked(called(), None, None), "why?");
         assert_eq!(messages.len(), 2);
@@ -523,7 +575,7 @@ mod tests {
         });
         stream.note("a note", Tone::Quiet);
         stream.push(Kind::Owner("also the tests".into()));
-        let turn = under_way("Fix the parser", &stream.blocks);
+        let turn = under_way("Fix the parser", &[], &stream.blocks);
         assert_eq!(turn.prompt, "Fix the parser");
         assert_eq!(
             turn.steps,
@@ -537,7 +589,7 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("so far:\n----\n[tool read_file]"), "{text}");
-        let quiet = under_way("Fix the parser", &[]);
+        let quiet = under_way("Fix the parser", &[], &[]);
         let (messages, _) = request(&asked(Vec::new(), None, Some(quiet)), "how far?");
         assert!(
             messages[1]

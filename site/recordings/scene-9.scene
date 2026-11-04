@@ -1,0 +1,68 @@
+# Scene 9: the small things — eight languages, an image pasted into the input, a side question with /btw while the
+# turn runs, the project's to-dos, and a session found again by its words.
+size 130 37
+project shop
+beside receipt
+home fresh
+setting lsp false
+allow "Bash(python3 *)"
+on "Glut asks" key y
+run glut --provider anthropic --model claude-sonnet-5-5 --lang en
+wait 20 "⏎ send"
+pause 1.2
+type "/language"
+pause 0.6
+key enter
+pause 2.5
+key down
+pause 1
+key enter
+pause 1.5
+key ctrl-k
+pause 4
+key ctrl-k
+pause 1
+type "/language en"
+pause 0.6
+key enter
+wait 10 "⏎ send"
+pause 1.5
+type "the shop printed this receipt "
+paste "~/glut-demo/receipt/receipt.png"
+pause 1
+type "does total() in prices.py agree with it? Change nothing yet"
+pause 0.6
+key enter
+wait 15 "⌃C stops"
+pause 2
+type "/btw what is on the receipt?"
+pause 0.6
+key enter
+wait 60 "closes"
+pause 7
+key esc
+wait-gone 300 "⌃C stops"
+pause 4
+type "/todo total(): VAT on each line's total, not per piece"
+pause 0.6
+key enter
+pause 1
+type "/todo a test for receipt 0417"
+pause 0.6
+key enter
+pause 1
+key ctrl-y
+pause 4
+key ctrl-y
+pause 1
+type "/clear"
+pause 0.6
+key enter
+pause 2
+type "/search receipt"
+pause 0.6
+key enter
+pause 5
+key esc
+pause 1
+end
