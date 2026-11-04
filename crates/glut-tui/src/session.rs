@@ -1560,6 +1560,21 @@ pub fn sandboxed(parts: &Parts) -> bool {
         && glut::sandbox::available()
 }
 
+#[cfg(test)]
+mod mode_label_tests {
+    use super::*;
+
+    #[test]
+    fn another_window_s_mode_is_named_as_the_footer_names_it() {
+        assert_eq!(mode_label_of("accept_edits"), "build");
+        assert_eq!(mode_label_of("default"), "ask");
+        assert_eq!(
+            mode_label_of("odd\u{1b}"),
+            crate::transcript::clean("odd\u{1b}")
+        );
+    }
+}
+
 /// The mode after `mode` on Shift+Tab: plan → ask → build → auto → plan. `dont_ask` (a headless mode) goes to plan.
 pub fn next_mode(mode: Mode) -> Mode {
     match mode {
@@ -1579,6 +1594,15 @@ pub fn mode_label(mode: Mode) -> &'static str {
         Mode::Auto => "auto",
         Mode::DontAsk => "don't ask",
     }
+}
+
+/// A mode another window names as Glut's settings write it (`accept_edits`), as the screen names it (`build`); a name
+/// Glut does not know stays as it came, cleaned.
+pub fn mode_label_of(name: &str) -> String {
+    Mode::parse(name).map_or_else(
+        || crate::transcript::clean(name),
+        |mode| mode_label(mode).to_owned(),
+    )
 }
 
 /// The folder a session works in, as the header shows it: `~/…` below the home folder.

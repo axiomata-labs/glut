@@ -1392,7 +1392,7 @@ impl Panes {
                             "{} · {} · {}",
                             crate::transcript::cut(&crate::transcript::clean(&seat.project), 40),
                             crate::transcript::clean(&seat.model),
-                            crate::transcript::clean(&seat.mode)
+                            crate::session::mode_label_of(&seat.mode)
                         );
                         Item::plain(address.clone(), detail, Pick::WriteTo(address))
                     }),
@@ -1421,7 +1421,7 @@ impl Panes {
                     "{} · {} · {} · {}",
                     crate::transcript::cut(&crate::transcript::clean(&seat.project), 40),
                     crate::transcript::clean(&seat.model),
-                    crate::transcript::clean(&seat.mode),
+                    crate::session::mode_label_of(&seat.mode),
                     if seat.works {
                         tr!(sessions_works)
                     } else {
@@ -1662,8 +1662,8 @@ impl Panes {
                 self.chain = self.chain.max(letter.chain);
                 let theirs = letter.mode.as_str();
                 let target_app = &self.list[target].app;
-                let ours = target_app.mode().name();
-                let same_mode = theirs == ours;
+                // Read as a mode, not compared as words: another window may write one by an alias (`acceptEdits`).
+                let same_mode = glut::permissions::Mode::parse(theirs) == Some(target_app.mode());
                 // As `tell` between the panes of one window (Q6b): a pane that can do more than the sender — a looser
                 // mode, an "always" it lacked, a wider role, another folder unless it only plans — starts nothing on
                 // its word. A letter without the sender's rights is taken for one from a pane that may do nothing.
@@ -1680,8 +1680,8 @@ impl Panes {
                     tr!(
                         held_window_mode,
                         from = from,
-                        theirs = crate::transcript::clean(theirs),
-                        ours = ours
+                        theirs = crate::session::mode_label_of(theirs),
+                        ours = crate::session::mode_label(target_app.mode())
                     )
                 } else if wider {
                     tr!(held_window_wider, from = from)
@@ -6276,6 +6276,20 @@ mod tests {
             panes.list[1].app.held.is_empty() && panes.list[1].app.working(),
             "Enter lets it go on"
         );
+        let notes: Vec<&str> = panes.list[1]
+            .app
+            .transcript
+            .blocks
+            .iter()
+            .filter_map(|block| match &block.kind {
+                crate::transcript::Kind::Note { text, .. } if text.contains("build it all") => {
+                    Some(text.as_str())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(notes.len(), 1, "the message stands once: {notes:?}");
+        assert!(notes[0].ends_with("you let it in"), "{notes:?}");
     }
 
     #[tokio::test]

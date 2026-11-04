@@ -2153,6 +2153,7 @@ pub const TEXTS: Texts = Texts {
     name_now: "此窗口名为 {name} — /name <new> 可重命名",
     name_set: "此窗口现在名为 {name}",
     held_dropped: "已丢弃被搁置的消息",
+    held_let_in: "你已放行",
     form_see_all: "请先逐一查看每个字段（⇥）",
     hint_form_begin: "⇥ 或 ⏎ 开始填写 · Esc 关闭 · ⌃D 拒绝",
     state_asks_form: "{server} 请你填写一个表单 — Tab 开始，Esc 关闭",

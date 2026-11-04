@@ -19,6 +19,7 @@
 //! wait 20 "build"              until the screen shows the text, at most so many seconds
 //! wait 300 "passed" x6         the same, its time played six times faster
 //! wait-gone 20 "⏎ send"       until the text is no longer on the screen (Glut started working)
+//! wait-gone 300 "⌃C" for 4     … and stays away for 4 s (a turn's short gaps between its steps do not count)
 //! pause 1.5                    nothing for so long
 //! type "fix the tests"         typed at a person's pace
 //! paste "~/glut-demo/a.png"    pasted at once, as a dropped file is (a leading ~/ is the owner's home)
@@ -44,6 +45,8 @@ pub enum Step {
     WaitGone {
         text: String,
         limit: Duration,
+        /// How long it must stay away to count as gone.
+        steady: Duration,
     },
     /// Nothing for so long.
     Pause(Duration),
@@ -243,12 +246,17 @@ pub fn parse(text: &str) -> Result<Scene, String> {
                     .ok_or_else(|| fail("wait-gone takes seconds and a text"))?;
                 let (text, after) =
                     quoted(rest.trim()).ok_or_else(|| fail("the text goes in double quotes"))?;
-                if !after.trim().is_empty() {
-                    return Err(fail("nothing after the text"));
-                }
+                let steady = match after.trim() {
+                    "" => Duration::ZERO,
+                    more => more
+                        .strip_prefix("for ")
+                        .and_then(|seconds| seconds_of(seconds.trim()))
+                        .ok_or_else(|| fail("after the text only: for <seconds>"))?,
+                };
                 scene.steps.push(Step::WaitGone {
                     text,
                     limit: seconds_of(seconds).ok_or_else(|| fail("not a number of seconds"))?,
+                    steady,
                 });
             }
             "pause" => scene.steps.push(Step::Pause(

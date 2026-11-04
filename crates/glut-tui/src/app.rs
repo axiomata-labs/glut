@@ -227,6 +227,13 @@ const GO_ON: &str = "Go on where you stopped.";
 /// What a cut-off turn going on works on, as a side question tells it to the model (T57).
 const RESUMED_TURN: &str = "(a turn that was cut off, going on where it stopped)";
 
+/// A message of another pane's model held for the owner's Enter, and the note it stands in.
+pub struct Held {
+    pub message: String,
+    /// The note's block in the stream: bound by place, never by text — the text is a model's.
+    note: usize,
+}
+
 /// The conversation as a turn, a compaction or a handoff got it (T57).
 struct Lent {
     conversation: Vec<Message>,
@@ -482,9 +489,11 @@ pub struct App {
     /// What the screen calls this pane's model instead of its name (a blind arena's `model A`, T61); `None`: its name.
     pub disguise: Option<String>,
     /// Messages of another pane's model that wait for the owner's Enter here (T36c): never sent by a turn's end.
-    pub held: Vec<String>,
+    pub held: Vec<Held>,
     /// When the last of them came: an Enter right after it (meant for something else) lets none go.
     pub(crate) held_since: Option<Instant>,
+    /// A held message the owner let in stands in the stream already: its turn does not show it again.
+    held_shown: bool,
     /// Glut's very first start (TUI9c): the welcome shows the first keys until a message or a command goes.
     pub first_start: bool,
     /// The last note of a switch gone round (`⇧⇥` the mode, `⌃T` the thinking), and how long the stream was after it:
@@ -757,6 +766,7 @@ impl App {
             warm_until: None,
             cache_seen: false,
             held_since: None,
+            held_shown: false,
             busy_since: None,
             live: crate::live::Live::default(),
             working_since: None,
@@ -1891,6 +1901,8 @@ impl App {
 
     /// [`App::send`] with the images the message carries (T45).
     fn send_with(&mut self, prompt: String, images: Vec<glut::images::Image>) {
+        // Taken at once: a message that does not go now must not hide the next one.
+        let shown_already = std::mem::take(&mut self.held_shown);
         if prompt.trim().is_empty() || self.working() {
             return;
         }
@@ -1912,9 +1924,12 @@ impl App {
         // Another pane's model is not the owner (T36c): its message stands apart, and only the owner's word ends a
         // chain of messages between models.
         if let Some(shown) = crate::tell::shown(&prompt) {
-            // In the hue of the pane it came from (T84), told apart from the owner's own words.
-            let tone = crate::tell::from(&prompt).map_or(Tone::Heed, Tone::Pane);
-            self.transcript.note(shown, tone);
+            // In the hue of the pane it came from (T84), told apart from the owner's own words — once: a held message
+            // let in stands in the stream already.
+            if !shown_already {
+                let tone = crate::tell::from(&prompt).map_or(Tone::Heed, Tone::Pane);
+                self.transcript.note(shown, tone);
+            }
         } else {
             self.owner_spoke = true;
             // The images stand under the words, each a picture of its own (T46).
@@ -3751,7 +3766,14 @@ impl App {
         {
             let next = self.held.remove(0);
             self.owner_spoke = true;
-            return self.send(next);
+            // The note it waited under says it is in now, in the hue of the pane it came from; the message is not shown
+            // a second time below it.
+            let shown = crate::tell::shown(&next.message).unwrap_or_default();
+            let tone = crate::tell::from(&next.message).map_or(Tone::Heed, Tone::Pane);
+            self.held_shown =
+                self.transcript
+                    .renote(next.note, format!("{shown}\n— {}", tr!(held_let_in)), tone);
+            return self.send(next.message);
         }
         if self.input.is_empty() && !self.queue.is_empty() {
             let next = self.queue.remove(0);
@@ -7216,11 +7238,12 @@ impl App {
     /// Holds another model's message for the owner's Enter, its text shown with `why`.
     fn hold(&mut self, message: String, why: &str) {
         let shown = crate::tell::shown(&message).unwrap_or_default();
+        let note = self.transcript.blocks.len();
         self.transcript.note(
             format!("{shown}\n— {}", tr!(held_why, why = why)),
             Tone::Heed,
         );
-        self.held.push(message);
+        self.held.push(Held { message, note });
         self.held_since = Some(Instant::now());
     }
 
@@ -9082,6 +9105,41 @@ pub(crate) mod tests {
 
     fn key(code: KeyCode, modifiers: KeyModifiers) -> TermEvent {
         TermEvent::Key(KeyEvent::new(code, modifiers))
+    }
+
+    #[tokio::test]
+    async fn held_messages_of_the_same_words_are_let_in_each_under_its_own_note() {
+        let (mut app, _reports) = app();
+        let message = crate::tell::wrapped(2, "build it all");
+        // A model's text that reads like the head of another held note takes no note but its own.
+        let forged = crate::tell::wrapped(2, "build it all\n— held: x");
+        for text in [&message, &forged, &message] {
+            app.hold(text.clone(), "another mode");
+        }
+        let notes = |app: &App| -> Vec<String> {
+            app.transcript
+                .blocks
+                .iter()
+                .filter_map(|block| match &block.kind {
+                    crate::transcript::Kind::Note { text, .. } if text.contains("build it all") => {
+                        Some(text.clone())
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        app.held_since = Some(Instant::now() - Duration::from_secs(1));
+        app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
+        let after = notes(&app);
+        assert_eq!(after.len(), 3, "none shown twice: {after:?}");
+        assert!(
+            after[0].ends_with("you let it in"),
+            "the first let in is the first held: {after:?}"
+        );
+        assert!(
+            after[1].contains("held: x\n— held") && after[2].contains("— held"),
+            "{after:?}"
+        );
     }
 
     /// `⌃X A`: the Agents tab (TUI9a; ⌃A is the line's start).

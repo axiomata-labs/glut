@@ -352,6 +352,25 @@ impl Transcript {
         self.blocks.push(Block::new(kind));
     }
 
+    /// The note at `index` with a new text and tone: a note that said what waits says what came of it. `false` where
+    /// the block there is no note (the stream was cleared meanwhile).
+    pub fn renote(&mut self, index: usize, text: String, tone: Tone) -> bool {
+        let Some(block) = self.blocks.get_mut(index) else {
+            return false;
+        };
+        let Kind::Note {
+            text: old,
+            tone: was,
+        } = &mut block.kind
+        else {
+            return false;
+        };
+        *old = text;
+        *was = tone;
+        block.touch();
+        true
+    }
+
     pub fn note(&mut self, text: impl Into<String>, tone: Tone) {
         self.push(Kind::Note {
             text: text.into(),

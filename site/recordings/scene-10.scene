@@ -1,0 +1,37 @@
+# Scene 10: agents that talk — two Glut windows side by side, the shop on the left and its checkout on the right. The
+# shop's agent adds a rule and tells the checkout's agent about it. Another project's model may not start work in
+# this folder: the message waits above the input until the owner lets it in with Enter.
+size 160 40
+project shop
+beside checkout
+beside tmux
+home fresh
+setting lsp false
+allow "Bash(python3 *)"
+on "Glut asks" key y
+run tmux -L glut-demo -f ../tmux/glut.conf attach
+wait 30 "checkout"
+pause 3
+type "/sessions"
+pause 0.6
+key enter
+pause 4
+key esc
+pause 1
+key ctrl-b
+key left
+pause 1.5
+type "add free_shipping(total) to prices.py: free from 50.00 gross, with a test. Then tell the checkout window to stop charging shipping from 50.00"
+pause 0.6
+key enter
+wait 15 "⌃C stops"
+wait 300 "lets it in"
+wait-gone 300 "⌃C stops" for 4
+key ctrl-b
+key right
+pause 1.5
+key enter
+wait 15 "⌃C stops"
+wait-gone 400 "⌃C stops" for 8
+pause 2
+end

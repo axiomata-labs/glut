@@ -122,7 +122,11 @@ pub fn record(repo: &Path, name: &str) -> Result<(), String> {
                 limit,
                 faster,
             } => take.wait_for(&mut terminal, text, *limit, *faster),
-            Step::WaitGone { text, limit } => take.wait_gone(&mut terminal, text, *limit),
+            Step::WaitGone {
+                text,
+                limit,
+                steady,
+            } => take.wait_gone(&mut terminal, text, *limit, *steady),
             Step::Pause(span) => take.run_for(&mut terminal, *span, 1.0),
             Step::Type(text) => text.chars().try_for_each(|c| {
                 terminal.send(c.encode_utf8(&mut [0; 4]).as_bytes())?;
@@ -262,13 +266,27 @@ impl Take {
         terminal: &mut Terminal,
         text: &str,
         limit: Duration,
+        steady: Duration,
     ) -> Result<(), String> {
         let until = Instant::now() + limit;
-        while Film::text(self.parser.screen()).contains(text) {
+        // Since when the text has been away; it must stay away `steady` long.
+        let mut away: Option<Instant> = None;
+        loop {
+            let shown = Film::text(self.parser.screen()).contains(text);
+            match (shown, away) {
+                (true, _) => away = None,
+                (false, None) => away = Some(Instant::now()),
+                (false, Some(since)) if since.elapsed() >= steady => return Ok(()),
+                (false, Some(_)) => {}
+            }
+            if !shown && steady.is_zero() {
+                return Ok(());
+            }
             if Instant::now() >= until {
                 return Err(format!(
-                    "{text:?} stayed on the screen for {} s",
-                    limit.as_secs()
+                    "{text:?} stayed on the screen for {} s; the screen shows:\n{}",
+                    limit.as_secs(),
+                    Film::text(self.parser.screen())
                 ));
             }
             self.pump(
@@ -277,7 +295,6 @@ impl Take {
                 1.0,
             )?;
         }
-        Ok(())
     }
 
     /// Takes what the program wrote until `until`: answers its questions to the terminal, keeps a screen when one

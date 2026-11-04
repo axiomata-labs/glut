@@ -2256,6 +2256,7 @@ pub const TEXTS: Texts = Texts {
     name_now: "このウィンドウの名前は {name} です — /name <new> で変更",
     name_set: "このウィンドウの名前は {name} になりました",
     held_dropped: "保留中のメッセージを破棄しました",
+    held_let_in: "受け入れました",
     form_see_all: "まずすべての項目を確認してください（⇥）",
     hint_form_begin: "⇥ か ⏎ で入力開始 · Esc 閉じる · ⌃D 拒否",
     state_asks_form: "{server} がフォームの入力を求めています — Tab で開始、Esc で閉じる",

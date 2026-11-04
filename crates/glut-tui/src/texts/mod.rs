@@ -2291,6 +2291,8 @@ glut::catalog! {
         name_set: &'static str,
         /// Esc dropped a held message.
         held_dropped: &'static str,
+        /// A held message's note once the owner's Enter let it in, in place of the reason it waited.
+        held_let_in: &'static str,
         /// ⏎ on a form with a field not yet on the screen: it goes there.
         form_see_all: &'static str,
         /// The keys of a server's form before the owner began.
