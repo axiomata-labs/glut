@@ -2095,6 +2095,32 @@ glut::catalog! {
         sandbox_unreadable: &'static str,
         /// `/sandbox` with words it does not take.
         sandbox_usage: &'static str,
+        /// `/trust`: this folder is trusted.
+        trust_cmd_is: &'static str,
+        /// `/trust`: this folder is not trusted.
+        trust_cmd_is_not: &'static str,
+        /// Before the lines of what the folder's own settings add.
+        trust_cmd_adds: &'static str,
+        /// `/trust on` done.
+        trust_cmd_on: &'static str,
+        /// `/trust off` done.
+        trust_cmd_off: &'static str,
+        /// `/trust off` of a folder not trusted.
+        trust_cmd_was_not: &'static str,
+        /// `/trust list` with no folder trusted.
+        trust_cmd_none: &'static str,
+        /// Before the trusted folders.
+        trust_cmd_list_head: &'static str,
+        /// `/trust on` in the home folder.
+        trust_cmd_not_home: &'static str,
+        /// `/trust on` in the root folder.
+        trust_cmd_not_root: &'static str,
+        /// `/trust on` in a folder not the owner's alone.
+        trust_cmd_not_shared: &'static str,
+        /// `/trust` with words it does not take.
+        trust_usage: &'static str,
+        /// At the start: the folder's own `.glut` brings what it leaves out while the folder is not trusted.
+        trust_untrusted_note: &'static str,
         /// `/sandbox`: no command runs without a sandbox.
         sandbox_required_shown: &'static str,
         /// `/sandbox required on` done.

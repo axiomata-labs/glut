@@ -342,7 +342,7 @@ pub async fn build(
     if launch.owner_trust {
         options.trusted = Trust::load(&home)
             .map_err(|err| err.to_string())?
-            .contains(&cwd);
+            .trusts(&cwd, &home);
     }
     let trusted = options.trusted;
     let asker = OnScreen {
@@ -357,7 +357,21 @@ pub async fn build(
     if !host_mode && built.gate.mode() == Mode::Default {
         built.gate.set_mode(Mode::AcceptEdits);
     }
-    notes.extend(built.notes().into_iter().map(str::to_owned));
+    // The library's note for a folder not trusted is said with the command that trusts it — also when the folder
+    // brings only skills, agents or commands, which the library's note does not count.
+    notes.extend(
+        built
+            .notes()
+            .into_iter()
+            .filter(|note| *note != glut::permissions::UNTRUSTED_NOTE)
+            .map(str::to_owned),
+    );
+    if launch.owner_trust
+        && !trusted
+        && glut::cli::trust::offered(&cwd).is_ok_and(|lines| !lines.is_empty())
+    {
+        notes.push(tr!(trust_untrusted_note).to_owned());
+    }
 
     let mut config = RunConfig::new(&cwd);
     let mut memory = None;

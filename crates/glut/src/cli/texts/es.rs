@@ -155,6 +155,17 @@ pub const TEXTS: Texts = Texts {
     sandbox_git_now_writable: "Desde el próximo comando, en cada sesión, los comandos que Glut ejecuta pueden volver a escribir en las \
      carpetas git, también hacer commit.",
     sandbox_unreadable: "{reason} — hasta que el archivo vuelva a leerse, las carpetas git siguen de solo lectura para los comandos y ninguno se ejecuta sin sandbox.",
+    trust_owners_only: "La confianza es palabra del propietario solo, nunca de un comando que Glut ejecuta.",
+    trust_none: "Ninguna carpeta es de confianza.",
+    trust_is: "{folder} es de confianza: cuentan sus propias reglas de permiso .glut/, su modo, sus skills, agentes y comandos.",
+    trust_is_not: "{folder} no es de confianza: de sus propios ajustes .glut/ solo cuentan las reglas de prohibición y de pregunta.",
+    trust_adds: "Confiar en ella añade:",
+    trust_not_home: "La carpeta personal nunca es de confianza: su .glut/ es el tuyo.",
+    trust_not_root: "La carpeta raíz nunca es de confianza.",
+    trust_not_shared: "Una carpeta que no es solo tuya — la de otro usuario, o una que cualquiera puede escribir, como /tmp — nunca es de confianza.",
+    trust_added: "{folder} es de confianza desde su próxima sesión.",
+    trust_removed: "{folder} deja de ser de confianza desde su próxima sesión: solo cuentan sus reglas de prohibición y de pregunta.",
+    trust_was_not: "{folder} no era de confianza.",
     keychain_closed: "El llavero vuelve a estar cerrado a todo comando que Glut ejecuta; los programas de la lista lo \
                       piden.",
     route_not_here: "{provider} sirve cada modelo desde un host: no hay hosts que elegir (OpenRouter los tiene)",

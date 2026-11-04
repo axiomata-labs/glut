@@ -734,6 +734,38 @@ pub fn load(home: &Path, project: &Path, trusted: bool) -> Result<Loaded, Harnes
     Ok(loaded)
 }
 
+/// Why a folder cannot be trusted.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Refused {
+    /// The home folder: its `.glut` is the owner's own folder, never a project's.
+    Home,
+    /// The file system's root.
+    Root,
+    /// A folder that is not the owner's alone: another user's, or one anybody may write.
+    Shared,
+}
+
+/// Whether `folder` (canonical) may be trusted: never the home folder, the root, or a folder not the owner's alone.
+///
+/// # Errors
+///
+/// [`Refused`] for any of them.
+pub fn may_trust(folder: &Path, home: &Path) -> Result<(), Refused> {
+    let home = home.canonicalize().unwrap_or_else(|_| home.to_path_buf());
+    if folder == home {
+        return Err(Refused::Home);
+    }
+    if folder.parent().is_none() {
+        return Err(Refused::Root);
+    }
+    // A folder another user owns, or one anybody may write (`/tmp`), may get a `.glut` the owner never saw.
+    use std::os::unix::fs::MetadataExt;
+    match (std::fs::metadata(folder), std::fs::metadata(&home)) {
+        (Ok(own), Ok(home)) if own.uid() == home.uid() && own.mode() & 0o002 == 0 => Ok(()),
+        _ => Err(Refused::Shared),
+    }
+}
+
 /// The folders the owner trusted (P5), kept in `~/.glut/trusted.json`.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Trust {
@@ -765,9 +797,20 @@ impl Trust {
         }
     }
 
-    /// Whether `folder` (canonical) is trusted.
+    /// Whether `folder` (canonical) is on the list.
     pub fn contains(&self, folder: &Path) -> bool {
         self.folders.iter().any(|known| known == folder)
+    }
+
+    /// Whether `folder` (canonical) counts as trusted: on the list, and neither the home folder nor the root — a
+    /// list edited by hand does not make them so.
+    pub fn trusts(&self, folder: &Path, home: &Path) -> bool {
+        self.contains(folder) && may_trust(folder, home).is_ok()
+    }
+
+    /// The trusted folders, in the order they were trusted.
+    pub fn folders(&self) -> &[PathBuf] {
+        &self.folders
     }
 
     /// Trusts `folder` (canonical) from now on.
@@ -776,11 +819,29 @@ impl Trust {
     ///
     /// [`HarnessError::Settings`] when the file cannot be written.
     pub fn add(&mut self, home: &Path, folder: &Path) -> Result<(), HarnessError> {
-        use std::os::unix::fs::DirBuilderExt;
         if self.contains(folder) {
             return Ok(());
         }
         self.folders.push(folder.to_path_buf());
+        self.save(home)
+    }
+
+    /// Trusts `folder` no more; whether it was trusted.
+    ///
+    /// # Errors
+    ///
+    /// [`HarnessError::Settings`] when the file cannot be written.
+    pub fn remove(&mut self, home: &Path, folder: &Path) -> Result<bool, HarnessError> {
+        let before = self.folders.len();
+        self.folders.retain(|known| known != folder);
+        if self.folders.len() == before {
+            return Ok(false);
+        }
+        self.save(home).map(|()| true)
+    }
+
+    fn save(&self, home: &Path) -> Result<(), HarnessError> {
+        use std::os::unix::fs::DirBuilderExt;
         let path = Self::path(home);
         let fail = |reason: String| HarnessError::Settings {
             path: path.display().to_string(),
@@ -961,6 +1022,42 @@ mod tests {
         trust.add(&home, &project).unwrap();
         assert!(Trust::load(&home).unwrap().contains(&project));
         assert!(!Trust::load(&home).unwrap().contains(&home));
+    }
+
+    #[test]
+    fn a_home_folder_written_into_the_list_by_hand_is_not_trusted() {
+        let home = temp("trust-by-hand").canonicalize().unwrap();
+        let listed = serde_json::json!({ "folders": [home, "/"] }).to_string();
+        write(&home.join(".glut/trusted.json"), &listed);
+        let trust = Trust::load(&home).unwrap();
+        assert!(trust.contains(&home));
+        assert!(!trust.trusts(&home, &home));
+        assert!(!trust.trusts(Path::new("/"), &home));
+    }
+
+    #[test]
+    fn trust_taken_back_leaves_the_other_folders() {
+        use std::os::unix::fs::PermissionsExt;
+        let (home, one, two) = (
+            temp("untrust-home"),
+            temp("untrust-one"),
+            temp("untrust-two"),
+        );
+        let mut trust = Trust::load(&home).unwrap();
+        trust.add(&home, &one).unwrap();
+        trust.add(&home, &two).unwrap();
+        assert!(trust.remove(&home, &one).unwrap());
+        assert!(
+            !trust.remove(&home, &one).unwrap(),
+            "a second time finds nothing"
+        );
+        let kept = Trust::load(&home).unwrap();
+        assert_eq!(kept.folders(), [two]);
+        let mode = std::fs::metadata(home.join(".glut/trusted.json"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
     }
 
     #[test]

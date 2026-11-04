@@ -4259,6 +4259,10 @@ impl App {
                 Ok(said) => self.tell(said),
                 Err(reason) => self.transcript.note(reason, Tone::Fault),
             },
+            "trust" => match crate::said::trust(&self.parts, rest) {
+                Ok(said) => self.tell(said),
+                Err(reason) => self.transcript.note(reason, Tone::Fault),
+            },
             "clean" => self.clean_command(rest),
             "lsp" => match rest {
                 "on" | "off" => match prefs::set_lsp(&self.parts.home, rest == "on") {

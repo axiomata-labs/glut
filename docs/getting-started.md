@@ -38,9 +38,9 @@ prompt; `/init` writes one for you from what it finds in the folder. A git repos
 and every change it makes can be seen as a diff.
 
 A project may bring settings of its own in `.glut/settings.json`. Its deny and ask rules always count; if it brings
-allow rules or a mode, those count only in a folder you trust — listed in `~/.glut/trusted.json` — and are left out
-everywhere else. A project's
-hooks never run — only yours, from `~/.glut/settings.json`, do.
+allow rules or a mode, those count only in a folder you trust and are left out everywhere else: `/trust` shows what
+they would add, `/trust on` trusts the folder from its next session on. A project's hooks never run — only yours, from
+`~/.glut/settings.json`, do.
 
 ## 3. A task
 

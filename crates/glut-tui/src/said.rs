@@ -95,6 +95,64 @@ pub fn sandbox(parts: &Parts, rest: &str) -> Said {
     Ok(text)
 }
 
+/// `/trust`: whether the working folder's own `.glut` settings count in full — shown with what they add, trusted
+/// (never the home folder or the root) or taken back, or every trusted folder listed. The owner's word alone, as
+/// `glut trust`; it counts from the folder's next session, which builds its gate, skills and agents anew.
+pub fn trust(parts: &Parts, rest: &str) -> Said {
+    use glut::cli::trust::{Refused, may_trust, offered};
+    use glut::permissions::settings::Trust;
+    let folder = &parts.config.cwd;
+    let mut trust = Trust::load(&parts.home).map_err(|err| err.to_string())?;
+    match rest.trim() {
+        "" => {
+            let mut text = if trust.contains(folder) {
+                tr!(trust_cmd_is).to_string()
+            } else {
+                tr!(trust_cmd_is_not).to_string()
+            };
+            let lines = offered(folder)?;
+            if !lines.is_empty() && !trust.contains(folder) {
+                text.push('\n');
+                text.push_str(tr!(trust_cmd_adds));
+                for line in lines {
+                    text.push_str("\n  ");
+                    text.push_str(&line);
+                }
+            }
+            Ok(text)
+        }
+        "on" => {
+            match may_trust(folder, &parts.home) {
+                Err(Refused::Home) => return Err(tr!(trust_cmd_not_home).to_string()),
+                Err(Refused::Root) => return Err(tr!(trust_cmd_not_root).to_string()),
+                Err(Refused::Shared) => return Err(tr!(trust_cmd_not_shared).to_string()),
+                Ok(()) => {}
+            }
+            trust
+                .add(&parts.home, folder)
+                .map_err(|err| err.to_string())?;
+            Ok(tr!(trust_cmd_on).to_string())
+        }
+        "off" => match trust
+            .remove(&parts.home, folder)
+            .map_err(|err| err.to_string())?
+        {
+            true => Ok(tr!(trust_cmd_off).to_string()),
+            false => Ok(tr!(trust_cmd_was_not).to_string()),
+        },
+        "list" if trust.folders().is_empty() => Ok(tr!(trust_cmd_none).to_string()),
+        "list" => {
+            let mut text = tr!(trust_cmd_list_head).to_string();
+            for known in trust.folders() {
+                text.push_str("\n  ");
+                text.push_str(&known.display().to_string());
+            }
+            Ok(text)
+        }
+        _ => Err(tr!(trust_usage).to_string()),
+    }
+}
+
 /// `/folder`: the folders beside the working one (T60c), the owner's word for this session alone — listed alone,
 /// one added (checked: never the home folder, one holding the project or a secret) or taken away. What is added
 /// counts from the next call on: the file tools, the commands' sandbox, the gate and the snapshots share it.

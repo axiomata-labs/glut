@@ -159,6 +159,17 @@ pub const TEXTS: Texts = Texts {
     sandbox_git_now_writable: "Ab dem nächsten Befehl dürfen Befehle, die Glut ausführt, in jeder Session wieder in Git-Ordner schreiben, \
      auch committen.",
     sandbox_unreadable: "{reason} — bis die Datei wieder lesbar ist, bleiben Git-Ordner für Befehle schreibgeschützt, und ohne Sandbox läuft keiner.",
+    trust_owners_only: "Vertrauen ist allein das Wort des Owners, nie das eines Befehls, den Glut ausführt.",
+    trust_none: "Keinem Ordner wird vertraut.",
+    trust_is: "{folder} wird vertraut: Seine eigenen .glut/-Erlaubnis-Regeln, sein Modus, seine Skills, Agenten und Befehle zählen.",
+    trust_is_not: "{folder} wird nicht vertraut: Von seinen eigenen .glut/-Einstellungen zählen nur die Verbots- und Frage-Regeln.",
+    trust_adds: "Vertrauen fügt hinzu:",
+    trust_not_home: "Dem Home-Ordner wird nie vertraut: Sein .glut/ ist dein eigenes.",
+    trust_not_root: "Dem Wurzelordner wird nie vertraut.",
+    trust_not_shared: "Einem Ordner, der nicht dir allein gehört — dem eines anderen Benutzers oder einem, den jeder schreiben darf, wie /tmp —, wird nie vertraut.",
+    trust_added: "{folder} wird ab seiner nächsten Session vertraut.",
+    trust_removed: "{folder} wird ab seiner nächsten Session nicht mehr vertraut: Nur seine Verbots- und Frage-Regeln zählen.",
+    trust_was_not: "{folder} wurde nicht vertraut.",
     keychain_closed: "Der Schlüsselbund ist wieder zu für jeden Befehl, den Glut ausführt; die gelisteten Programme \
                       fragen nach ihm.",
     route_not_here: "{provider} bedient jedes Modell von einem Host: es gibt keine Hosts zu wählen (OpenRouter hat sie)",

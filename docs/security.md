@@ -76,7 +76,7 @@ Rules are written as in Claude Code: `Bash(git status *)`, `Read(src/**)`, `Netw
 
 - `~/.glut/settings.json` — the owner's;
 - `<project>/.glut/settings.json` and `settings.local.json` — a project's `deny` and `ask` rules always count; its
-  `allow` rules and its mode count only in a folder the owner trusted once (`~/.glut/trusted.json`), and a project's
+  `allow` rules and its mode count only in a folder the owner trusted once (`/trust on`), and a project's
   mode never lets through more than the owner's own.
 
 A project's hooks are parsed and reported but never run. A project's allow rule never gives a command the Keychain.

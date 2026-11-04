@@ -2271,6 +2271,11 @@ pub struct BuiltGate {
     pub max_turns: Option<u32>,
 }
 
+/// The note for a project whose own allow rules or mode are left out (a host may say it its own way, with its
+/// command to trust the folder).
+pub const UNTRUSTED_NOTE: &str =
+    "the project's .glut/ allow rules and mode are left out: this folder is not trusted";
+
 impl BuiltGate {
     /// The run's compaction for `model`: the owner's switch and the window the settings name for it.
     pub fn compaction(&self, model: &str) -> crate::config::Compaction {
@@ -2290,9 +2295,7 @@ impl BuiltGate {
     pub fn notes(&self) -> Vec<&'static str> {
         let mut notes = Vec::new();
         if self.untrusted_project {
-            notes.push(
-                "the project's .glut/ allow rules and mode are left out: this folder is not trusted",
-            );
+            notes.push(UNTRUSTED_NOTE);
         }
         if self.project_hooks_skipped {
             notes.push(

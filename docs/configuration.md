@@ -49,7 +49,7 @@ Files you configure:
 | `~/.glut/settings.json` | Rules, mode, sandbox paths, hooks, limits | You, by hand |
 | `<project>/.glut/settings.json` | A project's rules, mode, secret paths | The project |
 | `<project>/.glut/settings.local.json` | Same shape, for local additions | The project |
-| `~/.glut/trusted.json` | Folders whose project settings may loosen the gate | You, by hand |
+| `~/.glut/trusted.json` | Folders whose project settings may loosen the gate | `/trust`, `glut trust` |
 | `~/.glut/hooks.json` | More hooks, beside those in `settings.json` | The `make-hook` skill, or you |
 | `~/.glut/providers.json` | Model providers, default provider, routing | `glut providers`, `/provider`, `/context` |
 | `~/.glut/credentials.json` | Keys and sign-ins, where the file store is used | `glut providers`, `glut mcp login` |
@@ -288,7 +288,12 @@ skills, agents) is framed as the project's and never speaks with Glut's own voic
 ## trusted.json
 
 `~/.glut/trusted.json` lists the folders whose project settings may loosen the gate, and whose skills, agents and
-command files count. A folder must match exactly, as its canonical (resolved) path.
+command files count. A folder must match exactly, as its canonical (resolved) path. `/trust` in Glut shows whether
+the working folder is trusted and what its settings would add; `/trust on`, `/trust off` and `/trust list` change and
+list it, `glut trust show|add|remove [folder]` and `glut trust list` do the same outside Glut. A change counts from the folder's next
+session; the home folder, the root and a folder not yours alone (another user's, or one anybody may write) are
+never trusted, and no command Glut runs may change the list. `/trust` lists the project's allow rules, mode, skills,
+agents and commands before you decide.
 
 ```json
 {

@@ -288,6 +288,28 @@ crate::catalog! {
         sandbox_git_now_writable: &'static str,
         /// `glut sandbox show`: `~/.glut/sandbox.json` cannot be read, `{reason}` why.
         sandbox_unreadable: &'static str,
+        /// `glut trust add|remove` from a command Glut runs.
+        trust_owners_only: &'static str,
+        /// `glut trust list` with no folder trusted.
+        trust_none: &'static str,
+        /// `glut trust show`: `{folder}` is trusted.
+        trust_is: &'static str,
+        /// `glut trust show`: `{folder}` is not trusted.
+        trust_is_not: &'static str,
+        /// Before the lines of what a folder's own settings add.
+        trust_adds: &'static str,
+        /// `glut trust add` of the home folder.
+        trust_not_home: &'static str,
+        /// `glut trust add` of the root.
+        trust_not_root: &'static str,
+        /// `glut trust add` of a folder not the owner's alone.
+        trust_not_shared: &'static str,
+        /// `glut trust add` done: `{folder}`.
+        trust_added: &'static str,
+        /// `glut trust remove` done: `{folder}`.
+        trust_removed: &'static str,
+        /// `glut trust remove` of a folder not on the list: `{folder}`.
+        trust_was_not: &'static str,
         /// `glut providers route` for a provider off OpenRouter: `{provider}`.
         route_not_here: &'static str,
         /// The rule: `{on}`, `{margin}`, `{uptime}`, `{speed}`, `{wait}`.

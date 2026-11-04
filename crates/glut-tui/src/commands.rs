@@ -102,7 +102,7 @@ const fn command(
 }
 
 /// Every command, grouped by topic in [`Topic::ALL`]'s order, the most used first inside a topic.
-pub const COMMANDS: [Command; 67] = [
+pub const COMMANDS: [Command; 68] = [
     command(Topic::Session, "clear", "", "start a new session"),
     command(
         Topic::Session,
@@ -412,6 +412,13 @@ pub const COMMANDS: [Command; 67] = [
         "[git read-only|writable] [required on|off]",
         "how the commands Glut runs are contained — the sandbox here, whether git folders are read-only to them and \
          whether none runs without a sandbox; /sandbox git read-only|writable, /sandbox required on|off",
+    ),
+    command(
+        Topic::Settings,
+        "trust",
+        "[on|off|list]",
+        "whether this folder's own .glut settings count in full — its allow rules, mode, skills, agents and \
+         commands, shown before you trust it; /trust on|off from the folder's next session, /trust list every one",
     ),
     command(
         Topic::Settings,

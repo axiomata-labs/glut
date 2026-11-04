@@ -20,6 +20,7 @@ pub mod mcp_servers;
 pub mod models;
 pub mod providers;
 pub mod sandbox;
+pub mod trust;
 
 use crate::commands::{PermissionsView, Registry};
 use crate::mcp;
@@ -92,6 +93,9 @@ pub enum Command {
     /// How the commands Glut runs are held: the sandbox here, and whether git folders are read-only to them.
     #[command(subcommand)]
     Sandbox(sandbox::SandboxCommand),
+    /// The folders whose own .glut settings count in full: their allow rules, mode, skills, agents and commands.
+    #[command(subcommand)]
+    Trust(trust::TrustCommand),
 }
 
 /// Writes each event as one JSON line, flushed at once so a reader sees it while the run goes on.
@@ -262,6 +266,7 @@ pub async fn dispatch(command: Command) -> ExitCode {
         Command::Mcp(command) => mcp_servers::run(command).await,
         Command::Keychain(command) => keychain::run(command),
         Command::Sandbox(command) => sandbox::run(command),
+        Command::Trust(command) => trust::run(command),
     }
 }
 
@@ -753,7 +758,7 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
         Err(err) => return fail(err.to_string()),
     };
     let trusted = match Trust::load(&home) {
-        Ok(trust) => trust.contains(&cwd),
+        Ok(trust) => trust.trusts(&cwd, &home),
         Err(err) => return fail(err.to_string()),
     };
     // T35: the project's guides and map before the caller's instructions, the memory's folder for its tool.

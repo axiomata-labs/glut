@@ -161,6 +161,17 @@ pub const TEXTS: Texts = Texts {
     sandbox_git_now_writable: "Dès la prochaine commande, dans chaque session, les commandes que Glut exécute peuvent de nouveau écrire \
      dans les dossiers git, et commiter.",
     sandbox_unreadable: "{reason} — jusqu’à ce que le fichier se lise de nouveau, les dossiers git restent en lecture seule pour les commandes et aucune ne s’exécute sans bac à sable.",
+    trust_owners_only: "La confiance est la parole du propriétaire seul, jamais celle d’une commande que Glut exécute.",
+    trust_none: "Aucun dossier n’est de confiance.",
+    trust_is: "{folder} est de confiance : ses propres règles d’autorisation .glut/, son mode, ses skills, agents et commandes comptent.",
+    trust_is_not: "{folder} n’est pas de confiance : de ses propres réglages .glut/, seules les règles d’interdiction et de question comptent.",
+    trust_adds: "Lui faire confiance ajoute :",
+    trust_not_home: "Le dossier personnel n’est jamais de confiance : son .glut/ est le vôtre.",
+    trust_not_root: "Le dossier racine n’est jamais de confiance.",
+    trust_not_shared: "Un dossier qui n’est pas à vous seul — celui d’un autre utilisateur, ou un dossier que tout le monde peut écrire, comme /tmp — n’est jamais de confiance.",
+    trust_added: "{folder} est de confiance dès sa prochaine session.",
+    trust_removed: "{folder} n’est plus de confiance dès sa prochaine session : seules ses règles d’interdiction et de question comptent.",
+    trust_was_not: "{folder} n’était pas de confiance.",
     keychain_closed: "Le trousseau est de nouveau fermé à toute commande que Glut exécute ; les programmes listés le \
                       demandent.",
     route_not_here: "{provider} sert chaque modèle depuis un seul hôte : aucun hôte à choisir (OpenRouter en a)",
