@@ -4,6 +4,7 @@ size 120 34
 project shop
 home fresh
 allow "Bash(python3 *)"
+on "your word on its plan" key enter after 6
 on "Glut asks" key y
 run glut --provider anthropic --model claude-sonnet-5-5 --lang en
 wait 20 "⏎ send"

@@ -4,9 +4,12 @@
 //! # a comment
 //! size 120 34                  the terminal, columns and rows
 //! project prices               site/demo/prices, copied fresh to ~/glut-demo/prices and committed
+//! origin                       the project gets a remote of its own (a bare repository beside it), pushed to
 //! home fresh                   Glut's own folder new for the take: the owner's providers and keys, nothing else
 //! allow "Bash(python3 *)"      a rule of that fresh home's settings, so the scene is not held by a question
-//! on "Glut asks" key y         whenever the text comes up: the keys, after a reader's pause (once per appearance)
+//! on "Glut asks" key y         whenever the text comes up: the keys, after a reader's pause (once per appearance);
+//! on "Glut asks" "git push" key n   several texts: all must be on the screen at once
+//! on "its plan" key enter after 6   read for six seconds before the answer
 //! run glut --lang en           the program and its arguments, started in the project
 //! wait 20 "build"              until the screen shows the text, at most so many seconds
 //! wait 300 "passed" x6         the same, its time played six times faster
@@ -47,6 +50,17 @@ pub enum Step {
     End,
 }
 
+/// Keys sent whenever every one of some texts is on the screen.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Trigger {
+    /// What must be on the screen, all at once.
+    pub texts: Vec<String>,
+    /// The bytes sent.
+    pub keys: Vec<u8>,
+    /// How long it is read before the keys; `None`: the recorder's usual pause.
+    pub reads: Option<Duration>,
+}
+
 /// A scene: the terminal, the project, the program, the steps.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Scene {
@@ -58,12 +72,14 @@ pub struct Scene {
     pub project: Option<String>,
     /// Whether Glut gets a fresh home of its own (`GLUT_HOME`): no sessions, projects or settings of the owner's.
     pub fresh_home: bool,
+    /// Whether the project gets a remote to push to.
+    pub origin: bool,
     /// The allow rules of the fresh home's settings.
     pub allow: Vec<String>,
     /// The program and its arguments.
     pub program: Vec<String>,
     /// Keys sent whenever a text comes up on the screen.
-    pub triggers: Vec<(String, Vec<u8>)>,
+    pub triggers: Vec<Trigger>,
     /// What happens, in order.
     pub steps: Vec<Step>,
 }
@@ -79,6 +95,7 @@ pub fn parse(text: &str) -> Result<Scene, String> {
         rows: 34,
         project: None,
         fresh_home: false,
+        origin: false,
         allow: Vec::new(),
         program: Vec::new(),
         triggers: Vec::new(),
@@ -110,13 +127,27 @@ pub fn parse(text: &str) -> Result<Scene, String> {
                 scene.project = Some(rest.to_owned());
             }
             "home" if rest == "fresh" => scene.fresh_home = true,
+            "origin" if rest.is_empty() => scene.origin = true,
             "on" => {
-                let (text, after) =
-                    quoted(rest).ok_or_else(|| fail("the text goes in double quotes"))?;
+                // One or more quoted texts, all on the screen at once, then the keys.
+                let mut texts = Vec::new();
+                let mut after = rest;
+                while let Some((text, more)) = quoted(after.trim_start()) {
+                    texts.push(text);
+                    after = more;
+                }
                 let names = after
                     .trim()
                     .strip_prefix("key ")
-                    .ok_or_else(|| fail("on \"text\" key <keys>"))?;
+                    .ok_or_else(|| fail("on \"text\" … key <keys>"))?;
+                // `… key enter after 6`: this question is read longer before it is answered.
+                let (names, reads) = match names.rsplit_once(" after ") {
+                    Some((names, seconds)) => (
+                        names,
+                        Some(seconds_of(seconds).ok_or_else(|| fail("after takes seconds"))?),
+                    ),
+                    None => (names, None),
+                };
                 let mut bytes = Vec::new();
                 for name in names.split_whitespace() {
                     bytes.extend(
@@ -125,10 +156,14 @@ pub fn parse(text: &str) -> Result<Scene, String> {
                             .ok_or_else(|| fail(&format!("no key {name}")))?,
                     );
                 }
-                if text.is_empty() || bytes.is_empty() {
-                    return Err(fail("on needs a text and keys"));
+                if texts.is_empty() || texts.iter().any(String::is_empty) || bytes.is_empty() {
+                    return Err(fail("on needs texts and keys"));
                 }
-                scene.triggers.push((text, bytes));
+                scene.triggers.push(Trigger {
+                    texts,
+                    keys: bytes,
+                    reads,
+                });
             }
             "allow" => {
                 let (rule, after) =

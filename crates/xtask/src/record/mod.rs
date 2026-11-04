@@ -54,7 +54,7 @@ pub fn record(repo: &Path, name: &str) -> Result<(), String> {
     let scene = scene::parse(&text).map_err(|err| format!("{}: {err}", script.display()))?;
     let home = std::env::var("HOME").map_err(|_| "HOME is not set".to_owned())?;
     let folder = match &scene.project {
-        Some(project) => fresh_project(repo, Path::new(&home), project)?,
+        Some(project) => fresh_project(repo, Path::new(&home), project, scene.origin)?,
         None => return Err("a scene runs in a demo project, never in the repository".to_owned()),
     };
 
@@ -79,9 +79,10 @@ pub fn record(repo: &Path, name: &str) -> Result<(), String> {
         triggers: scene
             .triggers
             .iter()
-            .map(|(text, keys)| Trigger {
-                text: text.clone(),
-                keys: keys.clone(),
+            .map(|trigger| Trigger {
+                texts: trigger.texts.clone(),
+                keys: trigger.keys.clone(),
+                reads: trigger.reads.unwrap_or(READS_FOR),
                 seen: None,
                 answered: false,
             })
@@ -158,8 +159,11 @@ struct Take {
 
 /// Keys sent when a text comes up: once per time it appears, after [`READS_FOR`].
 struct Trigger {
-    text: String,
+    /// Every text that must be on the screen.
+    texts: Vec<String>,
     keys: Vec<u8>,
+    /// How long the question is read before the keys go.
+    reads: Duration,
     /// When the text came up this time.
     seen: Option<Instant>,
     answered: bool,
@@ -272,15 +276,28 @@ impl Take {
         self.last = now;
         self.keep_now(false);
         let shown = Film::text(self.parser.screen());
+        // The first trigger in the script's order answers; the others then wait as if they had just seen their text,
+        // so one question never gets two answers (`on "git push" key n` before `on "Glut asks" key y`).
+        let mut answered = false;
         for trigger in &mut self.triggers {
-            if !shown.contains(&trigger.text) {
+            if !trigger
+                .texts
+                .iter()
+                .all(|text| shown.contains(text.as_str()))
+            {
                 (trigger.seen, trigger.answered) = (None, false);
                 continue;
             }
             let seen = *trigger.seen.get_or_insert(now);
-            if !trigger.answered && seen.elapsed() >= READS_FOR {
+            if !answered && !trigger.answered && seen.elapsed() >= trigger.reads {
                 trigger.answered = true;
+                answered = true;
                 terminal.send(&trigger.keys)?;
+            }
+        }
+        if answered {
+            for trigger in self.triggers.iter_mut().filter(|trigger| !trigger.answered) {
+                trigger.seen = trigger.seen.map(|_| now);
             }
         }
         if self.ended {
@@ -443,7 +460,7 @@ fn collect_strings(value: &serde_json::Value, into: &mut Vec<String>) {
 
 /// `site/demo/<project>` copied to `~/glut-demo/<project>`, the old copy gone first (only one this tool made), and
 /// committed, so the scene's diffs show what Glut changed.
-fn fresh_project(repo: &Path, home: &Path, project: &str) -> Result<PathBuf, String> {
+fn fresh_project(repo: &Path, home: &Path, project: &str, origin: bool) -> Result<PathBuf, String> {
     let source = repo.join("site/demo").join(project);
     if !source.is_dir() {
         return Err(format!("no demo project {}", source.display()));
@@ -502,6 +519,18 @@ fn fresh_project(repo: &Path, home: &Path, project: &str) -> Result<PathBuf, Str
     git(&["init", "-q", "-b", "main"])?;
     git(&["add", "-A"])?;
     git(&["commit", "-q", "-m", "The project as it was yesterday"])?;
+    if origin {
+        // A remote of its own beside the project, outside the folder the take works in.
+        let bare = home.join(DEMO_DIR).join(format!("{project}-origin.git"));
+        if bare.exists() {
+            std::fs::remove_dir_all(&bare)
+                .map_err(|err| format!("cannot remove {}: {err}", bare.display()))?;
+        }
+        let bare_text = bare.to_string_lossy().into_owned();
+        git(&["init", "-q", "--bare", &bare_text])?;
+        git(&["remote", "add", "origin", &bare_text])?;
+        git(&["push", "-q", "-u", "origin", "main"])?;
+    }
     Ok(folder)
 }
 
