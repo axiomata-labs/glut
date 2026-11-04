@@ -1,7 +1,7 @@
 // The site's player of Glut's recordings (`cargo run -p xtask -- record <scene>`): a drawn terminal whose rows are
 // text in spans, filled frame by frame from the recording's JSON. Text, not video: sharp at any size, light, and
-// selectable. It plays while on screen and pauses off it; with reduced motion it shows the last screen and waits for
-// a click on play.
+// selectable. It is fetched as it comes near the screen, plays while on screen and pauses off it; with reduced motion
+// it shows the last screen and waits for a click on play. Scenes behind tabs ([data-scenes]) share one player.
 (() => {
   "use strict";
 
@@ -142,7 +142,8 @@
       show(0);
     };
     const tick = (now) => {
-      if (!playing) return;
+      // A figure taken off the page (another scene chosen) stops for good.
+      if (!playing || !figure.isConnected) return;
       clock += Math.min(100, now - last);
       last = now;
       show(clock);
@@ -194,5 +195,51 @@
     ).observe(figure);
   }
 
-  document.querySelectorAll("figure.player").forEach(player);
+  // A recording is fetched only as it comes near the screen: a page of several loads what is read.
+  const near = new IntersectionObserver(
+    (entries) => entries.forEach((entry) => {
+      if (!entry.isIntersecting) return;
+      near.unobserve(entry.target);
+      player(entry.target);
+    }),
+    { rootMargin: "100% 0px" },
+  );
+  const pristine = new WeakMap();
+  document.querySelectorAll("figure.player").forEach((figure) => {
+    pristine.set(figure, figure.cloneNode(true));
+    near.observe(figure);
+  });
+
+  // Scenes behind tabs: one player, the chosen scene in it. Arrow keys move along the tabs, as a tab list's do.
+  document.querySelectorAll("[data-scenes]").forEach((box) => {
+    const tabs = [...box.querySelectorAll("[data-scene]")];
+    const caption = box.querySelector("[data-caption]");
+    const choose = (tab) => {
+      const old = box.querySelector("figure.player");
+      const fresh = (pristine.get(old) || old).cloneNode(true);
+      fresh.dataset.src = tab.dataset.scene;
+      const title = fresh.querySelector(".bar span");
+      if (title) title.textContent = tab.dataset.bar || "";
+      near.unobserve(old);
+      old.replaceWith(fresh);
+      pristine.set(fresh, fresh.cloneNode(true));
+      player(fresh);
+      tabs.forEach((other) => {
+        other.setAttribute("aria-selected", String(other === tab));
+        other.tabIndex = other === tab ? 0 : -1;
+      });
+      if (caption) caption.textContent = tab.dataset.about || "";
+    };
+    tabs.forEach((tab, at) => {
+      tab.addEventListener("click", () => choose(tab));
+      tab.addEventListener("keydown", (event) => {
+        const step = { ArrowRight: 1, ArrowLeft: -1 }[event.key];
+        if (!step) return;
+        event.preventDefault();
+        const next = tabs[(at + step + tabs.length) % tabs.length];
+        next.focus();
+        choose(next);
+      });
+    });
+  });
 })();

@@ -12,7 +12,7 @@ sleep, and your editor at hand.
 > **Status: 0.1.0, early.** Glut is used every day by its author and is solid on macOS; Linux is tested in
 > containers. Expect rough edges, and please [report them](https://github.com/NamorX68/glut/issues).
 
-<!-- Screenshot: the first scene of the recordings (Glimm, a task list, a diff, tests turning green). -->
+![Glut after a first task: the failing tests found, two bugs fixed, the steps it took on the left, its side panel on the right](docs/images/scene-1.png)
 
 ## Why Glut
 
@@ -39,6 +39,15 @@ sleep, and your editor at hand.
   Node, no Python, no runtime to install.
 - **Eight languages.** English, German, French, Italian, Spanish, Chinese, Japanese and Portuguese — the whole
   interface and the manual.
+
+## A look
+
+| The gate | The arena | Neovim |
+|---|---|---|
+| ![A `.env` read refused by the sandbox and a `git push` refused at the gate, the judgements in the side panel](docs/images/scene-2.png) | ![Three models' results side by side in the arena's card, the chosen one's diff below](docs/images/scene-5.png) | ![Glut's edit as a Neovim diff, the owner's own line on its right side, Glut's question beside it](docs/images/scene-8.png) |
+| `.env` refused, `git push` asked and refused | three models blind, their time, cost and diff | an edit as a diff in your editor, your change in it |
+
+Every scene is a real run; the website replays them as text.
 
 ## Install
 

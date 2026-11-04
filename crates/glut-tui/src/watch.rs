@@ -299,7 +299,7 @@ impl Watch {
                 )),
             ]));
             lines.push(Line::from(Span::styled(
-                fit(format!("     {}", seen.reason), width),
+                fit(format!("     {}", shown_reason(&seen.reason)), width),
                 theme::quiet(),
             )));
         }
@@ -309,8 +309,27 @@ impl Watch {
     }
 }
 
+/// A judgement's reason as the screen words it: the gate names a mode as the settings write it (`mode accept_edits`),
+/// the footer as `build`.
+fn shown_reason(reason: &str) -> String {
+    match reason.strip_prefix("mode ") {
+        Some(name) if glut::permissions::Mode::parse(name).is_some() => {
+            format!("mode {}", crate::session::mode_label_of(name))
+        }
+        _ => reason.to_owned(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_mode_in_a_judgement_is_named_as_the_footer_names_it() {
+        assert_eq!(shown_reason("mode accept_edits"), "mode build");
+        assert_eq!(shown_reason("mode default"), "mode ask");
+        assert_eq!(shown_reason("allowed when asked"), "allowed when asked");
+        assert_eq!(shown_reason("mode of its own"), "mode of its own");
+    }
     use super::*;
 
     fn judged(tool: &str, target: &str, allowed: bool, reason: &str) -> Event {
