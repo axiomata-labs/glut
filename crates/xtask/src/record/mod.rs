@@ -58,8 +58,19 @@ pub fn record(repo: &Path, name: &str) -> Result<(), String> {
         None => return Err("a scene runs in a demo project, never in the repository".to_owned()),
     };
 
+    // The owner's keys and sign-ins as the take is given them, to tell afterwards which it renewed.
+    let given = stored_secrets(&Path::new(&home).join(".glut").join(CREDENTIALS));
     let glut_home = if scene.fresh_home {
-        Some(fresh_home(Path::new(&home), &scene.allow, &scene.settings)?)
+        let fresh = fresh_home(Path::new(&home), &scene.allow, &scene.settings)?;
+        for set in &scene.tasks {
+            let source = repo.join("site/demo/arena").join(set);
+            if !source.is_dir() {
+                return Err(format!("no demo task set {}", source.display()));
+            }
+            // Only the demo's own tasks: the owner's private sets never come into a take.
+            copy(&source, &fresh.join(".glut/arena/tasks/sets").join(set))?;
+        }
+        Some(fresh)
     } else {
         None
     };
@@ -116,6 +127,14 @@ pub fn record(repo: &Path, name: &str) -> Result<(), String> {
     // The program and all it started are stopped however the scene ended; what it showed last is kept.
     terminal.end();
     take.keep_now(true);
+    // A sign-in the take renewed holds the only good refresh token now: it goes back to the owner before the copy goes.
+    if let Some(fresh) = &glut_home {
+        for account in give_back_renewals(Path::new(&home), fresh, &given)? {
+            eprintln!(
+                "record: the take renewed the sign-in {account}; it went back into ~/.glut/credentials.json"
+            );
+        }
+    }
     // The fresh home's copy of the keys goes at once: no take leaves one behind.
     let secrets = glut_home
         .as_deref()
@@ -440,6 +459,111 @@ fn take_out_keys(fresh: &Path) -> Result<Vec<String>, String> {
     Ok(values)
 }
 
+/// The keys' file of a Glut home, below its `.glut`.
+const CREDENTIALS: &str = "credentials.json";
+
+/// The `secrets` of a keys' file by account, empty where it cannot be read.
+fn stored_secrets(path: &Path) -> serde_json::Map<String, serde_json::Value> {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|json| json.get("secrets")?.as_object().cloned())
+        .unwrap_or_default()
+}
+
+/// Every account whose entry the take changed (a subscription's renewal replaces its refresh token, which spends the
+/// owner's) written back into the owner's keys' file — under the owner's lock of that account, as Glut's renewal
+/// takes it, and only where the owner's entry is still the one the take was given: one the owner renewed meanwhile
+/// stays. No account is added, none removed.
+fn give_back_renewals(
+    home: &Path,
+    fresh: &Path,
+    given: &serde_json::Map<String, serde_json::Value>,
+) -> Result<Vec<String>, String> {
+    let taken = stored_secrets(&fresh.join(".glut").join(CREDENTIALS));
+    let renewed: Vec<(&String, &serde_json::Value)> = taken
+        .iter()
+        .filter(|(account, value)| given.get(*account).is_some_and(|before| before != *value))
+        .collect();
+    let mut back = Vec::new();
+    for (account, value) in renewed {
+        let _lock = account_lock(home, account)?;
+        let path = home.join(".glut").join(CREDENTIALS);
+        let text = std::fs::read_to_string(&path)
+            .map_err(|err| format!("cannot read the owner's keys again: {err}"))?;
+        let mut json: serde_json::Value = serde_json::from_str(&text)
+            .map_err(|err| format!("the owner's keys do not read: {err}"))?;
+        let Some(secrets) = json
+            .get_mut("secrets")
+            .and_then(serde_json::Value::as_object_mut)
+        else {
+            continue;
+        };
+        if secrets.get(account) != given.get(account) {
+            continue;
+        }
+        secrets.insert(account.clone(), value.clone());
+        write_private(&path, &json.to_string())?;
+        back.push(account.clone());
+    }
+    Ok(back)
+}
+
+/// Glut's own lock of `account`'s record (`subscription::Lock`: `~/.glut/locks/<account>.lock`), waited for.
+fn account_lock(home: &Path, account: &str) -> Result<std::fs::File, String> {
+    use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _};
+    let dir = home.join(".glut").join("locks");
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&dir)
+        .map_err(|err| format!("cannot make {}: {err}", dir.display()))?;
+    let name: String = account
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || "@.-_".contains(c) {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .mode(0o600)
+        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
+        .open(dir.join(format!("{name}.lock")))
+        .map_err(|err| format!("cannot open the sign-in's lock: {err}"))?;
+    rustix::fs::flock(&file, rustix::fs::FlockOperation::LockExclusive)
+        .map_err(|err| format!("cannot take the sign-in's lock: {err}"))?;
+    Ok(file)
+}
+
+/// `text` as the whole of `path`: a file beside it, readable by the owner alone from its first byte, renamed into
+/// place.
+fn write_private(path: &Path, text: &str) -> Result<(), String> {
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let beside = path.with_extension(format!("json.{}.new", std::process::id()));
+    let mut file = std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .open(&beside)
+        .map_err(|err| format!("cannot write the owner's keys: {err}"))?;
+    let written = file
+        .write_all(text.as_bytes())
+        .and_then(|()| file.sync_all())
+        .and_then(|()| std::fs::rename(&beside, path));
+    if let Err(err) = written {
+        let _ = std::fs::remove_file(&beside);
+        return Err(format!("cannot write the owner's keys: {err}"));
+    }
+    Ok(())
+}
+
 /// The shortest value of the keys' file checked against a recording.
 const MIN_SECRET: usize = 16;
 
@@ -552,6 +676,47 @@ fn copy(from: &Path, to: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_sign_in_the_take_renewed_goes_back_unless_the_owner_renewed_it_too() {
+        let base = std::env::temp_dir().join(format!("xtask-renewals-{}", std::process::id()));
+        let (home, fresh) = (base.join("home"), base.join("fresh"));
+        for dir in [&home, &fresh] {
+            std::fs::create_dir_all(dir.join(".glut")).unwrap();
+        }
+        let keys = |dir: &Path, json: serde_json::Value| {
+            std::fs::write(dir.join(".glut").join(CREDENTIALS), json.to_string()).unwrap()
+        };
+        keys(
+            &home,
+            serde_json::json!({"secrets": {"plan@a": "old", "mine@b": "old", "key@c": "same"}}),
+        );
+        let given = stored_secrets(&home.join(".glut").join(CREDENTIALS));
+        // The take renewed two sign-ins and made one up; the owner renewed one of them meanwhile.
+        keys(
+            &fresh,
+            serde_json::json!({"secrets": {"plan@a": "new", "mine@b": "take's", "key@c": "same", "x@d": "1"}}),
+        );
+        keys(
+            &home,
+            serde_json::json!({"secrets": {"plan@a": "old", "mine@b": "owner's", "key@c": "same"}}),
+        );
+        assert_eq!(
+            give_back_renewals(&home, &fresh, &given).unwrap(),
+            ["plan@a"]
+        );
+        let now = stored_secrets(&home.join(".glut").join(CREDENTIALS));
+        assert_eq!(now["plan@a"], "new");
+        assert_eq!(now["mine@b"], "owner's", "the owner's own renewal stays");
+        assert!(!now.contains_key("x@d"), "no account is added");
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = std::fs::metadata(home.join(".glut").join(CREDENTIALS))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+        let _ = std::fs::remove_dir_all(base);
+    }
 
     #[test]
     fn the_terminal_answers_glut_s_questions_in_their_order() {

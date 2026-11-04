@@ -8,6 +8,7 @@
 //! home fresh                   Glut's own folder new for the take: the owner's providers and keys, nothing else
 //! allow "Bash(python3 *)"      a rule of that fresh home's settings, so the scene is not held by a question
 //! setting lsp false            a value of that fresh home's settings (JSON), e.g. no editor's language server
+//! tasks demo                   site/demo/arena/demo, the arena bench's task set, in that fresh home
 //! on "Glut asks" key y         whenever the text comes up: the keys, after a reader's pause (once per appearance);
 //! on "Glut asks" "git push" key n   several texts: all must be on the screen at once
 //! on "its plan" key enter after 6   read for six seconds before the answer
@@ -76,6 +77,8 @@ pub struct Scene {
     pub allow: Vec<String>,
     /// Other values of the fresh home's settings, by key.
     pub settings: serde_json::Map<String, serde_json::Value>,
+    /// The arena bench's task sets under `site/demo/arena/` the fresh home gets.
+    pub tasks: Vec<String>,
     /// The program and its arguments.
     pub program: Vec<String>,
     /// Keys sent whenever a text comes up on the screen.
@@ -98,6 +101,7 @@ pub fn parse(text: &str) -> Result<Scene, String> {
         origin: false,
         allow: Vec::new(),
         settings: serde_json::Map::new(),
+        tasks: Vec::new(),
         program: Vec::new(),
         triggers: Vec::new(),
         steps: Vec::new(),
@@ -128,6 +132,12 @@ pub fn parse(text: &str) -> Result<Scene, String> {
                 scene.project = Some(rest.to_owned());
             }
             "home" if rest == "fresh" => scene.fresh_home = true,
+            "tasks"
+                if !rest.is_empty()
+                    && rest.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') =>
+            {
+                scene.tasks.push(rest.to_owned());
+            }
             "origin" if rest.is_empty() => scene.origin = true,
             "on" => {
                 // One or more quoted texts, all on the screen at once, then the keys.
@@ -351,6 +361,13 @@ mod tests {
         assert_eq!(scene.settings["loop"]["rounds"], 3);
         assert!(parse("project shop\nhome fresh\nsetting lsp nope\nrun glut\n").is_err());
         assert!(parse("project shop\nhome fresh\nsetting permissions {}\nrun glut\n").is_err());
+    }
+
+    #[test]
+    fn a_task_set_is_a_plain_name() {
+        let scene = parse("project shop\nhome fresh\ntasks demo\nrun glut\nend\n").unwrap();
+        assert_eq!(scene.tasks, ["demo"]);
+        assert!(parse("project shop\nhome fresh\ntasks ../private\nrun glut\n").is_err());
         assert!(
             parse("project shop\nsetting lsp false\nrun glut\n").is_err(),
             "never the owner's settings"

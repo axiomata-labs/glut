@@ -1,0 +1,23 @@
+# Scene 5b: the arena's test bench — a set of tasks run on three models, one after another, each judged by its own
+# check that no model sees, and the grid of who passed what.
+size 130 37
+project shop
+home fresh
+setting lsp false
+tasks demo
+run glut --provider anthropic --model claude-sonnet-5-5 --lang en
+wait 20 "⏎ send"
+pause 1.2
+type "/arena tasks"
+pause 0.6
+key enter
+wait 10 "Task sets in"
+pause 3
+type "/arena tasks demo: anthropic/claude-sonnet-5-5, chatgpt/gpt-6-luna, openrouter/deepseek/deepseek-v4.1-flash-1017"
+pause 0.8
+key enter
+wait 15 "task 1/3"
+pause 4
+wait 900 "refusals" x4
+pause 10
+end
