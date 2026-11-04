@@ -3223,7 +3223,7 @@ impl Panes {
                 .position(|member| member.state == crate::arena::State::Waiting)
         {
             // A model without room waits for it, never counts as failed: a wider window or a closed pane starts it.
-            if !arena.background && !self.room_for_one_more() {
+            if !arena.background && !self.make_room_for_one_more() {
                 if !arena.told_no_room {
                     arena.told_no_room = true;
                     let model = arena.shown_name(next);
@@ -4615,6 +4615,28 @@ impl Panes {
                 .fits(self.room, self.grid.others.len() + 1, PANE_MIN_COLUMNS)
     }
 
+    /// [`Self::room_for_one_more`], the main pane made narrower first where that alone gives the room — down to
+    /// [`SHARE_LEAST`], never further: an arena's models go beside it rather than wait in a window that could hold
+    /// them. Where even the narrowest share has no room, the share stays as it was.
+    fn make_room_for_one_more(&mut self) -> bool {
+        if self.room_for_one_more() {
+            return true;
+        }
+        let was = self.grid.share;
+        while self.grid.share > SHARE_LEAST {
+            self.grid.share = self
+                .grid
+                .share
+                .saturating_sub(SHARE_STEP.unsigned_abs())
+                .max(SHARE_LEAST);
+            if self.room_for_one_more() {
+                return true;
+            }
+        }
+        self.grid.share = was;
+        false
+    }
+
     /// Closes a peek; a question that came up under it counts as shown only from now.
     fn close_peek(&mut self) {
         self.peek = None;
@@ -5140,6 +5162,40 @@ mod tests {
             panes.settle(&host);
         }
         assert_eq!(panes.grid.share, SHARE_LEAST, "within its bounds");
+        // An arena's model makes room by a narrower main pane where that is enough, and leaves the share alone where
+        // it is not.
+        let (sender, _) = mpsc::unbounded_channel();
+        panes.building = Some(Building {
+            looping: None,
+            id: 3,
+            number: 3,
+            resume: false,
+            tree: None,
+            role: None,
+            background: None,
+            restore: None,
+            reports: sender,
+            arena: None,
+        });
+        panes.on_built(Ok(session::for_tests()));
+        panes.grid.share = SHARE;
+        let _ = panes.areas(Rect::new(0, 0, 130, 37));
+        assert!(
+            !panes.room_for_one_more(),
+            "two in a row beside a main pane of half the width are under 40 columns"
+        );
+        assert!(panes.make_room_for_one_more());
+        assert_eq!(
+            panes.grid.share, 35,
+            "the first share that holds two of 40 columns beside it"
+        );
+        panes.grid.share = SHARE;
+        let _ = panes.areas(Rect::new(0, 0, 100, 37));
+        assert!(
+            !panes.make_room_for_one_more(),
+            "not even at the narrowest share"
+        );
+        assert_eq!(panes.grid.share, SHARE, "kept as it was");
         // The border dragged by the mouse.
         let _ = panes.areas(Rect::new(0, 0, 100, 40));
         let border = panes.placed.border.unwrap();

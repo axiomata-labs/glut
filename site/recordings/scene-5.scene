@@ -1,0 +1,49 @@
+# Scene 5: the arena — three models blind on the same task, each in a copy of its own; the repository's check in every
+# copy, the comparison card, one model's changes taken (the names told then), and the judge's word after the pick.
+size 130 37
+project shop
+home fresh
+setting lsp false
+allow "Bash(python3 *)"
+on "Glut asks" key y
+run glut --provider anthropic --model claude-sonnet-5-5 --lang en
+wait 20 "⏎ send"
+pause 1.2
+type "/arena anthropic/claude-sonnet-5-5, chatgpt/gpt-6-luna, openrouter/deepseek/deepseek-v4.1-flash-1017: add shipping(total) to prices.py: 4.90, free from 50.00 gross; with tests"
+pause 0.8
+key enter
+wait 900 "fastest:"
+pause 3
+type "/arena check python3 -m unittest"
+pause 0.6
+key enter
+pause 8
+type "/arena card"
+pause 0.6
+key enter
+wait 10 "←/→ model"
+pause 4
+key right
+pause 3
+key right
+pause 3
+key left
+pause 2
+key left
+pause 2
+type "t"
+wait 10 "Yes, take them"
+pause 2
+key down
+pause 1
+key enter
+wait 10 "the names:"
+pause 3
+type "/arena judge"
+pause 0.6
+key enter
+wait 60 "Esc closes the card"
+pause 14
+key esc
+pause 2
+end
