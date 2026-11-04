@@ -487,9 +487,15 @@ async fn steps(peer: &Peer, live: &Live, rest: &str) -> Ran {
         .unwrap_or_else(|poison| poison.into_inner())
         .marks
         .clone();
-    let Some(steps) = crate::said::steps(&live.parts, &marks) else {
+    let Some((root, cwd, marks)) = crate::said::steps_source(&live.parts, &marks) else {
         return Ran::Said(vec![tr!(steps_no_snapshots).to_string()]);
     };
+    // Git over the store and the folder: blocking work, off the protocol's thread.
+    let steps =
+        match tokio::task::spawn_blocking(move || crate::said::steps(&root, &cwd, &marks)).await {
+            Ok(steps) => steps,
+            Err(failed) => return Ran::Said(vec![format!("⚠ {failed}")]),
+        };
     let (word, number) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
     if word.is_empty() {
         if steps.is_empty() {

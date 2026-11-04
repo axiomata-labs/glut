@@ -349,6 +349,67 @@ pub fn beside_of(root: &Path, work_tree: &Path, run: &str) -> Vec<PathBuf> {
         .unwrap_or_default()
 }
 
+/// The steps of `run` that changed no recorded file: the folder before each is the folder before the next step, in
+/// the working folder and in every folder beside it the run recorded. A step is recorded before a change is tried,
+/// so one refused (plan mode, the gate, a failed edit) or a command that wrote nothing leaves a step that changed
+/// nothing. A run's last step is judged against the folder before the next run's first step, the newest run's
+/// against the folder as it is now (recorded: blocking work, as [`diff`]); a change the owner made between two runs
+/// counts as the earlier run's. Where a folder cannot be read — one beside that is gone, a record swept —, every step
+/// counts as changed: the list then shows too much, never too little.
+pub fn unchanged_steps(root: &Path, work_tree: &Path, run: &str) -> Vec<u32> {
+    let Some((_, mut idle)) = idle_steps(root, work_tree, run) else {
+        return Vec::new();
+    };
+    for folder in beside_of(root, work_tree, run) {
+        let Some((taken, idle_there)) = idle_steps(root, &folder, run) else {
+            return Vec::new();
+        };
+        // A folder whose first snapshot came later changed nothing before it.
+        idle.retain(|turn| idle_there.contains(turn) || !taken.contains(turn));
+    }
+    idle
+}
+
+/// The turns of `run`'s steps in `folder`'s store, and those whose folder before them is the one after them: before
+/// the next step, and for the last one before the next run's first step — or, for the newest run, the folder now.
+fn idle_steps(root: &Path, folder: &Path, run: &str) -> Option<(Vec<u32>, Vec<u32>)> {
+    let folder = folder.canonicalize().ok()?;
+    // Newest first: the run before this one in the list is the one recorded after it.
+    let all = runs(root, &folder);
+    let at = all.iter().position(|record| record.run == run)?;
+    let record = &all[at];
+    let turns: Vec<u32> = record.steps.iter().map(|step| step.turn).collect();
+    let git_dir = store_of(root, &folder);
+    let after = match at.checked_sub(1).and_then(|newer| all[newer].steps.first()) {
+        Some(next) => format!("{}^{{tree}}", checked_commit(&next.commit).ok()?),
+        None => {
+            let _locked = lock(&git_dir).ok()?;
+            tree_now(&git_dir, &folder, run).ok()?
+        }
+    };
+    let mut trees: Vec<String> = record
+        .steps
+        .iter()
+        .map(|step| checked_commit(&step.commit).map(|commit| format!("{commit}^{{tree}}")))
+        .collect::<Result<_, _>>()
+        .ok()?;
+    trees.push(after);
+    let mut args = vec!["rev-parse"];
+    args.extend(trees.iter().map(String::as_str));
+    let answer = git(&git_dir, &folder, &args).ok()?;
+    let trees: Vec<&str> = answer.lines().collect();
+    if trees.len() != turns.len() + 1 {
+        return None;
+    }
+    let idle = turns
+        .iter()
+        .zip(trees.windows(2))
+        .filter(|(_, pair)| pair[0] == pair[1])
+        .map(|(turn, _)| *turn)
+        .collect();
+    Some((turns, idle))
+}
+
 /// [`restore`] of `work_tree` and of every folder beside it the run recorded (T60c): each put back as it was before
 /// the step — a folder whose first snapshot came later, as before that one (nothing in it changed before). Returns
 /// the working folder's commit and each folder beside it that could not be put back, with why: the working folder
@@ -419,6 +480,19 @@ pub fn diff_to_now(
     changed(root, work_tree, run, step, false)
 }
 
+/// The tree of `work_tree` as it is now, recorded into a throwaway index, so a file made since counts as a snapshot
+/// would count it (the store's exclude list as the snapshots left it), and the run's own index stays as it was. The
+/// caller holds the store's lock.
+fn tree_now(git_dir: &Path, work_tree: &Path, run: &str) -> Result<String, String> {
+    let scratch = git_dir.join(format!("index-diff-{run}-{}", std::process::id()));
+    let _ = std::fs::copy(git_dir.join(format!("index-{run}")), &scratch);
+    let tree = git_with_index(git_dir, work_tree, &scratch, &["add", "--all"])
+        .and_then(|_| git_with_index(git_dir, work_tree, &scratch, &["write-tree"]));
+    let _ = std::fs::remove_file(&scratch);
+    let tree = tree?.trim().to_owned();
+    Ok(checked_commit(&tree)?.to_owned())
+}
+
 /// The change from before step `step` (the run's first without one) to the next step's snapshot when `to_next` and
 /// there is one, else to the folder now.
 fn changed(
@@ -452,19 +526,9 @@ fn changed(
     };
     let git_dir = store_of(root, &work_tree);
     let _locked = lock(&git_dir)?;
-    // To the folder as it is now: recorded into a throwaway index, so a file made since counts as a snapshot would
-    // count it (the store's exclude list as the snapshots left it), and the run's own index stays as it was.
     let to = match to {
         Some(to) => to,
-        None => {
-            let scratch = git_dir.join(format!("index-diff-{run}-{}", std::process::id()));
-            let _ = std::fs::copy(git_dir.join(format!("index-{run}")), &scratch);
-            let tree = git_with_index(&git_dir, &work_tree, &scratch, &["add", "--all"])
-                .and_then(|_| git_with_index(&git_dir, &work_tree, &scratch, &["write-tree"]));
-            let _ = std::fs::remove_file(&scratch);
-            let tree = tree?.trim().to_owned();
-            checked_commit(&tree)?.to_owned()
-        }
+        None => tree_now(&git_dir, &work_tree, run)?,
     };
     let args = [
         "diff",
@@ -878,6 +942,60 @@ mod tests {
         assert!(
             diff(&root, &folder, "--output=x", 1).is_err(),
             "no run id is an option"
+        );
+    }
+
+    #[test]
+    fn a_step_that_changed_nothing_is_told_apart_the_last_by_the_folder_now() {
+        let (root, folder) = (temp("root"), temp("folder"));
+        std::fs::write(folder.join("a.txt"), "one\n").unwrap();
+        let mut snaps = Snapshots::open(&root, &folder, "run1").unwrap();
+        snaps.take(1).unwrap();
+        // Step 1's change was refused: the folder before step 2 is the folder before step 1.
+        snaps.take(2).unwrap();
+        std::fs::write(folder.join("a.txt"), "two\n").unwrap();
+        snaps.take(3).unwrap();
+        assert_eq!(
+            unchanged_steps(&root, &folder, "run1"),
+            [1, 3],
+            "the last step, a command that wrote nothing, changed nothing up to now"
+        );
+        std::fs::write(folder.join("a.txt"), "three\n").unwrap();
+        assert_eq!(unchanged_steps(&root, &folder, "run1"), [1]);
+        assert!(unchanged_steps(&root, &folder, "no-such-run").is_empty());
+
+        // A later run: run1's last step is judged against the folder before it, not against what it changed.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let mut later = Snapshots::open(&root, &folder, "run3").unwrap();
+        later.take(1).unwrap();
+        std::fs::write(folder.join("a.txt"), "four\n").unwrap();
+        assert_eq!(unchanged_steps(&root, &folder, "run1"), [1]);
+        assert!(unchanged_steps(&root, &folder, "run3").is_empty());
+        std::fs::write(folder.join("a.txt"), "three\n").unwrap();
+        assert_eq!(
+            unchanged_steps(&root, &folder, "run3"),
+            [1],
+            "back as it was before run3: its step changed nothing"
+        );
+        assert_eq!(
+            unchanged_steps(&root, &folder, "run1"),
+            [1],
+            "run1's last step still changed a.txt"
+        );
+
+        let beside = temp("beside");
+        std::fs::write(beside.join("b.txt"), "one\n").unwrap();
+        let mut there = Snapshots::open(&root, &folder, "run2").unwrap();
+        let mut beside_snaps = Snapshots::open(&root, &beside, "run2").unwrap();
+        there.set_beside(vec![beside.clone()]);
+        for turn in [1, 2] {
+            beside_snaps.take(turn).unwrap();
+            there.take(turn).unwrap();
+            std::fs::write(beside.join("b.txt"), format!("after {turn}\n")).unwrap();
+        }
+        assert!(
+            unchanged_steps(&root, &folder, "run2").is_empty(),
+            "step 1 changed the folder beside: it counts"
         );
     }
 

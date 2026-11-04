@@ -1,7 +1,8 @@
 //! What a command says (T64b): the commands whose answer is text, shared by the TUI and an editor's session — each
 //! does what it does and hands back the line for the stream, `Err` for a fault.
 
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use crate::prefs::{self, Prefs};
 use crate::session::{self, Engine, Parts};
@@ -397,24 +398,46 @@ pub struct Step {
     pub commit: String,
 }
 
-/// The steps of the session's turns whose snapshots are still kept, the newest first.
-pub fn steps(parts: &Parts, marks: &[crate::store::Mark]) -> Option<Vec<Step>> {
-    let root = parts.config.snapshots.as_ref()?;
-    let runs = glut::snapshot::runs(root, &parts.config.cwd);
+/// Where `/steps` reads the session's steps: the snapshots' root, the working folder and the session's marks — what
+/// [`steps`] needs, taken out so it can run off the screen's thread. `None` when the session keeps no snapshots.
+pub fn steps_source(
+    parts: &Parts,
+    marks: &[crate::store::Mark],
+) -> Option<(PathBuf, PathBuf, Vec<crate::store::Mark>)> {
+    let root = parts.config.snapshots.clone()?;
+    Some((root, parts.config.cwd.clone(), marks.to_vec()))
+}
+
+/// The steps of the session's turns whose snapshots are still kept and that changed a file, the newest first. Reads
+/// the store and, for each run's last step, the folder as it is now: blocking work, never on the screen's thread.
+pub fn steps(root: &Path, cwd: &Path, marks: &[crate::store::Mark]) -> Vec<Step> {
+    let runs = glut::snapshot::runs(root, cwd);
+    let mut idle: HashMap<&str, Vec<u32>> = HashMap::new();
     let mut steps = Vec::new();
     for mark in marks.iter().rev() {
         let Some(run) = &mark.run else { continue };
         let Some(record) = runs.iter().find(|record| &record.run == run) else {
             continue;
         };
-        steps.extend(record.steps.iter().rev().map(|step| Step {
-            run: run.clone(),
-            turn: step.turn,
-            prompt: mark.prompt.clone(),
-            commit: step.commit[..step.commit.len().min(8)].to_owned(),
-        }));
+        // A step whose change was refused changed no file: the list is of steps that did.
+        let unchanged = idle
+            .entry(run)
+            .or_insert_with(|| glut::snapshot::unchanged_steps(root, cwd, run));
+        steps.extend(
+            record
+                .steps
+                .iter()
+                .rev()
+                .filter(|step| !unchanged.contains(&step.turn))
+                .map(|step| Step {
+                    run: run.clone(),
+                    turn: step.turn,
+                    prompt: mark.prompt.clone(),
+                    commit: step.commit[..step.commit.len().min(8)].to_owned(),
+                }),
+        );
     }
-    Some(steps)
+    steps
 }
 
 /// The run the review of `scope` starts from: the latest turn that changed files, or the session's first — and its

@@ -2697,6 +2697,12 @@ impl App {
                 }
             }
             Report::Attached { name, kept } => self.attached(name, kept),
+            // Read off the screen's thread: it opens only where nothing else was opened meanwhile.
+            Report::Steps(steps) => {
+                if self.picker.is_none() && self.ask.is_none() {
+                    self.picker = Some(steps_picker(steps));
+                }
+            }
             Report::Diff(turn, change) => match change {
                 Ok(change) if change.trim().is_empty() => self
                     .transcript
@@ -4201,7 +4207,7 @@ impl App {
                 Ok(request) => self.pane_request = Some(request),
                 Err(reason) => self.transcript.note(reason, Tone::Fault),
             },
-            "steps" => self.picker = Some(self.steps_picker()),
+            "steps" => self.read_steps(),
             "motion" => match crate::motion::Motion::parse(rest) {
                 Some(motion) => self.set_motion(motion),
                 None => {
@@ -5342,35 +5348,17 @@ impl App {
         self.transcript.note(tr!(forked), Tone::Fine);
     }
 
-    /// The snapshot steps of this session's runs, newest first (`/steps`, T13): a step's change, or the files back
-    /// to before it.
-    fn steps_picker(&self) -> Picker {
-        let Some(steps) = crate::said::steps(&self.parts, &self.session.marks) else {
-            return Picker::new(tr!(steps_no_snapshots), Vec::new(), None);
+    /// Reads the steps of this session's runs off the screen's thread (`/steps`, T13): the picker opens when they come.
+    fn read_steps(&mut self) {
+        let Some((root, cwd, marks)) = crate::said::steps_source(&self.parts, &self.session.marks)
+        else {
+            self.picker = Some(steps_picker(None));
+            return;
         };
-        let items: Vec<Item> = steps
-            .into_iter()
-            .map(|step| {
-                Item::plain(
-                    tr!(
-                        step_of,
-                        turn = step.turn,
-                        prompt = crate::transcript::clean(&step.prompt)
-                    ),
-                    step.commit,
-                    Pick::Step {
-                        run: step.run,
-                        turn: step.turn,
-                    },
-                )
-            })
-            .collect();
-        let title = if items.is_empty() {
-            tr!(steps_none)
-        } else {
-            tr!(steps_title)
-        };
-        Picker::new(title, items, None)
+        let reports = self.reports.clone();
+        tokio::task::spawn_blocking(move || {
+            let _ = reports.send(Report::Steps(Some(crate::said::steps(&root, &cwd, &marks))));
+        });
     }
 
     /// Opens the review (T17) of what changed since before the latest turn that changed files, or before the
@@ -8709,6 +8697,37 @@ impl App {
         let most = self.stream_lines.saturating_sub(self.stream_height);
         self.scroll = self.scroll.saturating_add_signed(lines).min(most);
     }
+}
+
+/// The picker of the steps that changed files (`/steps`, T13), newest first: a step's change, or the files back to
+/// before it. `None`: the session keeps no snapshots.
+fn steps_picker(steps: Option<Vec<crate::said::Step>>) -> Picker {
+    let Some(steps) = steps else {
+        return Picker::new(tr!(steps_no_snapshots), Vec::new(), None);
+    };
+    let items: Vec<Item> = steps
+        .into_iter()
+        .map(|step| {
+            Item::plain(
+                tr!(
+                    step_of,
+                    turn = step.turn,
+                    prompt = crate::transcript::clean(&step.prompt)
+                ),
+                step.commit,
+                Pick::Step {
+                    run: step.run,
+                    turn: step.turn,
+                },
+            )
+        })
+        .collect();
+    let title = if items.is_empty() {
+        tr!(steps_none)
+    } else {
+        tr!(steps_title)
+    };
+    Picker::new(title, items, None)
 }
 
 /// What to do with a step of `/steps`.

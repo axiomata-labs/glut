@@ -43,4 +43,10 @@ pause 0.6
 key enter
 wait 10 "Steps that changed files"
 pause 2.5
+key enter
+wait 5 "show what it changed"
+pause 2
+key enter
+wait 15 "diff --git"
+pause 5
 end
