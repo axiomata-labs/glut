@@ -1,0 +1,48 @@
+# Scene 4: many agents — a second pane as the tester in auto mode, a background agent for the docs, one model telling
+# the other what it did (held until the owner lets it into the pane with more rights), and a look at the background
+# agent's stream.
+size 130 37
+project shop
+home fresh
+setting lsp false
+allow "Bash(python3 *)"
+on "held: Enter here" key ctrl-p enter after 3
+on "Glut asks" key y
+run glut --provider anthropic --model claude-sonnet-5-5 --lang en
+wait 20 "⏎ send"
+pause 1.2
+type "/split here as tester"
+pause 0.6
+key enter
+pause 2.5
+key backtab
+pause 1.5
+key ctrl-p
+pause 1
+type "/bg docs-check as docs here"
+pause 0.6
+key enter
+pause 2
+type "/send docs-check write README.md: one line on each function in prices.py, nothing more"
+pause 0.6
+key enter
+pause 1.5
+type "add free_shipping(total) to prices.py: free from 50.00 gross. No tests from you: once it is in, tell the tester in pane 2 to write them"
+pause 0.6
+key enter
+wait 15 "⌃C stops"
+wait-gone 600 "⌃C stops"
+wait 60 "⌃C stops"
+wait-gone 600 "⌃C stops"
+pause 3
+wait-gone 600 "⌃C stops"
+pause 3
+wait-gone 600 "⌃C stops"
+pause 3
+type "/peek docs-check"
+pause 0.6
+key enter
+pause 5
+key esc
+pause 2
+end

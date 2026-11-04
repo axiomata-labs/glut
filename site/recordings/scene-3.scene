@@ -3,6 +3,7 @@
 size 130 37
 project shop
 home fresh
+setting lsp false
 allow "Bash(python3 *)"
 on "your word on its plan" key enter after 6
 on "Glut asks" key y

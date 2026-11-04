@@ -190,13 +190,17 @@ fn style_of(cell: &vt100::Cell) -> Style {
 /// cells wide and drops the mark (a character of Unicode's private use, never on a screen of Glut's).
 pub const WIDE: char = '\u{E000}';
 
-/// `cells` with every run of cells that spells `home` replaced by one `~` in the first one's style.
+/// `cells` with every run of cells that spells `home` replaced by one `~` in the first one's style. The columns it
+/// saves come back at the next gap of two blanks after it, so what stands right of it (a card's frame, a second pane)
+/// keeps its place; with no such gap they come back at the row's end.
 fn masked(cells: Vec<(String, Style)>, home: &str) -> Vec<(String, Style)> {
     if home.is_empty() {
         return cells;
     }
     let wanted: Vec<char> = home.chars().collect();
+    let blank = |at: usize| cells.get(at).is_some_and(|(text, _)| text == " ");
     let mut out = Vec::with_capacity(cells.len());
+    let mut owed = 0;
     let mut at = 0;
     while at < cells.len() {
         let spells = cells.len() - at >= wanted.len()
@@ -206,11 +210,16 @@ fn masked(cells: Vec<(String, Style)>, home: &str) -> Vec<(String, Style)> {
                 .all(|(c, (text, _))| text.chars().eq(std::iter::once(*c)));
         if spells {
             out.push(("~".to_owned(), cells[at].1.clone()));
+            owed += wanted.len() - 1;
             at += wanted.len();
-        } else {
-            out.push(cells[at].clone());
-            at += 1;
+            continue;
         }
+        if owed > 0 && blank(at) && blank(at + 1) {
+            out.extend(std::iter::repeat_n(cells[at].clone(), owed));
+            owed = 0;
+        }
+        out.push(cells[at].clone());
+        at += 1;
     }
     out
 }
@@ -270,6 +279,17 @@ mod tests {
         let json = film.json(0);
         let row = json["frames"][0]["rows"]["0"][0][0].as_str().unwrap();
         assert!(row.starts_with("cd ~/project "), "{row:?}");
+        assert_eq!(row.chars().count(), 30);
+    }
+
+    #[test]
+    fn what_stands_right_of_the_home_folder_keeps_its_column() {
+        let mut film = Film::new(30, 1, "/Users/me");
+        let parser = screen(30, b"/Users/me/a    |b");
+        film.keep(0, parser.screen());
+        let json = film.json(0);
+        let row = json["frames"][0]["rows"]["0"][0][0].as_str().unwrap();
+        assert_eq!(row.find('|'), Some(15), "{row:?}");
         assert_eq!(row.chars().count(), 30);
     }
 }

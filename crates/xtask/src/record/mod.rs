@@ -59,7 +59,7 @@ pub fn record(repo: &Path, name: &str) -> Result<(), String> {
     };
 
     let glut_home = if scene.fresh_home {
-        Some(fresh_home(Path::new(&home), &scene.allow)?)
+        Some(fresh_home(Path::new(&home), &scene.allow, &scene.settings)?)
     } else {
         None
     };
@@ -375,7 +375,11 @@ const HOME_TAKES: [&str; 3] = ["providers.json", "credentials.json", "models"];
 
 /// A new `~/glut-demo/.home` for Glut (`GLUT_HOME`), the old one gone first (only one this tool made): the owner's
 /// providers and keys, and none of their sessions, projects, settings or snapshots — nothing private on screen.
-fn fresh_home(home: &Path, allow: &[String]) -> Result<PathBuf, String> {
+fn fresh_home(
+    home: &Path,
+    allow: &[String],
+    settings: &serde_json::Map<String, serde_json::Value>,
+) -> Result<PathBuf, String> {
     let fresh = home.join(DEMO_DIR).join(".home");
     if fresh.exists() {
         if !fresh.join(MARKER).is_file() {
@@ -402,10 +406,19 @@ fn fresh_home(home: &Path, allow: &[String]) -> Result<PathBuf, String> {
                 .map_err(|err| format!("cannot copy {name}: {err}"))?;
         }
     }
+    let mut written = settings.clone();
     if !allow.is_empty() {
-        let settings = serde_json::json!({ "permissions": { "allow": allow } });
-        std::fs::write(glut.join("settings.json"), settings.to_string())
-            .map_err(|err| format!("cannot write the take's settings: {err}"))?;
+        written.insert(
+            "permissions".to_owned(),
+            serde_json::json!({ "allow": allow }),
+        );
+    }
+    if !written.is_empty() {
+        std::fs::write(
+            glut.join("settings.json"),
+            serde_json::Value::Object(written).to_string(),
+        )
+        .map_err(|err| format!("cannot write the take's settings: {err}"))?;
     }
     Ok(fresh)
 }

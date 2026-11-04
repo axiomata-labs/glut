@@ -2,6 +2,7 @@
 size 130 37
 project prices
 home fresh
+setting lsp false
 allow "Bash(python3 *)"
 on "Glut asks" key y
 run glut --provider anthropic --model claude-sonnet-5-5 --lang en

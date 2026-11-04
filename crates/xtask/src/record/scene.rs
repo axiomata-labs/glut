@@ -7,6 +7,7 @@
 //! origin                       the project gets a remote of its own (a bare repository beside it), pushed to
 //! home fresh                   Glut's own folder new for the take: the owner's providers and keys, nothing else
 //! allow "Bash(python3 *)"      a rule of that fresh home's settings, so the scene is not held by a question
+//! setting lsp false            a value of that fresh home's settings (JSON), e.g. no editor's language server
 //! on "Glut asks" key y         whenever the text comes up: the keys, after a reader's pause (once per appearance);
 //! on "Glut asks" "git push" key n   several texts: all must be on the screen at once
 //! on "its plan" key enter after 6   read for six seconds before the answer
@@ -73,6 +74,8 @@ pub struct Scene {
     pub origin: bool,
     /// The allow rules of the fresh home's settings.
     pub allow: Vec<String>,
+    /// Other values of the fresh home's settings, by key.
+    pub settings: serde_json::Map<String, serde_json::Value>,
     /// The program and its arguments.
     pub program: Vec<String>,
     /// Keys sent whenever a text comes up on the screen.
@@ -94,6 +97,7 @@ pub fn parse(text: &str) -> Result<Scene, String> {
         fresh_home: false,
         origin: false,
         allow: Vec::new(),
+        settings: serde_json::Map::new(),
         program: Vec::new(),
         triggers: Vec::new(),
         steps: Vec::new(),
@@ -170,6 +174,17 @@ pub fn parse(text: &str) -> Result<Scene, String> {
                 }
                 scene.allow.push(rule);
             }
+            "setting" => {
+                let (key, value) = rest
+                    .split_once(' ')
+                    .ok_or_else(|| fail("setting <key> <JSON value>"))?;
+                if key == "permissions" {
+                    return Err(fail("the rules come from `allow` lines"));
+                }
+                let value = serde_json::from_str(value.trim())
+                    .map_err(|err| fail(&format!("not a JSON value: {err}")))?;
+                scene.settings.insert(key.to_owned(), value);
+            }
             "run" if !rest.is_empty() => {
                 scene.program = rest.split_whitespace().map(str::to_owned).collect()
             }
@@ -232,9 +247,9 @@ pub fn parse(text: &str) -> Result<Scene, String> {
             _ => return Err(fail("not a step")),
         }
     }
-    if !scene.allow.is_empty() && !scene.fresh_home {
+    if (!scene.allow.is_empty() || !scene.settings.is_empty()) && !scene.fresh_home {
         return Err(
-            "an `allow` rule needs `home fresh`: the owner's own settings are never written"
+            "an `allow` rule or a `setting` needs `home fresh`: the owner's own settings are never written"
                 .to_owned(),
         );
     }
@@ -325,6 +340,21 @@ mod tests {
         assert!(matches!(scene.steps[1], Step::Wait { faster, .. } if faster == 6.0));
         assert_eq!(scene.steps[4], Step::Keys(vec![3, b'\r']));
         assert_eq!(scene.steps[5], Step::End);
+    }
+
+    #[test]
+    fn a_setting_is_json_and_only_for_a_fresh_home() {
+        let scene =
+            parse("project shop\nhome fresh\nsetting lsp false\nsetting loop {\"rounds\": 3}\nrun glut\nend\n")
+                .unwrap();
+        assert_eq!(scene.settings["lsp"], serde_json::json!(false));
+        assert_eq!(scene.settings["loop"]["rounds"], 3);
+        assert!(parse("project shop\nhome fresh\nsetting lsp nope\nrun glut\n").is_err());
+        assert!(parse("project shop\nhome fresh\nsetting permissions {}\nrun glut\n").is_err());
+        assert!(
+            parse("project shop\nsetting lsp false\nrun glut\n").is_err(),
+            "never the owner's settings"
+        );
     }
 
     #[test]

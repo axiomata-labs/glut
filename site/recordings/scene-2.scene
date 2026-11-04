@@ -4,6 +4,7 @@ size 130 37
 project prices
 origin
 home fresh
+setting lsp false
 on "Glut asks" "outside the sandbox" key n
 on "Glut asks" "git push" key n
 on "Glut asks" key y
