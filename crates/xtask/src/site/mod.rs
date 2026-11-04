@@ -19,7 +19,7 @@ pub use serve::serve;
 use links::{Linker, MANUAL_DIR, relative, root};
 
 /// The repository's documents the site shows, by their path from the top, each with its page.
-const DOCUMENTS: [(&str, &str); 11] = [
+const DOCUMENTS: [(&str, &str); 12] = [
     ("docs/install.md", "docs/install.html"),
     ("docs/getting-started.md", "docs/getting-started.html"),
     ("docs/configuration.md", "docs/configuration.html"),
@@ -27,6 +27,7 @@ const DOCUMENTS: [(&str, &str); 11] = [
     ("docs/architecture.md", "docs/architecture.html"),
     ("docs/library.md", "docs/library.html"),
     ("docs/editor-protocol.md", "docs/editor-protocol.html"),
+    ("docs/comparison.md", "docs/comparison.html"),
     ("CHANGELOG.md", "docs/changelog.html"),
     ("CONTRIBUTING.md", "docs/contributing.html"),
     ("SECURITY.md", "docs/security-policy.html"),

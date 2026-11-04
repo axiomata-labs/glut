@@ -140,6 +140,8 @@ main.doc h2 { margin-top: 2.2em; padding-top: 0.6em; border-top: 1px solid var(-
 main.doc h2, main.doc h3 { scroll-margin-top: 5em; }
 main.doc table { border-collapse: collapse; display: block; overflow-x: auto; }
 main.doc th, main.doc td { border: 1px solid var(--line); padding: 0.35em 0.7em; text-align: left; vertical-align: top; }
+/* A table wider than the text scrolls sideways; its first column (what a row is about) stays in view. */
+main.doc th:first-child, main.doc td:first-child { position: sticky; left: 0; background: var(--ground); }
 main.doc blockquote { margin: 1.2em 0; padding: 0.2em 1.2em; border-left: 2px solid var(--ember); color: var(--dim); }
 .lead { font-size: 1.15em; color: var(--ink); }
 dl.forms dt, dl.commands dt { margin-top: 0.8em; }
