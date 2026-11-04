@@ -1,0 +1,20 @@
+/* The site's frame until its design (launch step L4): readable, dark, no fonts loaded from elsewhere. */
+:root { color-scheme: dark; --ink: #e8e3da; --dim: #9a948a; --ember: #ff7a3d; --ground: #121110; --line: #2a2725; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--ground); color: var(--ink); font: 16px/1.6 system-ui, sans-serif; }
+a { color: var(--ember); }
+code, pre { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.92em; }
+pre { background: #1b1918; padding: 0.8em 1em; overflow-x: auto; border: 1px solid var(--line); }
+.top { display: flex; justify-content: space-between; padding: 0.8em 1.5em; border-bottom: 1px solid var(--line); }
+.brand { font-weight: 700; text-decoration: none; }
+.frame { display: grid; grid-template-columns: 15em minmax(0, 52em); gap: 2em; padding: 1.5em; }
+.side { display: flex; flex-direction: column; gap: 0.3em; }
+.side details a { display: block; padding-left: 1em; }
+.side [aria-current] { color: var(--ink); }
+.lead { font-size: 1.15em; color: var(--ink); }
+dl.forms dt, dl.commands dt { margin-top: 0.7em; }
+dd { margin-left: 1.5em; color: var(--dim); }
+table { border-collapse: collapse; }
+th, td { border: 1px solid var(--line); padding: 0.3em 0.6em; text-align: left; }
+footer.page { margin-top: 3em; color: var(--dim); font-size: 0.9em; }
+@media (max-width: 50em) { .frame { grid-template-columns: 1fr; } }

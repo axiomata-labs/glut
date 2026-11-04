@@ -32,6 +32,19 @@ its own repository. To work on both at once, check it out beside Glut and patch 
 axiomata-files = { path = "../Axiomata-Foundation/crates/axiomata-files" }
 ```
 
+## The website
+
+The site is built from the same files: the documents in `docs/` and beside this one, the manual's pages, and the
+layout, pages and files of `site/`. No framework, nothing to install:
+
+```sh
+cargo run -p xtask -- site serve   # http://127.0.0.1:8000, built again when a source changes
+cargo run -p xtask -- site check   # every link and anchor between the pages leads somewhere
+```
+
+A link in a document to another document becomes a link between their pages; a link to any other file of the
+repository leads to it on GitHub.
+
 ## Before a pull request
 
 Every change passes the same gate:

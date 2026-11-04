@@ -1,0 +1,12 @@
+[package]
+name = "xtask"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+description = "Glut's own build tasks: the website (cargo run -p xtask -- site build|serve|check)"
+publish = false
+
+[dependencies]
+clap.workspace = true
+# The website's pages are written in Markdown, the same CommonMark the terminal UI reads.
+pulldown-cmark = { workspace = true, features = ["html"] }
