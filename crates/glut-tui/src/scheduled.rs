@@ -1530,6 +1530,7 @@ mod tests {
             scopes: Vec::new(),
             from: None,
             keychain: false,
+            unsandboxed: false,
             note: None,
         };
         let never: AnswerFuture<'_> = Box::pin(std::future::pending());

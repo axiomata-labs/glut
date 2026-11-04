@@ -1882,6 +1882,10 @@ async fn asked(peer: &Peer, live: &Live, request: &AskRequest) -> Answer {
     if request.keychain {
         return Answer::Deny;
     }
+    // Nor a run outside the sandbox: an editor's card cannot say so as Glut's own does.
+    if request.unsandboxed {
+        return Answer::Deny;
+    }
     let card = ask_card(live, request);
     let mut options =
         vec![json!({"optionId": "allow-once", "name": "Allow once", "kind": "allow_once"})];

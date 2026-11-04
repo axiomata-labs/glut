@@ -5311,6 +5311,7 @@ mod tests {
             scopes: Vec::new(),
             from: None,
             keychain: false,
+            unsandboxed: false,
             note: None,
         };
         panes.on_report(behind, Report::Ask(request, answer));

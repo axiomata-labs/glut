@@ -918,7 +918,7 @@ impl App {
             State::Works => tr!(state_works),
             State::Asks => match &self.ask {
                 Some(open) => {
-                    let said = tr!(
+                    let mut said = tr!(
                         state_asks_tool,
                         tool = open.request.tool,
                         target = crate::transcript::cut(
@@ -926,6 +926,9 @@ impl App {
                             120
                         )
                     );
+                    if open.request.unsandboxed {
+                        said = format!("{said} · ⚠ {}", tr!(ask_unsandboxed));
+                    }
                     return self.transcript.note(said, Tone::Heed);
                 }
                 None => match &self.form {
@@ -9008,6 +9011,7 @@ pub(crate) mod tests {
                 scopes: Vec::new(),
                 from: None,
                 keychain: false,
+                unsandboxed: false,
                 note: None,
             },
             reply,
@@ -10203,6 +10207,7 @@ pub(crate) mod tests {
                 scopes: Vec::new(),
                 from: None,
                 keychain: false,
+                unsandboxed: false,
                 note: None,
             },
             reply,
@@ -11500,6 +11505,7 @@ pub(crate) mod tests {
                 scopes: Vec::new(),
                 from: None,
                 keychain: false,
+                unsandboxed: false,
                 note: None,
             },
             reply,
@@ -11929,6 +11935,7 @@ pub(crate) mod tests {
                 scopes: vec!["accept_edits".into(), "auto".into(), "default".into()],
                 from: None,
                 keychain: false,
+                unsandboxed: false,
                 note: None,
             },
             reply,
@@ -12040,6 +12047,7 @@ pub(crate) mod tests {
                 scopes: vec!["accept_edits".into()],
                 from: None,
                 keychain: false,
+                unsandboxed: false,
                 note: None,
             },
             reply,
@@ -12195,6 +12203,7 @@ pub(crate) mod tests {
                 ],
                 from: None,
                 keychain: false,
+                unsandboxed: false,
                 note: None,
             },
             reply,
@@ -13068,6 +13077,7 @@ pub(crate) mod tests {
                 scopes: vec!["gh pr *".into()],
                 from: None,
                 keychain: true,
+                unsandboxed: false,
                 note: None,
             },
             reply,
@@ -13363,6 +13373,7 @@ pub(crate) mod tests {
                         scopes: vec!["git push origin main".into(), "git push *".into()],
                         from: None,
                         keychain: false,
+                        unsandboxed: false,
                         note: None,
                     },
                     reply,

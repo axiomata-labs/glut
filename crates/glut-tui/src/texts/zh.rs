@@ -2058,6 +2058,8 @@ pub const TEXTS: Texts = Texts {
     trust_untrusted_note: "此文件夹自己的 .glut/ 带有允许规则、模式、Skill、代理或命令，在它不受信任时被略过 — /trust 显示它们，/trust on 信任它",
     keychain_usage: "/keychain, /keychain add <program>, /keychain remove <program>, /keychain open, /keychain close",
     ask_keychain: "使用钥匙串",
+    ask_unsandboxed: "沙箱之外",
+    ask_unsandboxed_line: "在没有沙箱的情况下运行：除了你的回答，没有任何东西约束它 — 最多允许一次",
     keychain_footer: "🔑 开放",
     ide_connected: "已连接到 {ide} — 你在那里的工作会随消息一起发送",
     ide_rename_here: "此次重命名涉及的文件多于编辑器能以 diff 显示的数量——请在 Glut 中回答",

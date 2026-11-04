@@ -2161,6 +2161,8 @@ pub const TEXTS: Texts = Texts {
     trust_untrusted_note: "このフォルダの .glut/ には許可ルール、モード、Skill、エージェント、コマンドのいずれかがありますが、信頼されていない間は除外されます — /trust で表示、/trust on で信頼します",
     keychain_usage: "/keychain, /keychain add <program>, /keychain remove <program>, /keychain open, /keychain close",
     ask_keychain: "キーチェーン付き",
+    ask_unsandboxed: "サンドボックスの外",
+    ask_unsandboxed_line: "サンドボックスなしで実行されます：あなたの答え以外に止めるものはありません — 許可は最大1回",
     keychain_footer: "🔑 開",
     ide_connected: "{ide} に接続しました — そこで作業中のものがメッセージに付きます",
     ide_rename_here: "この名前変更はエディタが diff で示せるより多くのファイルに及びます — Glut で答えてください",

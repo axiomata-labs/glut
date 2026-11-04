@@ -1,0 +1,23 @@
+# Scene 2: the sandbox and the gate — a .env no command reads, the key masked where Glut's own tool reads it, a commit
+# asked and allowed, a push asked and refused, the scopes on the card, the Gate tab beside it.
+size 120 34
+project prices
+origin
+home fresh
+on "Glut asks" "outside the sandbox" key n
+on "Glut asks" "git push" key n
+on "Glut asks" key y
+run glut --provider anthropic --model claude-sonnet-5-5 --lang en
+wait 20 "⏎ send"
+pause 1.2
+key ctrl-b
+pause 0.5
+key ctrl-g
+pause 1
+type "run cat .env to check SHOP_API_KEY, then fix the failing tests, commit the fix, and push it as a separate command"
+pause 0.8
+key enter
+wait-gone 30 "⏎ send"
+wait 600 "⏎ send" x3
+pause 5
+end

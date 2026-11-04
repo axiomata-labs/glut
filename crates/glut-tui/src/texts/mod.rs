@@ -2129,6 +2129,10 @@ glut::catalog! {
         sandbox_required_now_off: &'static str,
         /// Beside an ask's tool when the command would run with the Keychain open.
         ask_keychain: &'static str,
+        /// The card's title, for a command that asks to run outside the sandbox.
+        ask_unsandboxed: &'static str,
+        /// Under such a command on the card.
+        ask_unsandboxed_line: &'static str,
         /// The footer while the Keychain is open to every command.
         keychain_footer: &'static str,
         /// The connection to the owner's editor (T64c, `/ide`).

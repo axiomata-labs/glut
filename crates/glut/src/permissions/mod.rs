@@ -934,6 +934,9 @@ pub struct AskRequest {
     pub from: Option<String>,
     /// The command would run with the Keychain open (T74): a listed program, the Keychain shut to every other.
     pub keychain: bool,
+    /// The command asks to run outside the sandbox: the operating system holds nothing back. Shown as such, and only
+    /// ever allowed once — no scope is offered for it.
+    pub unsandboxed: bool,
     /// What the second model said of the command when it did not find it only reading (T52), to show beside it.
     pub note: Option<String>,
 }
@@ -1054,10 +1057,19 @@ const ASK_DISPLAY_CHARS: usize = 300;
 impl Asker for Terminal {
     fn ask<'a>(&'a self, request: &'a AskRequest) -> AnswerFuture<'a> {
         let target = ask_display(&request.target);
-        let prompt = format!(
-            "  ? {} {target} — allow? [y]es / always / [n]o: ",
-            printable(&request.tool)
-        );
+        // A run outside the sandbox says so, and is allowed once at most: no "always" is offered for it.
+        let unsandboxed = request.unsandboxed;
+        let prompt = if unsandboxed {
+            format!(
+                "  ? {} {target} — OUTSIDE THE SANDBOX, allow once? [y]es / [n]o: ",
+                printable(&request.tool)
+            )
+        } else {
+            format!(
+                "  ? {} {target} — allow? [y]es / always / [n]o: ",
+                printable(&request.tool)
+            )
+        };
         Box::pin(async move {
             tokio::task::spawn_blocking(move || {
                 use std::io::{BufRead, Write};
@@ -1070,7 +1082,7 @@ impl Asker for Terminal {
                 }
                 match line.trim().to_lowercase().as_str() {
                     "y" | "j" | "yes" | "ja" => Answer::Allow,
-                    "always" | "immer" => Answer::AllowAlways,
+                    "always" | "immer" if !unsandboxed => Answer::AllowAlways,
                     _ => Answer::Deny,
                 }
             })
@@ -1681,6 +1693,7 @@ impl Gate {
             scopes,
             from: subagent().map(|(_, label)| label),
             keychain: false,
+            unsandboxed: false,
             note: None,
         };
         let _one_at_a_time = self.asking.lock().await;
@@ -1821,7 +1834,19 @@ impl Gate {
                 false
             }
             Verdict::Ask => {
-                let scopes = scopes(tool, access, keychain.is_some());
+                let unsandboxed = matches!(
+                    access,
+                    Access::Bash {
+                        unsandboxed: true,
+                        ..
+                    }
+                );
+                // A run outside the sandbox is the owner's word each time: an "always" would read as a lasting yes.
+                let scopes = if unsandboxed {
+                    Vec::new()
+                } else {
+                    scopes(tool, access, keychain.is_some())
+                };
                 let request = AskRequest {
                     tool: tool.to_owned(),
                     // T74b: a 🔑 card says where the command runs when it is not the working folder's top — git finds
@@ -1835,6 +1860,7 @@ impl Gate {
                     scopes: scopes.iter().map(|scope| scope.label.clone()).collect(),
                     from: subagent().map(|(_, label)| label),
                     keychain: keychain.is_some(),
+                    unsandboxed,
                     note,
                 };
                 let _one_at_a_time = self.asking.lock().await;
@@ -2767,6 +2793,56 @@ mod tests {
             self.0.lock().unwrap().push(request.keychain);
             Box::pin(async { Answer::Allow })
         }
+    }
+
+    /// Answers yes and keeps, per ask, whether it was to run outside the sandbox and the scopes it offered.
+    struct EscapeAsks(Mutex<Vec<(bool, Vec<String>)>>);
+
+    impl Asker for EscapeAsks {
+        fn ask<'a>(&'a self, request: &'a AskRequest) -> AnswerFuture<'a> {
+            self.0
+                .lock()
+                .unwrap()
+                .push((request.unsandboxed, request.scopes.clone()));
+            Box::pin(async { Answer::Allow })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_run_outside_the_sandbox_is_asked_as_such_and_only_ever_once() {
+        let asker = Arc::new(EscapeAsks(Mutex::new(Vec::new())));
+        let gate = Gate::new(rules(&[], &[], &[]), Mode::AcceptEdits, asker.clone());
+        let outside = Access::Bash {
+            command: "cat .env".into(),
+            folder: String::new(),
+            unsandboxed: true,
+            sandboxed: false,
+        };
+        assert!(gate.judge("bash", &outside).await.is_ok());
+        let inside = Access::Bash {
+            command: "python3 -m unittest".into(),
+            folder: String::new(),
+            unsandboxed: false,
+            sandboxed: true,
+        };
+        assert!(gate.judge("bash", &inside).await.is_ok());
+        let asks = asker.0.lock().unwrap().clone();
+        assert_eq!(asks[0], (true, Vec::new()), "marked, and no scope offered");
+        // Even an "always" sent for it anyway leaves no lasting yes behind.
+        let gate = Gate::new(
+            rules(&[], &[], &[]),
+            Mode::AcceptEdits,
+            Arc::new(Always(Answer::AllowAlways, Mutex::new(0))),
+        );
+        assert!(gate.judge("bash", &outside).await.is_ok());
+        assert!(
+            gate.granted().is_empty(),
+            "nothing granted for a run outside the sandbox"
+        );
+        assert!(
+            !asks[1].0 && !asks[1].1.is_empty(),
+            "a sandboxed one offers its scopes"
+        );
     }
 
     /// Says READS for the commands it is given, CHANGES for the rest, and counts its judgements (T52).
