@@ -308,14 +308,69 @@ pub fn serve_helper() -> Option<i32> {
 }
 
 /// The places no command reads for the owner whose home is `home`, resolved: Glut's own list of secrets and the
-/// owner's `extra` ones from the settings.
+/// owner's `extra` ones from the settings. Where Glut keeps its own folder elsewhere (`GLUT_HOME`), the list holds
+/// for that home too: its `.glut` holds the keys, the settings and the switches as the real one does.
 pub fn secrets(home: &Path, extra: &[PathBuf]) -> Vec<PathBuf> {
+    secrets_in(home, moved_glut_home(home).as_deref(), extra)
+}
+
+/// Glut's own home (`GLUT_HOME`) where it is not `home`: the second place its `.glut` lies.
+fn moved_glut_home(home: &Path) -> Option<PathBuf> {
+    crate::permissions::settings::home_dir()
+        .ok()
+        .filter(|glut| glut.as_path() != home)
+}
+
+/// What of a moved home's `.glut` no command writes: the whole folder, or — where the working folder lies inside it
+/// (a worktree or an arena's copy under `.glut/worktrees`) — every file and folder Glut reads its rights, settings,
+/// keys and switches from, so the working folder itself stays writable.
+fn glut_state(glut: &Path, root: &Path) -> Vec<PathBuf> {
+    if !root.starts_with(glut) {
+        return vec![glut.to_path_buf()];
+    }
+    GLUT_STATE.iter().map(|name| glut.join(name)).collect()
+}
+
+/// The parts of `~/.glut` that hold what Glut runs with: settings, servers, keys, trust, switches, extensions.
+const GLUT_STATE: [&str; 21] = [
+    "settings.json",
+    "settings.local.json",
+    "mcp.json",
+    "mcp-approved.json",
+    "providers.json",
+    "credentials.json",
+    "trusted.json",
+    "sandbox.json",
+    "keychain.json",
+    "secrets.json",
+    "schedules.json",
+    "clean.json",
+    "prefs.json",
+    "skills",
+    "agents",
+    "commands",
+    "hooks",
+    "memory",
+    "sessions.d",
+    "ide",
+    "schedules",
+];
+
+/// [`secrets`] with the second home handed in.
+fn secrets_in(home: &Path, other: Option<&Path>, extra: &[PathBuf]) -> Vec<PathBuf> {
     let real = |path: PathBuf| path.canonicalize().unwrap_or(path);
-    HOME_SECRETS
-        .iter()
-        .map(|rel| real(home.join(rel)))
+    let mut homes = vec![home];
+    if let Some(other) = other.filter(|other| *other != home) {
+        homes.push(other);
+    }
+    let mut found: Vec<PathBuf> = homes
+        .into_iter()
+        .flat_map(|home| HOME_SECRETS.iter().map(move |rel| home.join(rel)))
+        .map(real)
         .chain(extra.iter().cloned().map(real))
-        .collect()
+        .collect();
+    found.dedup();
+    found
 }
 
 /// What a run's sandbox allows, in resolved paths.
@@ -388,9 +443,16 @@ impl Policy {
                 .iter()
                 .map(|rel| real(home.join(rel)))
                 .collect(),
+            // Glut's own folder in a moved home is no command's to write either (on macOS a read refused is not a
+            // write refused): it would plant settings, servers or switched-off switches for the next session.
             write_denied: PROTECTED_IN_ROOT
                 .iter()
                 .map(|name| root.join(name))
+                .chain(
+                    moved_glut_home(home)
+                        .into_iter()
+                        .flat_map(|glut| glut_state(&real(glut.join(crate::providers::DIR)), root)),
+                )
                 .collect(),
             read_denied: secrets(home, extra_secrets),
             git_dirs: git_dirs(root),
@@ -791,6 +853,41 @@ fn regex_escape(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_moved_glut_home_is_shut_but_a_working_folder_inside_it_stays_writable() {
+        let glut = Path::new("/nowhere/glut-home/.glut");
+        assert_eq!(
+            glut_state(glut, Path::new("/nowhere/project")),
+            [glut.to_path_buf()]
+        );
+        let worktree = glut.join("worktrees/arena-1");
+        let parts = glut_state(glut, &worktree);
+        assert!(
+            !parts.iter().any(|part| worktree.starts_with(part)),
+            "the worktree itself is writable"
+        );
+        assert!(
+            parts.contains(&glut.join("settings.json"))
+                && parts.contains(&glut.join("credentials.json"))
+        );
+    }
+
+    #[test]
+    fn a_moved_glut_home_keeps_its_own_folder_closed_too() {
+        let user = Path::new("/nowhere/user");
+        let glut = Path::new("/nowhere/glut-home");
+        let found = secrets_in(user, Some(glut), &[]);
+        for rel in [".ssh", ".aws", ".glut"] {
+            assert!(found.contains(&user.join(rel)), "{rel} of the user's home");
+            assert!(found.contains(&glut.join(rel)), "{rel} of Glut's home");
+        }
+        assert_eq!(
+            secrets_in(user, Some(user), &[]).len(),
+            HOME_SECRETS.len(),
+            "one home, listed once"
+        );
+    }
 
     /// A fresh folder for a test, resolved (Seatbelt sees `/private/var/…`, not `/var/…`).
     fn temp(name: &str) -> PathBuf {
