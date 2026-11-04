@@ -10,6 +10,8 @@
 //! allow "Bash(python3 *)"      a rule of that fresh home's settings, so the scene is not held by a question
 //! setting lsp false            a value of that fresh home's settings (JSON), e.g. no editor's language server
 //! tasks demo                   site/demo/arena/demo, the arena bench's task set, in that fresh home
+//! neovim                       Neovim's folders in that fresh home: site/demo/nvim/init.lua and glut.nvim beside the
+//!                              repository, none of the owner's config, plugins or history
 //! on "Glut asks" key y         whenever the text comes up: the keys, after a reader's pause (once per appearance);
 //! on "Glut asks" "git push" key n   several texts: all must be on the screen at once
 //! on "its plan" key enter after 6   read for six seconds before the answer
@@ -19,7 +21,7 @@
 //! wait-gone 20 "⏎ send"       until the text is no longer on the screen (Glut started working)
 //! pause 1.5                    nothing for so long
 //! type "fix the tests"         typed at a person's pace
-//! key enter                    keys: enter, esc, tab, backtab, up, down, left, right, space, ctrl-<letter>
+//! key enter                    keys: enter, esc, tab, backtab, up, down, left, right, space, ctrl-<letter>, ctrl-backslash
 //! end                          the recording ends; the program is stopped
 //! ```
 
@@ -82,6 +84,8 @@ pub struct Scene {
     pub settings: serde_json::Map<String, serde_json::Value>,
     /// The arena bench's task sets under `site/demo/arena/` the fresh home gets.
     pub tasks: Vec<String>,
+    /// Whether Neovim gets folders of its own in the fresh home, with glut.nvim and the demo's config.
+    pub neovim: bool,
     /// The program and its arguments.
     pub program: Vec<String>,
     /// Keys sent whenever a text comes up on the screen.
@@ -106,6 +110,7 @@ pub fn parse(text: &str) -> Result<Scene, String> {
         allow: Vec::new(),
         settings: serde_json::Map::new(),
         tasks: Vec::new(),
+        neovim: false,
         program: Vec::new(),
         triggers: Vec::new(),
         steps: Vec::new(),
@@ -149,6 +154,7 @@ pub fn parse(text: &str) -> Result<Scene, String> {
                 scene.tasks.push(rest.to_owned());
             }
             "origin" if rest.is_empty() => scene.origin = true,
+            "neovim" if rest.is_empty() => scene.neovim = true,
             "on" => {
                 // One or more quoted texts, all on the screen at once, then the keys.
                 let mut texts = Vec::new();
@@ -326,6 +332,8 @@ fn key(name: &str) -> Option<Vec<u8>> {
         "down" => b"\x1b[B",
         "right" => b"\x1b[C",
         "left" => b"\x1b[D",
+        // Neovim's way out of a terminal's input: ctrl-\ then ctrl-n.
+        "ctrl-backslash" => b"\x1c",
         _ => {
             let letter = name.strip_prefix("ctrl-")?;
             let [c] = letter.as_bytes() else { return None };
@@ -379,6 +387,11 @@ mod tests {
         assert_eq!(scene.tasks, ["demo"]);
         let scene = parse("project shop\nbeside stock\nhome fresh\nrun glut\nend\n").unwrap();
         assert_eq!(scene.beside, ["stock"]);
+        assert!(
+            parse("project shop\nhome fresh\nneovim\nrun nvim\nend\n")
+                .unwrap()
+                .neovim
+        );
         assert!(parse("project shop\nbeside ../x\nhome fresh\nrun glut\n").is_err());
         assert!(parse("project shop\nhome fresh\ntasks ../private\nrun glut\n").is_err());
         assert!(

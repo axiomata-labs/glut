@@ -1773,6 +1773,12 @@ impl Panes {
             self.notifier.focus(event == TermEvent::FocusGained);
             return;
         }
+        // A new size is drawn whole from blank: a terminal that re-wraps its lines (Neovim's, an editor's) changed
+        // cells ratatui still holds as drawn — and two quick resizes may end at the size it knows, so it sees none.
+        if matches!(event, TermEvent::Resize(..)) {
+            self.redraw = true;
+            return;
+        }
         // ⌃L draws the screen anew, as in a shell: a terminal that cleared itself (an editor's ⌘K) left it blank.
         if let TermEvent::Key(key) = &event
             && key.kind == crossterm::event::KeyEventKind::Press
@@ -5065,6 +5071,15 @@ mod tests {
         );
         assert_eq!(placed.lines, [Rect::new(50, 0, 1, 40)]);
         assert_eq!(placed.border, Some(Rect::new(50, 0, 1, 40)));
+    }
+
+    #[tokio::test]
+    async fn a_resize_draws_the_screen_anew_even_back_at_the_old_size() {
+        let (mut panes, _inlets) = split();
+        panes.redraw = false;
+        panes.on_terminal(TermEvent::Resize(130, 37));
+        assert!(panes.redraw);
+        assert!(panes.active().input.is_empty());
     }
 
     #[tokio::test]

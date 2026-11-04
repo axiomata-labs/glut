@@ -1,0 +1,56 @@
+# Scene 8: Neovim with glut.nvim — three lines sent to Glut with a question, Glut's edit coming up as a Neovim diff,
+# the owner's own change on its right side, accepted there, and the file read again.
+size 160 40
+project shop
+home fresh
+neovim
+setting lsp false
+allow "Bash(python3 *)"
+run nvim prices.py
+wait 20 "VAT_RATE"
+pause 2
+type ":6"
+key enter
+pause 0.8
+type "Vjj"
+pause 1
+type ":GlutSend"
+pause 0.6
+key enter
+wait 30 "@prices.py#L6-8"
+pause 1.2
+key backtab
+pause 0.8
+key backtab
+pause 0.8
+key backtab
+pause 1.2
+type "raise a ValueError when percent is outside 0 to 100, then run the tests"
+pause 0.6
+key enter
+wait 15 "⌃C stops"
+wait 300 "Glut asks"
+pause 4
+key ctrl-backslash ctrl-n
+pause 0.6
+key ctrl-w
+type "h"
+pause 1
+type "/raise ValueError"
+pause 0.6
+key enter
+pause 0.8
+type "O# over 100 % pays the customer"
+pause 0.4
+key esc
+type "0"
+pause 2.5
+type ":GlutDiffAccept"
+pause 0.8
+key enter
+wait 30 "allowed when asked"
+wait-gone 300 "⌃C stops"
+pause 2
+wait-gone 300 "⌃C stops"
+pause 6
+end

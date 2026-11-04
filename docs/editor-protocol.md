@@ -45,6 +45,8 @@ The plugin writes `~/.glut/ide/<port>.json` once it listens, and removes it when
 ```
 
 - `~/.glut/ide/` is `0700`, the file `0600`, written under another name and renamed into place.
+- Where Glut's home is moved (`GLUT_HOME`, an absolute folder), the plugin writes to `$GLUT_HOME/.glut/ide/`: the
+  folder Glut looks in. A relative `GLUT_HOME` counts for nothing, as in Glut.
 - A fresh token at every start; never logged, never shown.
 - A terminal the plugin starts Glut in carries `GLUT_IDE_PORT=<port>`.
 

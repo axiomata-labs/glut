@@ -73,13 +73,24 @@ pub fn record(repo: &Path, name: &str) -> Result<(), String> {
             // Only the demo's own tasks: the owner's private sets never come into a take.
             copy(&source, &fresh.join(".glut/arena/tasks/sets").join(set))?;
         }
+        if scene.neovim {
+            neovim_in(repo, &fresh)?;
+        }
         Some(fresh)
     } else {
         None
     };
+    let neovim: Vec<(&str, PathBuf)> = match (&glut_home, scene.neovim) {
+        (Some(fresh), true) => NEOVIM_FOLDERS
+            .iter()
+            .map(|(name, below)| (*name, fresh.join(below)))
+            .collect(),
+        _ => Vec::new(),
+    };
     let env: Vec<(&str, &Path)> = glut_home
         .iter()
         .map(|path| ("GLUT_HOME", path.as_path()))
+        .chain(neovim.iter().map(|(name, path)| (*name, path.as_path())))
         .collect();
     let mut terminal = Terminal::start(&scene.program, &folder, &env, scene.cols, scene.rows)?;
     let mut take = Take {
@@ -397,6 +408,34 @@ impl Pace {
 
 /// What of the owner's `~/.glut` a fresh home takes: the providers, their keys and the model lists — the keys only
 /// copied from file to file, never read here.
+/// Neovim's folders, each below the fresh home: its config, plugins, history and cache are the take's alone.
+const NEOVIM_FOLDERS: [(&str, &str); 4] = [
+    ("XDG_CONFIG_HOME", ".config"),
+    ("XDG_DATA_HOME", ".local/share"),
+    ("XDG_STATE_HOME", ".local/state"),
+    ("XDG_CACHE_HOME", ".cache"),
+];
+
+/// Neovim for a take, in the fresh home's folders: the demo's `init.lua` and glut.nvim — the checkout beside the
+/// repository, its code alone — as a package Neovim loads at start.
+fn neovim_in(repo: &Path, fresh: &Path) -> Result<(), String> {
+    let config = fresh.join(".config/nvim");
+    std::fs::create_dir_all(&config)
+        .map_err(|err| format!("cannot make {}: {err}", config.display()))?;
+    let init = repo.join("site/demo/nvim/init.lua");
+    std::fs::copy(&init, config.join("init.lua"))
+        .map_err(|err| format!("cannot copy {}: {err}", init.display()))?;
+    let plugin = repo.join("../glut.nvim");
+    if !plugin.join("lua/glut").is_dir() {
+        return Err(format!("no glut.nvim at {}", plugin.display()));
+    }
+    let package = fresh.join(".local/share/nvim/site/pack/glut/start/glut.nvim");
+    for part in ["lua", "plugin"] {
+        copy(&plugin.join(part), &package.join(part))?;
+    }
+    Ok(())
+}
+
 const HOME_TAKES: [&str; 3] = ["providers.json", "credentials.json", "models"];
 
 /// A new `~/glut-demo/.home` for Glut (`GLUT_HOME`), the old one gone first (only one this tool made): the owner's
