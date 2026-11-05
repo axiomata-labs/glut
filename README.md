@@ -87,7 +87,7 @@ key, `/help <command>` opens its page. A walk through the first session:
 | [Architecture](docs/architecture.md) | how a turn runs, the crates, where to start reading |
 | [Glut as a library](docs/library.md) | embedding the loop in your own program; `glut run`'s JSON events |
 | [Editor protocol](docs/editor-protocol.md) | what an editor plugin and Glut say to each other |
-| [Glut and other coding agents](docs/comparison.md) | eight others compared, dated and sourced — and where they are ahead |
+| [Glut and other coding agents](docs/comparison.md) | nine others compared, dated and sourced — and where they are ahead |
 
 ## Contributing
 
