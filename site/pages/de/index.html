@@ -106,9 +106,9 @@
       <p class="hud"><b>[02]</b> wie ein Befehl gehalten wird</p>
       <h2 class="display" id="held">Vier Wände<br>um jeden<br><em>Befehl.</em></h2>
     </div>
-    <div class="steps" data-steps>
-      <div class="panel-stack" aria-hidden="true">
-        <div class="panel on" data-panel="sandbox">
+    <div class="walls">
+      <div class="wall" data-reveal>
+        <div class="panel" aria-hidden="true">
           <div class="bar"><i></i><i></i><i></i></div>
           <pre><span class="say">$</span> cat .env
 <span class="no">cat: .env: Operation not permitted</span>
@@ -117,7 +117,18 @@
 <span class="say">$</span> cargo test
 <span class="ok">test result: ok. 112 passed</span></pre>
         </div>
-        <div class="panel" data-panel="gate">
+        <article class="step">
+          <p class="hud"><b>01</b> / 04</p>
+          <h3>Die Sandbox</h3>
+          <p><strong>Jeder Befehl läuft in der Sandbox des Betriebssystems</strong> — Seatbelt auf macOS, bubblewrap mit
+            dem eigenen seccomp-Filter von Glut auf Linux. Er schreibt nur in dein Projekt und die üblichen Caches.
+            Er liest keine <code>.env</code> und lässt Git-Hooks, <code>.cargo/config.toml</code> oder
+            <code>.vscode/tasks.json</code> in jeder Tiefe in Ruhe. Wo keine Sandbox laufen kann, fragt jeder Befehl dich
+            vorher.</p>
+        </article>
+      </div>
+      <div class="wall" data-reveal>
+        <div class="panel" aria-hidden="true">
           <div class="bar"><i></i><i></i><i></i></div>
           <pre><span class="ask">? einen Befehl ausführen</span>
   git push origin main
@@ -128,7 +139,16 @@
     git push *
     git *</pre>
         </div>
-        <div class="panel" data-panel="snapshot">
+        <article class="step">
+          <p class="hud"><b>02</b> / 04</p>
+          <h3>Das Tor</h3>
+          <p><strong>Lesen ist frei; Ändern fragt — oder nicht, im Modus, den du wählst.</strong> Ein Befehl, der nur
+            liest, läuft sofort; <code>rm -rf</code>, <code>git push</code> und <code>sudo</code> fragen immer. „Immer“
+            heißt die Reichweite, die du wählst, nie eine, die Glut erweitert.</p>
+        </article>
+      </div>
+      <div class="wall" data-reveal>
+        <div class="panel" aria-hidden="true">
           <div class="bar"><i></i><i></i><i></i></div>
           <pre><span class="say">◆ edit</span> src/parser.rs  <span class="ok">+12</span> <span class="no">−4</span>
 <span class="say">◆ edit</span> src/lexer.rs   <span class="ok">+3</span>  <span class="no">−1</span>
@@ -136,7 +156,16 @@
 <span class="you">/steps</span>  ⏎ auf der ersten Änderung
 <span class="ok">2 Dateien wieder wie vor ihr</span></pre>
         </div>
-        <div class="panel" data-panel="masks">
+        <article class="step">
+          <p class="hud"><b>03</b> / 04</p>
+          <h3>Der Snapshot</h3>
+          <p><strong>Vor jeder Änderung bewahrt Glut deine Dateien, wie sie waren.</strong> <code>/steps</code> legt die Dateien
+            zurück, wie sie vor einem beliebigen Schritt waren; <code>/diff</code> zeigt die Änderungen der Session Datei für
+            Datei, und ein einzelner Abschnitt kann allein zurück.</p>
+        </article>
+      </div>
+      <div class="wall" data-reveal>
+        <div class="panel" aria-hidden="true">
           <div class="bar"><i></i><i></i><i></i></div>
           <pre><span class="say">$</span> env | grep KEY
 OPENROUTER_API_KEY=<span class="ask">‹secret 1: openrouter key, 73 chars›</span>
@@ -144,32 +173,7 @@ OPENROUTER_API_KEY=<span class="ask">‹secret 1: openrouter key, 73 chars›</s
 <span class="say">das Modell sieht die Maske; ein Schreiben in die
 Datei, die den Schlüssel hält, setzt ihn wieder ein.</span></pre>
         </div>
-      </div>
-      <div>
-        <article class="step on" data-step="sandbox">
-          <p class="hud"><b>01</b> / 04</p>
-          <h3>Die Sandbox</h3>
-          <p><strong>Jeder Befehl läuft in der Sandbox des Betriebssystems</strong> — Seatbelt auf macOS, bubblewrap mit
-            dem eigenen seccomp-Filter von Glut auf Linux. Er schreibt nur in dein Projekt und die üblichen Caches.
-            Er liest keine <code>.env</code> und lässt Git-Hooks, <code>.cargo/config.toml</code> oder
-            <code>.vscode/tasks.json</code> in jeder Tiefe in Ruhe. Wo keine Sandbox laufen kann, fragt jeder Befehl dich
-            vorher.</p>
-        </article>
-        <article class="step" data-step="gate">
-          <p class="hud"><b>02</b> / 04</p>
-          <h3>Das Tor</h3>
-          <p><strong>Lesen ist frei; Ändern fragt — oder nicht, im Modus, den du wählst.</strong> Ein Befehl, der nur
-            liest, läuft sofort; <code>rm -rf</code>, <code>git push</code> und <code>sudo</code> fragen immer. „Immer“
-            heißt die Reichweite, die du wählst, nie eine, die Glut erweitert.</p>
-        </article>
-        <article class="step" data-step="snapshot">
-          <p class="hud"><b>03</b> / 04</p>
-          <h3>Der Snapshot</h3>
-          <p><strong>Vor jeder Änderung bewahrt Glut deine Dateien, wie sie waren.</strong> <code>/steps</code> legt die Dateien
-            zurück, wie sie vor einem beliebigen Schritt waren; <code>/diff</code> zeigt die Änderungen der Session Datei für
-            Datei, und ein einzelner Abschnitt kann allein zurück.</p>
-        </article>
-        <article class="step" data-step="masks">
+        <article class="step">
           <p class="hud"><b>04</b> / 04</p>
           <h3>Die Masken</h3>
           <p><strong>Ein versehentlich gezeigter Schlüssel erreicht das Modell nie.</strong> Geheimnisse werden maskiert,

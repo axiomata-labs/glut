@@ -303,20 +303,19 @@ html:not(.js) button.copy { display: none; }
 }
 .manifesto + .hud { margin-top: 2em; }
 
-/* The steps beside their sticky panel. */
-.steps { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: clamp(2em, 5vw, 5em); }
-.panel-stack { position: sticky; top: 18vh; align-self: start; min-height: 22em; }
+/* The four walls: each its terminal beside its words, a row of its own — no sticky panel to fall behind. */
+.walls { display: grid; gap: clamp(3em, 8vh, 6em); }
+.wall {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: clamp(2em, 5vw, 5em);
+  align-items: center;
+}
 .panel {
-  position: absolute;
-  inset: 0 0 auto;
   border: 1px solid var(--line);
   background: var(--panel);
   font: 0.95rem/1.65 var(--mono);
-  opacity: 0;
-  transform: translateY(0.8em);
-  transition: opacity 0.4s, transform 0.4s;
 }
-.panel.on, html:not(.js) .panel:first-child { opacity: 1; transform: none; }
 .panel .bar { display: flex; gap: 0.4em; padding: 0.7em 0.9em; border-bottom: 1px solid var(--line); }
 .panel .bar i { width: 0.6em; height: 0.6em; border-radius: 50%; background: var(--line); }
 .panel pre { border: 0; background: none; margin: 0; padding: 1.1em 1.2em 1.4em; white-space: pre-wrap; }
@@ -325,8 +324,6 @@ html:not(.js) button.copy { display: none; }
 .ok { color: var(--fine); }
 .no { color: #e06c6c; }
 .ask { color: var(--gold); }
-.step { min-height: 62vh; padding-top: 2em; opacity: 0.6; transition: opacity 0.4s; }
-.step.on, html:not(.js) .step { opacity: 1; }
 .step h3 { font: 700 clamp(1.4rem, 2.6vw, 2.2rem)/1.1 var(--sans); text-transform: uppercase; margin: 0.5em 0; }
 .step p { color: var(--dim); max-width: 30em; }
 .step p strong { color: var(--ink); }
@@ -522,9 +519,7 @@ html:not(.js) .scene-tabs, html:not(.js) .scene-about { display: none; }
   .brand { letter-spacing: 0.15em; }
   .hero .stage { width: min(20em, 70vw); margin: 0 auto; }
   .part-head { grid-template-columns: 1fr; }
-  .steps { grid-template-columns: minmax(0, 1fr); }
-  .panel-stack { position: relative; top: 0; }
-  .step { min-height: auto; padding-bottom: 2em; }
+  .wall { grid-template-columns: minmax(0, 1fr); gap: 1.2em; }
   .top .links a.wide { display: none; }
   .reel li { grid-template-columns: 2.6em minmax(0, 1fr); }
   .reel li span { grid-column: 2; margin-bottom: 0.5em; }
@@ -533,5 +528,5 @@ html:not(.js) .scene-tabs, html:not(.js) .scene-about { display: none; }
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
   *, *::before, *::after { animation: none !important; transition: none !important; }
-  .js [data-reveal], .js [data-words] span, .step { opacity: 1; transform: none; }
+  .js [data-reveal], .js [data-words] span { opacity: 1; transform: none; }
 }

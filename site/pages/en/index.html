@@ -105,9 +105,9 @@
       <p class="hud"><b>[02]</b> how a command is held</p>
       <h2 class="display" id="held">Four walls<br>around every<br><em>command.</em></h2>
     </div>
-    <div class="steps" data-steps>
-      <div class="panel-stack" aria-hidden="true">
-        <div class="panel on" data-panel="sandbox">
+    <div class="walls">
+      <div class="wall" data-reveal>
+        <div class="panel" aria-hidden="true">
           <div class="bar"><i></i><i></i><i></i></div>
           <pre><span class="say">$</span> cat .env
 <span class="no">cat: .env: Operation not permitted</span>
@@ -116,7 +116,17 @@
 <span class="say">$</span> cargo test
 <span class="ok">test result: ok. 112 passed</span></pre>
         </div>
-        <div class="panel" data-panel="gate">
+        <article class="step">
+          <p class="hud"><b>01</b> / 04</p>
+          <h3>The sandbox</h3>
+          <p><strong>Every command runs in the operating system's own sandbox</strong> — Seatbelt on macOS, bubblewrap with
+            Glut's seccomp filter on Linux. It writes your project and the usual caches, nothing else. It reads no
+            <code>.env</code>, and leaves git hooks, <code>.cargo/config.toml</code> or <code>.vscode/tasks.json</code>
+            alone at any depth. Where no sandbox can run, every command asks you first.</p>
+        </article>
+      </div>
+      <div class="wall" data-reveal>
+        <div class="panel" aria-hidden="true">
           <div class="bar"><i></i><i></i><i></i></div>
           <pre><span class="ask">? run a command</span>
   git push origin main
@@ -127,7 +137,16 @@
     git push *
     git *</pre>
         </div>
-        <div class="panel" data-panel="snapshot">
+        <article class="step">
+          <p class="hud"><b>02</b> / 04</p>
+          <h3>The gate</h3>
+          <p><strong>Reading is free; changing asks — or not, in the mode you choose.</strong> A command that only reads
+            runs at once; <code>rm -rf</code>, <code>git push</code> and <code>sudo</code> always ask. "Always" means
+            the scope you pick, never one Glut widens.</p>
+        </article>
+      </div>
+      <div class="wall" data-reveal>
+        <div class="panel" aria-hidden="true">
           <div class="bar"><i></i><i></i><i></i></div>
           <pre><span class="say">◆ edit</span> src/parser.rs  <span class="ok">+12</span> <span class="no">−4</span>
 <span class="say">◆ edit</span> src/lexer.rs   <span class="ok">+3</span>  <span class="no">−1</span>
@@ -135,7 +154,16 @@
 <span class="you">/steps</span>  ⏎ on the first edit
 <span class="ok">2 files back as they were before it</span></pre>
         </div>
-        <div class="panel" data-panel="masks">
+        <article class="step">
+          <p class="hud"><b>03</b> / 04</p>
+          <h3>The snapshot</h3>
+          <p><strong>Before every change, Glut keeps your files as they were.</strong> <code>/steps</code> puts them back
+            as they were before any step; <code>/diff</code> shows the session's changes file by file, and a hunk can go back
+            alone.</p>
+        </article>
+      </div>
+      <div class="wall" data-reveal>
+        <div class="panel" aria-hidden="true">
           <div class="bar"><i></i><i></i><i></i></div>
           <pre><span class="say">$</span> env | grep KEY
 OPENROUTER_API_KEY=<span class="ask">‹secret 1: openrouter key, 73 chars›</span>
@@ -143,31 +171,7 @@ OPENROUTER_API_KEY=<span class="ask">‹secret 1: openrouter key, 73 chars›</s
 <span class="say">the model sees the mask; a write into the file
 that holds the key puts the key back.</span></pre>
         </div>
-      </div>
-      <div>
-        <article class="step on" data-step="sandbox">
-          <p class="hud"><b>01</b> / 04</p>
-          <h3>The sandbox</h3>
-          <p><strong>Every command runs in the operating system's own sandbox</strong> — Seatbelt on macOS, bubblewrap with
-            Glut's seccomp filter on Linux. It writes your project and the usual caches, nothing else. It reads no
-            <code>.env</code>, and leaves git hooks, <code>.cargo/config.toml</code> or <code>.vscode/tasks.json</code>
-            alone at any depth. Where no sandbox can run, every command asks you first.</p>
-        </article>
-        <article class="step" data-step="gate">
-          <p class="hud"><b>02</b> / 04</p>
-          <h3>The gate</h3>
-          <p><strong>Reading is free; changing asks — or not, in the mode you choose.</strong> A command that only reads
-            runs at once; <code>rm -rf</code>, <code>git push</code> and <code>sudo</code> always ask. "Always" means
-            the scope you pick, never one Glut widens.</p>
-        </article>
-        <article class="step" data-step="snapshot">
-          <p class="hud"><b>03</b> / 04</p>
-          <h3>The snapshot</h3>
-          <p><strong>Before every change, Glut keeps your files as they were.</strong> <code>/steps</code> puts them back
-            as they were before any step; <code>/diff</code> shows the session's changes file by file, and a hunk can go back
-            alone.</p>
-        </article>
-        <article class="step" data-step="masks">
+        <article class="step">
           <p class="hud"><b>04</b> / 04</p>
           <h3>The masks</h3>
           <p><strong>A key shown by accident never reaches the model.</strong> Secrets are masked where a result enters

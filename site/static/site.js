@@ -146,21 +146,6 @@
     });
   });
 
-  // The steps: the panel beside them shows the step being read.
-  document.querySelectorAll("[data-steps]").forEach((steps) => {
-    const panels = [...steps.querySelectorAll("[data-panel]")];
-    const watch = new IntersectionObserver(
-      (entries) => entries.forEach((entry) => {
-        if (!entry.isIntersecting) return;
-        const name = entry.target.dataset.step;
-        panels.forEach((panel) => panel.classList.toggle("on", panel.dataset.panel === name));
-        steps.querySelectorAll("[data-step]").forEach((step) => step.classList.toggle("on", step === entry.target));
-      }),
-      { rootMargin: "-45% 0px -45% 0px" },
-    );
-    steps.querySelectorAll("[data-step]").forEach((step) => watch.observe(step));
-  });
-
   // The closing reel: its terminal stands still while the page scrolls through its track, a line more for every step
   // of the scroll — the last one in before the track ends. With reduced motion, or where the terminal is taller than
   // the screen, every line simply stands.
