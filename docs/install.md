@@ -1,6 +1,7 @@
 # Installing Glut
 
-Glut is one program, `glut`, for macOS (Apple silicon and Intel) and Linux (x86_64 and arm64).
+Glut is one program, `glut`, for macOS (Apple silicon and Intel) and Linux (x86_64 and arm64); on Windows it runs
+in WSL2.
 
 ## The install script
 
@@ -71,6 +72,19 @@ unprivileged user namespaces), or set `kernel.apparmor_restrict_unprivileged_use
 
 Without a working sandbox Glut still starts, but every command it would run asks you first — and `/sandbox required
 on` refuses them outright.
+
+## Windows
+
+Glut runs in **WSL2**, which is a Linux kernel: the Linux build and its sandbox run there as they are. In PowerShell,
+`wsl --install` sets up WSL2 with Ubuntu; then, in the Ubuntu terminal, use the install script and bubblewrap as on
+Linux above. WSL1 has no namespaces, so the sandbox needs WSL2 (`wsl --set-version <distribution> 2`).
+
+- Keep projects in the WSL home (`~/…`), not on the Windows drive (`/mnt/c`): files there are slow and pass Linux's
+  permissions by.
+- Plans (`/schedule`) need systemd, which WSL starts only with `systemd=true` under `[boot]` in `/etc/wsl.conf`
+  (then `wsl --shutdown`); Glut says so when you add one.
+- VS Code reaches Glut in WSL through its WSL remote; a JetBrains IDE on Windows only with WSL's mirrored networking.
+- A native Windows build, with a sandbox of Windows' own, is planned.
 
 ## Checking it
 

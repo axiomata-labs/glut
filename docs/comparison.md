@@ -61,7 +61,7 @@ nothing of it; [Around the conversation](#around-the-conversation) names the sou
 Glut is young (0.1.0) and has one maintainer. Things the others do that Glut does not:
 
 - **Windows.** Codex CLI has a native Windows sandbox, Gemini CLI, Crush and pi run on Windows, Claude Code and Cursor
-  CLI install there. Glut runs on macOS and Linux only.
+  CLI install there. Glut runs on macOS and Linux, on Windows only in WSL2 (the Linux build and its sandbox).
   ([Codex](https://learn.chatgpt.com/docs/windows/windows-sandbox.md),
   [Crush](https://github.com/charmbracelet/crush/blob/main/README.md),
   [pi](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/windows.md))

@@ -430,7 +430,7 @@ fn draw_in(frame: &mut Frame, app: &mut App, area: Rect, chrome: &Chrome) {
     let input_width = usize::from(area.width.saturating_sub(2));
     let (rows, cursor) = app.input.layout(input_width);
     let input_height = rows.len().clamp(1, INPUT_ROWS) as u16 + 1;
-    // The side panel shows this frame: Glimm heads it, so no card beside it gets one of its own (T84).
+    // The side panel shows this frame, and a card beside it stays without Glimm: the panel keeps the screen calm (T84).
     // The stream spans the whole width, so whether the panel fits is known before the layout.
     if chrome.alone() {
         app.panel_fits = area.width >= PANEL_MIN_SCREEN;
@@ -1410,14 +1410,33 @@ fn draw_form(
     frame.render_widget(Paragraph::new(lines), text);
 }
 
+/// The side panel's first line: the header's spark and a word for what the session does now.
+fn panel_state(app: &App) -> Line<'static> {
+    use glimm::Mood;
+    let (word, style) = match app.mood() {
+        Mood::Working => (tr!(panel_working), theme::glow()),
+        Mood::Waiting => (tr!(panel_waiting), theme::glow()),
+        Mood::Done => (tr!(panel_done), theme::quiet()),
+        Mood::Failed => (tr!(panel_failed), theme::fault()),
+        Mood::Resting => (tr!(panel_resting), theme::quiet()),
+    };
+    Line::from(vec![
+        Span::styled(
+            format!(" {} ", glimm::spark(app.working(), app.frame)),
+            style,
+        ),
+        Span::styled(word.to_string(), style),
+    ])
+}
+
 /// The narrowest screen the waiting Glimm stands beside a question on; a narrower one keeps every column for the
 /// question.
 const ASK_GLIMM_MIN_SCREEN: u16 = 60;
 
 /// How many columns the waiting Glimm takes in an ask box on a screen `width` wide: itself and a gap, or none.
 fn ask_glimm_width(width: u16, panel_shows: bool) -> u16 {
-    // The reader mode has no Glimm: the question takes every column. Nor does a question beside the side panel, whose
-    // head Glimm already is (T84: one Glimm at a time).
+    // The reader mode has no Glimm: the question takes every column. Nor does a question beside the side panel, which
+    // keeps the screen calm (T84; the panel itself shows its state as a line).
     if width >= ASK_GLIMM_MIN_SCREEN && !panel_shows && !crate::motion::reader() {
         glimm::cells(glimm::Size::Small).0 + 2
     } else {
@@ -1927,12 +1946,9 @@ fn draw_panel(frame: &mut Frame, app: &mut App, area: Rect) {
         .title(title);
     let inner = block.inner(area);
     let width = usize::from(area.width.saturating_sub(4)).max(8);
-    // Glimm heads the panel with the session's mood: working, waiting for the owner, pleased or gone out.
-    let mut lines: Vec<Line> = vec![Line::default()];
-    for mut row in glimm::lines(glimm::Size::Small, app.mood(), app.frame) {
-        row.spans.insert(0, Span::raw(" "));
-        lines.push(row);
-    }
+    // One quiet line heads the panel with the session's state; Glimm stays out of it (owner, 2026-11-05: a figure
+    // there was too playful).
+    let mut lines: Vec<Line> = vec![Line::default(), panel_state(app)];
     if app.tab == Tab::Meter {
         lines.push(Line::default());
         // T42: a guide grown too large heads the meter, in orange, as long as it is.
@@ -2664,8 +2680,10 @@ fn footer_name(name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{asked_rows, footer_name, marked, panel_width, tab_titles};
+    use super::{asked_rows, footer_name, marked, panel_state, panel_width, tab_titles};
     use crate::meter::tokens;
+    use crate::theme;
+    use ratatui::text::Line;
     use unicode_width::UnicodeWidthStr;
 
     #[test]
@@ -2767,6 +2785,26 @@ mod tests {
         assert_eq!(tokens(840), "840");
         assert_eq!(tokens(12_345), "12.3k");
         assert_eq!(tokens(1_250_000), "1.2M");
+    }
+
+    #[test]
+    fn the_side_panel_heads_with_a_line_of_the_sessions_state_and_no_glimm() {
+        let mut app = app();
+        let text = |line: Line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.to_string())
+                .collect::<String>()
+        };
+        let resting = text(panel_state(&app));
+        assert!(resting.ends_with(tr!(panel_resting)), "{resting}");
+        // One line, so no figure of rows: the tabs keep the room Glimm took.
+        app.last_turn = Some(false);
+        let failed = panel_state(&app);
+        assert_eq!(failed.spans[1].style, theme::fault());
+        assert!(text(failed).ends_with(tr!(panel_failed)));
+        app.last_turn = Some(true);
+        assert!(text(panel_state(&app)).ends_with(tr!(panel_done)));
     }
 
     /// A session that talks to nothing, as the tests draw it.

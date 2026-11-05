@@ -327,6 +327,16 @@ glut::catalog! {
         agent_spent: &'static str,
         /// The plan waits for the owner.
         plan_waiting: &'static str,
+        /// The side panel's state line: the session works.
+        panel_working: &'static str,
+        /// The side panel's state line: a question waits for the owner.
+        panel_waiting: &'static str,
+        /// The side panel's state line: the last turn ended well.
+        panel_done: &'static str,
+        /// The side panel's state line: the last turn failed.
+        panel_failed: &'static str,
+        /// The side panel's state line: nothing has run yet.
+        panel_resting: &'static str,
         /// The plan approved: `{mode}` the mode it runs in.
         plan_approved: &'static str,
         /// The plan sent back: `{note}` the owner's note.

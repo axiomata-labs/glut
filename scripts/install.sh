@@ -61,6 +61,7 @@ case "$(uname -s)/$(uname -m)" in
   Darwin/x86_64) target="x86_64-apple-darwin" ;;
   Linux/x86_64 | Linux/amd64) target="x86_64-unknown-linux-musl" ;;
   Linux/aarch64 | Linux/arm64) target="aarch64-unknown-linux-musl" ;;
+  MINGW* | MSYS* | CYGWIN*) fail "on Windows, Glut runs in WSL2: wsl --install in PowerShell, then this line in its Ubuntu terminal" ;;
   *) fail "no prebuilt glut for $(uname -s) $(uname -m); build it with: cargo install glut-tui" ;;
 esac
 
@@ -115,6 +116,12 @@ case ":${PATH:-}:" in
     echo "  export PATH=\"$to:\$PATH\""
     ;;
 esac
+
+# WSL1 has no Linux kernel of its own, so no namespaces: the sandbox needs WSL2 ("microsoft-standard-WSL2").
+if grep -q "Microsoft" /proc/sys/kernel/osrelease 2>/dev/null; then
+  echo
+  echo "This is WSL1: Glut's sandbox needs WSL2 (wsl --set-version <distribution> 2 in PowerShell)."
+fi
 
 if [ "$(uname -s)" = "Linux" ] && ! command -v bwrap >/dev/null 2>&1; then
   echo
