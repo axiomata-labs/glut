@@ -27,12 +27,14 @@ pub enum Mood {
     Failed,
 }
 
-/// Which Glimm: the large one of the welcome (32 × 20 pixels, 16 columns by 10 rows), the small one beside a question
-/// and in the side panel (20 × 12, 10 by 6), and the mini one (8 × 4, 4 by 2) in front of a thought while the model
+/// Which Glimm: the large one of the welcome (32 × 20 pixels, 16 columns by 10 rows), the small one (20 × 12, 10 by 6)
+/// that stood beside a question and in the side panel until 2026-11-05 — its drawing kept, drawn nowhere now (owner:
+/// too playful there) —, and the mini one (8 × 4, 4 by 2) in front of a thought while the model
 /// thinks — a small flame without eyes and without a glow, only ever working.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Size {
     Large,
+    #[allow(dead_code)]
     Small,
     Mini,
 }
@@ -552,6 +554,7 @@ pub fn lines(size: Size, mood: Mood, tick: usize) -> Vec<Line<'static>> {
 }
 
 /// How many terminal columns and rows a Glimm of `size` takes.
+#[allow(dead_code)]
 pub fn cells(size: Size) -> (u16, u16) {
     let raster = raster(Design::ALL[ACTIVE], size);
     ((raster.width / 2) as u16, (raster.height / 2) as u16)

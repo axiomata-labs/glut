@@ -430,7 +430,7 @@ fn draw_in(frame: &mut Frame, app: &mut App, area: Rect, chrome: &Chrome) {
     let input_width = usize::from(area.width.saturating_sub(2));
     let (rows, cursor) = app.input.layout(input_width);
     let input_height = rows.len().clamp(1, INPUT_ROWS) as u16 + 1;
-    // The side panel shows this frame, and a card beside it stays without Glimm: the panel keeps the screen calm (T84).
+    // Whether the side panel shows this frame.
     // The stream spans the whole width, so whether the panel fits is known before the layout.
     if chrome.alone() {
         app.panel_fits = area.width >= PANEL_MIN_SCREEN;
@@ -446,10 +446,7 @@ fn draw_in(frame: &mut Frame, app: &mut App, area: Rect, chrome: &Chrome) {
     // A server's card stands where the gate's would (T67); the gate asks one question at a time, so never both.
     // The rows that must stay in sight are; the fields drawn count as seen — ⏎ sends only once each one was.
     let form_lines = app.form.as_mut().map(|form| {
-        let width = usize::from(
-            area.width
-                .saturating_sub(4 + ask_glimm_width(area.width, panel_shows)),
-        );
+        let width = usize::from(area.width.saturating_sub(4));
         let most = usize::from(area.height / 2).clamp(3, FORM_ROWS);
         let drawn = form.lines(width, most);
         let first = drawn
@@ -480,10 +477,7 @@ fn draw_in(frame: &mut Frame, app: &mut App, area: Rect, chrome: &Chrome) {
         .filter(|_| !plan_asking && form_lines.is_none())
         .map(|open| {
             let most = usize::from(area.height / 3).clamp(3, ASK_ROWS);
-            let width = usize::from(
-                area.width
-                    .saturating_sub(4 + ask_glimm_width(area.width, panel_shows)),
-            );
+            let width = usize::from(area.width.saturating_sub(4));
             if open.request.keychain {
                 keychain_rows(open, width, most)
             } else if open.request.unsandboxed {
@@ -498,28 +492,15 @@ fn draw_in(frame: &mut Frame, app: &mut App, area: Rect, chrome: &Chrome) {
                 asked_rows(&open.request.target, width, most)
             }
         });
-    // The target, then a row per choice: once, each scope, refuse — at least as tall as the waiting Glimm beside it.
+    // The target, then a row per choice: once, each scope, refuse.
     let ask_height = ask_rows
         .as_ref()
         .zip(app.ask.as_ref().filter(|_| !plan_asking))
         .map_or(0, |(rows, open)| {
-            let inner = (rows.len() + 2 + open.request.scopes.len().min(9)) as u16;
-            let glimm = if ask_glimm_width(area.width, panel_shows) > 0 {
-                glimm::cells(glimm::Size::Small).1
-            } else {
-                0
-            };
-            inner.max(glimm) + 2
+            (rows.len() + 2 + open.request.scopes.len().min(9)) as u16 + 2
         });
     let ask_height = match &form_lines {
-        Some(lines) => {
-            let glimm = if ask_glimm_width(area.width, panel_shows) > 0 {
-                glimm::cells(glimm::Size::Small).1
-            } else {
-                0
-            };
-            (lines.len() as u16).max(glimm) + 2
-        }
+        Some(lines) => lines.len() as u16 + 2,
         None => ask_height,
     };
     let waiting = waiting_lines(app, usize::from(area.width));
@@ -592,10 +573,10 @@ fn draw_in(frame: &mut Frame, app: &mut App, area: Rect, chrome: &Chrome) {
     app.ask_area = Rect::default();
     if let Some(rows) = ask_rows {
         app.ask_area = ask;
-        draw_ask(frame, app, ask, rows, panel_shows);
+        draw_ask(frame, app, ask, rows);
     }
     if let Some(lines) = form_lines {
-        draw_form(frame, app, ask, lines, panel_shows);
+        draw_form(frame, app, ask, lines);
     }
     draw_input(
         frame,
@@ -1304,7 +1285,7 @@ fn mark_stream(frame: &mut Frame, app: &App, area: Rect) {
     }
 }
 
-fn draw_ask(frame: &mut Frame, app: &App, area: Rect, rows: Vec<String>, panel_shows: bool) {
+fn draw_ask(frame: &mut Frame, app: &App, area: Rect, rows: Vec<String>) {
     let Some(open) = &app.ask else { return };
     let block = Block::default()
         .borders(Borders::ALL)
@@ -1370,27 +1351,12 @@ fn draw_ask(frame: &mut Frame, app: &App, area: Rect, rows: Vec<String>, panel_s
     lines.push(Line::from(vec![key("n".into()), Span::raw(tr!(refuse))]));
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    let beside = ask_glimm_width(area.width, panel_shows);
-    if beside == 0 {
-        frame.render_widget(Paragraph::new(lines), inner);
-        return;
-    }
-    // Glimm waits beside the question, looking up at the owner.
-    let [glimm_area, text] =
-        Layout::horizontal([Constraint::Length(beside), Constraint::Min(1)]).areas(inner);
-    let glimm_lines = glimm::lines(glimm::Size::Small, glimm::Mood::Waiting, app.frame);
-    frame.render_widget(Paragraph::new(glimm_lines), glimm_area);
-    frame.render_widget(Paragraph::new(lines), text);
+    // The question takes every column: no Glimm beside it (owner, 2026-11-05: a figure there was too playful).
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
-/// A server's card (T67): who asks in its title, its lines, the waiting Glimm beside them.
-fn draw_form(
-    frame: &mut Frame,
-    app: &App,
-    area: Rect,
-    lines: Vec<Line<'static>>,
-    panel_shows: bool,
-) {
+/// A server's card (T67): who asks in its title, its lines.
+fn draw_form(frame: &mut Frame, app: &App, area: Rect, lines: Vec<Line<'static>>) {
     let Some(form) = &app.form else { return };
     let block = Block::default()
         .borders(Borders::ALL)
@@ -1398,16 +1364,7 @@ fn draw_form(
         .title(Span::styled(form.title(), theme::glow()));
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    let beside = ask_glimm_width(area.width, panel_shows);
-    if beside == 0 {
-        frame.render_widget(Paragraph::new(lines), inner);
-        return;
-    }
-    let [glimm_area, text] =
-        Layout::horizontal([Constraint::Length(beside), Constraint::Min(1)]).areas(inner);
-    let glimm_lines = glimm::lines(glimm::Size::Small, glimm::Mood::Waiting, app.frame);
-    frame.render_widget(Paragraph::new(glimm_lines), glimm_area);
-    frame.render_widget(Paragraph::new(lines), text);
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 /// The side panel's first line: the header's spark and a word for what the session does now.
@@ -1427,21 +1384,6 @@ fn panel_state(app: &App) -> Line<'static> {
         ),
         Span::styled(word.to_string(), style),
     ])
-}
-
-/// The narrowest screen the waiting Glimm stands beside a question on; a narrower one keeps every column for the
-/// question.
-const ASK_GLIMM_MIN_SCREEN: u16 = 60;
-
-/// How many columns the waiting Glimm takes in an ask box on a screen `width` wide: itself and a gap, or none.
-fn ask_glimm_width(width: u16, panel_shows: bool) -> u16 {
-    // The reader mode has no Glimm: the question takes every column. Nor does a question beside the side panel, which
-    // keeps the screen calm (T84; the panel itself shows its state as a line).
-    if width >= ASK_GLIMM_MIN_SCREEN && !panel_shows && !crate::motion::reader() {
-        glimm::cells(glimm::Size::Small).0 + 2
-    } else {
-        0
-    }
 }
 
 /// What an ask shows of its target in `most` rows: all of it, or its head, how much is left out, and its tail — the
