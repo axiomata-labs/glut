@@ -2,6 +2,7 @@
 // text in spans, filled frame by frame from the recording's JSON. Text, not video: sharp at any size, light, and
 // selectable. It is fetched as it comes near the screen, plays while on screen and pauses off it; with reduced motion
 // it shows the last screen and waits for a click on play. Scenes behind tabs ([data-scenes]) share one player.
+// An image Glut had the terminal draw (the recording's "images" and a frame's "pics") is laid over its cells.
 (() => {
   "use strict";
 
@@ -97,7 +98,25 @@
       screen.append(row);
       rows.push(row);
     }
+    // Only base64 of the recorder's PNGs becomes an image's source.
+    const images = (film.images || []).map((data) =>
+      typeof data === "string" && /^[A-Za-z0-9+/]+=*$/.test(data) ? `data:image/png;base64,${data}` : "");
+    const pictures = document.createElement("div");
+    pictures.className = "pics";
+    screen.append(pictures);
+    // A picture at a cell, in cells: the font's own width (ch) and the rows' height, so it scales with the text.
+    const picture = ([image, x, y, cols, height]) => {
+      const source = images[image];
+      if (!source) return null;
+      const img = document.createElement("img");
+      img.alt = "";
+      img.src = source;
+      img.style.cssText = `left:${Number(x)}ch;top:${Number(y) * 1.22}em;`
+        + `width:${Number(cols)}ch;height:${Number(height) * 1.22}em`;
+      return img;
+    };
     const draw = (frame) => {
+      if (Array.isArray(frame.pics)) pictures.replaceChildren(...frame.pics.map(picture).filter(Boolean));
       for (const [at, runs] of Object.entries(frame.rows)) {
         rows[Number(at)].innerHTML = runs
           .map(([text, style]) => {
@@ -138,6 +157,7 @@
       next = 0;
       clock = 0;
       rows.forEach((row) => (row.textContent = ""));
+      pictures.textContent = "";
       // The first screen at once: no empty frame between the end and the new start.
       show(0);
     };

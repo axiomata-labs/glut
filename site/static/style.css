@@ -384,6 +384,7 @@ figure.player .bar {
 figure.player .bar i { width: 0.6em; height: 0.6em; border-radius: 50%; background: var(--line); }
 figure.player .bar span { margin-left: 0.8em; }
 figure.player .screen {
+  position: relative;
   margin: 0;
   padding: 0.6em 0;
   border: 0;
@@ -394,6 +395,8 @@ figure.player .screen {
   overflow: hidden;
   min-height: 12em;
 }
+figure.player .pics { position: absolute; left: 0; top: 0.6em; pointer-events: none; }
+figure.player .pics img { position: absolute; display: block; }
 figure.player .row { height: 1.22em; }
 figure.player .row b { display: inline-block; width: 1ch; overflow: hidden; text-align: center; font-weight: inherit; vertical-align: top; height: 1.22em; }
 figure.player .row b.c2 { width: 2ch; }

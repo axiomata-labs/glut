@@ -4,6 +4,7 @@ size 130 37
 project shop
 beside receipt
 home fresh
+terminal ghostty
 setting lsp false
 allow "Bash(python3 *)"
 on "Glut asks" key y

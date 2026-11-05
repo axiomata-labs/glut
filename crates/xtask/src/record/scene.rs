@@ -10,6 +10,8 @@
 //! allow "Bash(python3 *)"      a rule of that fresh home's settings, so the scene is not held by a question
 //! setting lsp false            a value of that fresh home's settings (JSON), e.g. no editor's language server
 //! tasks demo                   site/demo/arena/demo, the arena bench's task set, in that fresh home
+//! terminal ghostty             the terminal names itself Ghostty: Glut sends images through it, the film keeps them
+//!                              (needs a fresh home: its footer is kept plain there)
 //! neovim                       Neovim's folders in that fresh home: site/demo/nvim/init.lua and glut.nvim beside the
 //!                              repository, none of the owner's config, plugins or history
 //! on "Glut asks" key y         whenever the text comes up: the keys, after a reader's pause (once per appearance);
@@ -92,6 +94,8 @@ pub struct Scene {
     pub tasks: Vec<String>,
     /// Whether Neovim gets folders of its own in the fresh home, with glut.nvim and the demo's config.
     pub neovim: bool,
+    /// Whether the terminal names itself Ghostty, so Glut draws images through it.
+    pub ghostty: bool,
     /// The program and its arguments.
     pub program: Vec<String>,
     /// Keys sent whenever a text comes up on the screen.
@@ -117,6 +121,7 @@ pub fn parse(text: &str) -> Result<Scene, String> {
         settings: serde_json::Map::new(),
         tasks: Vec::new(),
         neovim: false,
+        ghostty: false,
         program: Vec::new(),
         triggers: Vec::new(),
         steps: Vec::new(),
@@ -161,6 +166,7 @@ pub fn parse(text: &str) -> Result<Scene, String> {
             }
             "origin" if rest.is_empty() => scene.origin = true,
             "neovim" if rest.is_empty() => scene.neovim = true,
+            "terminal" if rest == "ghostty" => scene.ghostty = true,
             "on" => {
                 // One or more quoted texts, all on the screen at once, then the keys.
                 let mut texts = Vec::new();

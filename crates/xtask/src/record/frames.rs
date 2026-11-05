@@ -8,10 +8,15 @@
 //!
 //! A colour is `""` (the player's own ink or ground), `#rrggbb`, or `i<n>` for an indexed one; the flags are bold 1,
 //! dim 2, italic 4, underline 8, inverse 16.
+//!
+//! A scene that shows images (`terminal ghostty`) adds `"images":["<base64 PNG>", …]` and, on a frame where what
+//! stands changed, `"pics":[[image, x, y, cols, rows], …]` — every picture standing from then on, none for `[]`.
 
 use std::collections::{BTreeMap, HashMap};
 
 use serde_json::{Value, json};
+
+use super::graphics::Picture;
 
 /// A cell's look.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -24,6 +29,13 @@ pub struct Style {
 /// A row: runs of text in one style.
 pub type Row = Vec<(String, usize)>;
 
+/// A kept frame: its time, its changed rows, and every picture standing where what stands changed.
+struct Frame {
+    millis: u64,
+    rows: BTreeMap<usize, Row>,
+    pictures: Option<Vec<Picture>>,
+}
+
 /// The recording being made.
 pub struct Film {
     cols: u16,
@@ -31,7 +43,12 @@ pub struct Film {
     styles: Vec<Style>,
     known: HashMap<Style, usize>,
     last: Vec<Row>,
-    frames: Vec<(u64, BTreeMap<usize, Row>)>,
+    frames: Vec<Frame>,
+    /// The images the terminal was sent, as base64 PNG.
+    images: Vec<String>,
+    /// The pictures standing now, and as the last kept frame had them.
+    pictures: Vec<Picture>,
+    last_pictures: Vec<Picture>,
     /// The home folder, shown as `~` wherever it stands.
     home: String,
 }
@@ -46,11 +63,29 @@ impl Film {
             known: HashMap::new(),
             last: Vec::new(),
             frames: Vec::new(),
+            images: Vec::new(),
+            pictures: Vec::new(),
+            last_pictures: Vec::new(),
             home: home.trim_end_matches('/').to_owned(),
         }
     }
 
-    /// Keeps `screen` at `millis` from the start, if a row changed since the last one kept.
+    /// Keeps an image the terminal was sent (base64 PNG); returns its place, which [`Picture::image`] names. One sent
+    /// again (Glut sends its pictures anew after a clear) is kept once.
+    pub fn image(&mut self, data: String) -> usize {
+        if let Some(at) = self.images.iter().position(|known| *known == data) {
+            return at;
+        }
+        self.images.push(data);
+        self.images.len() - 1
+    }
+
+    /// The pictures standing on the screen from now on.
+    pub fn stand(&mut self, pictures: Vec<Picture>) {
+        self.pictures = pictures;
+    }
+
+    /// Keeps `screen` at `millis` from the start, if a row or a picture changed since the last one kept.
     pub fn keep(&mut self, millis: u64, screen: &vt100::Screen) -> bool {
         let rows: Vec<Row> = (0..self.rows).map(|row| self.row(screen, row)).collect();
         let changed: BTreeMap<usize, Row> = rows
@@ -59,11 +94,17 @@ impl Film {
             .filter(|(at, row)| self.last.get(*at) != Some(row))
             .map(|(at, row)| (at, row.clone()))
             .collect();
-        if changed.is_empty() {
+        let pictures = (self.pictures != self.last_pictures).then(|| self.pictures.clone());
+        if changed.is_empty() && pictures.is_none() {
             return false;
         }
-        self.frames.push((millis, changed));
+        self.frames.push(Frame {
+            millis,
+            rows: changed,
+            pictures,
+        });
         self.last = rows;
+        self.last_pictures = self.pictures.clone();
         true
     }
 
@@ -82,23 +123,41 @@ impl Film {
         let mut frames: Vec<Value> = self
             .frames
             .iter()
-            .map(|(millis, rows)| {
-                let rows: serde_json::Map<String, Value> = rows
-                    .iter()
-                    .map(|(at, row)| {
-                        let runs: Vec<Value> = row
+            .map(
+                |Frame {
+                     millis,
+                     rows,
+                     pictures,
+                 }| {
+                    let rows: serde_json::Map<String, Value> = rows
+                        .iter()
+                        .map(|(at, row)| {
+                            let runs: Vec<Value> = row
+                                .iter()
+                                .map(|(text, style)| json!([text, style]))
+                                .collect();
+                            (at.to_string(), Value::Array(runs))
+                        })
+                        .collect();
+                    let mut frame = json!({ "t": millis, "rows": rows });
+                    if let Some(pictures) = pictures {
+                        frame["pics"] = pictures
                             .iter()
-                            .map(|(text, style)| json!([text, style]))
+                            .map(|p| json!([p.image, p.x, p.y, p.cols, p.rows]))
                             .collect();
-                        (at.to_string(), Value::Array(runs))
-                    })
-                    .collect();
-                json!({ "t": millis, "rows": rows })
-            })
+                    }
+                    frame
+                },
+            )
             .collect();
-        let end = self.frames.last().map_or(0, |(millis, _)| millis + hold);
+        let end = self.frames.last().map_or(0, |frame| frame.millis + hold);
         frames.push(json!({ "t": end, "rows": {} }));
-        json!({ "cols": self.cols, "rows": self.rows, "styles": styles, "frames": frames })
+        let mut film =
+            json!({ "cols": self.cols, "rows": self.rows, "styles": styles, "frames": frames });
+        if !self.images.is_empty() {
+            film["images"] = json!(self.images);
+        }
+        film
     }
 
     /// One row of the screen as runs, the home folder as `~` and the row filled out to its width again.
@@ -252,6 +311,36 @@ mod tests {
             "filled to the width: 4 + 8 columns"
         );
         assert_eq!(json["frames"][1]["t"], 500, "the last frame held");
+    }
+
+    #[test]
+    fn a_picture_standing_or_gone_is_a_frame_of_its_own() {
+        let mut film = Film::new(4, 1, "/nowhere");
+        let parser = screen(4, b"ab");
+        assert!(film.keep(0, parser.screen()));
+        let image = film.image("QUJD".to_owned());
+        let picture = Picture {
+            image,
+            x: 1,
+            y: 0,
+            cols: 2,
+            rows: 1,
+        };
+        film.stand(vec![picture]);
+        assert!(film.keep(10, parser.screen()), "the picture came");
+        assert!(!film.keep(20, parser.screen()), "nothing changed");
+        film.stand(Vec::new());
+        assert!(film.keep(30, parser.screen()), "the picture went");
+        assert_eq!(
+            film.image("QUJD".to_owned()),
+            image,
+            "sent again, kept once"
+        );
+        let json = film.json(0);
+        assert_eq!(json["images"], json!(["QUJD"]));
+        assert!(json["frames"][0].get("pics").is_none());
+        assert_eq!(json["frames"][1]["pics"], json!([[0, 1, 0, 2, 1]]));
+        assert_eq!(json["frames"][2]["pics"], json!([]));
     }
 
     #[test]

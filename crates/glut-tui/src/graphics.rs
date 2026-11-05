@@ -44,8 +44,10 @@ pub fn protocol() -> Option<Protocol> {
 const MARK_RED: u8 = 0xFE;
 /// The most pictures one run of Glut marks: a mark's number is two bytes.
 const MOST: usize = 65_535;
-/// A cell's size in pixels, guessed, for the PNG a terminal is sent: it scales the picture into the cells anyway.
-const CELL_PIXELS: (u32, u32) = (10, 20);
+/// A cell's size in pixels, guessed, for the PNG a terminal is sent: it scales the picture into the cells anyway. A
+/// Retina screen's cell is about 16 × 34 device pixels: sent at less, a picture is drawn larger than it is and blurs
+/// (a receipt's print could not be read).
+const CELL_PIXELS: (u32, u32) = (20, 40);
 /// The most bytes of base64 in one kitty escape.
 const CHUNK: usize = 4096;
 

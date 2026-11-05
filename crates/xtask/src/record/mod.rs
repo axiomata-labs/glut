@@ -3,6 +3,7 @@
 //! player. Real runs with real models: every recording is looked at by the owner before it goes on the site.
 
 mod frames;
+mod graphics;
 mod pty;
 mod scene;
 
@@ -12,6 +13,7 @@ use std::sync::mpsc::RecvTimeoutError;
 use std::time::{Duration, Instant};
 
 use frames::Film;
+use graphics::Graphics;
 use pty::Terminal;
 use scene::Step;
 
@@ -64,7 +66,12 @@ pub fn record(repo: &Path, name: &str) -> Result<(), String> {
     // The owner's keys and sign-ins as the take is given them, to tell afterwards which it renewed.
     let given = stored_secrets(&Path::new(&home).join(".glut").join(CREDENTIALS));
     let glut_home = if scene.fresh_home {
-        let fresh = fresh_home(Path::new(&home), &scene.allow, &scene.settings)?;
+        let fresh = fresh_home(
+            Path::new(&home),
+            &scene.allow,
+            &scene.settings,
+            scene.ghostty,
+        )?;
         for set in &scene.tasks {
             let source = repo.join("site/demo/arena").join(set);
             if !source.is_dir() {
@@ -91,6 +98,12 @@ pub fn record(repo: &Path, name: &str) -> Result<(), String> {
         .iter()
         .map(|path| ("GLUT_HOME", path.as_path()))
         .chain(neovim.iter().map(|(name, path)| (*name, path.as_path())))
+        // Glut draws its images through the terminal where it names itself Ghostty, as the owner's does.
+        .chain(
+            scene
+                .ghostty
+                .then_some(("TERM_PROGRAM", Path::new("ghostty"))),
+        )
         .collect();
     let mut terminal = Terminal::start(&scene.program, &folder, &env, scene.cols, scene.rows)?;
     let mut take = Take {
@@ -101,6 +114,8 @@ pub fn record(repo: &Path, name: &str) -> Result<(), String> {
         kept: None,
         ended: false,
         carry: Vec::new(),
+        graphics: Graphics::default(),
+        images: std::collections::HashMap::new(),
         triggers: scene
             .triggers
             .iter()
@@ -204,6 +219,9 @@ struct Take {
     ended: bool,
     /// The end of the last read, searched again with the next.
     carry: Vec<u8>,
+    /// The pictures the program drew through the terminal, and their images' places in the film by their number.
+    graphics: Graphics,
+    images: std::collections::HashMap<u32, usize>,
     triggers: Vec<Trigger>,
 }
 
@@ -303,6 +321,7 @@ impl Take {
         let wait = until.saturating_duration_since(Instant::now());
         match terminal.output.recv_timeout(wait) {
             Ok(bytes) => {
+                let bytes = self.graphics.cut(&bytes);
                 // A question split over two reads is found whole: the end of the last read goes in front.
                 let mut seen = std::mem::take(&mut self.carry);
                 let from = seen.len();
@@ -370,12 +389,31 @@ impl Take {
             }
             self.parser.process(&bytes[done.max(from)..end.max(done)]);
             done = end.max(done);
+            if question == graphics::TOKEN {
+                self.draw_picture();
+                continue;
+            }
             said.push(answer(question, self.parser.screen()));
         }
         if done < bytes.len() {
             self.parser.process(&bytes[done.max(from)..]);
         }
         said
+    }
+
+    /// Applies the next graphics command at the cursor: an image sent whole goes into the film, and the pictures
+    /// standing are the film's from now on.
+    fn draw_picture(&mut self) {
+        let (row, col) = self.parser.screen().cursor_position();
+        if let Some((number, data)) = self.graphics.apply(row, col) {
+            let index = self.film.image(data);
+            self.images.insert(number, index);
+        }
+        let images = &self.images;
+        self.film.stand(
+            self.graphics
+                .standing(|number| images.get(&number).copied()),
+        );
     }
 
     /// Keeps the screen as it is now, unless one was kept less than [`FRAME_EVERY`] ago (`always` keeps it anyway).
@@ -388,9 +426,17 @@ impl Take {
 }
 
 /// The questions to the terminal Glut asks, each with its place in `bytes`, in order: the background and foreground
-/// colour, its kind (DA1) and the cursor's place. The kitty keyboard question gets no answer, as from a terminal
-/// without it.
-const QUESTIONS: [&str; 5] = ["\x1b]11;?", "\x1b]10;?", "\x1b[c", "\x1b[0c", "\x1b[6n"];
+/// colour, its kind (DA1) and the cursor's place — and where a graphics command stood ([`graphics::TOKEN`]), which
+/// gets no answer either (Glut sends them quiet, `q=2`). The kitty keyboard question gets no answer, as from a
+/// terminal without it.
+const QUESTIONS: [&str; 6] = [
+    "\x1b]11;?",
+    "\x1b]10;?",
+    "\x1b[c",
+    "\x1b[0c",
+    "\x1b[6n",
+    graphics::TOKEN,
+];
 
 fn questions(bytes: &[u8]) -> Vec<(usize, &'static str)> {
     let mut found: Vec<(usize, &'static str)> = QUESTIONS
@@ -471,6 +517,7 @@ fn fresh_home(
     home: &Path,
     allow: &[String],
     settings: &serde_json::Map<String, serde_json::Value>,
+    ghostty: bool,
 ) -> Result<PathBuf, String> {
     let fresh = home.join(DEMO_DIR).join(".home");
     if fresh.exists() {
@@ -511,6 +558,11 @@ fn fresh_home(
             serde_json::Value::Object(written).to_string(),
         )
         .map_err(|err| format!("cannot write the take's settings: {err}"))?;
+    }
+    if ghostty {
+        // Ghostty draws Powerline's separators itself, the site's font has none: the footer stays as in every scene.
+        std::fs::write(glut.join("prefs.json"), r#"{"footer":"plain"}"#)
+            .map_err(|err| format!("cannot write the take's prefs: {err}"))?;
     }
     Ok(fresh)
 }
@@ -825,6 +877,8 @@ mod tests {
             kept: None,
             ended: false,
             carry: Vec::new(),
+            graphics: Graphics::default(),
+            images: std::collections::HashMap::new(),
             triggers: Vec::new(),
         };
         let said = take.feed(b"\x1b]11;?\x07\x1b[c\x1b[?u", 0);
@@ -839,6 +893,39 @@ mod tests {
         assert!(said.is_empty());
         let said = take.feed(b"xx\x1b[6n", 4);
         assert_eq!(said.len(), 1);
+    }
+
+    #[test]
+    fn a_picture_is_placed_where_the_cursor_stood_and_gets_no_answer() {
+        let mut take = Take {
+            parser: frames::emulator(4, 10),
+            film: Film::new(10, 4, "/nowhere"),
+            clock: 0.0,
+            last: Instant::now(),
+            kept: None,
+            ended: false,
+            carry: Vec::new(),
+            graphics: Graphics::default(),
+            images: std::collections::HashMap::new(),
+            triggers: Vec::new(),
+        };
+        let sent = take
+            .graphics
+            .cut(b"\x1b_Ga=t,f=100,i=1,q=2,m=0;QUJD\x1b\\\x1b7\x1b[3;2H\x1b_Ga=p,i=1,p=1,c=4,r=2,C=1,q=2\x1b\\\x1b8x");
+        assert!(take.feed(&sent, 0).is_empty(), "graphics are quiet");
+        take.keep_now(true);
+        let json = take.film.json(0);
+        assert_eq!(json["images"], serde_json::json!(["QUJD"]));
+        assert_eq!(
+            json["frames"][0]["pics"],
+            serde_json::json!([[0, 1, 2, 4, 2]])
+        );
+        assert!(
+            json["frames"][0]["rows"]["0"][0][0]
+                .as_str()
+                .unwrap()
+                .starts_with('x')
+        );
     }
 
     #[test]
