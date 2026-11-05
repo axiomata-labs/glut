@@ -2,7 +2,7 @@
 # packed with the licences and the README, their SHA-256 checksums, the install script, and the notes of that version
 # from CHANGELOG.md. A program of 50 MB or more fails the release (the site and the README say "under 50 MB"). Once
 # the release stands, the Homebrew tap's formula is written anew — where the secret HOMEBREW_TAP_TOKEN (a token that
-# may push to NamorX68/homebrew-tap) is set; without it that step is skipped with a note.
+# may push to axiomata-labs/homebrew-tap) is set; without it that step is skipped with a note.
 #
 # The builds are unsigned for now (docs/install.md says how macOS lets them run); Developer ID signing and
 # notarisation come with an Apple developer account.
@@ -196,7 +196,7 @@ jobs:
       - if: steps.token.outputs.skip != 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: NamorX68/homebrew-tap
+          repository: axiomata-labs/homebrew-tap
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           path: tap
       - if: steps.token.outputs.skip != 'true'

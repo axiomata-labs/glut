@@ -23,7 +23,7 @@ curl -fsSL https://github.com/NamorX68/glut/releases/latest/download/install.sh 
 ## Homebrew
 
 ```sh
-brew install NamorX68/tap/glut
+brew install axiomata-labs/tap/glut
 brew upgrade glut          # later
 ```
 

@@ -1,5 +1,6 @@
-# The formula of the tap NamorX68/homebrew-tap, written by the release workflow (.github/workflows/release.yml) from
-# this template: the version and the checksums of the release's own archives. `brew install NamorX68/tap/glut`.
+# The formula of the tap axiomata-labs/homebrew-tap, written by the release workflow (.github/workflows/release.yml)
+# from this template: the version and the checksums of the release's own archives.
+# `brew install axiomata-labs/tap/glut`.
 class Glut < Formula
   desc "Coding agent for the terminal that runs every command in an OS sandbox"
   homepage "https://github.com/NamorX68/glut"
