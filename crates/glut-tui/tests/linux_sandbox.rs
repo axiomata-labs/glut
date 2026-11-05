@@ -317,7 +317,11 @@ async fn the_network_is_the_proxy_through_the_relay_and_nothing_else() {
         return;
     };
     let proxy = glut::sandbox::proxy::Proxy::start(None).await.unwrap();
-    let socket = place.top.join("proxy.sock");
+    // A Unix socket's path is at most 107 bytes, which a CI checkout's `target/` folder passes: beside the project in
+    // the temporary folder, as Glut's own lies in its short scratch folder there.
+    let sockets = std::env::temp_dir().join(format!("glut-lsb-{}", std::process::id()));
+    std::fs::create_dir_all(&sockets).unwrap();
+    let socket = sockets.join("proxy.sock");
     let _bridge = glut::sandbox::proxy::Bridge::start(&socket, proxy.port()).unwrap();
     let mut policy = place.policy();
     policy.proxy_port = Some(proxy.port());
@@ -338,6 +342,7 @@ async fn the_network_is_the_proxy_through_the_relay_and_nothing_else() {
     })
     .await
     .unwrap();
+    let _ = std::fs::remove_dir_all(&sockets);
     let text = said(&out);
     // The proxy answered (it refuses this machine's own address), and only it was reached.
     assert!(text.contains("HTTP/1.1 502"), "{text}");

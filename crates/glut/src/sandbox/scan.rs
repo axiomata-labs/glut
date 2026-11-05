@@ -379,7 +379,7 @@ fn walk(top: &Path, beside: bool, found: &mut Found, seen: &mut usize) {
             let Ok(kind) = entry.file_type() else {
                 continue;
             };
-            let lower = name.to_ascii_lowercase();
+            let lower = super::folded(&name);
             if lower == ".git" {
                 guard(found, path.clone(), true);
                 if kind.is_dir() {
@@ -457,7 +457,7 @@ impl Rules {
     /// folder for git folders in it, a git folder in those, a protected name in the working folder, a `.git` or an
     /// `.envrc` anywhere, a protected name at any depth and in any case in a folder beside the working one.
     pub fn refuses(&self, dir: &Path, name: &str) -> bool {
-        let lower = name.to_ascii_lowercase();
+        let lower = super::folded(name);
         if self.git_dirs.contains(dir) {
             return GIT_RUNS.contains(&name) || name == "modules" || name == "worktrees";
         }
@@ -472,11 +472,9 @@ impl Rules {
         if PROTECTED_IN_ROOT.contains(&lower.as_str())
             && dir.strip_prefix(&self.root).is_ok_and(|inside| {
                 lower != PACKAGED
-                    || !inside.components().any(|part| {
-                        part.as_os_str()
-                            .to_string_lossy()
-                            .eq_ignore_ascii_case(PACKAGES)
-                    })
+                    || !inside
+                        .components()
+                        .any(|part| super::folded(&part.as_os_str().to_string_lossy()) == PACKAGES)
             })
         {
             return true;
@@ -698,6 +696,9 @@ mod tests {
         // Below the top as at it, but in what a package manager fills.
         assert!(rules.refuses(&root.join("a"), ".cargo"));
         assert!(rules.refuses(&root.join("a"), "OpenCode.json"));
+        // The long s and the Kelvin sign fold as Seatbelt's pattern folds them.
+        assert!(rules.refuses(&root.join("a"), ".v\u{17F}code"));
+        assert!(rules.refuses(&root.join("a"), ".hus\u{212A}y"));
         assert!(rules.refuses(&root.join("node_modules/x"), ".envrc"));
         assert!(
             rules.refuses(&root.join("node_modules/x"), ".cargo"),

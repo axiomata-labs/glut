@@ -808,6 +808,19 @@ pub(crate) fn git_dirs(root: &Path) -> Vec<PathBuf> {
     dirs
 }
 
+/// `name` as the protected names are compared on Linux: in ASCII lower case, the long s and the Kelvin sign as `s` and
+/// `k` — the folds [`any_case`] gives Seatbelt, so a name refused on one system is refused on the other (a casefolded
+/// ext4 folder, or a copy onto APFS, would open `.vſcode` as `.vscode`).
+pub(crate) fn folded(name: &str) -> String {
+    name.chars()
+        .map(|c| match c {
+            '\u{17F}' => 's',
+            '\u{212A}' => 'k',
+            c => c.to_ascii_lowercase(),
+        })
+        .collect()
+}
+
 /// `name` as an SBPL regex matching it in any case (`.vscode` → `\.[vV][sS]…`): macOS volumes do not tell the cases
 /// apart.
 fn any_case(name: &str) -> String {
