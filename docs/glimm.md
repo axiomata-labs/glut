@@ -9,19 +9,18 @@ https://claude.ai/artifact/8j3h3Y5SJX8AG2xmVyP35V (private to the owner).
 
 ## How a design is written (since T72)
 
-A drawing is a file per size in `crates/glut-tui/src/glimm/` (`a-large.txt`, `a-small.txt`, `a-mini.txt`, and the same
-for `c-`), read at compile time (`include_str!`) and parsed once. Its first line (after `#` comments) is
-`size <width> <height>` in pixels, both even; then frames — `@ <name>`, exactly `height` lines of exactly `width`
-letters, a blank line between frames. A terminal cell holds 2 × 2 pixels (Unicode quadrant blocks), and a cell is about
+A drawing is a file per size in `crates/glut-tui/src/glimm/` (`a-large.txt`, `a-mini.txt`, and the same for `c-`),
+read at compile time (`include_str!`) and parsed once. Its first line (after `#` comments) is `size <width> <height>`
+in pixels, both even; then frames — `@ <name>`, exactly `height` lines of exactly `width` letters, a blank line between
+frames. A terminal cell holds 2 × 2 pixels (Unicode quadrant blocks), and a cell is about
 one wide and two tall, so **a pixel is 1 wide : 2 tall** — a round shape is drawn about twice as wide as tall.
 
 | size | pixels | cells | shown |
 |---|---|---|---|
 | large | 32 × 20 | 16 × 10 | the welcome |
-| small | 20 × 12 | 10 × 6 | beside a question, heading the side panel |
 | mini | 8 × 4 | 4 × 2 | before a thought while the model thinks (working frames only, no glow) |
 
-Frames (large and small; the mini one has `work0`–`work3`): `rest0`–`rest3` (the tip leaning left, a breath, right, the
+Frames (the large one; the mini one has `work0`–`work3`): `rest0`–`rest3` (the tip leaning left, a breath, right, the
 plain one), `restblink`, `work0`–`work5` (a flicker, run 0→5→0, sparks drawn in), `wait0` (the "!") and `wait1`
 (without), `done0` and `done1` (with the twinkle), `fail0`–`fail2` (the flame out, the ember, smoke). Sparks, the "!",
 the twinkle and the smoke are pixels of the frames; the eyes and the highlight too.

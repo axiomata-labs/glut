@@ -1,9 +1,8 @@
 //! Glimm, Glut's mascot (T27, drawn finely in T72): a small flame with eyes, in true colour, drawn in quadrant blocks —
 //! each terminal cell 2 × 2 pixels (a pixel is one wide and two tall on the screen). The owner chose design A of
 //! three (2026-10-22); T72 redrew it, and the rounder C, on a finer raster. Both drawings are kept (`glimm/a-*.txt`,
-//! `glimm/c-*.txt`, [`Design`]), A is the one in use. A drawing is a file of hand-drawn frames per mood, three sizes
-//! each (the large one of the welcome, the small one beside a question and in the panel, the mini one before a
-//! thought); `crates/glut-tui/examples/glimm_preview.rs` shows a file as it is drawn here.
+//! `glimm/c-*.txt`, [`Design`]), A is the one in use. A drawing is a file of hand-drawn frames per mood, two sizes
+//! each (the large one of the welcome, the mini one before a thought); `crates/glut-tui/examples/glimm_preview.rs` shows a file as it is drawn here.
 //!
 //! Five moods: resting (breathes, blinks now and then), working (the flame flickers, sparks rise), waiting for the
 //! owner (wide eyes and a "!"), done (pleased eyes and a twinkle) and failed (out and grey, only the ember below
@@ -27,17 +26,17 @@ pub enum Mood {
     Failed,
 }
 
-/// Which Glimm: the large one of the welcome (32 × 20 pixels, 16 columns by 10 rows), the small one (20 × 12, 10 by 6)
-/// that stood beside a question and in the side panel until 2026-11-05 — its drawing kept, drawn nowhere now (owner:
-/// too playful there) —, and the mini one (8 × 4, 4 by 2) in front of a thought while the model
-/// thinks — a small flame without eyes and without a glow, only ever working.
+/// Which Glimm: the large one of the welcome (32 × 20 pixels, 16 columns by 10 rows) and the mini one (8 × 4, 4 by 2)
+/// in front of a thought while the model thinks — a small flame without eyes and without a glow, only ever working.
+/// A third size stood beside a question and in the side panel until 2026-11-05 (owner: too playful there).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Size {
     Large,
-    #[allow(dead_code)]
-    Small,
     Mini,
 }
+
+/// How many sizes a design is drawn in: one file each in [`TEXTS`].
+const SIZE_COUNT: usize = 2;
 
 /// A drawing of Glimm: its frames are files, one per size.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,13 +54,11 @@ impl Design {
 /// The drawing in use: its place in [`Design::ALL`].
 const ACTIVE: usize = 0;
 
-/// The files of the drawings, by design and size (large, small, mini).
-const TEXTS: [&str; 6] = [
+/// The files of the drawings, by design and size (large, mini).
+const TEXTS: [&str; Design::ALL.len() * SIZE_COUNT] = [
     include_str!("glimm/a-large.txt"),
-    include_str!("glimm/a-small.txt"),
     include_str!("glimm/a-mini.txt"),
     include_str!("glimm/c-large.txt"),
-    include_str!("glimm/c-small.txt"),
     include_str!("glimm/c-mini.txt"),
 ];
 
@@ -164,12 +161,12 @@ fn parse(text: &str) -> Result<Raster, String> {
 
 /// A design's raster in a size, read from its file once.
 fn raster(design: Design, size: Size) -> &'static Raster {
-    static RASTERS: [OnceLock<Raster>; 6] = [const { OnceLock::new() }; 6];
+    static RASTERS: [OnceLock<Raster>; TEXTS.len()] = [const { OnceLock::new() }; TEXTS.len()];
     let at = Design::ALL
         .iter()
         .position(|&d| d == design)
         .unwrap_or_default()
-        * 3
+        * SIZE_COUNT
         + size as usize;
     RASTERS[at].get_or_init(|| {
         // The files are part of the program and every one is parsed in the tests.
@@ -195,12 +192,10 @@ impl Raster {
 }
 
 /// Screen ticks per step of the calm animations (the "!", the twinkle, the smoke) and of the flicker while it works:
-/// a small Glimm beside text moves slower, so it does not pull the eye from what it stands beside (owner: the asking
-/// one was "zu hektisch").
+/// the mini one beside a thought moves slower, so it does not pull the eye from the text it stands beside.
 fn pace(size: Size) -> (usize, usize) {
     match size {
         Size::Large => (2, 1),
-        Size::Small => (5, 3),
         Size::Mini => (10, 8),
     }
 }
@@ -581,7 +576,7 @@ mod tests {
         Mood::Done,
         Mood::Failed,
     ];
-    const SIZES: [Size; 3] = [Size::Large, Size::Small, Size::Mini];
+    const SIZES: [Size; SIZE_COUNT] = [Size::Large, Size::Mini];
     /// Ghostty's own, dark, and a light one.
     const DARK: Rgb = (0x1e, 0x1e, 0x2e);
     const LIGHT: Rgb = (0xf5, 0xf5, 0xf5);
@@ -614,11 +609,7 @@ mod tests {
             "fail2",
         ];
         for design in Design::ALL {
-            for (size, width, height) in [
-                (Size::Large, 32, 20),
-                (Size::Small, 20, 12),
-                (Size::Mini, 8, 4),
-            ] {
+            for (size, width, height) in [(Size::Large, 32, 20), (Size::Mini, 8, 4)] {
                 let raster = raster(design, size);
                 assert_eq!(
                     (raster.width, raster.height),
@@ -640,7 +631,6 @@ mod tests {
             }
         }
         assert_eq!(cells(Size::Large), (16, 10));
-        assert_eq!(cells(Size::Small), (10, 6));
         assert_eq!(cells(Size::Mini), (4, 2));
     }
 
@@ -703,28 +693,27 @@ mod tests {
     #[test]
     fn every_mood_looks_different_and_a_failed_glimm_has_gone_grey_but_its_ember() {
         for design in Design::ALL {
-            for size in [Size::Large, Size::Small] {
-                let looks: Vec<_> = MOODS
-                    .iter()
-                    .map(|&mood| draw(design, size, mood, 0, false, None))
-                    .collect();
-                for (at, look) in looks.iter().enumerate() {
-                    for other in &looks[at + 1..] {
-                        assert_ne!(look, other, "{design:?} {size:?}: two moods look alike");
-                    }
+            let size = Size::Large;
+            let looks: Vec<_> = MOODS
+                .iter()
+                .map(|&mood| draw(design, size, mood, 0, false, None))
+                .collect();
+            for (at, look) in looks.iter().enumerate() {
+                for other in &looks[at + 1..] {
+                    assert_ne!(look, other, "{design:?} {size:?}: two moods look alike");
                 }
-                let (_, failed) = pixels(design, size, Mood::Failed, 0, false, None);
-                let colors: Vec<Rgb> = failed.iter().flatten().flatten().copied().collect();
+            }
+            let (_, failed) = pixels(design, size, Mood::Failed, 0, false, None);
+            let colors: Vec<Rgb> = failed.iter().flatten().flatten().copied().collect();
+            assert!(
+                colors.contains(&(0xd9, 0x48, 0x0f)),
+                "{design:?} {size:?}: the ember still glows"
+            );
+            for flame in ['o', 'a', 'y', 'w'] {
                 assert!(
-                    colors.contains(&(0xd9, 0x48, 0x0f)),
-                    "{design:?} {size:?}: the ember still glows"
+                    !colors.contains(&color(flame, false).unwrap()),
+                    "{design:?} {size:?}: {flame} is still coloured"
                 );
-                for flame in ['o', 'a', 'y', 'w'] {
-                    assert!(
-                        !colors.contains(&color(flame, false).unwrap()),
-                        "{design:?} {size:?}: {flame} is still coloured"
-                    );
-                }
             }
         }
     }
@@ -867,26 +856,25 @@ mod tests {
     #[test]
     fn a_glow_surrounds_the_flame_runs_out_and_never_covers_it() {
         for design in Design::ALL {
-            for size in [Size::Large, Size::Small] {
-                for mood in [Mood::Resting, Mood::Working, Mood::Waiting, Mood::Done] {
-                    let (width, hard) = pixels(design, size, mood, 4, false, None);
-                    let (_, glowing) = pixels(design, size, mood, 4, false, Some(DARK));
-                    assert!(
-                        painted(&glowing) > painted(&hard),
-                        "{design:?} {size:?} {mood:?}: no glow"
-                    );
-                    let height = hard.len();
-                    for (y, (a, b)) in hard.iter().zip(&glowing).enumerate() {
-                        for (x, (drawn, glow)) in a.iter().zip(b).enumerate() {
-                            // What is drawn stays as it is; the glow is only where nothing is.
-                            if drawn.is_some() {
-                                assert_eq!(drawn, glow, "{design:?} {size:?} {mood:?} {x},{y}");
-                            }
-                            // Never at the raster's edge: it runs out before.
-                            let edge = x == 0 || y == 0 || x == width - 1 || y == height - 1;
-                            if edge && drawn.is_none() {
-                                assert!(glow.is_none(), "{design:?} {size:?} {mood:?} {x},{y}");
-                            }
+            let size = Size::Large;
+            for mood in [Mood::Resting, Mood::Working, Mood::Waiting, Mood::Done] {
+                let (width, hard) = pixels(design, size, mood, 4, false, None);
+                let (_, glowing) = pixels(design, size, mood, 4, false, Some(DARK));
+                assert!(
+                    painted(&glowing) > painted(&hard),
+                    "{design:?} {size:?} {mood:?}: no glow"
+                );
+                let height = hard.len();
+                for (y, (a, b)) in hard.iter().zip(&glowing).enumerate() {
+                    for (x, (drawn, glow)) in a.iter().zip(b).enumerate() {
+                        // What is drawn stays as it is; the glow is only where nothing is.
+                        if drawn.is_some() {
+                            assert_eq!(drawn, glow, "{design:?} {size:?} {mood:?} {x},{y}");
+                        }
+                        // Never at the raster's edge: it runs out before.
+                        let edge = x == 0 || y == 0 || x == width - 1 || y == height - 1;
+                        if edge && drawn.is_none() {
+                            assert!(glow.is_none(), "{design:?} {size:?} {mood:?} {x},{y}");
                         }
                     }
                 }

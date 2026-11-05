@@ -1,6 +1,6 @@
 #!/bin/sh
 # Renders every Glimm draft (A and C) in every frame, at a weak, a weaker and no glow, on the terminal's own
-# background. Run from anywhere: sh crates/glut-tui/examples/glimm_fine/show.sh (large drawings only; the small and mini files are ./src/glimm/*-small.txt, *-mini.txt) [bg RRGGBB]
+# background. Run from anywhere: sh crates/glut-tui/examples/glimm_fine/show.sh (large drawings only; the mini files are ./src/glimm/*-mini.txt) [bg RRGGBB]
 # The bg is the terminal's background colour (default 1e1e2e, Ghostty's); `--bg none` shows the hard edge.
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
