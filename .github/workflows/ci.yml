@@ -136,4 +136,6 @@ jobs:
       - if: steps.foundation.outputs.use != 'none'
         name: the site built, every internal link and anchor checked
         working-directory: glut
-        run: cargo run -p xtask --locked -- site check
+        # Built outside target/: the cache restores target/ without the site's mark, and the tool never empties a
+        # folder it did not make.
+        run: cargo run -p xtask --locked -- site check --out "$RUNNER_TEMP/site"

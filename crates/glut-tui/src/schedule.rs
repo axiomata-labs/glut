@@ -971,7 +971,12 @@ fn lingering() -> Option<bool> {
 
 /// Where systemd reads the user's own units: `$XDG_CONFIG_HOME/systemd/user`, else `~/.config/systemd/user`.
 fn user_units(home: &Path) -> PathBuf {
-    std::env::var_os("XDG_CONFIG_HOME")
+    user_units_with(home, std::env::var_os("XDG_CONFIG_HOME"))
+}
+
+/// [`user_units`] with `$XDG_CONFIG_HOME` given: a relative one counts as unset, as the XDG specification says.
+fn user_units_with(home: &Path, config: Option<std::ffi::OsString>) -> PathBuf {
+    config
         .map(PathBuf::from)
         .filter(|dir| dir.is_absolute())
         .unwrap_or_else(|| home.join(".config"))
@@ -1246,14 +1251,28 @@ mod tests {
             ),
             "{service}"
         );
+        // The folder follows `$XDG_CONFIG_HOME` where the machine sets one (GitHub's runners do).
+        let units = user_units(home);
         let files = Systemd.files(home, &plan, Path::new("/g"));
+        assert_eq!(files[0].0, units.join("glut-schedule-tests.timer"));
+        assert_eq!(files[1].0, units.join("glut-schedule-tests.service"));
+    }
+
+    #[test]
+    fn a_users_units_lie_in_the_xdg_config_folder_or_beside_the_home() {
+        let home = Path::new("/home/o");
         assert_eq!(
-            files[0].0,
-            Path::new("/home/o/.config/systemd/user/glut-schedule-tests.timer")
+            user_units_with(home, None),
+            Path::new("/home/o/.config/systemd/user")
         );
         assert_eq!(
-            files[1].0,
-            Path::new("/home/o/.config/systemd/user/glut-schedule-tests.service")
+            user_units_with(home, Some("/cfg".into())),
+            Path::new("/cfg/systemd/user")
+        );
+        assert_eq!(
+            user_units_with(home, Some("relative".into())),
+            Path::new("/home/o/.config/systemd/user"),
+            "a relative one counts as unset"
         );
     }
 
