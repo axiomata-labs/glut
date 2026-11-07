@@ -40,7 +40,7 @@ jobs:
         run: |
           if [ -n "$FOUNDATION_TOKEN" ]; then
             echo "use=checkout" >> "$GITHUB_OUTPUT"
-          elif git ls-remote https://github.com/NamorX68/Axiomata-Foundation HEAD >/dev/null 2>&1; then
+          elif git ls-remote https://github.com/axiomata-labs/Axiomata-Foundation HEAD >/dev/null 2>&1; then
             echo "use=git" >> "$GITHUB_OUTPUT"
           else
             echo "::notice::Axiomata-Foundation cannot be read (private, no FOUNDATION_TOKEN): the run is skipped."
@@ -54,7 +54,7 @@ jobs:
       - if: steps.foundation.outputs.use == 'checkout'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: NamorX68/Axiomata-Foundation
+          repository: axiomata-labs/Axiomata-Foundation
           path: Axiomata-Foundation
           token: ${{ secrets.FOUNDATION_TOKEN }}
           persist-credentials: false
@@ -62,7 +62,7 @@ jobs:
         name: Foundation from the checkout beside, as on the owner's machine
         run: |
           mkdir -p glut/.cargo
-          printf '[patch."https://github.com/NamorX68/Axiomata-Foundation"]\naxiomata-files = { path = "../Axiomata-Foundation/crates/axiomata-files" }\n' \
+          printf '[patch."https://github.com/axiomata-labs/Axiomata-Foundation"]\naxiomata-files = { path = "../Axiomata-Foundation/crates/axiomata-files" }\n' \
             > glut/.cargo/config.toml
       - if: steps.foundation.outputs.use != 'none'
         uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
@@ -103,7 +103,7 @@ jobs:
         run: |
           if [ -n "$FOUNDATION_TOKEN" ]; then
             echo "use=checkout" >> "$GITHUB_OUTPUT"
-          elif git ls-remote https://github.com/NamorX68/Axiomata-Foundation HEAD >/dev/null 2>&1; then
+          elif git ls-remote https://github.com/axiomata-labs/Axiomata-Foundation HEAD >/dev/null 2>&1; then
             echo "use=git" >> "$GITHUB_OUTPUT"
           else
             echo "::notice::Axiomata-Foundation cannot be read (private, no FOUNDATION_TOKEN): the run is skipped."
@@ -117,14 +117,14 @@ jobs:
       - if: steps.foundation.outputs.use == 'checkout'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: NamorX68/Axiomata-Foundation
+          repository: axiomata-labs/Axiomata-Foundation
           path: Axiomata-Foundation
           token: ${{ secrets.FOUNDATION_TOKEN }}
           persist-credentials: false
       - if: steps.foundation.outputs.use == 'checkout'
         run: |
           mkdir -p glut/.cargo
-          printf '[patch."https://github.com/NamorX68/Axiomata-Foundation"]\naxiomata-files = { path = "../Axiomata-Foundation/crates/axiomata-files" }\n' \
+          printf '[patch."https://github.com/axiomata-labs/Axiomata-Foundation"]\naxiomata-files = { path = "../Axiomata-Foundation/crates/axiomata-files" }\n' \
             > glut/.cargo/config.toml
       - if: steps.foundation.outputs.use != 'none'
         uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable

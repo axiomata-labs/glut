@@ -20,7 +20,7 @@ library in another program, read [`library.md`](library.md). The security model 
   and `rustix`, not on `glut`.
 
 **External dependency.** The only external dependency is `axiomata-files`, from the
-[Axiomata-Foundation](https://github.com/NamorX68/Axiomata-Foundation) repository. This is the guarded file service.
+[Axiomata-Foundation](https://github.com/axiomata-labs/Axiomata-Foundation) repository. This is the guarded file service.
 Every file tool opens paths through its `Root` (`Root::dir(cwd, LinkPolicy::Contained)` in `tools/files.rs`), never
 through a raw path, and containment is checked there. The workspace manifest names the git repository. A local
 `.cargo/config.toml`, which is not checked in, patches the dependency to the `../Axiomata-Foundation` checkout next

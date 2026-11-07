@@ -35,7 +35,7 @@ jobs:
       - if: steps.token.outputs.skip != 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: NamorX68/Axiomata-Foundation
+          repository: axiomata-labs/Axiomata-Foundation
           path: Axiomata-Foundation
           token: ${{ secrets.FOUNDATION_TOKEN }}
           persist-credentials: false
@@ -53,7 +53,7 @@ jobs:
         name: Foundation from the checkout beside, as on the owner's machine
         run: |
           mkdir -p Axiomata-Glut/.cargo
-          printf '[patch."https://github.com/NamorX68/Axiomata-Foundation"]\naxiomata-files = { path = "../Axiomata-Foundation/crates/axiomata-files" }\n' \
+          printf '[patch."https://github.com/axiomata-labs/Axiomata-Foundation"]\naxiomata-files = { path = "../Axiomata-Foundation/crates/axiomata-files" }\n' \
             > Axiomata-Glut/.cargo/config.toml
       - if: steps.token.outputs.skip != 'true'
         name: the sandbox's tests, the sandbox required to be there

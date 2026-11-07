@@ -23,12 +23,12 @@ cargo build                       # the library and the program `glut`
 cargo run --bin glut              # the terminal UI in the current folder
 ```
 
-Glut depends on [`axiomata-files`](https://github.com/NamorX68/Axiomata-Foundation), the guarded file service, from
+Glut depends on [`axiomata-files`](https://github.com/axiomata-labs/Axiomata-Foundation), the guarded file service, from
 its own repository. To work on both at once, check it out beside Glut and patch it locally in `.cargo/config.toml`
 (not checked in):
 
 ```toml
-[patch."https://github.com/NamorX68/Axiomata-Foundation"]
+[patch."https://github.com/axiomata-labs/Axiomata-Foundation"]
 axiomata-files = { path = "../Axiomata-Foundation/crates/axiomata-files" }
 ```
 
