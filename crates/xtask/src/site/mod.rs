@@ -4,6 +4,7 @@
 //! any folder of a host and from the disk.
 
 mod check;
+mod deploy;
 mod glimm;
 mod links;
 mod manual;
@@ -14,6 +15,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 pub use check::check_built as check_folder;
+pub use deploy::deploy;
 pub use serve::serve;
 
 use links::{Linker, MANUAL_DIR, relative, root};

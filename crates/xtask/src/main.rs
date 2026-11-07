@@ -52,6 +52,14 @@ enum SiteTask {
         #[arg(long, default_value_t = 8000)]
         port: u16,
     },
+    /// Builds, checks, then replaces the site on its web server (glut-ai.com) over SSH.
+    Deploy {
+        #[arg(long, default_value = "target/site")]
+        out: PathBuf,
+        /// The SSH key that lets the deploy in; the owner's `~/.config/glut-ai/deploy_ed25519` where none is named.
+        #[arg(long)]
+        key: Option<PathBuf>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -67,6 +75,7 @@ fn main() -> ExitCode {
             }),
             SiteTask::Check { out } => site::check(&repo, &repo.join(out)),
             SiteTask::Serve { out, port } => site::serve(&repo, &repo.join(out), port),
+            SiteTask::Deploy { out, key } => site::deploy(&repo, &repo.join(out), key),
         },
         Task::Record { name } => record::record(&repo, &name),
     };
