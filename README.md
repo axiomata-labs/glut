@@ -31,8 +31,8 @@ sleep, and your editor at hand.
   repository; compare time, cost, tokens and diffs, take the winner. A test bench of fixed tasks scores models over
   repeated runs.
 - **Built for long work.** It compacts its own context ahead of time, never cuts a tool's output (the whole stays in
-  a store the model can page through), snapshots your files before every change (`/steps` puts them back), and resumes a run that
-  was lost midway.
+  a store the model can page through), snapshots your files before every change (`/steps` puts them back, `/rewind`
+  the conversation with them), and resumes a run that was lost midway.
 - **Your editor, not instead of it.** Neovim, VS Code and JetBrains plugins, and the Agent Client Protocol for Zed and
   others: diffs open in your editor, your answer there is Glut's answer.
 - **One program, nothing else.** Written in Rust, a single binary under 50 MB with everything above inside — no

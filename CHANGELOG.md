@@ -11,7 +11,8 @@ its own; this release brings together:
 - **The loop**: a tool-calling loop over OpenAI-compatible, Anthropic and Responses APIs, with two dozen providers in
   its catalog, keys in the Keychain bound to their host, ChatGPT and OpenRouter sign-in, prices, budgets and
   per-provider routing; compaction ahead of time, refusal limits, results kept whole in a store, compact command
-  output, journals that let a lost run resume, snapshots before every change and `glut undo`.
+  output, journals that let a lost run resume, snapshots before every change and `glut undo`, `/rewind` of the
+  conversation with the files, what it cuts off kept as a branch.
 - **The tools**: guarded file tools, a shell whose every command runs in an OS sandbox (macOS Seatbelt; Linux
   bubblewrap with Glut's own seccomp filter) behind a network proxy, code mode (QuickJS), language-server errors after
   an edit and an `lsp` tool, MCP (stdio and HTTP, OAuth, forms), skills, hooks that can veto, subagents.

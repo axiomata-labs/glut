@@ -18,7 +18,7 @@ Aider 0.86 (last tagged release; its main branch has moved on since), Cursor CLI
 | Models | any vendor, local | Claude only | OpenAI, local | Gemini only | any vendor, local | any vendor, local | Cursor's catalogue | any vendor, local | any vendor, local | any vendor, local |
 | OS sandbox for commands | on by default | opt-in | on by default | opt-in | none | none | on by default ² | none | none | none ⁸ |
 | Network of commands | proxy asks per host | proxy, allow-list | off; optional proxy | partly | none | none | blocked; allow-list | none | name list only | none ⁸ |
-| Files put back | before every change ³ | per prompt ⁴ | git advised | opt-in ⁴ | per step ⁵ | a git commit per edit | `/rewind` | not documented | not documented | an example extension |
+| Files put back | before every change, `/rewind` ³ | per prompt ⁴ | git advised | opt-in ⁴ | per step ⁵ | a git commit per edit | `/rewind` | not documented | not documented | an example extension |
 | Tool output | never cut ⁶ | cut, rest in a file | token budget | cut at 40k chars | cut, rest in a file | asks before adding | not documented | cut, rest in a file | cut, rest in a file | cut, rest in a file |
 | Several agents | panes, background agents, subagents — each its own model and provider | subagents; teams (experimental) | subagents | subagents | subagents | one | subagents | subagents | task agents | one (tmux; an example extension) |
 | Models side by side | arena, test bench | — | — | — | — | — | best-of-n (IDE) | — | — | — |
@@ -29,7 +29,8 @@ Aider 0.86 (last tagged release; its main branch has moved on since), Cursor CLI
 | Interface languages | 8 | English | English | English | English (app: many) | English | English | English (app: 16) | English | English |
 
 ¹ Source-available, not an OSI licence; it turns into MIT later. ² In its recommended Auto-review mode. ³ Glut keeps
-the files before every step that may change them, a command's too. ⁴ Edits of the agent's own edit tools only, not
+the files before every step that may change them, a command's too; `/rewind` takes the conversation back with them and
+keeps what it cut off as a branch session. ⁴ Edits of the agent's own edit tools only, not
 changes made by commands. ⁵ Needs a git repository; a command's side effects are not put back. ⁶ Glut bounds a result
 as it enters the conversation and keeps the whole in a store the model pages through. ⁷ Variables named like keys
 are kept out of commands' environment. ⁸ pi leaves the boundary to a container and documents recipes for one.
@@ -65,11 +66,6 @@ Glut is young (0.1.0) and has one maintainer. Things the others do that Glut doe
   ([Codex](https://learn.chatgpt.com/docs/windows/windows-sandbox.md),
   [Crush](https://github.com/charmbracelet/crush/blob/main/README.md),
   [pi](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/windows.md))
-- **Rewinding the conversation with the files.** Claude Code, Gemini CLI, opencode and Cursor CLI take the
-  conversation back to a point together with the files; pi keeps the conversation as a tree you branch from any point.
-  Glut's `/steps` puts files back; the conversation goes on.
-  ([Claude Code](https://code.claude.com/docs/en/checkpointing), [opencode](https://opencode.ai/v2/docs/snapshots/),
-  [pi](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/sessions.md))
 - **Hooks that allow or rewrite.** Claude Code, Codex CLI, Cursor CLI and Crush let a hook approve a call or change its
   input. Glut's hooks may only veto — on purpose (the gate stays the one place that allows), but less flexible.
   ([Claude Code](https://code.claude.com/docs/en/hooks), [Crush](https://github.com/charmbracelet/crush/blob/main/docs/hooks/README.md))
