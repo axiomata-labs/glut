@@ -485,7 +485,20 @@ pub fn diff_to_now(
 /// caller holds the store's lock.
 fn tree_now(git_dir: &Path, work_tree: &Path, run: &str) -> Result<String, String> {
     let scratch = git_dir.join(format!("index-diff-{run}-{}", std::process::id()));
-    let _ = std::fs::copy(git_dir.join(format!("index-{run}")), &scratch);
+    let index = git_dir.join(format!("index-{run}"));
+    if std::fs::copy(&index, &scratch).is_ok() {
+        // Git trusts an entry whose size and mtime match unless the file is as new as the index itself ("racy git"):
+        // a copy dated now would hide a same-size edit made in the snapshot's second, so the copy keeps the
+        // index's own time. Unset, git reads every file again — slower, never wrong.
+        let _ = std::fs::metadata(&index)
+            .and_then(|meta| meta.modified())
+            .and_then(|time| {
+                std::fs::File::options()
+                    .write(true)
+                    .open(&scratch)?
+                    .set_modified(time)
+            });
+    }
     let tree = git_with_index(git_dir, work_tree, &scratch, &["add", "--all"])
         .and_then(|_| git_with_index(git_dir, work_tree, &scratch, &["write-tree"]));
     let _ = std::fs::remove_file(&scratch);
@@ -887,14 +900,15 @@ mod tests {
     use super::*;
 
     fn temp(label: &str) -> PathBuf {
+        // A count, not the clock: macOS's clock ticks in microseconds, and two tests started in one tick shared a
+        // folder.
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let dir = std::env::temp_dir().join(format!(
             "glut-snap-{label}-{}-{}",
             std::process::id(),
-            SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir.canonicalize().unwrap()
     }
@@ -943,6 +957,20 @@ mod tests {
             diff(&root, &folder, "--output=x", 1).is_err(),
             "no run id is an option"
         );
+    }
+
+    #[test]
+    fn an_edit_of_the_same_size_in_the_snapshots_own_second_is_still_seen() {
+        let (root, folder) = (temp("root"), temp("folder"));
+        std::fs::write(folder.join("a.txt"), "one\ntwo\n").unwrap();
+        Snapshots::open(&root, &folder, "run1")
+            .unwrap()
+            .take(1)
+            .unwrap();
+        // Same size, and most likely the same second as the snapshot: only git's racy check tells it changed.
+        std::fs::write(folder.join("a.txt"), "one\nTWO\n").unwrap();
+        let now = diff_to_now(&root, &folder, "run1", None).unwrap();
+        assert!(now.contains("+TWO"), "{now}");
     }
 
     #[test]
