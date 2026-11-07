@@ -2,7 +2,7 @@
 //! The pages are Markdown in `manual/it/`, one file a command, read by the website too.
 
 /// Every command's page, by its name, in `commands::COMMANDS`' order.
-pub const PAGES: [(&str, &str); 68] = [
+pub const PAGES: [(&str, &str); 69] = [
     ("clear", include_str!("../../manual/it/clear.md")),
     ("resume", include_str!("../../manual/it/resume.md")),
     ("search", include_str!("../../manual/it/search.md")),
@@ -41,6 +41,7 @@ pub const PAGES: [(&str, &str); 68] = [
     ("sessions", include_str!("../../manual/it/sessions.md")),
     ("name", include_str!("../../manual/it/name.md")),
     ("diff", include_str!("../../manual/it/diff.md")),
+    ("rewind", include_str!("../../manual/it/rewind.md")),
     ("steps", include_str!("../../manual/it/steps.md")),
     ("todo", include_str!("../../manual/it/todo.md")),
     ("memory", include_str!("../../manual/it/memory.md")),

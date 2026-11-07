@@ -102,7 +102,7 @@ const fn command(
 }
 
 /// Every command, grouped by topic in [`Topic::ALL`]'s order, the most used first inside a topic.
-pub const COMMANDS: [Command; 68] = [
+pub const COMMANDS: [Command; 69] = [
     command(Topic::Session, "clear", "", "start a new session"),
     command(
         Topic::Session,
@@ -329,6 +329,12 @@ pub const COMMANDS: [Command; 68] = [
         "diff",
         "[session]",
         "review what the last turn changed, hunk by hunk; /diff session (⌃R)",
+    ),
+    command(
+        Topic::Changes,
+        "rewind",
+        "",
+        "back to before a message of yours: the conversation, the files or both, or a fork (⎋⎋)",
     ),
     command(
         Topic::Changes,

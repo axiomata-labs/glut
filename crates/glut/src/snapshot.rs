@@ -245,6 +245,13 @@ impl Snapshots {
     }
 }
 
+/// The run an undo without a named run puts back: the newest of `runs` (as [`runs`] lists them) but a rewind's
+/// branch run, which kept the folder as it stayed — putting it back would change nothing.
+pub fn newest_to_undo(runs: &[Record]) -> Option<&Record> {
+    runs.iter()
+        .find(|record| !record.run.starts_with(BRANCH_RUN))
+}
+
 /// The runs recorded for `work_tree`, newest first.
 pub fn runs(root: &Path, work_tree: &Path) -> Vec<Record> {
     let Ok(work_tree) = work_tree.canonicalize() else {
@@ -324,6 +331,25 @@ pub fn keep_now(root: &Path, work_tree: &Path, beside: &[PathBuf]) -> Result<Str
             .duration_since(SystemTime::UNIX_EPOCH)
             .map_or(0, |since| since.as_millis())
     );
+    keep_as(root, work_tree, beside, &run)
+}
+
+/// The prefix of a run [`keep_as`] records for a rewind's cut-off branch whose files stayed (G1): the folder as the
+/// branch left it, which an undo without a named run passes over — putting it back would change nothing.
+pub const BRANCH_RUN: &str = "branch-";
+
+/// [`keep_now`] under the name `run`, chosen by the caller (a rewind's branch names its run before it is taken).
+///
+/// # Errors
+///
+/// A name that is no run id, or why no snapshot of the working folder could be taken.
+pub fn keep_as(
+    root: &Path,
+    work_tree: &Path,
+    beside: &[PathBuf],
+    run: &str,
+) -> Result<String, String> {
+    let run = checked_run(run)?.to_owned();
     let mut kept = Vec::new();
     for folder in beside {
         let taken = Snapshots::open(root, folder, &run).and_then(|mut snaps| {
@@ -956,6 +982,29 @@ mod tests {
         assert!(
             diff(&root, &folder, "--output=x", 1).is_err(),
             "no run id is an option"
+        );
+    }
+
+    #[test]
+    fn a_branch_run_keeps_its_name_and_an_undo_passes_over_it() {
+        let (root, folder) = (temp("root"), temp("folder"));
+        std::fs::write(folder.join("a.txt"), "one\n").unwrap();
+        Snapshots::open(&root, &folder, "run1")
+            .unwrap()
+            .take(1)
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let branch = format!("{BRANCH_RUN}20261107-1");
+        assert_eq!(keep_as(&root, &folder, &[], &branch).unwrap(), branch);
+        let all = runs(&root, &folder);
+        assert_eq!(all[0].run, branch, "the newest");
+        assert_eq!(
+            newest_to_undo(&all).map(|record| record.run.as_str()),
+            Some("run1")
+        );
+        assert!(
+            keep_as(&root, &folder, &[], "--output=x").is_err(),
+            "no option for a name"
         );
     }
 

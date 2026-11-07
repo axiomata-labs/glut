@@ -51,6 +51,10 @@ pub struct Session {
     /// the session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window: Option<String>,
+    /// A branch a rewind cut off (G1): the snapshot run that kept the folder as the branch left it. Opening the
+    /// branch asks once whether its files come back; answered, it is gone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch_files: Option<String>,
 }
 
 /// Where and when a kept session worked, without what it said (T44).
@@ -110,6 +114,7 @@ impl Session {
             parent: None,
             todos: Vec::new(),
             window: None,
+            branch_files: None,
         }
     }
 

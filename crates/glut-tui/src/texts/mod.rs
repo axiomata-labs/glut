@@ -786,6 +786,18 @@ glut::catalog! {
         rewind_input_full: &'static str,
         /// The conversation rewound.
         rewound: &'static str,
+        /// The conversation rewound, what it cut kept as a session (G1).
+        rewound_branch: &'static str,
+        /// Asked as a rewind's cut-off branch opens: its files back too?
+        branch_files_title: &'static str,
+        /// Yes: the branch's files back.
+        branch_files_yes: &'static str,
+        /// What yes does first.
+        branch_files_yes_detail: &'static str,
+        /// No: the files stay.
+        branch_files_no: &'static str,
+        /// No is final.
+        branch_files_no_detail: &'static str,
         /// A fork while Glut works.
         fork_waits: &'static str,
         /// A fork that cannot be.

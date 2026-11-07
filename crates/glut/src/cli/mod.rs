@@ -1048,7 +1048,8 @@ fn undo(cwd: &std::path::Path, run: Option<String>, step: Option<u32>, list: boo
         }
         return ExitCode::SUCCESS;
     }
-    let Some(run) = run.or_else(|| runs.first().map(|record| record.run.clone())) else {
+    let newest = snapshot::newest_to_undo(&runs).map(|record| record.run.clone());
+    let Some(run) = run.or(newest) else {
         return fail(say!(undo_no_snapshots, path = cwd.display()));
     };
     match snapshot::restore_all(&root, &cwd, &run, step) {

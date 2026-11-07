@@ -880,6 +880,7 @@ impl App {
         self.context_used = 0;
         self.scroll = 0;
         self.session = session;
+        self.ask_branch_files();
     }
 
     /// Once per frame (TUI9b): when Glut began to work, and — in the reader mode — a line for each change of state,
@@ -4235,6 +4236,7 @@ impl App {
                 Err(reason) => self.transcript.note(reason, Tone::Fault),
             },
             "steps" => self.read_steps(),
+            "rewind" => self.open_rewind(),
             "motion" => match crate::motion::Motion::parse(rest) {
                 Some(motion) => self.set_motion(motion),
                 None => {
@@ -5227,8 +5229,9 @@ impl App {
     }
 
     /// Puts the files back to before `step` of `run` (its start for `None`), the folder as it was just now kept aside
-    /// first in a run of its own; the outcome comes back as a report.
-    fn restore_files(&self, run: String, step: Option<u32>) {
+    /// first in a run of its own — named `kept_as` where a rewind's branch named it already; the outcome comes back as
+    /// a report.
+    fn restore_files(&self, run: String, step: Option<u32>, kept_as: Option<String>) {
         let Some(root) = self.parts.config.snapshots.clone() else {
             return;
         };
@@ -5237,7 +5240,11 @@ impl App {
         tokio::task::spawn_blocking(move || {
             // T60c: the folders beside the working one the run recorded too go back with it.
             let beside = glut::snapshot::beside_of(&root, &cwd, &run);
-            let restored = glut::snapshot::keep_now(&root, &cwd, &beside).and_then(|kept| {
+            let kept = match &kept_as {
+                Some(name) => glut::snapshot::keep_as(&root, &cwd, &beside, name),
+                None => glut::snapshot::keep_now(&root, &cwd, &beside),
+            };
+            let restored = kept.and_then(|kept| {
                 glut::snapshot::restore_all(&root, &cwd, &run, step)
                     .map(|(commit, missed)| (commit, kept, missed))
             });
@@ -5245,6 +5252,151 @@ impl App {
         });
     }
 
+    /// Keeps the folder (and those beside it) as it is now under `run`, the name a rewind's branch gave it, the files
+    /// staying as they are: a rewind of the conversation alone.
+    fn keep_files_as(&self, run: String) {
+        let Some(root) = self.parts.config.snapshots.clone() else {
+            return;
+        };
+        let cwd = self.parts.config.cwd.clone();
+        let beside: Vec<std::path::PathBuf> = self
+            .parts
+            .tools
+            .folders()
+            .list()
+            .iter()
+            .map(|folder| folder.real().to_path_buf())
+            .collect();
+        tokio::task::spawn_blocking(move || {
+            // A folder that cannot be kept leaves a branch without files: opening it then asks nothing.
+            let _ = glut::snapshot::keep_as(&root, &cwd, &beside, &run);
+        });
+    }
+
+    /// `/rewind`: the list ⎋⎋ opens.
+    fn open_rewind(&mut self) {
+        if self.working() {
+            return self.transcript.note(tr!(rewind_waits), Tone::Quiet);
+        }
+        self.picker = Some(self.rewind_picker());
+    }
+
+    /// The conversation as it is, before a rewind cuts it: a session of its own under this one (G1), so nothing a
+    /// rewind cuts is lost. Its files' run is named here, before it is taken, so the branch is written once and never
+    /// again from another thread: the undo's own run where the files go back (`files`), else a branch run `glut undo`
+    /// passes over. `None` where sessions are not kept or nothing would be cut; else the branch's run (`None` without
+    /// snapshots).
+    fn keep_branch(&mut self, at: usize, files: bool) -> Option<Option<String>> {
+        if !self.parts.keep_sessions || at >= self.conversation.len() {
+            return None;
+        }
+        let mut branch = Session::new(
+            &self.parts.config.cwd,
+            &self.engine.provider,
+            self.engine.model_name(),
+        );
+        branch.parent = Some(self.session.id.clone());
+        let base = if self.session.title.is_empty() {
+            self.session
+                .marks
+                .first()
+                .map(|mark| crate::store::title_of(&mark.prompt))
+                .unwrap_or_default()
+        } else {
+            self.session
+                .title
+                .trim_end_matches(BRANCH_SUFFIX)
+                .to_owned()
+        };
+        branch.title = format!("{base}{BRANCH_SUFFIX}");
+        branch.conversation.clone_from(&self.conversation);
+        branch.marks.clone_from(&self.session.marks);
+        branch.todos.clone_from(&self.todos);
+        branch.branch_files = self.parts.config.snapshots.as_ref().map(|_| {
+            if files {
+                format!("before-undo-{}", branch.id)
+            } else {
+                format!("{}{}", glut::snapshot::BRANCH_RUN, branch.id)
+            }
+        });
+        match branch.save(&self.parts.home) {
+            Ok(()) => Some(branch.branch_files),
+            Err(reason) => {
+                self.transcript
+                    .note(tr!(session_unkept, reason = reason), Tone::Fault);
+                None
+            }
+        }
+    }
+
+    /// Asks, as a branch a rewind cut off opens, whether its files come back as the branch left them — "no" first:
+    /// the question comes with the session, not from a key of the owner's.
+    fn ask_branch_files(&mut self) {
+        let Some(run) = self.session.branch_files.clone() else {
+            return;
+        };
+        let Some(root) = self.parts.config.snapshots.as_ref() else {
+            return;
+        };
+        if self.parts.config.cwd.canonicalize().is_err() {
+            return;
+        }
+        let kept = glut::snapshot::runs(root, &self.parts.config.cwd)
+            .iter()
+            .any(|record| record.run == run);
+        if !kept {
+            // Cleaned away since (`glut clean`), or never taken: nothing left to ask about.
+            self.session.branch_files = None;
+            self.save_session();
+            return;
+        }
+        self.picker = Some(Picker::new(
+            tr!(branch_files_title),
+            vec![
+                Item::plain(
+                    tr!(branch_files_no),
+                    tr!(branch_files_no_detail),
+                    Pick::BranchFiles(None),
+                ),
+                Item::plain(
+                    tr!(branch_files_yes),
+                    tr!(branch_files_yes_detail),
+                    Pick::BranchFiles(Some(run)),
+                ),
+            ],
+            None,
+        ));
+    }
+
+    /// The owner's answer to [`App::ask_branch_files`]: final either way — but a yes while Glut works is asked again
+    /// next time rather than lost.
+    fn branch_files(&mut self, run: Option<String>) {
+        if run.is_some() && self.working() {
+            return self.transcript.note(tr!(rewind_waits), Tone::Quiet);
+        }
+        self.session.branch_files = None;
+        self.save_session();
+        if let Some(run) = run {
+            self.restore_files(run, None, None);
+            self.pending.push(Message::user(
+                "(I put the folder's files back as this conversation left them: what you read or changed since may \
+                 no longer be there.)"
+                    .to_owned(),
+            ));
+            self.keep();
+        }
+    }
+
+    /// Writes the session as it stands, nothing of the screen's taken into it (unlike [`App::keep`]).
+    fn save_session(&mut self) {
+        if !self.parts.keep_sessions {
+            return;
+        }
+        if let Err(reason) = self.session.save(&self.parts.home) {
+            self.transcript
+                .note(tr!(session_unkept, reason = reason), Tone::Fault);
+        }
+    }
     /// The owner's message at `at` (or after it), to put back in the input.
     /// The images of the owner's message at or after `at`, to give back with its text.
     fn images_at(&self, at: usize) -> Vec<glut::images::Image> {
@@ -5288,9 +5440,13 @@ impl App {
         if conversation && at.is_none() {
             return self.transcript.note(tr!(rewind_compacted), Tone::Fault);
         }
+        // What the rewind cuts off stays, as a session of its own with its files (G1).
+        let branch = at
+            .filter(|_| conversation)
+            .and_then(|at| self.keep_branch(at, files));
         if files {
             match self.files_run(mark) {
-                Some(run) => self.restore_files(run, None),
+                Some(run) => self.restore_files(run, None, branch.clone().flatten()),
                 None => self.transcript.note(tr!(no_snapshot), Tone::Quiet),
             }
             // A conversation that stays is told: the model must not trust what it read of the files before.
@@ -5333,6 +5489,12 @@ impl App {
             self.transcript.note(tr!(rewind_input_full), Tone::Quiet);
         }
         self.transcript.note(tr!(rewound), Tone::Fine);
+        if let Some(run) = branch {
+            if let Some(run) = run.filter(|_| !files) {
+                self.keep_files_as(run);
+            }
+            self.transcript.note(tr!(rewound_branch), Tone::Quiet);
+        }
     }
 
     /// A new session from before mark `mark` — this one kept as it is, the new one its fork (T14) — with that message
@@ -5510,7 +5672,7 @@ impl App {
             if self.working() {
                 return self.transcript.note(tr!(files_wait), Tone::Quiet);
             }
-            return self.restore_files(run, Some(turn));
+            return self.restore_files(run, Some(turn), None);
         }
         tokio::task::spawn_blocking(move || {
             let change = glut::snapshot::diff(&root, &cwd, &run, turn);
@@ -6516,6 +6678,7 @@ impl App {
                     Some(Pick::Role(name)) => self.play(name.as_deref()),
                     Some(Pick::RewindTo(mark)) => self.picker = Some(self.rewind_how(mark)),
                     Some(Pick::Fork(mark)) => self.fork(mark),
+                    Some(Pick::BranchFiles(run)) => self.branch_files(run),
                     Some(Pick::Init(migrate)) => self.init_with(migrate),
                     Some(Pick::MemoryFact(name)) => self.show_fact(&name),
                     Some(Pick::TodoClean) => self.todo_clean(),
@@ -8788,6 +8951,9 @@ fn step_do(run: String, turn: u32) -> Picker {
 /// How soon a second Esc opens rewind.
 const DOUBLE_ESC: Duration = Duration::from_millis(600);
 
+/// What a rewind's cut-off branch is called after its session's title (G1).
+const BRANCH_SUFFIX: &str = " (before rewind)";
+
 /// How long a walk of the folder stands for its files.
 const FILES_FRESH: Duration = Duration::from_secs(60);
 
@@ -9833,6 +9999,146 @@ pub(crate) mod tests {
         assert_eq!(labels, ["work", "└─⑂ ● work (fork)"], "{labels:?}");
         assert_eq!(picker.chosen(), Some(Pick::Session(app.session.id.clone())));
         let _ = std::fs::remove_dir_all(&app.parts.home);
+    }
+
+    #[test]
+    fn what_a_rewind_cuts_off_stays_as_a_session_under_this_one_and_rewind_is_a_command_too() {
+        let (mut app, _reports) = app();
+        app.session.title = "work".into();
+        app.conversation = vec![
+            Message::user("first"),
+            Message::system("one"),
+            Message::user("second"),
+            Message::system("two"),
+        ];
+        app.session.marks = vec![
+            crate::store::Mark {
+                at: Some(0),
+                prompt: "first".into(),
+                run: None,
+            },
+            crate::store::Mark {
+                at: Some(2),
+                prompt: "second".into(),
+                run: None,
+            },
+        ];
+        app.command("rewind");
+        assert_eq!(
+            app.picker.as_ref().and_then(Picker::chosen),
+            Some(Pick::RewindTo(1)),
+            "/rewind opens the list ⎋⎋ opens"
+        );
+        app.picker = None;
+        app.rewind(1, true, false);
+        assert_eq!(app.conversation.len(), 2);
+        let branches: Vec<Session> = Session::list(&app.parts.home, &app.parts.config.cwd)
+            .into_iter()
+            .filter(|session| session.parent.as_deref() == Some(app.session.id.as_str()))
+            .collect();
+        assert_eq!(branches.len(), 1, "one branch, under this session");
+        assert_eq!(branches[0].title, "work (before rewind)");
+        assert_eq!(
+            branches[0].conversation.len(),
+            4,
+            "the branch holds the conversation whole"
+        );
+        assert_eq!(branches[0].marks.len(), 2);
+
+        // A rewind to the end cuts nothing: no branch.
+        app.rewind(1, true, false);
+        let count = Session::list(&app.parts.home, &app.parts.config.cwd).len();
+        app.rewind(0, true, false);
+        assert_eq!(
+            Session::list(&app.parts.home, &app.parts.config.cwd).len(),
+            count + 1,
+            "a second rewind that cuts keeps a second branch"
+        );
+        let _ = std::fs::remove_dir_all(&app.parts.home);
+    }
+
+    #[tokio::test]
+    async fn a_branch_keeps_its_files_and_offers_them_back_once_as_it_opens() {
+        let folder = std::env::temp_dir().join(format!("glut-branch-{}", std::process::id()));
+        let root = folder.with_extension("snapshots");
+        let _ = std::fs::remove_dir_all(&folder);
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&folder).unwrap();
+        let folder = folder.canonicalize().unwrap();
+        std::fs::write(folder.join("a.txt"), "before\n").unwrap();
+        glut::snapshot::Snapshots::open(&root, &folder, "run1")
+            .unwrap()
+            .take(1)
+            .unwrap();
+        std::fs::write(folder.join("a.txt"), "the branch's\n").unwrap();
+
+        let (mut parts, engine) = session::for_tests();
+        parts.config.cwd = folder.clone();
+        parts.config.snapshots = Some(root.clone());
+        let (send, mut reports) = mpsc::unbounded_channel();
+        let mut app = App::new(Arc::new(parts), engine, send);
+        app.conversation = vec![Message::user("make it"), Message::system("made")];
+        app.session.marks.push(crate::store::Mark {
+            at: Some(0),
+            prompt: "make it".into(),
+            run: Some("run1".into()),
+        });
+        let this = app.session.id.clone();
+        app.rewind(0, true, true);
+        let report = reports.recv().await.unwrap();
+        app.on_report(report);
+        assert_eq!(
+            std::fs::read_to_string(folder.join("a.txt")).unwrap(),
+            "before\n"
+        );
+        let branch = Session::list(&app.parts.home, &folder)
+            .into_iter()
+            .find(|session| session.parent.as_deref() == Some(this.as_str()))
+            .expect("the branch");
+        let kept = branch.branch_files.clone().expect("its files are named");
+        assert_eq!(
+            kept,
+            format!("before-undo-{}", branch.id),
+            "named before it is taken: the branch is written once"
+        );
+
+        // Opening it asks, "no" first; yes brings the branch's files back, and the question is not asked again.
+        app.open(branch.clone());
+        assert_eq!(
+            app.picker.as_ref().and_then(Picker::chosen),
+            Some(Pick::BranchFiles(None)),
+            "an Enter meant for something else changes no file"
+        );
+        app.on_terminal(key(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(
+            app.picker.as_ref().and_then(Picker::chosen),
+            Some(Pick::BranchFiles(Some(kept)))
+        );
+        app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
+        let report = reports.recv().await.unwrap();
+        app.on_report(report);
+        assert_eq!(
+            std::fs::read_to_string(folder.join("a.txt")).unwrap(),
+            "the branch's\n"
+        );
+        assert_eq!(
+            Session::load(&app.parts.home, &branch.id)
+                .unwrap()
+                .branch_files,
+            None
+        );
+        app.open(Session::load(&app.parts.home, &branch.id).unwrap());
+        assert!(app.picker.is_none(), "asked once");
+
+        // A branch whose kept run was cleaned away asks nothing.
+        let mut gone = branch;
+        gone.branch_files = Some("before-undo-1".into());
+        app.open(gone);
+        assert!(app.picker.is_none());
+        assert_eq!(app.session.branch_files, None);
+        let _ = std::fs::remove_dir_all(&app.parts.home);
+        let _ = std::fs::remove_dir_all(&folder);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[tokio::test]

@@ -34,6 +34,8 @@ pub enum Pick {
     RewindTo(usize),
     /// Fork (T14): a new session from before the owner's message `mark`, this one kept as it is.
     Fork(usize),
+    /// The answer as a rewind's cut-off branch opens (G1): its files back from this kept run, or `None` to leave them.
+    BranchFiles(Option<String>),
     /// A snapshot step of a run, for `/steps`: its run and turn.
     Step {
         run: String,
