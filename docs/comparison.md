@@ -3,7 +3,7 @@
 How Glut compares with nine other terminal coding agents, **as of 2026-11-05**. Every statement about another tool
 comes from its own documentation, repository or release notes, linked where it is made; "not documented" means we
 looked there and did not find it, not that it cannot be done. These tools change every week — if something here is
-wrong or out of date, please [open an issue](https://github.com/NamorX68/glut/issues) and we correct it.
+wrong or out of date, please [open an issue](https://github.com/axiomata-labs/glut/issues) and we correct it.
 
 The versions looked at: Claude Code 2.1.318, Codex CLI 0.166.0, Gemini CLI 0.67.0, opencode 2.2.5 (and 1.19.5),
 Aider 0.86 (last tagged release; its main branch has moved on since), Cursor CLI (the `agent` command, changelog of

@@ -22,4 +22,4 @@ its own; this release brings together:
   over sessions, images, export, eight languages, a screen-reader mode.
 - **Editors**: plugins for Neovim, VS Code and JetBrains, and the Agent Client Protocol.
 
-[0.1.0]: https://github.com/NamorX68/glut/releases/tag/v0.1.0
+[0.1.0]: https://github.com/axiomata-labs/glut/releases/tag/v0.1.0

@@ -3,17 +3,17 @@
 # `brew install axiomata-labs/tap/glut`.
 class Glut < Formula
   desc "Coding agent for the terminal that runs every command in an OS sandbox"
-  homepage "https://github.com/NamorX68/glut"
+  homepage "https://glut-ai.com"
   version "@VERSION@"
   license any_of: ["MIT", "Apache-2.0"]
 
   on_macos do
     on_arm do
-      url "https://github.com/NamorX68/glut/releases/download/v@VERSION@/glut-aarch64-apple-darwin.tar.gz"
+      url "https://github.com/axiomata-labs/glut/releases/download/v@VERSION@/glut-aarch64-apple-darwin.tar.gz"
       sha256 "@SHA_MAC_ARM@"
     end
     on_intel do
-      url "https://github.com/NamorX68/glut/releases/download/v@VERSION@/glut-x86_64-apple-darwin.tar.gz"
+      url "https://github.com/axiomata-labs/glut/releases/download/v@VERSION@/glut-x86_64-apple-darwin.tar.gz"
       sha256 "@SHA_MAC_INTEL@"
     end
   end
@@ -23,11 +23,11 @@ class Glut < Formula
     depends_on "bubblewrap"
 
     on_arm do
-      url "https://github.com/NamorX68/glut/releases/download/v@VERSION@/glut-aarch64-unknown-linux-musl.tar.gz"
+      url "https://github.com/axiomata-labs/glut/releases/download/v@VERSION@/glut-aarch64-unknown-linux-musl.tar.gz"
       sha256 "@SHA_LINUX_ARM@"
     end
     on_intel do
-      url "https://github.com/NamorX68/glut/releases/download/v@VERSION@/glut-x86_64-unknown-linux-musl.tar.gz"
+      url "https://github.com/axiomata-labs/glut/releases/download/v@VERSION@/glut-x86_64-unknown-linux-musl.tar.gz"
       sha256 "@SHA_LINUX_INTEL@"
     end
   end

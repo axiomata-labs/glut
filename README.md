@@ -10,7 +10,7 @@ sessions: several agents side by side, an arena that pits models against each ot
 sleep, and your editor at hand.
 
 > **Status: 0.1.0, early.** Glut is used every day by its author and is solid on macOS; Linux is tested in
-> containers. Expect rough edges, and please [report them](https://github.com/NamorX68/glut/issues).
+> containers. Expect rough edges, and please [report them](https://github.com/axiomata-labs/glut/issues).
 
 ![Glut after a first task: the failing tests found, two bugs fixed, the steps it took on the left, its side panel on the right](docs/images/scene-1.png)
 
@@ -53,7 +53,7 @@ Every scene is a real run; the website replays them as text.
 
 ```sh
 # macOS and Linux, a prebuilt program (checksums verified):
-curl -fsSL https://github.com/NamorX68/glut/releases/latest/download/install.sh | sh
+curl -fsSL https://github.com/axiomata-labs/glut/releases/latest/download/install.sh | sh
 
 # Homebrew:
 brew install axiomata-labs/tap/glut

@@ -6,10 +6,10 @@ in WSL2.
 ## The install script
 
 ```sh
-curl -fsSL https://github.com/NamorX68/glut/releases/latest/download/install.sh | sh
+curl -fsSL https://github.com/axiomata-labs/glut/releases/latest/download/install.sh | sh
 ```
 
-It picks the program for your system from the newest [release](https://github.com/NamorX68/glut/releases), checks it
+It picks the program for your system from the newest [release](https://github.com/axiomata-labs/glut/releases), checks it
 against the release's SHA-256 checksums, and puts it into `~/.local/bin` — no password asked. If that folder is not
 on your `PATH`, it says which line to add to your shell's profile. Read the script first if you like: it is short,
 and it is the same file as `scripts/install.sh` in the repository at that release's tag.
@@ -17,7 +17,7 @@ and it is the same file as `scripts/install.sh` in the repository at that releas
 To pick a version or a folder:
 
 ```sh
-curl -fsSL https://github.com/NamorX68/glut/releases/latest/download/install.sh | sh -s -- --version 0.1.0 --to ~/bin
+curl -fsSL https://github.com/axiomata-labs/glut/releases/latest/download/install.sh | sh -s -- --version 0.1.0 --to ~/bin
 ```
 
 ## Homebrew
@@ -38,7 +38,7 @@ This builds Glut from source and needs a current stable [Rust](https://rustup.rs
 ## From a checkout
 
 ```sh
-git clone https://github.com/NamorX68/glut
+git clone https://github.com/axiomata-labs/glut
 cd glut
 cargo install --path crates/glut-tui --locked
 ```

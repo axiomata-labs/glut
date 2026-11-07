@@ -6,7 +6,7 @@ Glut runs a language model's commands on your machine. Its gate, its sandbox and
 ## Reporting a vulnerability
 
 Please **do not open a public issue**. Report it privately through GitHub:
-[Report a vulnerability](https://github.com/NamorX68/glut/security/advisories/new) (the repository's *Security* tab).
+[Report a vulnerability](https://github.com/axiomata-labs/glut/security/advisories/new) (the repository's *Security* tab).
 
 Tell us what an attacker can do and how: the steps, the version (`glut --version`), the system, and — if a model
 plays a part — what text it was given or read. A proof of concept helps; one that harms someone else's system does

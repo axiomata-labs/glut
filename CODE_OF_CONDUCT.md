@@ -7,5 +7,5 @@ the work. Harassment, insults, and personal or political attacks are not welcome
 anywhere else the project lives.
 
 If someone's behaviour troubles you, write to the maintainer privately through a
-[security advisory](https://github.com/NamorX68/glut/security/advisories/new) — it reaches only the maintainer — or by
+[security advisory](https://github.com/axiomata-labs/glut/security/advisories/new) — it reaches only the maintainer — or by
 the e-mail address on the project's website. Every report is read and kept confidential.

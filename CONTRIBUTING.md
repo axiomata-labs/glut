@@ -5,7 +5,7 @@ of us time: open an issue first and say what you have in mind.
 
 ## Reporting a bug
 
-Open an [issue](https://github.com/NamorX68/glut/issues) with:
+Open an [issue](https://github.com/axiomata-labs/glut/issues) with:
 
 - what you did, what you expected, what happened instead;
 - `glut --version`, your system (macOS version, or the Linux distribution and kernel), your terminal;
@@ -17,7 +17,7 @@ A **security** problem is not an issue: see [SECURITY.md](SECURITY.md).
 ## Building
 
 ```sh
-git clone https://github.com/NamorX68/glut
+git clone https://github.com/axiomata-labs/glut
 cd glut
 cargo build                       # the library and the program `glut`
 cargo run --bin glut              # the terminal UI in the current folder

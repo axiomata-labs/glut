@@ -32,7 +32,7 @@ const ALLOWED_PORTS: [u16; 2] = [443, 8443];
 const MAX_REDIRECTS: usize = 5;
 
 /// What the fetch sends as its user agent.
-const USER_AGENT: &str = "Glut/1 (Axiomata; +https://github.com/NamorX68/Axiomata-OS)";
+const USER_AGENT: &str = "Glut/1 (+https://glut-ai.com)";
 
 /// What closes a page's data frame.
 const END_MARK: &str = "[end of page content]";

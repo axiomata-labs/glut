@@ -2,13 +2,13 @@
 # Installs glut from a release: the program for this system, checked against the release's SHA-256 checksums, into
 # ~/.local/bin (no password asked). It is the release's `install.sh`, the same file at that release's tag:
 #
-#   curl -fsSL https://github.com/NamorX68/glut/releases/latest/download/install.sh | sh
-#   curl -fsSL https://github.com/NamorX68/glut/releases/latest/download/install.sh | sh -s -- --version 0.1.0 --to ~/bin
+#   curl -fsSL https://github.com/axiomata-labs/glut/releases/latest/download/install.sh | sh
+#   curl -fsSL https://github.com/axiomata-labs/glut/releases/latest/download/install.sh | sh -s -- --version 0.1.0 --to ~/bin
 #
 # POSIX sh on purpose: it is piped into whatever `sh` the system has.
 set -eu
 
-REPO="NamorX68/glut"
+REPO="axiomata-labs/glut"
 
 usage() {
   cat <<'EOF'

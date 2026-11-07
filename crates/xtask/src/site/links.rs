@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 /// Where the repository is read by people without a checkout.
-pub const GITHUB: &str = "https://github.com/NamorX68/glut";
+pub const GITHUB: &str = "https://github.com/axiomata-labs/glut";
 
 /// The manual's sources, one folder per language, in the repository.
 pub const MANUAL_DIR: &str = "crates/glut-tui/manual";

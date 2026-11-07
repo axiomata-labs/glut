@@ -5,8 +5,8 @@ members = ["crates/*"]
 [workspace.package]
 edition = "2024"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/NamorX68/glut"
-homepage = "https://github.com/NamorX68/glut"
+repository = "https://github.com/axiomata-labs/glut"
+homepage = "https://glut-ai.com"
 authors = ["Roman Thimian"]
 
 # The versions as Axiomata-OS has them: Axiomata builds Glut in its own tree, one version of each crate.
