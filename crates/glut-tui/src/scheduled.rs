@@ -1,4 +1,4 @@
-//! `glut schedule …` (`docs/plans/glut-tui.md`, T60b): plans made, listed, held and removed, and a plan's run — the
+//! `glut schedule …` (T60b): plans made, listed, held and removed, and a plan's run — the
 //! one launchd starts at its times (`--scheduled`) or the owner's own. A run is a session of the owner's like any
 //! (`/resume`, `/search`), built with nobody there: every ask refused, the plan's mode and rules alone beside the
 //! owner's `~/.glut/`, its budget and time limit always, and the end said by a macOS notification.

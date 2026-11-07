@@ -1,4 +1,4 @@
-//! The search across kept sessions (`docs/plans/glut-tui.md`, T55): `/resume`'s filter finds in the conversations
+//! The search across kept sessions (T55): `/resume`'s filter finds in the conversations
 //! too, and `glut search` prints what it finds. What is searched is the owner's messages, the model's answers and the
 //! tool calls' names and arguments — never a tool's result (a file read would answer every search) nor the thinking.
 //! There is no index: the sessions are read when the list opens, kept as their searchable text alone while it is

@@ -1,4 +1,4 @@
-//! Compacting a conversation (`/compact`, `docs/plans/slash-commands.md` S9): the model summarises everything so far,
+//! Compacting a conversation (`/compact`, S9): the model summarises everything so far,
 //! and the conversation goes on from that summary alone — as Claude Code's and Opencode's `/compact` do.
 //!
 //! A run also compacts itself shortly before its model's context is full (Glut robust, #111, K3, [`compact_older`]):

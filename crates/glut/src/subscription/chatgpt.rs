@@ -1,4 +1,4 @@
-//! "Sign in with ChatGPT" for open-source apps (`docs/plans/glut-providers.md`, PV4; OpenAI's guide under
+//! "Sign in with ChatGPT" for open-source apps (PV4; OpenAI's guide under
 //! `developers.openai.com/siwc/token-sharing-open-source/`): the owner's ChatGPT plan instead of an API key.
 //!
 //! The first sign-in registers Glut by itself: the client `dynamic_agent_client`, this host's id and Glut's name; the

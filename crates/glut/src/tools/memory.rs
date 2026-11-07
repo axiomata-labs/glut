@@ -1,4 +1,4 @@
-//! The `memory` tool (`docs/plans/glut-tui.md`, T35): the project's memory, kept outside the repository — Glut's own
+//! The `memory` tool (T35): the project's memory, kept outside the repository — Glut's own
 //! (`~/.glut/memory/<project>/`) or, in a repository Claude Code works in, Claude's (`~/.claude/projects/<path>/memory/`)
 //! — in Claude Code's form: one Markdown file per fact with its frontmatter, and `MEMORY.md`, the index of one line
 //! per fact. The file tools never reach it (they stay in the working folder, and never write `.glut` or `.claude`),

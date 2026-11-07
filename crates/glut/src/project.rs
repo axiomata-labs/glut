@@ -1,4 +1,4 @@
-//! What a session knows of its project from the start (`docs/plans/glut-tui.md`, T35): Glut's conventions — where
+//! What a session knows of its project from the start (T35): Glut's conventions — where
 //! plans, to-dos and the memory are kept —, a map of what the folder holds of them, the harnesses that worked here
 //! before (Claude Code's memory is then the project's), and the memory's index. A few lines in the prompt, so a model
 //! asked "where do we stand?" reads the right file at once instead of searching the folder.

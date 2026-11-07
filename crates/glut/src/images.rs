@@ -1,4 +1,4 @@
-//! Images sent to a model (`docs/plans/glut-tui.md`, T45): the owner's (pasted, dropped, `glut run --image`) and
+//! Images sent to a model (T45): the owner's (pasted, dropped, `glut run --image`) and
 //! those `read_file` gives the model. Each is scaled to what the APIs take — at most [`LONG_SIDE`] pixels on its long
 //! side — and kept once, by its content's hash, in `~/.glut/images`: a message holds a reference ([`Image`]), never
 //! the data, and the model client reads the file as it sends ([`base64_of`]).

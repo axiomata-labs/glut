@@ -1,4 +1,4 @@
-//! MCP's authorization, as the spec has it (`docs/plans/glut-tui.md`, T56): a hosted server that answers 401 names
+//! MCP's authorization, as the spec has it (T56): a hosted server that answers 401 names
 //! its protected resource's metadata (RFC 9728), that names its authorization server, whose metadata (RFC 8414)
 //! names the endpoints; Glut registers itself there (RFC 7591) unless the owner registered a client of their own,
 //! and signs in with OAuth 2.1's authorization code and PKCE (S256), a random `state`, and the redirect to a listener

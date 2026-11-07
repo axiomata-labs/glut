@@ -131,7 +131,7 @@ pub trait Tool: Send + Sync {
         true
     }
     /// Whether a call with these arguments may run again after the run was interrupted while it ran (durable runs,
-    /// `docs/plans/durable.md` D4): by default only what reads — a file below the folder, a page on the web.
+    /// D4): by default only what reads — a file below the folder, a page on the web.
     fn replay_safe(&self, arguments: &Value) -> bool {
         matches!(
             self.access(arguments),

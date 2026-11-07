@@ -1,4 +1,4 @@
-//! The panes kept for the next start (`docs/plans/glut-tui.md`, TUI9e): at the end, a window split into panes or
+//! The panes kept for the next start (TUI9e): at the end, a window split into panes or
 //! with agents in the background writes how it stood — each pane's session by its id, its role, an agent's name, a
 //! worktree's branch, and the main pane's share of the width (T36f). `glut -c` offers it once. A file from before
 //! T36f, with the shape of a split, comes back as the grid: its panes in their reading order, the first the main one.

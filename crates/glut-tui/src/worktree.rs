@@ -1,4 +1,4 @@
-//! A pane's own worktree (`docs/plans/glut-tui.md`, T36a): made beside the repository for a second pane, and at its
+//! A pane's own worktree (T36a): made beside the repository for a second pane, and at its
 //! end kept, taken over (merged into the branch the repository's folder was on) or discarded. Git runs only for what
 //! the owner picked, never for the model — and as the owner, outside the sandbox, in a repository a model may have
 //! worked in. So every call is pinned to the repository's own git folder (a `commondir` or `.git` file cannot point

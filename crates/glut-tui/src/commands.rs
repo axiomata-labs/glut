@@ -1,4 +1,4 @@
-//! The session's commands and keys by topic (`docs/plans/glut-tui.md`, T38): one order for the `/` list, the Keys
+//! The session's commands and keys by topic (T38): one order for the `/` list, the Keys
 //! sheet (Ctrl+K, a tab of the side panel) and `/help`, kept here once — each entry carries its topic, and the topics
 //! follow [`Topic::ALL`].
 

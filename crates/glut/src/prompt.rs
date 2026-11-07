@@ -62,7 +62,7 @@ their result.
 /// The system prompt for a run in `cwd` on `date` with `model`, with the caller's instructions, if any, after it;
 /// `todos`: `todo_write` is offered, and the tools say how to keep its list; `code`: `lsp` is offered (T62).
 /// It names the harness and the model, so a model asked who it is says where it runs rather than a name it learned
-/// (DeepSeek in the Glut chat called itself "Claude", `docs/plans/glut-round.md`).
+/// (DeepSeek in the Glut chat called itself "Claude").
 pub fn system_prompt(
     cwd: &Path,
     date: &str,

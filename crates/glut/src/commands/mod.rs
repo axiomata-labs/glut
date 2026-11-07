@@ -1,4 +1,4 @@
-//! Slash commands (`docs/plans/harness.md`, HS4, C1–C6): the Markdown files below `.glut/commands/`, the built-ins
+//! Slash commands (HS4, C1–C6): the Markdown files below `.glut/commands/`, the built-ins
 //! answered without a model, and turning a `/name rest of line` into the prompt a run starts with.
 //!
 //! The files are read through `axiomata_files::Root` rooted at the `commands` folder itself, with

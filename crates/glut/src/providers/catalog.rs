@@ -1,4 +1,4 @@
-//! The providers Glut knows by name (`docs/plans/glut-providers.md`, P1): where their API is, how a run signs in and
+//! The providers Glut knows by name (P1): where their API is, how a run signs in and
 //! where a key may wait in the environment. The owner's own endpoints sit beside them as `openai-compatible`.
 
 /// The wire protocol a provider speaks (P2); the OpenAI Responses client follows (PV4).

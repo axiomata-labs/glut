@@ -1,4 +1,4 @@
-//! The projects (`docs/plans/glut-tui.md`, T44): the folders Glut was started in, as the sessions kept for them say —
+//! The projects (T44): the folders Glut was started in, as the sessions kept for them say —
 //! each with when it was last worked in and the panes kept for it. `/projects` lists them, the welcome shows the
 //! newest; one picked is opened as `glut -c` there would (Glut starts anew in its folder, [`crate::screen`]).
 //!

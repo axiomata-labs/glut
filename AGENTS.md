@@ -3,12 +3,6 @@
 Guidance for coding agents working in this repository — Claude Code reads it through `CLAUDE.md`. Short and
 pointer-heavy: it is loaded on every turn.
 
-
-**Worktrees** (owner, 2026-10-28): every worktree lives under `~/Worktrees/axiomata-glut/<name>/`, never under
-`~/Documents` (iCloud syncs it and chokes on `target/`; it also evicts files, so builds and tests stall) and not under
-`~/.axiomata` or `~/.claude`. Put the checkout one level down with a link `Axiomata-Foundation` → the real repository
-beside it (Glut's path dependency is `../Axiomata-Foundation`), and remove the worktree with its folder once its branch
-is merged.
 ## What this is
 
 **Glut**, an agent harness: a lean tool-calling loop over an OpenAI-compatible model API (OpenRouter, Ollama), with
@@ -20,12 +14,10 @@ subagents and journals that let a lost run resume.
   stdout, `glut resume|undo|gain|providers|models`).
 - `crates/glut-tui` — the program `glut`: the terminal UI, and the headless commands as its subcommands (T43: `axh`
   is gone, and so is `~/.axh` — everything is `~/.glut` / `.glut`).
-- Next: the terminal UI, `docs/plans/glut-tui.md` (the master plan, phases TUI0–TUI9).
+- `crates/xtask` — the website, the recordings and the deploy (`cargo run -p xtask -- site build|check|serve|deploy`).
 
-Glut grew inside Axiomata-OS (`../Axiomata-OS`, its plans `docs/plans/harness*.md`, `glut-*.md`, `durable.md` are the
-history of every decision so far) and became an app of its own on 2026-10-21. **Axiomata builds Glut from this folder**
-(a path dependency in its root `Cargo.toml`): a change here takes effect there at the next build, so run Axiomata's gate
-too when a public item changes.
+Glut grew inside a larger project, Axiomata, which still builds Glut as a library: keep public items stable, and say
+so in the changelog when one changes.
 
 ## Rules
 
@@ -103,20 +95,19 @@ scripts/install-dev.sh           # glut for every terminal: ~/.cargo/bin, linked
   (`a && b; c`) runs with a random mark printed before each part (`output::marked`/`unmark` in `shell.rs`) — the only
   place Glut touches a command: the gate, the hooks and the events see the command and the output as written, never
   the marks; keep it that way when changing either side.
-- **Hooks veto, they never permit** (HS7, Axiomata-OS `docs/plans/harness-hs7.md`): the `hooks` of
+- **Hooks veto, they never permit** (HS7): the `hooks` of
   `~/.glut/settings.json` (Claude's shape) may only *block* a call or the answer — `allow`/`ask` parse and
   are no-ops (the gate stays the only decider), a crash/timeout/odd exit is a fail-open `Event::Hook` note,
   and only the owner's file counts: a project's `.glut/` hooks are parsed (`project_hooks_skipped`) and
   printed/folded into `stderr` as a note, never executed.
-- **Subagents: offering `task` and judging `task` are two layers** (HS8, Axiomata-OS `docs/plans/harness-hs8.md`): the
+- **Subagents: offering `task` and judging `task` are two layers** (HS8): the
   tool is *offered* when the run configures it (`RunConfig.subagents`, default on; in the core set only
   when the skill's `allowed_tools` names `task` — one reading of the frontmatter feeds both the gate and
   the tool list), but whether a call *runs* is the gate's word like any change (`Access::Other` under
   `task`, rules then mode; headless an unanswered ask refuses it). A declaration alone never allows, the
   subagent gets the parent's toolbox minus `task` (one level only), and its events arrive wrapped as
   `Event::Sub { depth, event }` — sinks must recurse (`Notes`, `Readable`) or they drop them.
-- **A provider's key is bound to its host and never comes from `GLUT_API_KEY`** (`docs/plans/glut-providers.md`,
-  `crates/glut/src/providers/`): providers live in `~/.glut/providers.json` (a file of their own — Glut rewrites it,
+- **A provider's key is bound to its host and never comes from `GLUT_API_KEY`** (`crates/glut/src/providers/`): providers live in `~/.glut/providers.json` (a file of their own — Glut rewrites it,
   never the owner's `settings.json`), keys in the Keychain or `~/.glut/credentials.json` (0600 from the first byte,
   `write_replacing`) under the account `<id>@<host>`, so a root changed in the file finds no key instead of sending
   the old one elsewhere. `GLUT_API_KEY` belongs to a one-off `--base-url` (and to hosts like Axiomata) only. On macOS

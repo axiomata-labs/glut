@@ -1,4 +1,4 @@
-//! The Runs tab (`docs/plans/glut-tui.md`, T60b): every plan of every project as a small tile — when it runs next,
+//! The Runs tab (T60b): every plan of every project as a small tile — when it runs next,
 //! how its last run ended, with its cost and the answer's first line. Opened, a plan shows its task, what it may do
 //! and its last ten runs; Enter opens a run's session, `r` runs the plan now, `p` pauses or resumes it, `d` deletes
 //! it once the owner says yes. A line at the top points to the loops running in the Agents tab (T60a).

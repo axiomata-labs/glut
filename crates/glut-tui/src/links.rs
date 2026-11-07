@@ -1,4 +1,4 @@
-//! Clickable links (`docs/plans/glut-tui.md`, TUI9d): where the terminal speaks OSC 8, a link's text is the link and
+//! Clickable links (TUI9d): where the terminal speaks OSC 8, a link's text is the link and
 //! the URL after it goes. ratatui knows no links, and an escape inside a cell would break its sense of widths, so a
 //! link's cells carry a mark instead — an underline colour standing for the link's number — that the frame's buffer
 //! gives up after each draw ([`take_spots`]): the marks are wiped before the frame goes out, and the cells they stood

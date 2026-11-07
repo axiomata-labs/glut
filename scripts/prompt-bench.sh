@@ -1,5 +1,5 @@
 #!/bin/sh
-# The system prompt's measure (docs/plans/glut-tui.md, T35; later part of TUI10): the same questions about a project,
+# The system prompt's measure (T35; later part of TUI10): the same questions about a project,
 # asked in plan mode (it only reads), each counted by its tool calls until the answer and its input tokens. Run it
 # before and after a change to the prompt, on the same model.
 #

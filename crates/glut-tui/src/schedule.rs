@@ -1,4 +1,4 @@
-//! Timed runs while Glut is closed (`docs/plans/glut-tui.md`, T60b): the owner's plans in `~/.glut/schedules.json`,
+//! Timed runs while Glut is closed (T60b): the owner's plans in `~/.glut/schedules.json`,
 //! each one a LaunchAgent of its own that starts `glut schedule run --scheduled <name>` at its times. What a plan may
 //! do is fixed when it is made — its folder, provider, model, mode and rules — and only the owner's `~/.glut/` counts
 //! beside it, never the project's. Every run is kept in `~/.glut/schedules/<name>.jsonl`.

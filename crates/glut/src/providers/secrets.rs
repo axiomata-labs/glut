@@ -1,4 +1,4 @@
-//! Where a provider's key waits between runs (`docs/plans/glut-providers.md`, P4): the system's secret store, or a
+//! Where a provider's key waits between runs (P4): the system's secret store, or a
 //! file only the owner can read — the owner's choice (`credentialStore`). Never `providers.json`, never a command's
 //! environment.
 

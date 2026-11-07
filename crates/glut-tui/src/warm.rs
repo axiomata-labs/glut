@@ -1,4 +1,4 @@
-//! Keeping a resting session's prompt cache warm (`docs/plans/glut-tui.md`, T36e): while a session that has worked
+//! Keeping a resting session's prompt cache warm (T36e): while a session that has worked
 //! rests, its last request goes out again about every four and a half minutes — answered as briefly as the provider
 //! allows, read from its cache, which renews the entry — for at most half an hour. A new turn, a closed pane, another
 //! session end it.

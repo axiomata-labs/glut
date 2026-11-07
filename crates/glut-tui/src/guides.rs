@@ -1,4 +1,4 @@
-//! A guide kept small (`docs/plans/glut-tui.md`, T42): a project's `AGENTS.md` (or `CLAUDE.md`) rides along on every
+//! A guide kept small (T42): a project's `AGENTS.md` (or `CLAUDE.md`) rides along on every
 //! turn, so one that grew past the owner's `guide.warnAt` is pointed out — at the session's start and in the Meter
 //! tab, in Glut's orange — with `/init` to shorten it. A guide the owner had `/init` check stays quiet until it grew
 //! [`MARGIN_BYTES`] beyond the size it had then. The owner's own `~/.glut/AGENTS.md` is never counted.

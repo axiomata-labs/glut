@@ -1,4 +1,4 @@
-//! `/mcp` (`docs/plans/glut-tui.md`, T56): the session's MCP servers and how each stands, signing in to a hosted one
+//! `/mcp` (T56): the session's MCP servers and how each stands, signing in to a hosted one
 //! and out again, adding a server to the owner's `~/.glut/mcp.json` and removing it — the same as `glut mcp`. The work
 //! runs beside the screen; what it comes to arrives as [`Step`]s. Glut never opens a browser unasked: only the
 //! owner's `/mcp login` does, after the note that names where they will sign in.

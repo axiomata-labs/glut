@@ -1,4 +1,4 @@
-//! Named subagents (`docs/plans/glut-tui.md`, T37a), as Claude Code has them: a Markdown file `<name>.md` whose YAML
+//! Named subagents (T37a), as Claude Code has them: a Markdown file `<name>.md` whose YAML
 //! frontmatter says what the agent is for and what it runs with, and whose text is its system prompt. The `task` tool
 //! lists them, and a `task` call that names one runs its subagent as the file says.
 //!

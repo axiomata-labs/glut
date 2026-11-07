@@ -750,7 +750,7 @@ index goes into the prompt. The folder is `~/.glut/memory/<key>/`, or Claude Cod
 `~/.claude/projects/<key>/memory/` when the repository's root holds `CLAUDE.md` or `.claude`. `<key>` is the
 repository's path with every character but letters, digits and `-` replaced by `-`. `/memory` shows it.
 
-**Project map.** The prompt also names where Glut keeps plans (`docs/plans/`) and the to-do list (`TODO.md`, also
+**Project map.** The prompt also names where Glut keeps plans and the to-do list (`TODO.md`, also
 found as `ToDo.md` or `todo.md`; `/todo` edits it).
 
 The terminal UI always reads guides, memory and map. `glut run` reads them only with `--project`;

@@ -1,4 +1,4 @@
-//! `web_search`: a web search through the first provider that answers (`docs/plans/glut-round.md`, W2/W3/W7) — Exa's
+//! `web_search`: a web search through the first provider that answers (W2/W3/W7) — Exa's
 //! hosted MCP endpoint (no key needed, rate limited), then TinyFish, then Tavily. A provider without its key is
 //! skipped; one that is rate limited or fails hands over to the next. A [`SearchBudget`] the caller supplies holds the
 //! daily limit and Tavily's monthly one, so no search can cost money the owner did not mean to spend: each search is

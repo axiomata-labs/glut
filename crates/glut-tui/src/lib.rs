@@ -1,4 +1,4 @@
-//! Glut's terminal interface (`docs/plans/glut-tui.md`): a full-screen session over the glut harness — run by the
+//! Glut's terminal interface: a full-screen session over the glut harness — run by the
 //! standalone `glut`, and by a host that runs Glut for its own ends (TUI8a): [`run`] takes the terminal for one
 //! session built as a [`Launch`] says, with a [`Host`] taking part in it.
 

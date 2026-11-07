@@ -1,4 +1,4 @@
-//! Loops while Glut is open (`docs/plans/glut-tui.md`, T60a): `/loop <interval> [fresh] [as <role>] [notify] <task>`
+//! Loops while Glut is open (T60a): `/loop <interval> [fresh] [as <role>] [notify] <task>`
 //! runs the task again and again in a background agent of its own, the interval counted from a round's end — rounds
 //! never overlap. The screen keeps each loop with its pane ([`Loop`]) and starts the rounds; the agent's model may end
 //! its loop with the tool `end_loop` once the goal is reached ([`EndLoop`]), which only a loop's own model is offered.

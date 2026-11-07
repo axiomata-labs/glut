@@ -1,4 +1,4 @@
-//! `glut mcp` (`docs/plans/glut-tui.md`, T56): the MCP servers of `~/.glut/mcp.json` and the folder's `.mcp.json`,
+//! `glut mcp` (T56): the MCP servers of `~/.glut/mcp.json` and the folder's `.mcp.json`,
 //! signing in to a hosted one and out again, and adding or removing the owner's own — the same as `/mcp` in the
 //! terminal UI. A token is read without echo, never taken as an argument; a project's file is never written.
 

@@ -1,4 +1,4 @@
-//! OAuth's parts every sign-in of Glut shares (`docs/plans/glut-providers.md`, PV4; first written for MCP, T56): the
+//! OAuth's parts every sign-in of Glut shares (PV4; first written for MCP, T56): the
 //! authorization code with PKCE (S256) and a random `state`, the listener on 127.0.0.1 the browser comes back to, the
 //! token endpoint, the browser opened only on the owner's word. What one kind of sign-in adds — MCP's discovery and
 //! registration ([`crate::mcp::oauth`]), ChatGPT's own client ([`crate::subscription`]) — stays with it.

@@ -1,4 +1,4 @@
-//! A side question (`/btw`, `docs/plans/glut-tui.md` T57): the owner asks something briefly — about the pane's own
+//! A side question (`/btw`, T57): the owner asks something briefly — about the pane's own
 //! session or another's, a background agent's — without disturbing the turn under way or filling any conversation.
 //! It goes to the asked session's own model as the real messages with the same tools on offer, so the provider's
 //! cache of them answers the most of it; no tool is ever run. The answer streams into a card over the pane that

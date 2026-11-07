@@ -1,4 +1,4 @@
-//! Tiles (`docs/plans/glut-tui.md`, T69): a small card at the window's top right when something the owner does not
+//! Tiles (T69): a small card at the window's top right when something the owner does not
 //! see ends or asks — a background agent, another pane held as a tab, a subagent of a turn — its name, how it stands
 //! and the first line of what it said. One goes after [`SHOWN_FOR`], one that asks stays until the question is
 //! answered; at most [`MOST`] stand. They take no key: a click opens where it came from. `/notify tiles on|off`.

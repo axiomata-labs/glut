@@ -1,4 +1,4 @@
-//! Who may do what in a run (`docs/plans/harness.md`, HS3a, P1–P8): rules in Claude Code's format, modes, and asking
+//! Who may do what in a run (HS3a, P1–P8): rules in Claude Code's format, modes, and asking
 //! the owner.
 //!
 //! Every tool says what a call would touch ([`Access`]); the [`Gate`] judges it against the rules — `deny` beats
@@ -2279,7 +2279,7 @@ pub struct BuiltGate {
     /// Whether runs compact themselves (#111, K6) and the context windows the owner named (K2).
     pub compact_auto: bool,
     pub context_windows: std::collections::HashMap<String, u32>,
-    /// The owner's prices by model id (`docs/plans/glut-cards.md`, C6), for a budget in money.
+    /// The owner's prices by model id (C6), for a budget in money.
     pub prices: std::collections::HashMap<String, crate::config::Prices>,
     /// How many subagents of one reply run at once (TUI T40), from `~/.glut/settings.json`.
     pub parallel_subagents: u32,

@@ -1,4 +1,4 @@
-//! What each provider offers (`docs/plans/glut-providers.md`, PV2, P5): its model list, pulled from the provider
+//! What each provider offers (PV2, P5): its model list, pulled from the provider
 //! (`GET {root}/models`) and kept in `~/.glut/models/<id>.json` with its fetch time, so a run, the meter and the model
 //! picker know a model's context window, its prices and whether it reasons without asking every time. The owner's
 //! `prices` and `contextWindow` in `settings.json` still beat what a list says.

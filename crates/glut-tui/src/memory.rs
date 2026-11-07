@@ -1,4 +1,4 @@
-//! `/memory` (`docs/plans/glut-tui.md`, T35): the project's memory as the owner reads it — the facts with the
+//! `/memory` (T35): the project's memory as the owner reads it — the facts with the
 //! description their frontmatter gives, one fact whole. Read here, no model asked; never through a link, never more
 //! than a fact may hold.
 

@@ -1,4 +1,4 @@
-//! MCP servers (`docs/plans/harness.md`, HS5, M1–M5): the owner's `~/.glut/mcp.json` and the project's
+//! MCP servers (HS5, M1–M5): the owner's `~/.glut/mcp.json` and the project's
 //! `.mcp.json`, each project server approved on its own, two transports (stdio and Streamable HTTP), and the
 //! tools they offer as `mcp__<server>__<tool>`.
 //!

@@ -1,4 +1,4 @@
-//! Secrets masked before they leave (T58 of `docs/plans/glut-tui.md`): every tool result is searched for keys before
+//! Secrets masked before they leave (T58): every tool result is searched for keys before
 //! the model, the stream or a file of the session sees it, and a hit becomes a numbered placeholder —
 //! `‹secret 1: anthropic key, 108 chars›`. Three ways find one: the values Glut knows itself (its own keys, found
 //! exactly — a pattern once let the owner's OpenRouter key through), known formats, and assignments whose name says

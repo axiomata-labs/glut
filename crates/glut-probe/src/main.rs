@@ -1,4 +1,4 @@
-//! `glut-probe`: what a terminal offers a full-screen TUI (`docs/plans/glut-tui.md`, TUI0).
+//! `glut-probe`: what a terminal offers a full-screen TUI (TUI0).
 //!
 //! Two parts. First the terminal is asked what it is and what it can do — queries it answers by itself, each followed
 //! by a primary device attributes request (`CSI c`) that every terminal answers: an answer that arrives before it is the

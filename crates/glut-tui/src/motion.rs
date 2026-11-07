@@ -1,4 +1,4 @@
-//! How much the screen moves, and the reader mode (`docs/plans/glut-tui.md`, TUI9b). Motion follows the app's
+//! How much the screen moves, and the reader mode (TUI9b). Motion follows the app's
 //! `core/motion.ts`: *full* — Glimm breathes, sparks rise, the flame flickers; *calm* and *off* — everything holds
 //! still, a frame is drawn only when something changed, and "working" counts its seconds once a second instead. macOS
 //! "Reduce motion" counts as off whatever the setting says. The reader mode is for a screen reader: words for the key

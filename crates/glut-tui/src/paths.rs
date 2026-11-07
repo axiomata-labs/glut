@@ -1,4 +1,4 @@
-//! Paths completed wherever one is typed (`docs/plans/glut-tui.md`, T68): the argument of a command whose catalog
+//! Paths completed wherever one is typed (T68): the argument of a command whose catalog
 //! entry takes `[path]`, and in a message a word that starts like a path (`~/`, `/`, `./`, `../`) — a bare word stays
 //! `@`'s. The folder typed in is read while typing, its names only: no file is opened, nothing is kept beyond the list
 //! on the screen, and Glut's `credentials.json` is never offered. The model sees none of it.

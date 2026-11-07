@@ -1,4 +1,4 @@
-//! Hooks (HS7, `docs/plans/harness-hs7.md`): Claude Code's four events — `SessionStart`, `PreToolUse`,
+//! Hooks (HS7): Claude Code's four events — `SessionStart`, `PreToolUse`,
 //! `PostToolUse`, `Stop` — run from the owner's `~/.glut/settings.json` around the loop's own steps.
 //!
 //! What a hook may do is a veto (B2): it can block a call or the answer, and `SessionStart` can add context;

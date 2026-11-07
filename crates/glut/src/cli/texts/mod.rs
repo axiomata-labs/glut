@@ -1,5 +1,4 @@
-//! What the headless commands say to the owner on the terminal, in each of Glut's languages (`docs/plans/glut-tui.md`,
-//! T48): `glut providers`, `glut models`, `glut resume`, `glut undo`, `glut gain` and the notes of `glut run` on
+//! What the headless commands say to the owner on the terminal, in each of Glut's languages (//! T48): `glut providers`, `glut models`, `glut resume`, `glut undo`, `glut gain` and the notes of `glut run` on
 //! stderr. `glut run`'s JSON lines, its errors (an `Event::Error`) and whatever a model reads stay English.
 
 mod de;

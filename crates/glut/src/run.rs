@@ -306,7 +306,7 @@ pub async fn run<M: ChatModel>(
         .0
 }
 
-/// A run that goes on with an earlier conversation (`docs/plans/harness-choice.md`, CP4): `earlier` is what a
+/// A run that goes on with an earlier conversation (CP4): `earlier` is what a
 /// previous call of this function returned — empty for a new conversation — and `prompt` the next user message.
 /// The system prompt is written anew (today's date, the caller's instructions as they are now), the rest is kept
 /// as it was; `SessionStart` fires for a new conversation only. Returns the outcome and the whole conversation,
@@ -333,7 +333,7 @@ pub async fn run_continuing<M: ChatModel>(
     .await
 }
 
-/// Resumes the run `run` from its journal in `config.journal`'s folder (durable runs, `docs/plans/durable.md`): the
+/// Resumes the run `run` from its journal in `config.journal`'s folder (durable runs): the
 /// conversation as it was saved, the steps and tokens used so far counted on, the time limit afresh (D6). A tool call
 /// that was under way when the run stopped runs again only when it only reads (D4/D7); any other gets an
 /// "interrupted" result and the model decides. A call that had not started yet runs as it would have. The caller

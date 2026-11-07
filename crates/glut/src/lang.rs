@@ -1,4 +1,4 @@
-//! Glut in eight languages (`docs/plans/glut-tui.md`, T48): the languages, which one is chosen, and the small parts
+//! Glut in eight languages (T48): the languages, which one is chosen, and the small parts
 //! every catalog shares — named placeholders, plural forms, and a macro that declares a catalog so a text missing in
 //! one language does not compile.
 //!

@@ -1,4 +1,4 @@
-//! What the terminal UI says to the owner, in each of Glut's languages (`docs/plans/glut-tui.md`, T48): one constant
+//! What the terminal UI says to the owner, in each of Glut's languages (T48): one constant
 //! per language of the one struct [`Texts`], so a text missing in a language does not compile. English is the source;
 //! another language is one file more.
 //!

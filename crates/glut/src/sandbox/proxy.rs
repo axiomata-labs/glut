@@ -1,4 +1,4 @@
-//! The run's network proxy (`docs/plans/harness.md`, HS3b): the only way out of the sandbox to the network.
+//! The run's network proxy (HS3b): the only way out of the sandbox to the network.
 //!
 //! A sandboxed command reaches only this proxy on localhost; its `HTTP(S)_PROXY` points here. For every connection the
 //! proxy asks the run's [`Gate`] about the host — `Network(crates.io)` rules, the mode, the owner when it is asked —

@@ -1,4 +1,4 @@
-//! Which project's MCP server the owner approved (`docs/plans/harness.md`, HS5, M2): `~/.glut/mcp-approved.json`.
+//! Which project's MCP server the owner approved (HS5, M2): `~/.glut/mcp-approved.json`.
 //!
 //! A project's server starts a process of its own and sends data out, so trusting the folder (P5) is not enough:
 //! each server is approved on its own, keyed by the project's path, its name and the SHA-256 of its config — a

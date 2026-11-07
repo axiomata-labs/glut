@@ -1,4 +1,4 @@
-//! The model arena (T61, `docs/plans/glut-tui.md`): the owner's task on two to four models at once, each in a pane
+//! The model arena (T61): the owner's task on two to four models at once, each in a pane
 //! and a worktree of its own that starts from the owner's folder as it is, in `auto`, under limits that stop it; then
 //! their numbers side by side and the winner's changes taken into the owner's folder. Cloud models run together, the
 //! local ones (Ollama, LM Studio) one after another once the others are done, so none measures another's load.

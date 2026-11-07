@@ -1,8 +1,8 @@
 //! `glut` — the harness as a program of its own: runs one prompt headless and writes every step as a JSON line on
-//! stdout (`docs/plans/harness.md`, H3). Logs go to stderr, so stdout stays machine-readable.
+//! stdout (H3). Logs go to stderr, so stdout stays machine-readable.
 //!
 //! The key comes from the environment (`GLUT_API_KEY`) or, for a provider of `~/.glut/providers.json`, from its own
-//! variable or the secret store (`glut providers`, `docs/plans/glut-providers.md`) — never from an argument: an
+//! variable or the secret store (`glut providers`) — never from an argument: an
 //! argument shows in `ps` and in a shell's history.
 //!
 //! Exit codes: 0 answered, 1 failed (model API, bad folder), 2 stopped at a limit (turns, time) or cancelled.
@@ -903,7 +903,7 @@ async fn execute(args: RunArgs, resumed: Option<String>) -> ExitCode {
         built.context_windows.get(&endpoint.model).copied(),
         listed(&endpoint.model).and_then(|info| info.context_window),
     );
-    // C6 of docs/plans/glut-cards.md: the budget at the prices of the model the run ends up with (a skill or a
+    // C6: the budget at the prices of the model the run ends up with (a skill or a
     // command may name its own).
     config.budget = crate::Budget {
         max_tokens,

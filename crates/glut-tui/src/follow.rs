@@ -1,4 +1,4 @@
-//! `glut watch` (`docs/plans/glut-tui.md`, T21, TUI8d): another session followed from its event log, read-only — a
+//! `glut watch` (T21, TUI8d): another session followed from its event log, read-only — a
 //! Studio card from another terminal, the owner's own session from a second window. The stream is drawn as the
 //! session's own screen draws it; nothing typed reaches the session, which goes on whether anyone watches or not.
 

@@ -1,4 +1,4 @@
-//! What a hosted MCP server is signed in with (`docs/plans/glut-tui.md`, T56): an OAuth grant, or a token the owner
+//! What a hosted MCP server is signed in with (T56): an OAuth grant, or a token the owner
 //! typed for a server without OAuth (GitHub's and GitLab's personal tokens) — both in the secret store the owner
 //! chose for the providers' keys (the Keychain or `~/.glut/credentials.json`), never in `mcp.json`, never in a
 //! variable.

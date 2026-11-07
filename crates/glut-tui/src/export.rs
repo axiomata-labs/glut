@@ -1,4 +1,4 @@
-//! A session written out to read or share (`docs/plans/glut-tui.md`, T54): Markdown, one HTML file (its CSS inside, no
+//! A session written out to read or share (T54): Markdown, one HTML file (its CSS inside, no
 //! script — a Content-Security-Policy forbids one, and the model's raw HTML is written as text), or the messages as
 //! JSON lines. What the model saw by default — results bounded, no system prompt — and with `full` the whole results
 //! from the session's store and the system prompt. Cleaned: control, bidi and zero-width characters out, the owner's

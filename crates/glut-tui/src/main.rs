@@ -1,4 +1,4 @@
-//! `glut` — Glut's terminal interface (`docs/plans/glut-tui.md`, TUI1a): one session in a folder, full screen, the
+//! `glut` — Glut's terminal interface (TUI1a): one session in a folder, full screen, the
 //! default provider of `~/.glut/providers.json` unless `--provider` names another.
 
 use std::path::PathBuf;

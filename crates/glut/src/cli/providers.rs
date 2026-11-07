@@ -1,4 +1,4 @@
-//! `glut providers` (`docs/plans/glut-providers.md`, PV1, P6): the owner's providers in `~/.glut/providers.json`,
+//! `glut providers` (PV1, P6): the owner's providers in `~/.glut/providers.json`,
 //! their keys in the secret store the owner chose. A key is read without echo, never taken as an argument.
 
 use std::io::{BufRead as _, IsTerminal as _, Read as _, Write as _};

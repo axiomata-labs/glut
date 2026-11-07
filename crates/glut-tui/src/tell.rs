@@ -1,4 +1,4 @@
-//! The models talk (`docs/plans/glut-tui.md`, T36c): the tool `tell`, a message from one pane's model to another
+//! The models talk (T36c): the tool `tell`, a message from one pane's model to another
 //! pane, delivered there at once — no inbox to read. The screen decides what becomes of it (the loop guard, the cap,
 //! the pane it goes to); the tool only hands it over and says what happened.
 

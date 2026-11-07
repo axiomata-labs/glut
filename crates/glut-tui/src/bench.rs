@@ -1,4 +1,4 @@
-//! The arena's test bench (T61 step 2, `docs/plans/glut-tui.md`): fixed tasks from the owner's private repository
+//! The arena's test bench (T61 step 2): fixed tasks from the owner's private repository
 //! `glut-arena`, cloned to `~/.glut/arena/tasks` — never public (tasks that end up in training data measure memory),
 //! and in `~/.glut`, which no sandboxed command reads: no model sees a task's check or its reference solution. Each
 //! task runs on the same models as an arena, judged by its own check script; the results go to

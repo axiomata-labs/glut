@@ -27,10 +27,10 @@ globset = "0.4"
 # HTTP client; `glut` adds `rustls-tls` for remote model APIs (HTTPS to OpenRouter) in its own manifest. No other
 # features — bodies are read chunk by chunk (`Response::chunk`), JSON goes through `serde_json`.
 reqwest = { version = "0.12", default-features = false }
-# Glut 2's code mode (docs/plans/glut-2.md, G2): QuickJS, compiled in. `futures` turns an async Rust function into a
+# Glut 2's code mode (G2): QuickJS, compiled in. `futures` turns an async Rust function into a
 # JavaScript promise (a tool call from a script); `parallel` makes the runtime Send, so a run stays a Send future.
 rquickjs = { version = "0.14", default-features = false, features = ["std", "futures", "parallel"] }
-# HTML → Markdown for Glut's `web_fetch` (docs/plans/glut-round.md, W1): a turndown port, no JavaScript runtime.
+# HTML → Markdown for Glut's `web_fetch` (W1): a turndown port, no JavaScript runtime.
 htmd = "0.5.6"
 # Process groups and files opened without following a link; `glut` adds the features it needs.
 rustix = { version = "1.1", default-features = false, features = ["std", "fs"] }
@@ -40,7 +40,7 @@ sha2 = "0.10"
 ring = { version = "0.17", default-features = false, features = ["alloc"] }
 # Images sent to a model (T45): read, scaled to what the APIs take, written as PNG or JPEG — nothing else of the crate.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
-# The terminal UI's terminal (docs/plans/glut-tui.md, T2): raw mode, events (keys, mouse, paste, resize, focus), the
+# The terminal UI's terminal (T2): raw mode, events (keys, mouse, paste, resize, focus), the
 # kitty keyboard protocol, synchronized output; `osc52` puts text on the clipboard over SSH and in tmux.
 crossterm = { version = "0.29", features = ["osc52"] }
 # The terminal UI's layout and widgets (T2): only the crossterm backend, on the crossterm above.
@@ -51,7 +51,7 @@ ratatui = { version = "0.30", default-features = false, features = [
 ] }
 # How many cells a character takes (wide characters, emoji): the TUI wraps by cells, not by chars.
 unicode-width = "0.2"
-# The TUI's Markdown (docs/plans/glut-tui.md, T7): the answer is parsed as CommonMark with tables and task lists.
+# The TUI's Markdown (T7): the answer is parsed as CommonMark with tables and task lists.
 pulldown-cmark = { version = "0.13", default-features = false }
 # Code blocks in colour (T7): tree-sitter's highlighter with the grammars of the owner's languages, built in.
 tree-sitter = "0.27"

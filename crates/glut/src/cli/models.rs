@@ -1,4 +1,4 @@
-//! `glut models` (`docs/plans/glut-providers.md`, PV2, P6): the models each configured provider offers, from its kept
+//! `glut models` (PV2, P6): the models each configured provider offers, from its kept
 //! list (`~/.glut/models/<id>.json`), fetched again when it is older than a day or on `refresh`.
 
 use std::path::Path;

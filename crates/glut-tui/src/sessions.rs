@@ -1,4 +1,4 @@
-//! Glut sessions talk across programs (`docs/plans/glut-tui.md`, T83): every Glut window on this machine listens on
+//! Glut sessions talk across programs (T83): every Glut window on this machine listens on
 //! a socket of its own under `~/.glut/sessions.d/`, which only the owner's own user may open, and answers two
 //! questions — who are you (its name and its panes) and take this message. A sandboxed command never reaches it
 //! (the sandbox denies every socket but the run's proxy): only Glut itself sends, for the owner's `/send` or a model's

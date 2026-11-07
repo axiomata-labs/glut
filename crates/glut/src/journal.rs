@@ -1,4 +1,4 @@
-//! A run's journal (durable runs, `docs/plans/durable.md`, D5): one JSON line per step, appended and synced before
+//! A run's journal (durable runs, D5): one JSON line per step, appended and synced before
 //! the step goes on, so a run the process lost — a crash, a quit, a rebuild — can go on from its last saved step.
 //!
 //! * The file is `<dir>/<run>.jsonl`, the owner's alone (0600 in a 0700 folder). It opens with a `start` line, then

@@ -1,4 +1,4 @@
-//! Where a row may break inside a run without spaces (`docs/plans/glut-tui.md`, T48): Chinese and Japanese put no
+//! Where a row may break inside a run without spaces (T48): Chinese and Japanese put no
 //! spaces between words, so a break at spaces only would move a whole sentence to the next row. Between wide
 //! characters a row may break — but a closing mark never starts a row and an opening one never ends it (kinsoku, as
 //! UAX #14 has it for the marks Glut's text holds).

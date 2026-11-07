@@ -1,4 +1,4 @@
-//! The guides a session reads by itself (`docs/plans/glut-tui.md`, T24): the owner's own `~/.glut/AGENTS.md` and the
+//! The guides a session reads by itself (T24): the owner's own `~/.glut/AGENTS.md` and the
 //! project's `AGENTS.md` (else `CLAUDE.md`) in every folder from the repository's root down to the one Glut works in —
 //! the general first, the specific last, so the nearer guide has the last word. A host that hands its own
 //! instructions over (Axiomata) does not use this.

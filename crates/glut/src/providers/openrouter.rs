@@ -1,4 +1,4 @@
-//! OpenRouter's sign-in (`docs/plans/glut-providers.md`, PV4b; `openrouter.ai/docs/guides/overview/auth/oauth`, read
+//! OpenRouter's sign-in (PV4b; `openrouter.ai/docs/guides/overview/auth/oauth`, read
 //! 2026-10-27): the owner signs in in the browser and OpenRouter hands Glut a key of its own — no key copied. The
 //! address names a PKCE challenge (S256) and a random `state`; the browser comes back to 127.0.0.1 with a code,
 //! which `POST /api/v1/auth/keys` trades for the key. The key is then a key like any: kept under

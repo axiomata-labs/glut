@@ -1,4 +1,4 @@
-//! The session's event log (`docs/plans/glut-tui.md`, TUI8d): every step of its turns as the run reported it, and
+//! The session's event log (TUI8d): every step of its turns as the run reported it, and
 //! the owner's messages between them, one JSON line each with the time in `at` — what `glut watch` follows from another
 //! terminal, and what a host reads for its own views (Axiomata's meter and Flow tiles read a card's). The owner's
 //! sessions keep theirs beside the session (`~/.glut/sessions/<id>.events.jsonl`), a host names its own file.

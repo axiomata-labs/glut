@@ -1,4 +1,4 @@
-//! OpenAI's Responses API (`docs/plans/glut-providers.md`, PV4): the ChatGPT plan's way in, OpenAI's newer models by
+//! OpenAI's Responses API (PV4): the ChatGPT plan's way in, OpenAI's newer models by
 //! key, and OpenCode Zen's models that speak it. Every request is streamed and stored nowhere (`store: false`): the
 //! whole conversation goes as `input` each time, the system prompt as `instructions`, the model's reasoning as the
 //! encrypted items the API hands out (`include: reasoning.encrypted_content`), sent back unchanged while the model

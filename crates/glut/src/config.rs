@@ -66,7 +66,7 @@ pub struct ModelEndpoint {
     /// How hard the model reasons before it answers; `None` sends nothing and leaves it to the provider.
     pub effort: Option<Effort>,
     /// `base_url` already ends in the API's version (`…/v1beta/openai`, `…/api/paas/v4`), as a provider of the
-    /// catalog names it (`docs/plans/glut-providers.md`): requests go to `{base_url}/chat/completions`, not
+    /// catalog names it: requests go to `{base_url}/chat/completions`, not
     /// `{base_url}/v1/chat/completions`.
     pub versioned: bool,
 }
@@ -216,7 +216,7 @@ impl Prices {
     }
 }
 
-/// When a run has spent what it may (`docs/plans/glut-cards.md`, C6): checked before each model call, so the calls of
+/// When a run has spent what it may (C6): checked before each model call, so the calls of
 /// the last reply are all answered and the run ends as [`crate::FinishReason::Budget`]. Nothing set: no budget.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Budget {
@@ -411,9 +411,9 @@ pub struct RunConfig {
     /// The host goes on from a summary the run made ahead of its threshold and never put in (T63,
     /// `RunOutcome::prepared`): then a run that answered waits for it. Off, such a summary is dropped as the run ends.
     pub hand_on_prepared: bool,
-    /// What the run may spend (C6 of `docs/plans/glut-cards.md`); none by default.
+    /// What the run may spend (C6); none by default.
     pub budget: Budget,
-    /// What the owner sends while the run works (T10 of `docs/plans/glut-tui.md`, steering): taken before the run's
+    /// What the owner sends while the run works (T10, steering): taken before the run's
     /// next model call, never between a reply and its results, and only by the run itself, never a subagent.
     pub inbox: Option<Inbox>,
     /// Secrets masked before they leave (T58): every tool result and the instructions, before the model, the events

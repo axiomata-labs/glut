@@ -1,4 +1,4 @@
-//! Anthropic's own Messages API (`docs/plans/glut-providers.md`, PV3): Claude by API key, streamed, with the prompt
+//! Anthropic's own Messages API (PV3): Claude by API key, streamed, with the prompt
 //! cached, adaptive thinking at the run's effort, and the model's thinking blocks handed back unchanged.
 //!
 //! The conversation Glut keeps is OpenAI-shaped ([`Message`]); this client turns it into Anthropic's form on every call

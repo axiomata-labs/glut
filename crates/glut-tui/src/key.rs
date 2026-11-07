@@ -1,4 +1,4 @@
-//! `/provider key [id]` (`docs/plans/glut-tui.md`, T70): a provider's key changed alone — asked for without echo in
+//! `/provider key [id]` (T70): a provider's key changed alone — asked for without echo in
 //! the screen's hidden entry (as `/mcp`'s sign-in), checked against the provider's model list before the old one is
 //! replaced, kept or not as the owner says. Only the key under `<id>@<host>` changes; what the work beside the screen
 //! comes to arrives as [`Step`]s, as `/mcp`'s does.

@@ -1,4 +1,4 @@
-//! `web_fetch`: one web page as Markdown (`docs/plans/glut-round.md`, W1) — raw as Opencode's `webfetch`, no second
+//! `web_fetch`: one web page as Markdown (W1) — raw as Opencode's `webfetch`, no second
 //! model in between. Safe as Claude Code's `WebFetch`: `https` only, no local or private address (checked after DNS,
 //! and the checked address is the one connected to), a redirect to another host handed back instead of followed, text
 //! types only. The gate judges a call as `Access::Network` for the page's host — the same rules the sandbox proxy asks.

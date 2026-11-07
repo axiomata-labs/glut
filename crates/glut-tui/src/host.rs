@@ -1,4 +1,4 @@
-//! What a host adds to a session of the TUI (`docs/plans/glut-tui.md` T20, TUI8a): the program that runs the screen
+//! What a host adds to a session of the TUI (T20, TUI8a): the program that runs the screen
 //! for its own ends — Axiomata's Studio pane for a card — says how the session is built ([`Launch`]) and takes part
 //! in it ([`Host`]): the run's settings, the budget before each turn, a second place to answer the gate's questions,
 //! the steps for its own log, the session's state, the conversation after each turn. Through a [`HostLink`] it tells

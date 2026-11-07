@@ -1,4 +1,4 @@
-//! Sign-in by subscription (`docs/plans/glut-providers.md`, PV4): a provider the owner signs in to with an account
+//! Sign-in by subscription (PV4): a provider the owner signs in to with an account
 //! instead of a key — today ChatGPT's plan, through "Sign in with ChatGPT" for open-source apps. The sign-in itself is
 //! OAuth's authorization code with PKCE ([`crate::oauth`]); what it leaves is a [`Record`] in the provider's place of
 //! the secret store (`<id>@<host>`, the Keychain or the 0600 file), and a run's model asks a [`Credential`] for a

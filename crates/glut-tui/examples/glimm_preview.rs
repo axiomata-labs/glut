@@ -1,4 +1,4 @@
-//! Preview for Glimm's finer drawing (T72, `docs/plans/glimm-fine.md`, "Preview (step 1)"): reads a design file of
+//! Preview for Glimm's finer drawing (T72): reads a design file of
 //! pixel frames of any even size (its first line that is no comment says `size <W> <H>`; 32 × 20 is 16 × 10 cells)
 //! and prints them in the terminal as Unicode quadrant blocks (each cell 2 × 2 pixels), in true colour, with the glow,
 //! the heart's pulse and the ash greys of a failed Glimm. Self-contained on purpose (`glimm.rs` is a private module of

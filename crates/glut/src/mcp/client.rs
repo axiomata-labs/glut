@@ -1,4 +1,4 @@
-//! The MCP protocol (`docs/plans/harness.md`, HS5, M3): one connected server behind one of two transports, the
+//! The MCP protocol (HS5, M3): one connected server behind one of two transports, the
 //! handshake, the tool list and `tools/call`.
 //!
 //! Over stdio the protocol is JSON-RPC 2.0, one message per line; over HTTP every message is one `POST`,

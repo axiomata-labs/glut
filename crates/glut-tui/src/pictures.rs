@@ -1,4 +1,4 @@
-//! The owner's images (`docs/plans/glut-tui.md`, T45): taken from the clipboard (`⌃V` — the terminal pastes text
+//! The owner's images (T45): taken from the clipboard (`⌃V` — the terminal pastes text
 //! alone), taken from a pasted or dropped path, and opened for a look. What a model is sent of them is `glut::images`'
 //! part.
 

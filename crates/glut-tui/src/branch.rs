@@ -1,4 +1,4 @@
-//! The branch the footer shows (`docs/plans/glut-tui.md`, T39): read from the repository's `HEAD` file, never by
+//! The branch the footer shows (T39): read from the repository's `HEAD` file, never by
 //! running git — the folder's repository may be anyone's, and the footer is drawn many times a second.
 
 use std::io::Read as _;

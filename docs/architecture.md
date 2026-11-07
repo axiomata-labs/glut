@@ -17,7 +17,7 @@ library in another program, read [`library.md`](library.md). The security model 
   (`record <scene>`), built from the repository's own files.
 - **`crates/glut-probe`** (binary `glut-probe`): a standalone tool that measures what a terminal offers a full-screen
   TUI (queries, colours, keys, mouse, paste, clipboard) and writes a Markdown report. It depends only on `crossterm`
-  and `rustix`, not on `glut`. Its reports are in `docs/probe/`.
+  and `rustix`, not on `glut`.
 
 **External dependency.** The only external dependency is `axiomata-files`, from the
 [Axiomata-Foundation](https://github.com/NamorX68/Axiomata-Foundation) repository. This is the guarded file service.

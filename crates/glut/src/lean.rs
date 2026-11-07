@@ -1,4 +1,4 @@
-//! The count of what Glut lean saves (`docs/plans/glut-lean.md`, N9): every compacted output, unchanged re-read and
+//! The count of what Glut lean saves (N9): every compacted output, unchanged re-read and
 //! relocated result is one line of `~/.glut/lean.jsonl` — the kind and the characters before and after — written by
 //! every Glut run (the app's, `glut`'s, the Studio's), so `glut gain` shows where the mechanisms fire and what they
 //! spare. A known command in front of a pipe is a line too, with nothing saved: it shows whether filtering inside a

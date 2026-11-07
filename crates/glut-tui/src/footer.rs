@@ -1,4 +1,4 @@
-//! The footer (`docs/plans/glut-tui.md`, T39): the session's status as coloured segments — the vi state, the mode,
+//! The footer (T39): the session's status as coloured segments — the vi state, the mode,
 //! the model, the context, the cost, the branch — with the key hints beside them, as much of both as the line holds.
 //! Powerline's arrows join the segments where the terminal draws them; plain blocks where it may not.
 

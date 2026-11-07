@@ -1,4 +1,4 @@
-//! A run's ledger of refused calls (Glut robust, #112, `docs/plans/glut-robust.md` R1–R5): a model that is refused
+//! A run's ledger of refused calls (Glut robust, #112, R1–R5): a model that is refused
 //! keeps asking for the same call, or goes around it, until the step limit — measured 30 identical fetches and
 //! `curl`, `python` and a subagent after them. The ledger warns the model once and then ends the run.
 //!

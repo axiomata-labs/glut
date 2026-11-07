@@ -1,4 +1,4 @@
-//! Images drawn by the terminal itself (`docs/plans/glut-tui.md`, T46b/c): the kitty graphics protocol (Ghostty, kitty,
+//! Images drawn by the terminal itself (T46b/c): the kitty graphics protocol (Ghostty, kitty,
 //! WezTerm) and iTerm2's inline images. ratatui knows no images, so a picture's cells are left blank and carry a mark —
 //! an underline colour standing for the picture — that the frame's buffer gives up after each draw ([`take`]), as
 //! the links' marks do. A picture whose every cell is still marked stands whole on the screen and is placed there

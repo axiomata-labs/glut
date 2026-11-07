@@ -1,4 +1,4 @@
-//! The project's to-dos (`docs/plans/glut-tui.md`, T41): its `TODO.md`, a GitHub checklist the owner and the model
+//! The project's to-dos (T41): its `TODO.md`, a GitHub checklist the owner and the model
 //! both keep, read for the To-dos tab and changed one line at a time — a box ticked, an item added at the end, the
 //! done ones dropped. The rest of the file is never touched, a change is made to the file as it is at that moment
 //! (found by its text, not its line number), and nothing is read or written through a link.

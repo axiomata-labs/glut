@@ -1,4 +1,4 @@
-//! The harness's own settings files (`docs/plans/harness.md`, P4, P5): `~/.glut/settings.json` (the owner's),
+//! The harness's own settings files (P4, P5): `~/.glut/settings.json` (the owner's),
 //! `<project>/.glut/settings.json` and `<project>/.glut/settings.local.json`.
 //!
 //! A project may always make a run stricter: its `deny` and `ask` rules count in every folder. What would loosen it —
@@ -125,7 +125,7 @@ struct File {
     /// `{"gemma4:12b": 32768}`. The owner's only.
     #[serde(default, rename = "contextWindow")]
     context_window: HashMap<String, u32>,
-    /// What the models cost, for a budget in money (`docs/plans/glut-cards.md`, C6):
+    /// What the models cost, for a budget in money (C6):
     /// `{"deepseek/deepseek-v4.1-flash": {"input_per_m": 0.1, "output_per_m": 0.4}}`. The owner's only.
     #[serde(default)]
     prices: HashMap<String, Prices>,

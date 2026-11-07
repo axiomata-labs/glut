@@ -1,4 +1,4 @@
-"""Glut's results and speed on fixed tasks (docs/plans/glut-tui.md, T47): run it before and after a change to the system
+"""Glut's results and speed on fixed tasks (T47): run it before and after a change to the system
 prompt or the tools, on the same models — a change stays only where every task is solved as often as before and Glut
 needs no more calls. Each run works in a fresh copy of `fixture/` and is checked by what it left there or answered.
 

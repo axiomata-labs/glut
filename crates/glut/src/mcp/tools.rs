@@ -1,4 +1,4 @@
-//! The MCP tools as the model sees them (`docs/plans/harness.md`, HS5, M5): one [`Tool`] per tool a connected
+//! The MCP tools as the model sees them (HS5, M5): one [`Tool`] per tool a connected
 //! server offers, named `mcp__<server>__<tool>` and judged by the run's rules like every other tool.
 
 use std::sync::Arc;

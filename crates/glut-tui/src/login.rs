@@ -1,4 +1,4 @@
-//! `/login` (`docs/plans/glut-providers.md`, PV4): the subscriptions the owner may sign in to — today the ChatGPT
+//! `/login` (PV4): the subscriptions the owner may sign in to — today the ChatGPT
 //! plan — with how each stands, and the providers whose key a sign-in hands out (OpenRouter, PV4b); Enter signs in,
 //! or out. The sign-in goes as an MCP server's does (T56): the address
 //! shown first, the browser opened only on the owner's ⏎, over SSH the address the browser ended on pasted back

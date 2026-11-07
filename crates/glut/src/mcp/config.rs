@@ -1,4 +1,4 @@
-//! Where a run's MCP servers come from (`docs/plans/harness.md`, HS5, M1): the owner's `~/.glut/mcp.json` and
+//! Where a run's MCP servers come from (HS5, M1): the owner's `~/.glut/mcp.json` and
 //! the project's `.mcp.json`, both read in one shape and merged, with the owner's winning on a name both hold.
 //!
 //! Both files are Claude Code's `{"mcpServers": {…}}`, so a repository's servers work as they are. What a server
@@ -362,7 +362,7 @@ pub fn load(home: &Path, project: &Path) -> Result<Vec<ServerEntry>, HarnessErro
 }
 
 /// The owner's servers alone (`~/.glut/mcp.json`), checked as [`load`] checks them: the one list the app's own
-/// Opencode instances start too (`docs/plans/agent-isolation.md`, D7).
+/// Opencode instances start too (D7).
 ///
 /// # Errors
 ///

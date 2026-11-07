@@ -1,4 +1,4 @@
-//! Glut's own providers (`docs/plans/glut-providers.md`, PV1): the catalog of known ones, the owner's configured
+//! Glut's own providers (PV1): the catalog of known ones, the owner's configured
 //! ones in `~/.glut/providers.json`, and their keys in a secret store. A run named by `--provider` (or the default
 //! provider) gets its endpoint from here; a host that passes its own endpoint never comes here (P7).
 

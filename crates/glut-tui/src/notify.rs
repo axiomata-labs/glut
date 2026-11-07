@@ -1,4 +1,4 @@
-//! Telling the owner a turn ended or asks while they look elsewhere (`docs/plans/glut-tui.md`, T53): through the
+//! Telling the owner a turn ended or asks while they look elsewhere (T53): through the
 //! terminal's own notifications (OSC 9, kitty's OSC 99) where it is known to have them, the bell beside it always —
 //! macOS's notifications only on the owner's `/notify system` and never over SSH, for a click on one opens Script
 //! Editor, not the terminal. Only while the window is not in front (the terminal's focus reports); a turn's end only

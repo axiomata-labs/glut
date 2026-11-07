@@ -1,4 +1,4 @@
-//! The built-in commands (`docs/plans/harness.md`, HS4, C5): written in Rust, not read from a file, always there
+//! The built-in commands (HS4, C5): written in Rust, not read from a file, always there
 //! and always before a file's command of the same name — and answered without a model, so their text goes to the
 //! front end and costs nothing.
 //!

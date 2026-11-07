@@ -1,4 +1,4 @@
-//! What a shell command does, as far as rules can tell (`docs/plans/harness.md`, P2).
+//! What a shell command does, as far as rules can tell (P2).
 //!
 //! A small lexer in the shell's own terms — quotes, escapes, operators, redirections — that is deliberately unsure:
 //! whatever it cannot vouch for makes the command *opaque*. That is a comment, a here-document, a substitution or any

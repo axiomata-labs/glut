@@ -2,7 +2,7 @@
 
 How an editor plugin (`glut.nvim`, `glut-vscode` for VS Code and its forks, `glut-jetbrains`) and Glut talk, so Glut knows the file, the cursor
 and the selection the owner works on, reads the editor's buffers, and shows its edits as the editor's own diffs. The
-plan is T64c in `docs/plans/glut-tui.md`; the pattern is Gemini CLI's published IDE companion spec and Claude Code's
+pattern is Gemini CLI's published IDE companion spec and Claude Code's
 IDE integration, the protocol Glut's own.
 
 ## Roles

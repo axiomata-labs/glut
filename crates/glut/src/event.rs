@@ -415,7 +415,7 @@ mod tests {
         })
         .unwrap();
         // Tagged `event` like every event; the `{"type": …}` in the HS6 plan was the slip of the pen the HS4 and
-        // HS5 plans made too (`docs/plans/harness.md`, "HS5 — what exists").
+        // HS5 plans made too ("HS5 — what exists").
         assert_eq!(
             line,
             json!({"event": "skill", "name": "demo", "how": "run"})

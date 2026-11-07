@@ -1,4 +1,4 @@
-//! The `glut_file` tool (`docs/plans/glut-tui.md`, T37b): Glut's own files a skill, an agent or a hook lives in — the
+//! The `glut_file` tool (T37b): Glut's own files a skill, an agent or a hook lives in — the
 //! owner's (`~/.glut/`) or the project's (`.glut/`) — for the skills that make them (`make-skill`, `make-hook`,
 //! `make-agent`). The file tools never reach these folders, so this tool is the one way in, and only to three kinds
 //! of file, each named, never a path: `skills/<name>/SKILL.md`, `agents/<name>.md` and the owner's `hooks.json`.

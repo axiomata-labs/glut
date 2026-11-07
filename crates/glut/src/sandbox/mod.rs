@@ -1,4 +1,4 @@
-//! The sandbox the shell's commands run in (`docs/plans/harness.md`, HS3b): macOS's Seatbelt (`sandbox-exec`), the
+//! The sandbox the shell's commands run in (HS3b): macOS's Seatbelt (`sandbox-exec`), the
 //! same mechanism Claude Code and Codex use; on Linux bubblewrap plus seccomp (T59, [`bwrap`], [`linux`]) — the same
 //! rules, held by mounts and namespaces. Unlike the rules of HS3a, which judge what a command *says*, the
 //! operating system holds whatever the command *does* — a script, `find -delete`, a daemon that left its process

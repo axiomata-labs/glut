@@ -1,4 +1,4 @@
-//! Several sessions in one window (`docs/plans/glut-tui.md`, T36a): the panes, each a whole session of its own — its
+//! Several sessions in one window (T36a): the panes, each a whole session of its own — its
 //! stream, input, model, mode and session file — sharing the terminal. Keys and pastes go to the active pane alone,
 //! a click moves into the pane under it, the wheel goes to the pane under it; each session's reports reach its own
 //! pane. A new pane is built beside the screen, so the others go on while its servers start.

@@ -1,4 +1,4 @@
-//! The shell tools (`docs/plans/harness.md`, HS2, S1–S6): `bash` runs a command in the owner's shell, in the
+//! The shell tools (HS2, S1–S6): `bash` runs a command in the owner's shell, in the
 //! foreground or as a background job; `bash_output` and `kill_shell` look after the jobs.
 //!
 //! One [`Session`] per run holds what the commands share: the shell, the profile snapshot (S2), the folder the last

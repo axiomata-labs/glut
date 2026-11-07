@@ -1,4 +1,4 @@
-//! The command line's help in the language read now (`docs/plans/glut-tui.md`, T48): clap's derive writes it in
+//! The command line's help in the language read now (T48): clap's derive writes it in
 //! English; the tree is built, then every about and help text is looked up by its English words in the catalog, and
 //! the headings are the language's. Command syntax (`[OPTIONS]`, `<MODEL>`) and clap's own errors stay as clap
 //! writes them.

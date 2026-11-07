@@ -49,7 +49,7 @@ image.workspace = true
 # The ChatGPT sign-in's ID token, verified against OpenAI's published keys (PV4).
 ring.workspace = true
 
-# The macOS Keychain, where a provider's key waits between runs (docs/plans/glut-providers.md, P4).
+# The macOS Keychain, where a provider's key waits between runs (P4).
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3"
 
