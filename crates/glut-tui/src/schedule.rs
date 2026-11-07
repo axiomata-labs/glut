@@ -1596,7 +1596,15 @@ mod tests {
             "the run before holds it"
         );
         drop(first);
-        assert!(Lock::take(&home, "tests").unwrap().is_some());
+        // A process another test starts at this moment holds a copy of the lock's file between its fork and its exec
+        // (the flag that closes it acts only at the exec), and with it the lock: so the lock comes free within moments.
+        let free = (0..100).any(|_| {
+            Lock::take(&home, "tests").unwrap().is_some() || {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                false
+            }
+        });
+        assert!(free, "the lock comes free once its run ended");
         forget_runs(&home, "tests");
         assert!(runs(&home, "tests").is_empty());
         let _ = std::fs::remove_dir_all(home);
