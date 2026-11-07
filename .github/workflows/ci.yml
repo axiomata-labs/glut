@@ -153,7 +153,7 @@ jobs:
           (umask 077; printf '%s\n' "$SITE_DEPLOY_KEY" > "$RUNNER_TEMP/site-deploy-key")
           echo "key=$RUNNER_TEMP/site-deploy-key" >> "$GITHUB_OUTPUT"
       - if: steps.deploy-key.outputs.key != ''
-        name: the site onto glut-ai.com (main: a push or a run by hand)
+        name: the site onto glut-ai.com (on main, pushed or run by hand)
         working-directory: glut
         # The runners' key of its own is `restrict`ed on the server (no forwarding, no terminal); the server's host keys
         # are pinned in site/deploy/known_hosts. A site with a broken link is never sent: the deploy checks first. Built
