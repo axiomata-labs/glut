@@ -1,18 +1,48 @@
-# Glut
+<p align="center">
+  <img src="docs/images/glimm.svg" width="88" alt="Glimm, Glut's ember">
+</p>
 
-**A coding agent for your terminal that runs every command in a sandbox, asks before it changes what matters, and
-works with whatever model you choose.**
+<h1 align="center">Glut</h1>
 
-Glut is a lean tool-calling loop over any OpenAI-compatible, Anthropic or Responses API — OpenRouter, OpenAI, a
-ChatGPT plan, Anthropic, Gemini, DeepSeek, Mistral, local models through Ollama or LM Studio, and two dozen more. It
-reads and edits your project, runs your tests and builds, and shows you every step in a terminal UI made for long
-sessions: several agents side by side, an arena that pits models against each other, plans that run while you
-sleep, and your editor at hand.
+<p align="center">
+  <b>A coding agent that doesn't trust its model.</b><br>
+  Every command in an OS sandbox · any model, local ones too · tool output never cut · one Rust binary
+</p>
+
+<p align="center">
+  <a href="https://github.com/axiomata-labs/glut/actions/workflows/ci.yml"><img src="https://github.com/axiomata-labs/glut/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://crates.io/crates/glut-tui"><img src="https://img.shields.io/crates/v/glut-tui?color=ff7a1a" alt="crates.io"></a>
+  <a href="https://github.com/axiomata-labs/glut/releases/latest"><img src="https://img.shields.io/github/v/release/axiomata-labs/glut?color=ffa040" alt="Release"></a>
+  <img src="https://img.shields.io/badge/macOS%20%C2%B7%20Linux-1a1a1a" alt="macOS · Linux">
+  <img src="https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-b8360f" alt="MIT / Apache-2.0">
+</p>
+
+<p align="center">
+  <a href="https://glut-ai.com">Website</a> ·
+  <a href="docs/getting-started.md">Getting started</a> ·
+  <a href="crates/glut-tui/manual/en/">Manual</a> ·
+  <a href="docs/security.md">Security model</a> ·
+  <a href="docs/comparison.md">Compared with others</a>
+</p>
+
+```sh
+curl -fsSL https://github.com/axiomata-labs/glut/releases/latest/download/install.sh | sh
+```
+
+![A real run: asked to read .env and push, Glut fixes the failing tests; the sandbox refuses the .env read, the gate stops the push, and every judgement shows in the side panel](docs/images/demo.gif)
+
+<p align="center"><sub>A real run with Claude Sonnet, time shortened while the model works. The task asks for
+<code>cat .env</code> and a push: the sandbox refuses the read, the gate stops the push, the tests get fixed anyway.</sub></p>
+
+Glut assumes the model can be steered by anything it reads — a README, a web page, a command's output — and limits
+what it can *do* instead of trying to detect it. It is a lean tool-calling loop over any OpenAI-compatible, Anthropic
+or Responses API — OpenRouter, OpenAI, a ChatGPT plan, Anthropic, Gemini, DeepSeek, Mistral, local models through
+Ollama or LM Studio, and two dozen more. It reads and edits your project, runs your tests and builds, and shows you
+every step in a terminal UI made for long sessions: several agents side by side, an arena that pits models against
+each other, plans that run while you sleep, and your editor at hand.
 
 > **Status: 0.1.0, early.** Glut is used every day by its author and is solid on macOS; Linux is tested in
 > containers. Expect rough edges, and please [report them](https://github.com/axiomata-labs/glut/issues).
-
-![Glut after a first task: the failing tests found, two bugs fixed, the steps it took on the left, its side panel on the right](docs/images/scene-1.png)
 
 ## Why Glut
 
@@ -42,12 +72,26 @@ sleep, and your editor at hand.
 
 ## A look
 
-| The gate | The arena | Neovim |
+| A first task | The arena | Neovim |
 |---|---|---|
-| ![A `.env` read refused by the sandbox and a `git push` refused at the gate, the judgements in the side panel](docs/images/scene-2.png) | ![Three models' results side by side in the arena's card, the chosen one's diff below](docs/images/scene-5.png) | ![Glut's edit as a Neovim diff, the owner's own line on its right side, Glut's question beside it](docs/images/scene-8.png) |
-| `.env` refused, `git push` asked and refused | three models blind, their time, cost and diff | an edit as a diff in your editor, your change in it |
+| ![Glut after a first task: the failing tests found, two bugs fixed, the steps it took on the left, its side panel on the right](docs/images/scene-1.png) | ![Three models' results side by side in the arena's card, the chosen one's diff below](docs/images/scene-5.png) | ![Glut's edit as a Neovim diff, the owner's own line on its right side, Glut's question beside it](docs/images/scene-8.png) |
+| failing tests found and fixed, every step shown | three models blind, their time, cost and diff | an edit as a diff in your editor, your change in it |
 
-Every scene is a real run; the website replays them as text.
+Every scene is a real run; [the website](https://glut-ai.com) replays ten of them as text.
+
+## At a glance
+
+As of 2026-11-05, from each tool's own documentation — the [full comparison](docs/comparison.md) has nine tools, the
+sources, and where the others are ahead.
+
+| | Glut | Claude Code | Codex CLI | opencode | Aider |
+|---|---|---|---|---|---|
+| Models | any vendor, local | Claude only | OpenAI, local | any vendor, local | any vendor, local |
+| OS sandbox for commands | on by default | opt-in | on by default | none | none |
+| Network of commands | proxy asks per host | proxy, allow-list | off; optional proxy | none | none |
+| Tool output | never cut | cut, rest in a file | token budget | cut, rest in a file | asks before adding |
+| Models side by side | arena, test bench | — | — | — | — |
+| Licence | MIT / Apache-2.0 | proprietary | Apache-2.0 | MIT | Apache-2.0 |
 
 ## Install
 
@@ -91,7 +135,8 @@ key, `/help <command>` opens its page. A walk through the first session:
 
 ## Contributing
 
-Issues and pull requests are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). A vulnerability goes to
+Issues and pull requests are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). Found a way past the sandbox or the
+gate? That is the most useful thing you can tell us. A vulnerability goes to
 [SECURITY.md](SECURITY.md), not to an issue. The repository's [AGENTS.md](AGENTS.md) is what a coding agent (Glut,
 or another) should read before it touches the code.
 
