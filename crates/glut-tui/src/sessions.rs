@@ -70,6 +70,12 @@ pub struct Letter {
     /// can do no more than that — as `tell` between the panes of one window. None: it waits for the owner.
     #[serde(default)]
     pub rights: Option<Rights>,
+    /// A request (#142): the turn this message starts answers the sender, by the random number it travels by.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request: Option<u64>,
+    /// The answer to the receiver's request of this random number (#142).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answers: Option<u64>,
 }
 
 /// What a sending pane may do, and its folder.
@@ -112,7 +118,8 @@ pub struct Card {
 #[serde(tag = "op", rename_all = "lowercase")]
 pub enum Ask {
     Who,
-    Send(Letter),
+    /// Boxed: a letter is large beside the question who a window is.
+    Send(Box<Letter>),
 }
 
 /// What a window answers.
@@ -137,6 +144,8 @@ pub struct Link {
     socket: PathBuf,
     name: Mutex<String>,
     seen: Mutex<Vec<(Card, PathBuf)>>,
+    /// The names of windows seen before whose process has ended since (#142): what waits on them hears so.
+    ended: Mutex<Vec<String>>,
 }
 
 impl Link {
@@ -167,6 +176,7 @@ impl Link {
             socket,
             name: Mutex::new(String::new()),
             seen: Mutex::new(Vec::new()),
+            ended: Mutex::new(Vec::new()),
         });
         // Named at once, the others not asked yet — a window that does not answer must not hold this one up; the
         // first look settles a name another window has already ([`Link::look`]).
@@ -258,8 +268,28 @@ impl Link {
             *self.name.lock().unwrap_or_else(PoisonError::into_inner) = fresh_name(base, &taken);
         }
         let cards = found.iter().map(|(card, _)| card.clone()).collect();
-        *self.seen.lock().unwrap_or_else(PoisonError::into_inner) = found;
+        let before = std::mem::replace(
+            &mut *self.seen.lock().unwrap_or_else(PoisonError::into_inner),
+            found,
+        );
+        // A window that only did not answer this time (stopped, busy) has not ended: only one whose socket is gone
+        // or whose process is.
+        let gone: Vec<String> = before
+            .into_iter()
+            .filter(|(_, path)| !path.exists() || ended(path))
+            .map(|(card, _)| card.name)
+            .collect();
+        let mut ended_names = self.ended.lock().unwrap_or_else(PoisonError::into_inner);
+        ended_names.extend(gone);
+        let excess = ended_names.len().saturating_sub(MOST_SEATS * 4);
+        ended_names.drain(..excess);
+        drop(ended_names);
         cards
+    }
+
+    /// The windows that ended since this was last asked, by name (#142).
+    pub fn take_ended(&self) -> Vec<String> {
+        std::mem::take(&mut *self.ended.lock().unwrap_or_else(PoisonError::into_inner))
     }
 
     /// Whether `word` names another window, or a pane of one (`name/2`), as last seen.
@@ -292,7 +322,7 @@ impl Link {
                 find().ok_or_else(|| format!("there is no Glut session {window}"))?
             }
         };
-        match talk(&path, &Ask::Send(letter)).await {
+        match talk(&path, &Ask::Send(Box::new(letter))).await {
             Ok(Reply {
                 sent: Some(sent), ..
             }) => sent,
@@ -578,7 +608,7 @@ pub(crate) fn fake_window(link: &Link, name: &str) -> mpsc::UnboundedReceiver<Le
                     sent: None,
                 },
                 Ask::Send(letter) => {
-                    let _ = letters.send(letter);
+                    let _ = letters.send(*letter);
                     Reply {
                         card: None,
                         sent: Some(Ok("delivered".into())),
@@ -644,7 +674,7 @@ mod tests {
 
     #[test]
     fn a_letter_goes_as_one_json_line_and_back() {
-        let ask = Ask::Send(Letter {
+        let ask = Ask::Send(Box::new(Letter {
             from: "a-xy".into(),
             to: "2".into(),
             text: "line one\nline two".into(),
@@ -653,7 +683,9 @@ mod tests {
             notify: true,
             chain: 3,
             rights: None,
-        });
+            request: Some(4_000_000_007),
+            answers: None,
+        }));
         let line = serde_json::to_string(&ask).unwrap();
         assert!(!line.contains('\n'));
         assert_eq!(serde_json::from_str::<Ask>(&line).unwrap(), ask);
@@ -705,6 +737,8 @@ mod tests {
             notify: false,
             chain: 0,
             rights: None,
+            request: None,
+            answers: None,
         };
         let sent = first.send("beta-xy/2", letter).await.unwrap();
         assert!(sent.ends_with(r#"to "2": hello"#), "{sent}");
@@ -723,6 +757,8 @@ mod tests {
             notify: false,
             chain: 0,
             rights: None,
+            request: None,
+            answers: None,
         }
     }
 }

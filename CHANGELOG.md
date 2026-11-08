@@ -10,6 +10,12 @@ follow [Semantic Versioning](https://semver.org/) — while Glut is at 0.x, a mi
 - **Who is here**: the models get a tool `who` beside `tell` — every other agent of this window and of the other Glut
   windows, with its role, model, mode, folder, branch, whether it is busy, and the line it set for what it works on
   (its own words). A model sets its own line with `who {"doing": …}`.
+- **Requests with answers**: `tell` with `answer` asks another agent for something, in this window or another; the
+  turn it starts there answers — its last reply comes back to the asker as a message marked as that request's
+  answer, while the asker works on. A busy agent takes it after its turn, and the asker hears where it stands in line;
+  one that cannot do it says so. Where nobody will answer (set aside with Esc, a turn refused or one before it
+  unfinished, the pane closed, the window ended, an hour gone) Glut tells the asker. Between windows a request
+  travels by a random number, so no window answers what it was not asked.
 
 ### Changed
 

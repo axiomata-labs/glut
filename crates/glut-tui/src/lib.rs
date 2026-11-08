@@ -50,6 +50,7 @@ mod pictures;
 mod plan;
 mod prefs;
 mod projects;
+mod requests;
 mod review;
 mod runs;
 mod said;

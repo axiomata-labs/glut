@@ -679,6 +679,8 @@ pub struct Panes {
     pub sessions_off: bool,
     /// Who asked to hear when a pane's turn ends (Q8): the pane's session id and the asker's address.
     notify_back: Vec<(u64, String)>,
+    /// Requests between agents and the answers owed (#142).
+    requests: crate::requests::Requests,
     /// The kept window name last tried, so one another window holds is not tried at every frame.
     window_tried: Option<String>,
     /// The pane the keys go back to once another one closed (`/close 2`): the owner stays where they were.
@@ -790,6 +792,7 @@ impl Panes {
             link: None,
             sessions_off: false,
             notify_back: Vec::new(),
+            requests: crate::requests::Requests::default(),
             window_tried: None,
             return_to: None,
             arena: None,
@@ -1022,6 +1025,7 @@ impl Panes {
         {
             self.chain = 0;
         }
+        self.settle_requests();
         let members: Vec<u64> = self
             .arena
             .iter()
@@ -1071,6 +1075,7 @@ impl Panes {
             to,
             text,
             notify,
+            answer,
             reply,
         } = report
         {
@@ -1081,14 +1086,41 @@ impl Panes {
                     .filter(|word| self.resolve(word, source).is_none())
                     .filter(|word| self.reaches_window(word))
             {
-                return self.tell_window(source, address.to_owned(), text, notify, reply);
+                return self.tell_window(source, address.to_owned(), text, notify, answer, reply);
             }
-            let _ = reply.send(self.tell(id, to, text));
+            let _ = reply.send(self.tell(id, to, text, answer));
             return;
         }
         // A turn asked about by another window ended (Q8): it hears so, once.
         if matches!(report, Report::Done(..)) {
             self.notify_done(id);
+        }
+        // A request's turn ended (#142): its last reply goes to the asker — taken before the pane goes on to its next
+        // message, which may be another request.
+        if let Report::Done(outcome, _) = &report
+            && let Some(at) = self.list.iter().position(|pane| pane.id == id)
+            && let Some(token) = self.list[at].app.answering.take()
+            && let Some(owed) = self.requests.take(token, id)
+        {
+            // Named as the asker reads it now: a pane closed since may have renumbered this one.
+            let label = self.label(at);
+            let text = crate::requests::answer_text(
+                outcome.reason,
+                outcome.answer.as_deref(),
+                &label,
+                crate::tell::MOST_BYTES,
+            );
+            self.answer(at, owed, &text);
+        }
+        // A request's turn refused before it began (a hook) never ends with a Done: its asker hears so.
+        if let Report::Refused { .. } = &report
+            && let Some(at) = self.list.iter().position(|pane| pane.id == id)
+            && let Some(token) = self.list[at].app.answering.take()
+        {
+            self.list[at]
+                .app
+                .declined
+                .push((token, crate::requests::Unanswered::Refused));
         }
         let Some(at) = self.list.iter().position(|pane| pane.id == id) else {
             return;
@@ -1338,7 +1370,13 @@ impl Panes {
     /// none): delivered as a message of the other model, never the owner's — held for the owner's Enter once the models
     /// have written [`MOST_CHAIN`] times without the owner's word, refused past [`MOST_TELLS`]. What it became, for the
     /// model.
-    fn tell(&mut self, id: u64, to: Option<String>, text: String) -> Result<String, String> {
+    fn tell(
+        &mut self,
+        id: u64,
+        to: Option<String>,
+        text: String,
+        answer: bool,
+    ) -> Result<String, String> {
         let source = self
             .list
             .iter()
@@ -1361,10 +1399,19 @@ impl Panes {
                 "this session has sent {MOST_TELLS} messages to other panes: no more — tell the owner instead"
             ));
         }
+        if answer {
+            self.requests.room()?;
+        }
         self.list[source].app.tells_sent += 1;
         self.chain += 1;
         let label = self.label(target);
-        let message = crate::tell::wrapped(from, &text);
+        // A request is marked by its number, which the answering turn carries back (#142).
+        let request = answer.then(|| self.requests.number());
+        let message = crate::tell::wrapped_marked(
+            from,
+            &text,
+            request.map_or(crate::tell::Mark::Plain, crate::tell::Mark::Request),
+        );
         // A model may start a turn only in a pane that can do no more than its own: no looser mode, no "always" it
         // lacks, and the same folder — a pane elsewhere (a worktree, the repository) writes where the sender cannot —
         // unless it only plans. Else, and past the chain, it waits for the owner's Enter there, its text shown.
@@ -1381,8 +1428,12 @@ impl Panes {
             sender,
             &tr!(held_enter, pane = from),
         )?;
-        Ok(match delivered {
+        let said = match delivered {
             Delivered::Now => format!("delivered: {label} starts on it now"),
+            Delivered::AfterTurn if request.is_some() => format!(
+                "delivered: {label} is busy — yours is number {} in its line and starts once its turn ends",
+                self.list[target].app.models_waiting()
+            ),
             Delivered::AfterTurn => format!("delivered: {label} reads it after its current turn"),
             Delivered::WhenFree => format!("delivered: {label} reads it once it is free"),
             Delivered::OnEnter if wider => format!(
@@ -1394,7 +1445,150 @@ impl Panes {
                  owner says so"
             ),
             Delivered::OnEnter => format!("held: {label} reads it once the owner goes on there"),
-        })
+        };
+        let Some(request) = request else {
+            return Ok(said);
+        };
+        self.requests.owe(
+            request,
+            self.list[target].id,
+            label.clone(),
+            crate::requests::Back::Pane { id, request },
+        );
+        Ok(format!(
+            "request r{request}, {said}. Its answer comes back to you as a message marked answers=\"r{request}\": go \
+             on with other work meanwhile."
+        ))
+    }
+
+    /// The answer `text` of the pane at `at` to the request `owed` (#142): to the asking pane here, or to its window.
+    /// It may start a turn there whatever the asker's mode — the asker asked for it, as a subagent's result comes
+    /// back to its parent, and the turn runs on the asker's own rights —, within the chain of messages without the
+    /// owner.
+    fn answer(&mut self, at: usize, owed: crate::requests::Owed, text: &str) {
+        use crate::requests::Back;
+        self.chain += 1;
+        match owed.back {
+            Back::Pane { id, request } => {
+                let from = self.list[at].number;
+                let message =
+                    crate::tell::wrapped_marked(from, text, crate::tell::Mark::Answer(request));
+                let may_start = self.chain <= MOST_CHAIN;
+                if let Some(asker) = self.list.iter_mut().find(|pane| pane.id == id) {
+                    asker
+                        .app
+                        .deliver_answer(message, may_start, &tr!(held_enter, pane = from));
+                }
+            }
+            Back::Window { address, nonce } => {
+                let letter = crate::sessions::Letter {
+                    from: self.address(at),
+                    to: String::new(),
+                    text: text.to_owned(),
+                    by: crate::sessions::By::Model,
+                    mode: self.list[at].app.mode().name().to_owned(),
+                    notify: false,
+                    chain: self.chain,
+                    rights: Some(crate::sessions::Rights {
+                        sender: self.list[at].app.sender(),
+                        folder: self.list[at].app.parts.config.cwd.clone(),
+                    }),
+                    request: None,
+                    answers: Some(nonce),
+                };
+                self.send_answer(address, letter);
+            }
+        }
+    }
+
+    /// An answer letter to `address`, beside the screen; one that does not get there is said in the stream — the
+    /// asker's window ended or refused it.
+    fn send_answer(&self, address: String, letter: crate::sessions::Letter) {
+        let Some(link) = self.link.clone() else {
+            return;
+        };
+        let reports = self.reports.clone();
+        let id = self.list[self.active].id;
+        tokio::spawn(async move {
+            if let Err(reason) = link.send(&address, letter).await {
+                let said = tr!(sent_window_failed, address = address, reason = reason);
+                let _ = reports.send((id, Report::Host(crate::host::Signal::Note(said))));
+            }
+        });
+    }
+
+    /// Glut's word to the asking pane `asker` that its request `request` gets no answer: `text`.
+    fn notice_asker(&mut self, asker: u64, request: u32, text: &str) {
+        self.chain += 1;
+        let may_start = self.chain <= MOST_CHAIN;
+        let message = crate::tell::wrapped_session_marked(
+            "glut",
+            crate::sessions::By::Notice,
+            text,
+            crate::tell::Mark::Answer(request),
+        );
+        if let Some(pane) = self.list.iter_mut().find(|pane| pane.id == asker) {
+            pane.app
+                .deliver_answer(message, may_start, &tr!(held_window_chain, from = "glut"));
+        }
+    }
+
+    /// The requests' books, once a frame (#142): a request that never reached its window waits for nothing, a
+    /// closed asker hears nothing more, and the asker of a request nobody will answer hears so — set aside, refused,
+    /// behind a turn that did not finish, its pane closed, an hour gone.
+    fn settle_requests(&mut self) {
+        self.requests.settle_failures();
+        let open: Vec<u64> = self.list.iter().map(|pane| pane.id).collect();
+        self.requests.forget_asker(&open);
+        for owed in self.requests.closed(&open) {
+            self.answer_unanswered(owed, "it was closed");
+        }
+        for at in 0..self.list.len() {
+            let pane = self.list[at].id;
+            for (token, why) in std::mem::take(&mut self.list[at].app.declined) {
+                if let Some(owed) = self.requests.take(token, pane) {
+                    self.answer_unanswered(owed, why.why());
+                }
+            }
+        }
+        let (old, stale) = self.requests.expired(Instant::now());
+        for owed in old {
+            self.answer_unanswered(owed, "no answer came within an hour");
+        }
+        for (asker, request, address) in stale {
+            self.notice_asker(
+                asker,
+                request,
+                &format!("{address} gave no answer within an hour: the request is closed"),
+            );
+        }
+    }
+
+    /// Glut's own answer to a request no turn will answer (#142), `why` none will.
+    fn answer_unanswered(&mut self, owed: crate::requests::Owed, why: &str) {
+        let text = format!("{} will not answer: {why}", owed.label);
+        match owed.back {
+            crate::requests::Back::Pane { id, request } => self.notice_asker(id, request, &text),
+            crate::requests::Back::Window { address, nonce } => {
+                let Some(link) = self.link.as_ref() else {
+                    return;
+                };
+                self.chain += 1;
+                let letter = crate::sessions::Letter {
+                    from: link.name(),
+                    to: String::new(),
+                    text,
+                    by: crate::sessions::By::Notice,
+                    mode: String::new(),
+                    notify: false,
+                    chain: self.chain,
+                    rights: None,
+                    request: None,
+                    answers: Some(nonce),
+                };
+                self.send_answer(address, letter);
+            }
+        }
     }
 
     /// `/send` alone: whom to write to — the other panes and agents of this window, then the other windows' panes as
@@ -1534,12 +1728,17 @@ impl Panes {
         address: String,
         text: String,
         notify: bool,
+        answer: bool,
         reply: tokio::sync::oneshot::Sender<Result<String, String>>,
     ) {
         let Some(link) = self.link.clone() else {
             let _ = reply.send(Err("this window talks to no other".into()));
             return;
         };
+        if answer && let Err(reason) = self.requests.room() {
+            let _ = reply.send(Err(reason));
+            return;
+        }
         if self.list[source].app.tells_sent >= MOST_TELLS {
             let _ = reply.send(Err(format!(
                 "this session has sent {MOST_TELLS} messages: no more — tell the owner instead"
@@ -1560,9 +1759,35 @@ impl Panes {
                 sender: self.list[source].app.sender(),
                 folder: self.list[source].app.parts.config.cwd.clone(),
             }),
+            request: None,
+            answers: None,
         };
+        let Some(request) = answer.then(|| self.requests.number()) else {
+            tokio::spawn(async move {
+                let _ = reply.send(link.send(&address, letter).await);
+            });
+            return;
+        };
+        // It travels by a random number: no window answers what it was not sent.
+        let nonce = self
+            .requests
+            .asked(request, self.list[source].id, address.clone());
+        let letter = crate::sessions::Letter {
+            request: Some(nonce),
+            ..letter
+        };
+        let failed = self.requests.failed();
         tokio::spawn(async move {
-            let _ = reply.send(link.send(&address, letter).await);
+            let said = link.send(&address, letter).await;
+            if said.is_err() {
+                let _ = failed.send(nonce);
+            }
+            let _ = reply.send(said.map(|said| {
+                format!(
+                    "request r{request}, {said}. Its answer comes back to you as a message marked \
+                     answers=\"r{request}\": go on with other work meanwhile."
+                )
+            }));
         });
     }
 
@@ -1580,6 +1805,8 @@ impl Panes {
             notify: false,
             chain: 0,
             rights: None,
+            request: None,
+            answers: None,
         };
         let id = self.list[self.active].id;
         let reports = self.reports.clone();
@@ -1622,6 +1849,8 @@ impl Panes {
                     sender: self.list[at].app.sender(),
                     folder: self.list[at].app.parts.config.cwd.clone(),
                 }),
+                request: None,
+                answers: None,
             };
             let link = Arc::clone(&link);
             tokio::spawn(async move {
@@ -1673,7 +1902,7 @@ impl Panes {
             },
             Ask::Send(letter) => Reply {
                 card: None,
-                sent: Some(self.take_letter(letter)),
+                sent: Some(self.take_letter(*letter)),
             },
         };
         let _ = incoming.reply.send(reply);
@@ -1691,14 +1920,52 @@ impl Panes {
         if crate::sessions::check_address(&letter.from).is_err() {
             return Err("a sender of no Glut window's address".into());
         }
+        let from = crate::transcript::cut(&crate::transcript::clean(&letter.from), 60);
+        // An answer to a request a pane here sent there (#142) goes to that pane, whatever pane the letter names; one
+        // nobody here asked for is refused.
+        if let Some(nonce) = letter.answers {
+            if letter.by == By::Owner {
+                return Err("an answer comes from a model or from Glut".into());
+            }
+            let (id, request) = self
+                .requests
+                .answered(nonce)
+                .ok_or_else(|| format!("no request here waits for an answer from {from}"))?;
+            self.chain = self.chain.max(letter.chain).saturating_add(1);
+            let message = crate::tell::wrapped_session_marked(
+                &from,
+                letter.by,
+                &letter.text,
+                crate::tell::Mark::Answer(request),
+            );
+            let may_start = self.chain <= MOST_CHAIN;
+            if let Some(asker) = self.list.iter_mut().find(|pane| pane.id == id) {
+                asker
+                    .app
+                    .deliver_answer(message, may_start, &tr!(held_window_chain, from = from));
+            }
+            return Ok("delivered: the answer reached its asker".into());
+        }
         let target = if letter.to.is_empty() {
             Some(0)
         } else {
             self.resolve(&letter.to, usize::MAX)
         }
         .ok_or_else(|| format!("there is no pane {}", crate::transcript::clean(&letter.to)))?;
-        let from = crate::transcript::cut(&crate::transcript::clean(&letter.from), 60);
-        let message = crate::tell::wrapped_session(&from, letter.by, &letter.text);
+        // A model's request (#142): the turn it starts here answers its sender, by a number of this window's.
+        let token = match letter.request {
+            Some(_) if letter.by == By::Model => {
+                self.requests.room()?;
+                Some(self.requests.number())
+            }
+            _ => None,
+        };
+        let message = crate::tell::wrapped_session_marked(
+            &from,
+            letter.by,
+            &letter.text,
+            token.map_or(crate::tell::Mark::Plain, crate::tell::Mark::Request),
+        );
         let label = self.address(target);
         use crate::app::Delivered;
         let delivered = match letter.by {
@@ -1756,6 +2023,18 @@ impl Panes {
                 {
                     let id = self.list[target].id;
                     self.notify_back.push((id, letter.from.clone()));
+                }
+                if let (Some(token), Some(request)) = (token, letter.request) {
+                    let label = self.address(target);
+                    self.requests.owe(
+                        token,
+                        self.list[target].id,
+                        label,
+                        crate::requests::Back::Window {
+                            address: letter.from.clone(),
+                            nonce: request,
+                        },
+                    );
                 }
                 delivered
             }
@@ -1822,6 +2101,14 @@ impl Panes {
                 )
             })
             .collect();
+        // A request to a window that ended is never answered (#142, Q17): its asker hears so.
+        for (asker, request, address) in self.requests.left(&link.take_ended()) {
+            self.notice_asker(
+                asker,
+                request,
+                &format!("{address} will not answer: its Glut window ended"),
+            );
+        }
         let window = Some(link.name());
         let addresses: Vec<String> = (0..self.list.len()).map(|at| self.address(at)).collect();
         for (pane, address) in self.list.iter_mut().zip(addresses) {
@@ -6177,7 +6464,53 @@ mod tests {
             notify: false,
             chain: 0,
             rights: None,
+            request: None,
+            answers: None,
         }
+    }
+
+    #[tokio::test]
+    async fn an_answer_from_another_window_reaches_only_a_request_that_went_there() {
+        let (mut panes, _inlets) = split();
+        panes.sync();
+        let asker = panes.list[1].id;
+        let mut answer = letter(crate::sessions::By::Model, "default", "");
+        answer.answers = Some(5);
+        answer.text = "done there".into();
+        assert!(
+            panes.take_letter(answer.clone()).is_err(),
+            "nobody here asked"
+        );
+        let nonce = panes.requests.asked(5, asker, "beta-xy/2".into());
+        assert!(
+            panes.take_letter(answer.clone()).is_err(),
+            "the asker's count is no key"
+        );
+        answer.answers = Some(nonce);
+        assert_eq!(
+            panes.take_letter(answer.clone()).unwrap(),
+            "delivered: the answer reached its asker"
+        );
+        assert!(noted(&panes.list[1].app, "answer to r5: done there"));
+        assert!(panes.take_letter(answer).is_err(), "once");
+        // A request from there is owed back to its window by its own number.
+        let mut request = letter(crate::sessions::By::Model, "default", "");
+        request.request = Some(9);
+        request.rights = Some(crate::sessions::Rights {
+            sender: panes.list[0].app.sender(),
+            folder: panes.list[0].app.parts.config.cwd.clone(),
+        });
+        let said = panes.take_letter(request).unwrap();
+        assert!(said.starts_with("delivered"), "{said}");
+        let token = panes.list[0].app.answering.expect("its turn answers it");
+        let owed = panes.requests.take(token, panes.list[0].id).unwrap();
+        assert_eq!(
+            owed.back,
+            crate::requests::Back::Window {
+                address: "beta-xy/2".into(),
+                nonce: 9
+            }
+        );
     }
 
     #[tokio::test]
@@ -6205,24 +6538,33 @@ mod tests {
             folder: "/elsewhere".into(),
             ..rights.clone()
         });
-        let sent = asked(&mut panes, Ask::Send(elsewhere))
+        let sent = asked(&mut panes, Ask::Send(Box::new(elsewhere)))
             .sent
             .unwrap()
             .unwrap();
         assert!(sent.starts_with("waits for approval"), "{sent}");
         panes.list[1].app.held.clear();
         let unknown = letter(By::Model, &mode, "2");
-        let sent = asked(&mut panes, Ask::Send(unknown)).sent.unwrap().unwrap();
+        let sent = asked(&mut panes, Ask::Send(Box::new(unknown)))
+            .sent
+            .unwrap()
+            .unwrap();
         assert!(sent.starts_with("waits for approval"), "{sent}");
         panes.list[1].app.held.clear();
         let mut alike = letter(By::Model, &mode, "2");
         alike.rights = Some(rights);
-        let sent = asked(&mut panes, Ask::Send(alike)).sent.unwrap().unwrap();
+        let sent = asked(&mut panes, Ask::Send(Box::new(alike)))
+            .sent
+            .unwrap()
+            .unwrap();
         assert!(sent.starts_with("delivered"), "{sent}");
         // From another mode a model's message waits for the owner there (Q6), shown as no word of the owner's.
-        let sent = asked(&mut panes, Ask::Send(letter(By::Model, "auto", "2")))
-            .sent
-            .unwrap();
+        let sent = asked(
+            &mut panes,
+            Ask::Send(Box::new(letter(By::Model, "auto", "2"))),
+        )
+        .sent
+        .unwrap();
         assert!(sent.unwrap().starts_with("waits for approval"));
         let target = &panes.list[1].app;
         assert_eq!(target.held.len(), 1);
@@ -6232,23 +6574,32 @@ mod tests {
                 if text.starts_with("beta-xy/2's model (not the owner): which test fails?")
         )));
         // The owner's own word from there goes in at once, whatever the mode.
-        let sent = asked(&mut panes, Ask::Send(letter(By::Owner, "auto", "")))
-            .sent
-            .unwrap();
+        let sent = asked(
+            &mut panes,
+            Ask::Send(Box::new(letter(By::Owner, "auto", ""))),
+        )
+        .sent
+        .unwrap();
         assert!(sent.is_ok(), "{sent:?}");
         // A pane it does not have, and a window that takes nothing from outside.
         assert!(
-            asked(&mut panes, Ask::Send(letter(By::Model, "default", "7")))
-                .sent
-                .unwrap()
-                .is_err()
+            asked(
+                &mut panes,
+                Ask::Send(Box::new(letter(By::Model, "default", "7")))
+            )
+            .sent
+            .unwrap()
+            .is_err()
         );
         panes.sessions_off = true;
         assert!(
-            asked(&mut panes, Ask::Send(letter(By::Owner, "default", "")))
-                .sent
-                .unwrap()
-                .is_err()
+            asked(
+                &mut panes,
+                Ask::Send(Box::new(letter(By::Owner, "default", "")))
+            )
+            .sent
+            .unwrap()
+            .is_err()
         );
         assert!(asked(&mut panes, Ask::Who).card.unwrap().off);
     }
@@ -6261,10 +6612,103 @@ mod tests {
                 to: to.map(str::to_owned),
                 text: text.into(),
                 notify: false,
+                answer: false,
                 reply,
             },
         );
         answer.try_recv().unwrap()
+    }
+
+    fn requested(panes: &mut Panes, from: u64, text: &str) -> String {
+        let (reply, mut answer) = oneshot::channel();
+        panes.on_report(
+            from,
+            Report::Tell {
+                to: None,
+                text: text.into(),
+                notify: false,
+                answer: true,
+                reply,
+            },
+        );
+        answer.try_recv().unwrap().unwrap()
+    }
+
+    fn noted(app: &App, part: &str) -> bool {
+        app.transcript.blocks.iter().any(|block| {
+            matches!(&block.kind, crate::transcript::Kind::Note { text, .. } if text.contains(part))
+        })
+    }
+
+    #[tokio::test]
+    async fn a_request_is_answered_by_the_turn_it_starts_and_a_refused_one_says_so() {
+        let (mut panes, _inlets) = split();
+        panes.sync();
+        let (first, second) = (panes.list[0].id, panes.list[1].id);
+        let said = requested(&mut panes, first, "write the docs");
+        assert!(
+            said.starts_with("request r1, delivered: pane 2 starts on it now")
+                && said.contains("answers=\"r1\""),
+            "{said}"
+        );
+        assert!(noted(
+            &panes.list[1].app,
+            "asks for an answer: write the docs"
+        ));
+        assert_eq!(panes.list[1].app.answering, Some(1));
+        let mut answered = ended(glut::FinishReason::Answered);
+        if let Report::Done(outcome, _) = &mut answered {
+            outcome.answer = Some("Docs written.".into());
+        }
+        panes.on_report(second, answered);
+        assert!(
+            noted(&panes.list[0].app, "answer to r1: Docs written."),
+            "the asker got the last reply as the answer"
+        );
+        assert_eq!(panes.list[1].app.answering, None);
+        // A second request, its turn refused by a hook, is answered by Glut.
+        let said = requested(&mut panes, first, "and the changelog");
+        assert!(said.starts_with("request r2"), "{said}");
+        panes.on_report(
+            second,
+            Report::Refused {
+                reason: "a hook said no".into(),
+                prompt: "x".into(),
+                conversation: Vec::new(),
+            },
+        );
+        assert_eq!(panes.list[1].app.answering, None);
+        panes.sync();
+        // The asker works on the first answer: the second waits for that turn's end, then starts.
+        assert_eq!(panes.list[0].app.models_waiting(), 1);
+        panes.on_report(first, ended(glut::FinishReason::Answered));
+        assert!(noted(
+            &panes.list[0].app,
+            "answer to r2: pane 2 will not answer: the turn it started was refused"
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_request_behind_a_turn_that_did_not_finish_is_answered_by_glut() {
+        let (mut panes, _inlets) = split();
+        panes.sync();
+        let (first, second) = (panes.list[0].id, panes.list[1].id);
+        requested(&mut panes, first, "first");
+        let said = requested(&mut panes, first, "second");
+        assert!(said.contains("number 1 in its line"), "{said}");
+        panes.on_report(second, ended(glut::FinishReason::Cancelled));
+        assert_eq!(panes.list[1].app.models_waiting(), 0);
+        panes.sync();
+        // The first answer (its turn stopped) started a turn in the asker; Glut's word on the second waits for it.
+        assert!(noted(
+            &panes.list[0].app,
+            "answer to r1: pane 2 did not finish (it was stopped)"
+        ));
+        panes.on_report(first, ended(glut::FinishReason::Answered));
+        assert!(noted(
+            &panes.list[0].app,
+            "answer to r2: pane 2 will not answer: its turn before yours ended unfinished"
+        ));
     }
 
     #[tokio::test]

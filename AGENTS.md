@@ -218,6 +218,18 @@ scripts/install-dev.sh           # glut for every terminal: ~/.cargo/bin, linked
   `~/.glut/sessions.d/`, the owner's user only; a sandboxed command must never reach it (`(deny network*)` — keep any
   new network allowance off Unix sockets). A message brings no rights: a model's waits for the owner unless it comes
   from the receiving pane's mode, and every one is wrapped (`tell::wrapped_session`) as no word of this window's owner.
+- **Glut keeps the books of requests, never a model** (#142, `crates/glut-tui/src/requests.rs`, `who.rs`): `tell`
+  with `answer` marks the message `request="<token>"` in the wrapping's opening tag (only Glut writes it; `<` in the
+  text is escaped); the turn that starts from it sets `App::answering`, and `Panes::on_report` takes that token
+  *before* the app handles `Done` (which may start the next request) and sends `outcome.answer` back — only the
+  token's own pane (`Requests::take(token, pane)`). An answer may start a turn in the asker whatever its mode (the
+  asker asked, as a subagent's result returns; the turn runs on the asker's rights), within `MOST_CHAIN` — keep the
+  request itself under the "no wider" rule of `tell`. Between windows a request travels by a random `nonce`, never
+  the asker's count; an `answers` letter is taken only for an open nonce. Every way a request can end unanswered
+  (Esc, `/clear`, a hook's refusal, an unfinished turn before it, a closed pane, a window whose process ended, an
+  hour) must answer the asker through `Unanswered` — a new path that drops a request must too. `who`'s facts are
+  Glut's; a model's `doing` line is bounded (`who::doing_line`) and shown as its words; an arena's member is
+  `contain`ed (neither tool offered).
 - **Glut cleans its own `~/.glut`** (T82, `crates/glut-tui/src/clean.rs`, `glut::clean`): once a day at the start, by
   the owner's terms in `~/.glut/clean.json` (written only by `glut clean keep` / `/clean keep`). A new kind of data
   Glut keeps there gets its line in the report (`clean::ITEMS`, `--json` is read by Axiomata — add, never rename) and

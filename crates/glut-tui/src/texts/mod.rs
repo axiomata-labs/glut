@@ -2291,6 +2291,10 @@ glut::catalog! {
         from_session_model: &'static str,
         /// Another window telling a turn ended: `{session}`, `{text}`.
         from_session_notice: &'static str,
+        /// A message that asks for an answer (#142), before its text: `{text}`.
+        told_request: &'static str,
+        /// The answer to a request (#142), before its text: `{request}` (`r3`), `{text}`.
+        told_answer: &'static str,
         /// `/sessions`' list.
         windows_title: &'static str,
         /// `/sessions` with no other window.

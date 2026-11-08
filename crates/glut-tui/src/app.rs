@@ -531,6 +531,11 @@ pub struct App {
     seen_turns: usize,
     /// Messages of another pane's model for after the turn under way, with what their sender could do (T36c).
     waiting_models: Vec<(String, Sender)>,
+    /// The request whose answer the turn under way gives (#142), by this window's number for it.
+    pub answering: Option<u32>,
+    /// Requests that will never start a turn here — the owner set them aside, or the conversation went (#142): the
+    /// screen tells their askers.
+    pub declined: Vec<(u32, crate::requests::Unanswered)>,
     /// The folder's branch for the footer (T39).
     pub branch: crate::branch::Branch,
     /// How the footer joins its segments, and whether Glut guessed it (`Some`, with the terminal it knew, if any)
@@ -785,6 +790,8 @@ impl App {
             seen_state: None,
             seen_turns: 0,
             waiting_models: Vec::new(),
+            answering: None,
+            declined: Vec::new(),
             separators,
             separators_from,
             frame: 0,
@@ -1779,6 +1786,20 @@ impl App {
         {
             return self.send(first);
         }
+        // A request waiting behind a turn that did not finish waits for nobody's Enter here (#142): its asker hears
+        // so, and asks again if it still needs it.
+        if !answered {
+            let (requests, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut self.waiting_models)
+                .into_iter()
+                .partition(|(message, _)| crate::tell::request_of(message).is_some());
+            self.waiting_models = rest;
+            self.declined.extend(
+                requests
+                    .iter()
+                    .filter_map(|(message, _)| crate::tell::request_of(message))
+                    .map(|token| (token, crate::requests::Unanswered::Unfinished)),
+            );
+        }
         // The next queued message follows a turn that answered; after a stop, a failure or a limit it waits for Enter,
         // or it would run into the same wall.
         // T36c: another model's message first — if this pane is still no wider than its sender was.
@@ -1950,6 +1971,8 @@ impl App {
         // Whatever session the screen shows now is the one this turn's steps belong to.
         self.parts.log.follow(&self.session.id);
         self.parts.log.owner(&prompt);
+        // A request's turn answers its asker (#142): the screen sends its last reply when it ends.
+        self.answering = crate::tell::request_of(&prompt);
         let cancel = Cancel::new();
         self.running = Some(cancel.clone());
         self.busy = Some(Busy::Turn);
@@ -1996,6 +2019,8 @@ impl App {
             return;
         }
         self.go_on = false;
+        // A run taken up again answers no request: none started it.
+        self.answering = None;
         self.transcript.note(tr!(turn_resumed), Tone::Quiet);
         self.lend(Some(RESUMED_TURN.to_owned()));
         self.after_resume = then;
@@ -3377,7 +3402,11 @@ impl App {
                         .held_since
                         .is_none_or(|since| since.elapsed() >= ASK_SETTLE) =>
             {
-                self.held.remove(0);
+                let dropped = self.held.remove(0);
+                self.declined.extend(
+                    crate::tell::request_of(&dropped.message)
+                        .map(|token| (token, crate::requests::Unanswered::SetAside)),
+                );
                 self.last_esc = None;
                 self.say(tr!(held_dropped));
             }
@@ -7400,6 +7429,29 @@ impl App {
         Ok(Delivered::OnEnter)
     }
 
+    /// An answer to this pane's own request (#142), or Glut's word that none comes: it goes in like another model's
+    /// message, but on this pane's own rights — it asked — and never refused for a full list: it is owed.
+    pub fn deliver_answer(&mut self, message: String, may_start: bool, why: &str) {
+        let sender = self.sender();
+        let free = !self.working()
+            && self.picker.is_none()
+            && self.queue.is_empty()
+            && self.held.is_empty()
+            && self.waiting_models.is_empty();
+        if may_start && self.steering.is_some() {
+            self.waiting_models.push((message, sender));
+        } else if may_start && free {
+            self.send(message);
+        } else {
+            self.hold(message, why);
+        }
+    }
+
+    /// How many other models' messages wait for the turn under way to end.
+    pub fn models_waiting(&self) -> usize {
+        self.waiting_models.len()
+    }
+
     /// Holds another model's message for the owner's Enter, its text shown with `why`.
     fn hold(&mut self, message: String, why: &str) {
         let shown = crate::tell::shown(&message).unwrap_or_default();
@@ -7676,6 +7728,20 @@ impl App {
 
     /// Other models' messages go with the conversation they were shown in.
     fn forget_models(&mut self) {
+        // A request among them is never answered here (#142): its asker hears so.
+        let requests: Vec<(u32, crate::requests::Unanswered)> = self
+            .held
+            .iter()
+            .map(|held| held.message.as_str())
+            .chain(
+                self.waiting_models
+                    .iter()
+                    .map(|(message, _)| message.as_str()),
+            )
+            .filter_map(crate::tell::request_of)
+            .map(|token| (token, crate::requests::Unanswered::SetAside))
+            .collect();
+        self.declined.extend(requests);
         self.held.clear();
         self.held_since = None;
         self.waiting_models.clear();

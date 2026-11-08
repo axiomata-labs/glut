@@ -2261,6 +2261,8 @@ pub const TEXTS: Texts = Texts {
     from_session_owner: "{session} のオーナー：{text}",
     from_session_model: "{session} のモデル（オーナーではありません）：{text}",
     from_session_notice: "{session}：{text}",
+    told_request: "返答を求めています：{text}",
+    told_answer: "{request} への返答：{text}",
     windows_title: "Glut ウィンドウ · ⏎ で書き送る",
     windows_none: "このマシンでは他の Glut ウィンドウは動いていません",
     sessions_off: "このウィンドウは今、他のウィンドウからのメッセージを受け取りません（/sessions on）",

@@ -2158,6 +2158,8 @@ pub const TEXTS: Texts = Texts {
     from_session_owner: "{session} 的所有者：{text}",
     from_session_model: "{session} 的模型（不是所有者）：{text}",
     from_session_notice: "{session}：{text}",
+    told_request: "请求回复：{text}",
+    told_answer: "对 {request} 的回复：{text}",
     windows_title: "Glut 窗口 · ⏎ 给其中一个写信",
     windows_none: "本机没有其他 Glut 窗口在运行",
     sessions_off: "此窗口现在不接收其他窗口的消息（/sessions on）",

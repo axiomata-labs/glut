@@ -7,3 +7,5 @@
 Un message du propriétaire là-bas entre aussitôt ; celui d'un modèle là-bas seulement s'il travaille dans le mode du pane qu'il atteint, sinon il attend au-dessus de la saisie : ⏎ le laisse entrer, Esc le jette. Aucun n'est ta parole au modèle d'ici. Seul Glut parle aux autres fenêtres — une commande du modèle ne les atteint jamais.
 
 Les modèles se voient aussi : leur outil `who` liste chaque agent ici et dans les autres fenêtres — rôle, modèle, dossier, branche, occupé ou libre — et la ligne que chacun a posée sur ce qu'il fait, dans ses propres mots.
+
+Un modèle peut demander quelque chose à un autre, ici ou dans une autre fenêtre : le tour que sa demande y lance lui répond — la dernière réponse de ce tour lui revient comme réponse, pendant qu'il continue autre chose. Un agent occupé la prend dès la fin de son tour ; celui qui ne peut pas le dit. Si personne ne répondra — tu as écarté la demande avec Esc, le pane a été fermé, la fenêtre s'est terminée — Glut le dit au demandeur.

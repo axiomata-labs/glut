@@ -61,6 +61,8 @@ pub enum Report {
         text: String,
         /// Hear when the turn the message starts ends (T83, Q8).
         notify: bool,
+        /// A request (#142): the turn it starts answers the sender with its last reply.
+        answer: bool,
         reply: oneshot::Sender<Result<String, String>>,
     },
     /// The owner's `!cmd` (for the model, `to_model`) or `!!cmd` (for the owner alone) ended.
