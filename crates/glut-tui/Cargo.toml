@@ -22,7 +22,7 @@ doc = false
 dev-keys = ["glut/dev-keys"]
 
 [dependencies]
-glut = { path = "../glut" }
+glut = { version = "0.1.0", path = "../glut" }
 # The folder's files for the `@` finder, walked as the file tools walk them (`.gitignore` kept).
 axiomata-files.workspace = true
 # An owner's `!cmd` in a process group of its own, stopped as a whole (as Glut's shell tool does).

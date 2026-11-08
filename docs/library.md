@@ -1,7 +1,7 @@
 # Using the `glut` library
 
 The `glut` crate (`crates/glut`) is the harness without the terminal UI. You give it a model, a toolbox and a prompt;
-it runs the tool-calling loop and reports every step as an `Event`. The program `glut` and Axiomata-OS both use it.
+it runs the tool-calling loop and reports every step as an `Event`. The program `glut` uses it, and so do other apps.
 This page covers what another program needs in order to do the same. The crate structure is described in
 [`architecture.md`](architecture.md), and the security model in [`security.md`](security.md).
 
@@ -9,18 +9,24 @@ This page describes the code as it stands. The crate is at version `0.1.0`, and 
 
 ## Adding the dependency
 
-`glut` is not published on crates.io. Add it as a path or git dependency, the way Axiomata-OS does:
+`glut` is on crates.io:
 
 ```toml
 [dependencies]
-glut = { path = "../Axiomata-Glut/crates/glut" }
+glut = "0.1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 serde_json = "1"
 ```
 
-`glut` itself depends on `axiomata-files` from the Axiomata-Foundation repository, by its git URL. A tree that already
-has a checkout of Foundation can patch it to the checkout, as Glut's own local `.cargo/config.toml` does. That way
-there is only one copy of its types.
+`glut` depends on `axiomata-files`, the guarded file service from the
+[Axiomata-Foundation](https://github.com/axiomata-labs/Axiomata-Foundation) repository, also on crates.io. A tree
+that has a checkout of the Foundation beside it can patch it to that checkout, so there is only one copy of its
+types:
+
+```toml
+[patch.crates-io]
+axiomata-files = { path = "../Axiomata-Foundation/crates/axiomata-files" }
+```
 
 Feature `dev-keys` makes macOS builds read `~/.glut/credentials.json` too. Without it, only the Keychain is used. Leave
 the feature off for builds that go to others.
