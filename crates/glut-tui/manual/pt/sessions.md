@@ -9,3 +9,5 @@ Uma mensagem do dono de lá entra logo; a de um modelo de lá só se trabalhar n
 Os modelos também se veem: a ferramenta `who` lista cada agente aqui e nas outras janelas — papel, modelo, pasta, branch, ocupado ou livre — e a linha que cada um definiu sobre o que faz, com as suas próprias palavras.
 
 Um modelo pode pedir algo a outro, aqui ou noutra janela: o turno que o pedido inicia lá responde-lhe — a última resposta desse turno volta como resposta, enquanto ele continua com outro trabalho. Um agente ocupado aceita-o assim que o seu turno termina; um que não consegue diz isso. Se ninguém vai responder — puseste o pedido de lado com Esc, o pane foi fechado, a janela terminou — o Glut diz isso a quem pediu.
+
+Você vê tudo na aba Equipe (⌃X T): cada agente aqui e nas outras janelas — ocupado, livre ou esperando por você, seu branch e sua linha — e o que passou entre eles: mensagens, pedidos, respostas, e quem chegou e saiu.

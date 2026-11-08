@@ -162,6 +162,8 @@ pub enum Tab {
     Runs,
     /// Every key by topic, only to read (T38).
     Keys,
+    /// Who is here and what passed between them (#142).
+    Team,
 }
 
 /// The message `/skill <name> [what for]` sends: the skill loaded first, then followed — a plan's run too (T60b).
@@ -531,6 +533,10 @@ pub struct App {
     seen_turns: usize,
     /// Messages of another pane's model for after the turn under way, with what their sender could do (T36c).
     waiting_models: Vec<(String, Sender)>,
+    /// The agents as this pane sees them, and what passed between them (#142): the Team tab's, filled by the screen.
+    pub team: Vec<glut::team::Profile>,
+    /// What passed between the agents, newest last: the screen's one log, shared.
+    pub team_log: Arc<Vec<glut::team::Note>>,
     /// The request whose answer the turn under way gives (#142), by this window's number for it.
     pub answering: Option<u32>,
     /// Requests that will never start a turn here — the owner set them aside, or the conversation went (#142): the
@@ -792,6 +798,8 @@ impl App {
             waiting_models: Vec::new(),
             answering: None,
             declined: Vec::new(),
+            team: Vec::new(),
+            team_log: Arc::default(),
             separators,
             separators_from,
             frame: 0,
@@ -3351,6 +3359,8 @@ impl App {
                 KeyCode::Char('a' | 'A') => return self.show_agents(),
                 // T60b: the Runs tab (⌃R is the review).
                 KeyCode::Char('r' | 'R') => return self.open_tab(Tab::Runs),
+                // #142: the Team tab.
+                KeyCode::Char('t' | 'T') => return self.open_tab(Tab::Team),
                 KeyCode::Up => return self.start_reading(),
                 KeyCode::Tab => return self.focus_panel(),
                 // Esc only lets the chord go; another key says it is none (T71) instead of vanishing.
@@ -8487,11 +8497,12 @@ impl App {
     /// To-dos) or its scrolling. A key with ⌃ or ⌥ goes on as ever, and a key the tab does not use gives the keys back
     /// and is the input's (T71: the owner types on after a tab's key) — false: not taken here.
     fn on_panel_key(&mut self, key: KeyEvent) -> bool {
-        const TABS: [Tab; 7] = [
+        const TABS: [Tab; 8] = [
             Tab::Plan,
             Tab::Gate,
             Tab::Meter,
             Tab::Agents,
+            Tab::Team,
             Tab::Todos,
             Tab::Runs,
             Tab::Keys,
@@ -8572,7 +8583,7 @@ impl App {
                 }
                 return taken;
             }
-            Tab::Keys | Tab::Plan | Tab::Gate | Tab::Meter => {
+            Tab::Keys | Tab::Plan | Tab::Gate | Tab::Meter | Tab::Team => {
                 let scroll = if self.tab == Tab::Keys {
                     &mut self.keys_scroll
                 } else {

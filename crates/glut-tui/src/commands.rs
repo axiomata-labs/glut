@@ -552,7 +552,7 @@ const fn key(topic: Topic, key: &'static str, what: &'static str, command: &'sta
 }
 
 /// Every key Glut has, grouped as [`COMMANDS`] are; a topic without keys shows no heading.
-pub const KEYS: [Key; 45] = [
+pub const KEYS: [Key; 46] = [
     key(
         Topic::Session,
         "⇧⇥",
@@ -606,6 +606,12 @@ pub const KEYS: [Key; 45] = [
         "⌃X A",
         "the Agents tab: every subagent and the agents in the background, live",
         "/agents",
+    ),
+    key(
+        Topic::View,
+        "⌃X T",
+        "the Team tab: every agent here and in other windows, and what passed between them",
+        "",
     ),
     key(
         Topic::View,

@@ -1863,6 +1863,7 @@ fn draw_panel(frame: &mut Frame, app: &mut App, area: Rect) {
         (Tab::Gate, names[1]),
         (Tab::Meter, names[2]),
         (Tab::Agents, names[3]),
+        (Tab::Team, names[7]),
         (Tab::Todos, todos_title.as_str()),
         (Tab::Runs, names[5]),
         (Tab::Keys, names[6]),
@@ -1968,6 +1969,17 @@ fn draw_panel(frame: &mut Frame, app: &mut App, area: Rect) {
             .into_iter()
             .map(|(line, row)| (line, crate::app::PanelSpot::Agent(row)));
         app.panel_spots.extend(row_spots(inner, spots));
+        lines.push(Line::default());
+        lines.extend(keys);
+        frame.render_widget(Paragraph::new(lines).block(block), area);
+        return;
+    }
+    if app.tab == Tab::Team {
+        lines.push(Line::default());
+        let keys = panel_keys(app, width);
+        let room = usize::from(area.height).saturating_sub(lines.len() + keys.len() + 3);
+        let body = team_lines(&app.team, &app.team_log, width);
+        lines.extend(scrolled(body, &mut app.panel_scroll, room));
         lines.push(Line::default());
         lines.extend(keys);
         frame.render_widget(Paragraph::new(lines).block(block), area);
@@ -2111,6 +2123,126 @@ fn draw_panel(frame: &mut Frame, app: &mut App, area: Rect) {
 /// for fewer, a tab that fills its rows in pairs would leave a scroll of one row nothing to move.
 const PANEL_BODY_MOST: usize = 2_000;
 
+/// The Team tab (#142): who is here — this window's agents, then the other windows' — each by its facts and its own
+/// line, then what passed between them, newest first — what just happened stands under the profiles, not past the
+/// scroll.
+fn team_lines(
+    team: &[glut::team::Profile],
+    log: &[glut::team::Note],
+    width: usize,
+) -> Vec<Line<'static>> {
+    use glut::team::{NoteKind, State};
+    let clean = |text: &str| crate::transcript::clean(text).replace('\n', " ");
+    let mut lines = Vec::new();
+    let heading = |text: &str| Line::from(Span::styled(format!(" {text}"), theme::strong()));
+    let quiet_rows = |lines: &mut Vec<Line<'static>>, text: &str, indent: &str| {
+        for row in wrap(text, width.saturating_sub(indent.len())) {
+            lines.push(Line::from(Span::styled(
+                format!(" {indent}{row}"),
+                theme::quiet(),
+            )));
+        }
+    };
+    let profile_rows = |lines: &mut Vec<Line<'static>>, profile: &glut::team::Profile| {
+        let (dot, word) = match profile.state {
+            State::Free => (theme::quiet(), tr!(team_free)),
+            State::Busy => (theme::glow(), tr!(team_busy)),
+            State::WaitsForOwner => (theme::fault(), tr!(team_waits)),
+        };
+        let mut head = vec![
+            Span::styled(" ● ", dot),
+            Span::styled(clean(&profile.address), theme::strong()),
+        ];
+        if profile.you {
+            head.push(Span::styled(format!(" · {}", tr!(team_you)), theme::glow()));
+        }
+        if let Some(role) = &profile.role {
+            head.push(Span::raw(format!(" · {}", clean(role))));
+        }
+        lines.push(Line::from(head));
+        let mut facts = vec![clean(&profile.model), profile.mode.clone()];
+        facts.push(clean(&profile.folder));
+        if let Some(branch) = &profile.branch {
+            facts.push(format!("⎇ {}", clean(branch)));
+        }
+        facts.push(word.to_owned());
+        quiet_rows(lines, &facts.join(" · "), "  ");
+        if let Some(doing) = &profile.doing {
+            for row in wrap(
+                &tr!(team_doing, doing = clean(doing)),
+                width.saturating_sub(3),
+            ) {
+                lines.push(Line::from(format!("   {row}")));
+            }
+        }
+    };
+    if team.iter().filter(|profile| !profile.you).count() == 0 {
+        quiet_rows(&mut lines, tr!(team_alone), "");
+    } else {
+        lines.push(heading(tr!(team_here)));
+        for profile in team.iter().filter(|profile| profile.window.is_none()) {
+            profile_rows(&mut lines, profile);
+        }
+        let mut elsewhere = team
+            .iter()
+            .filter(|profile| profile.window.is_some())
+            .peekable();
+        if elsewhere.peek().is_some() {
+            lines.push(Line::default());
+            lines.push(heading(tr!(team_elsewhere)));
+        }
+        for profile in elsewhere {
+            profile_rows(&mut lines, profile);
+        }
+    }
+    lines.push(Line::default());
+    lines.push(heading(tr!(team_talk)));
+    if log.is_empty() {
+        quiet_rows(&mut lines, tr!(team_quiet), "");
+    }
+    for note in log.iter().rev() {
+        let number = |request: u32| {
+            if request == 0 {
+                String::new()
+            } else {
+                format!("r{request}")
+            }
+        };
+        let (word, style) = match note.kind {
+            NoteKind::Message => (tr!(team_message).to_owned(), theme::quiet()),
+            NoteKind::Request(n) => (tr!(team_request, n = number(n)), theme::glow()),
+            NoteKind::Answer(n) => (tr!(team_answer, n = number(n)), theme::glow()),
+            NoteKind::Unanswered(n) => (tr!(team_unanswered, n = number(n)), theme::fault()),
+            NoteKind::Arrived => (tr!(team_arrived).to_owned(), theme::quiet()),
+            NoteKind::Left => (tr!(team_left).to_owned(), theme::quiet()),
+        };
+        let when = note
+            .at
+            .with_timezone(&chrono::Local)
+            .format("%H:%M")
+            .to_string();
+        let mut head = vec![
+            Span::styled(format!(" {when} "), theme::quiet()),
+            Span::styled(clean(&note.from), theme::strong()),
+        ];
+        if !note.to.is_empty() {
+            head.push(Span::raw(format!(" → {}", clean(&note.to))));
+        }
+        head.push(Span::styled(format!(" {}", word.trim_end()), style));
+        lines.push(Line::from(head));
+        if !note.text.is_empty() {
+            let rows = wrap(&clean(&note.text), width.saturating_sub(3));
+            for row in rows.into_iter().take(2) {
+                lines.push(Line::from(Span::styled(
+                    format!("   {row}"),
+                    theme::quiet(),
+                )));
+            }
+        }
+    }
+    lines
+}
+
 /// `room` rows of `body` from `scroll` on — scrolled no further than its end, so the keys past it leave nothing to
 /// scroll back first.
 fn scrolled(body: Vec<Line<'static>>, scroll: &mut usize, room: usize) -> Vec<Line<'static>> {
@@ -2228,6 +2360,7 @@ fn panel_keys(app: &App, width: usize) -> Vec<Line<'static>> {
             (Tab::Gate, "⌃G", names[1]),
             (Tab::Meter, "⌃N", names[2]),
             (Tab::Agents, "⌃X A", names[3]),
+            (Tab::Team, "⌃X T", names[7]),
             (Tab::Todos, "⌃Y", names[4]),
             (Tab::Runs, "⌃X R", names[5]),
             (Tab::Keys, "⌃K", names[6]),
@@ -2622,6 +2755,57 @@ fn footer_name(name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_team_tab_shows_who_is_here_and_the_newest_note_first() {
+        use glut::team::{Note, NoteKind, Profile, State};
+        let profile = |address: &str, you: bool, window: Option<&str>| Profile {
+            address: address.into(),
+            window: window.map(str::to_owned),
+            you,
+            role: None,
+            model: "m".into(),
+            mode: "build".into(),
+            folder: "p".into(),
+            branch: Some("main".into()),
+            state: State::Busy,
+            doing: Some("docs\u{1b}[31m".into()),
+        };
+        let text = |lines: Vec<Line<'static>>| {
+            lines
+                .iter()
+                .map(|line| {
+                    line.spans
+                        .iter()
+                        .map(|span| span.content.as_ref())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let alone = text(crate::view::team_lines(
+            &[profile("pane 1", true, None)],
+            &[],
+            60,
+        ));
+        assert!(alone.contains("/split"), "{alone}");
+        let team = [
+            profile("pane 1", true, None),
+            profile("pane 2", false, None),
+            profile("w-ab/2", false, Some("w-ab")),
+        ];
+        let log = [
+            Note::now("pane 1", "pane 2", NoteKind::Request(1), "count"),
+            Note::now("pane 2", "pane 1", NoteKind::Answer(1), "seven"),
+        ];
+        let shown = text(crate::view::team_lines(&team, &log, 60));
+        assert!(shown.contains("pane 2") && shown.contains("w-ab/2") && shown.contains("⎇ main"));
+        assert!(!shown.contains('\u{1b}'), "{shown}");
+        assert!(
+            shown.find("seven").unwrap() < shown.find("count").unwrap(),
+            "the newest first: {shown}"
+        );
+    }
+
     use super::{asked_rows, footer_name, marked, panel_state, panel_width, tab_titles};
     use crate::meter::tokens;
     use crate::theme;

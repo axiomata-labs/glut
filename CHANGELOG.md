@@ -17,6 +17,10 @@ follow [Semantic Versioning](https://semver.org/) — while Glut is at 0.x, a mi
   unfinished, the pane closed, the window ended, an hour gone) Glut tells the asker. Between windows a request
   travels by a random number, so no window answers what it was not asked.
 
+- **The Team tab** (⌃X T): every agent of this window and of the other Glut windows — busy, free or waiting for
+  you, its branch and its own line — and what passed between them: messages, requests, answers, Glut's word that
+  none comes, who came and went. Its shapes are the library's (`glut::team::Profile`, `Note`), for any screen.
+
 ### Changed
 
 - `glut::PANE_TOOLS` holds two names now, `tell` and `who` (`[&str; 2]`): a host that adds the screen's tools adds

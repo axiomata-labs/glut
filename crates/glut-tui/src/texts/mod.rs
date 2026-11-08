@@ -200,7 +200,7 @@ glut::catalog! {
         not_usable: &'static str,
         /// A list where nothing fits what was typed.
         nothing_matches: &'static str,
-        /// The side panel's tabs: Plan, Gate, Meter, Agents, To-dos, Keys — in this order.
+        /// The side panel's tabs: Plan, Gate, Meter, Agents, To-dos, Runs, Keys, Team — in this order.
         tab_names: &'static [&'static str],
         /// The Meter tab's heading of the context window.
         meter_context: &'static str,
@@ -2295,6 +2295,38 @@ glut::catalog! {
         told_request: &'static str,
         /// The answer to a request (#142), before its text: `{request}` (`r3`), `{text}`.
         told_answer: &'static str,
+        /// The Team tab: this window's agents.
+        team_here: &'static str,
+        /// The Team tab: the other Glut windows' agents.
+        team_elsewhere: &'static str,
+        /// The Team tab: what passed between the agents.
+        team_talk: &'static str,
+        /// The Team tab with no other agent.
+        team_alone: &'static str,
+        /// The Team tab before anything passed.
+        team_quiet: &'static str,
+        /// Beside the pane the tab is shown in.
+        team_you: &'static str,
+        /// An agent that can take something now.
+        team_free: &'static str,
+        /// An agent at work.
+        team_busy: &'static str,
+        /// An agent whose gate waits for its owner.
+        team_waits: &'static str,
+        /// What an agent says it works on, its own words: `{doing}`.
+        team_doing: &'static str,
+        /// A message between agents.
+        team_message: &'static str,
+        /// A request: `{n}` (`r3`).
+        team_request: &'static str,
+        /// Its answer: `{n}`.
+        team_answer: &'static str,
+        /// Glut's word that none comes: `{n}`.
+        team_unanswered: &'static str,
+        /// An agent or a window came.
+        team_arrived: &'static str,
+        /// An agent or a window went.
+        team_left: &'static str,
         /// `/sessions`' list.
         windows_title: &'static str,
         /// `/sessions` with no other window.
@@ -2772,8 +2804,8 @@ mod tests {
     fn every_language_names_each_tab_and_sort() {
         for lang in Lang::ALL {
             let texts = of(lang);
-            assert_eq!(texts.tab_names.len(), 7, "{}", lang.code());
-            assert_eq!(texts.tab_words.len(), 7, "{}", lang.code());
+            assert_eq!(texts.tab_names.len(), 8, "{}", lang.code());
+            assert_eq!(texts.tab_words.len(), 8, "{}", lang.code());
             assert_eq!(texts.sort_names.len(), 4, "{}", lang.code());
             assert_eq!(texts.key_words.len(), 13, "{}", lang.code());
             assert!(

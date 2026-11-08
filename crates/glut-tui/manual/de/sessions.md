@@ -9,3 +9,5 @@ Eine Nachricht des Owners dort geht sofort herein; eine eines Modells dort nur, 
 Auch die Modelle sehen einander: ihr Werkzeug `who` listet jeden Agenten hier und in den anderen Fenstern — Rolle, Modell, Ordner, Branch, beschäftigt oder frei — und die Zeile, die jeder für seine Arbeit gesetzt hat, in seinen eigenen Worten.
 
 Ein Modell kann ein anderes um etwas bitten, hier oder in einem anderen Fenster: Der Zug, den seine Bitte dort startet, antwortet ihm — die letzte Antwort dieses Zuges kommt als Antwort zurück, während es an anderem weiterarbeitet. Ein beschäftigter Agent nimmt sie, sobald sein Zug endet; einer, der es nicht kann, sagt es. Antwortet niemand — du hast die Bitte mit Esc beiseitegelegt, das Pane wurde geschlossen, das Fenster endete —, sagt Glut es dem Bittenden.
+
+Du siehst alles im Reiter Team (⌃X T): jeden Agenten hier und in den anderen Fenstern — beschäftigt, frei oder wartend auf dich, seinen Branch und seine Zeile — und was zwischen ihnen lief: Nachrichten, Bitten, Antworten und wer kam und ging.

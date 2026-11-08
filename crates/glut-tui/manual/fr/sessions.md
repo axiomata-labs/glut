@@ -9,3 +9,5 @@ Un message du propriétaire là-bas entre aussitôt ; celui d'un modèle là-bas
 Les modèles se voient aussi : leur outil `who` liste chaque agent ici et dans les autres fenêtres — rôle, modèle, dossier, branche, occupé ou libre — et la ligne que chacun a posée sur ce qu'il fait, dans ses propres mots.
 
 Un modèle peut demander quelque chose à un autre, ici ou dans une autre fenêtre : le tour que sa demande y lance lui répond — la dernière réponse de ce tour lui revient comme réponse, pendant qu'il continue autre chose. Un agent occupé la prend dès la fin de son tour ; celui qui ne peut pas le dit. Si personne ne répondra — tu as écarté la demande avec Esc, le pane a été fermé, la fenêtre s'est terminée — Glut le dit au demandeur.
+
+Tu vois tout dans l'onglet Équipe (⌃X T) : chaque agent ici et dans les autres fenêtres — occupé, libre ou en attente de toi, sa branche et sa ligne — et ce qui est passé entre eux : messages, demandes, réponses, et qui est arrivé ou parti.

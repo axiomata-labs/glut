@@ -146,6 +146,8 @@ pub struct Link {
     seen: Mutex<Vec<(Card, PathBuf)>>,
     /// The names of windows seen before whose process has ended since (#142): what waits on them hears so.
     ended: Mutex<Vec<String>>,
+    /// The first look at the others is done: until then a window missing from [`Link::seen`] is only not asked yet.
+    looked: std::sync::atomic::AtomicBool,
 }
 
 impl Link {
@@ -177,6 +179,7 @@ impl Link {
             name: Mutex::new(String::new()),
             seen: Mutex::new(Vec::new()),
             ended: Mutex::new(Vec::new()),
+            looked: std::sync::atomic::AtomicBool::new(false),
         });
         // Named at once, the others not asked yet — a window that does not answer must not hold this one up; the
         // first look settles a name another window has already ([`Link::look`]).
@@ -284,7 +287,14 @@ impl Link {
         let excess = ended_names.len().saturating_sub(MOST_SEATS * 4);
         ended_names.drain(..excess);
         drop(ended_names);
+        self.looked
+            .store(true, std::sync::atomic::Ordering::Relaxed);
         cards
+    }
+
+    /// Whether the others were looked at once at least.
+    pub fn looked(&self) -> bool {
+        self.looked.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// The windows that ended since this was last asked, by name (#142).

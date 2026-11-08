@@ -48,6 +48,7 @@ pub mod skills;
 pub mod snapshot;
 pub mod subscription;
 mod task;
+pub mod team;
 pub mod tools;
 
 pub use config::{

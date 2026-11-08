@@ -681,6 +681,20 @@ pub struct Panes {
     notify_back: Vec<(u64, String)>,
     /// Requests between agents and the answers owed (#142).
     requests: crate::requests::Requests,
+    /// What passed between the agents, newest last (#142): the Team tab's log, shared with every pane.
+    team_log: Arc<Vec<glut::team::Note>>,
+    /// The panes and windows known at the last frame, by id or name, and how they are named: who came and went.
+    team_known: Vec<(String, String)>,
+    /// The other windows' agents as last seen (T83), for the Team tab.
+    seats_seen: Vec<crate::sessions::Seat>,
+    /// The other windows known, by name, once the first look is done (#142): one comes when it is new, goes when its
+    /// process ended — not when it did not answer once.
+    windows_known: Option<Vec<String>>,
+    /// Notes made beside the screen (a message that did not get to its window), taken in once a frame.
+    late_notes: (
+        mpsc::UnboundedSender<glut::team::Note>,
+        mpsc::UnboundedReceiver<glut::team::Note>,
+    ),
     /// The kept window name last tried, so one another window holds is not tried at every frame.
     window_tried: Option<String>,
     /// The pane the keys go back to once another one closed (`/close 2`): the owner stays where they were.
@@ -793,6 +807,11 @@ impl Panes {
             sessions_off: false,
             notify_back: Vec::new(),
             requests: crate::requests::Requests::default(),
+            team_log: Arc::default(),
+            team_known: Vec::new(),
+            seats_seen: Vec::new(),
+            windows_known: None,
+            late_notes: mpsc::unbounded_channel(),
             window_tried: None,
             return_to: None,
             arena: None,
@@ -965,6 +984,47 @@ impl Panes {
                 )
             })
             .collect();
+        // The Team tab's profiles (#142): this window's agents, then the other windows' as last seen.
+        let here: Vec<glut::team::Profile> = (0..self.list.len())
+            .zip(&branches)
+            .map(|(at, branch)| {
+                let app = &self.list[at].app;
+                glut::team::Profile {
+                    address: self.label(at),
+                    window: None,
+                    you: false,
+                    role: app.role.clone(),
+                    model: app.engine.model_name().to_owned(),
+                    mode: session::mode_label(app.mode()).to_owned(),
+                    folder: folder_name(&app.parts.config.cwd),
+                    branch: branch.clone(),
+                    state: team_state(app.waits_for_owner(), app.working()),
+                    doing: app.parts.pane_link.doing(),
+                }
+            })
+            .collect();
+        let elsewhere: Vec<glut::team::Profile> = self
+            .seats_seen
+            .iter()
+            .map(|seat| glut::team::Profile {
+                address: seat.address.clone(),
+                window: Some(
+                    seat.address
+                        .split_once('/')
+                        .map_or(seat.address.as_str(), |(window, _)| window)
+                        .to_owned(),
+                ),
+                you: false,
+                role: seat.role.clone(),
+                model: crate::transcript::cut(&seat.model, 80),
+                mode: crate::session::mode_label_of(&seat.mode).to_owned(),
+                folder: crate::transcript::cut(&seat.project, 80),
+                branch: seat.branch.clone(),
+                state: team_state(false, seat.works),
+                doing: seat.doing.clone(),
+            })
+            .collect();
+        self.note_comings(&here);
         // The Agents tab of every pane lists the agents in the background (T36e), each a card (T69).
         let background: Vec<crate::agents::Behind> = self
             .list
@@ -1047,6 +1107,16 @@ impl Panes {
                     .map(|(_, line)| line.clone())
                     .collect(),
             );
+            pane.app.team = here
+                .iter()
+                .enumerate()
+                .map(|(other, profile)| glut::team::Profile {
+                    you: other == at,
+                    ..profile.clone()
+                })
+                .chain(elsewhere.iter().cloned())
+                .collect();
+            pane.app.team_log = Arc::clone(&self.team_log);
             pane.app.parts.pane_link.set_team_here(
                 team.iter()
                     .filter(|(number, _)| *number != pane.number)
@@ -1446,6 +1516,9 @@ impl Panes {
             ),
             Delivered::OnEnter => format!("held: {label} reads it once the owner goes on there"),
         };
+        let sender_label = self.label(source);
+        let kind = request.map_or(glut::team::NoteKind::Message, glut::team::NoteKind::Request);
+        self.note(&sender_label, &label, kind, &text);
         let Some(request) = request else {
             return Ok(said);
         };
@@ -1474,10 +1547,14 @@ impl Panes {
                 let message =
                     crate::tell::wrapped_marked(from, text, crate::tell::Mark::Answer(request));
                 let may_start = self.chain <= MOST_CHAIN;
-                if let Some(asker) = self.list.iter_mut().find(|pane| pane.id == id) {
-                    asker
-                        .app
-                        .deliver_answer(message, may_start, &tr!(held_enter, pane = from));
+                if let Some(asker) = self.list.iter().position(|pane| pane.id == id) {
+                    let (by, to) = (self.label(at), self.label(asker));
+                    self.note(&by, &to, glut::team::NoteKind::Answer(request), text);
+                    self.list[asker].app.deliver_answer(
+                        message,
+                        may_start,
+                        &tr!(held_enter, pane = from),
+                    );
                 }
             }
             Back::Window { address, nonce } => {
@@ -1496,6 +1573,8 @@ impl Panes {
                     request: None,
                     answers: Some(nonce),
                 };
+                let by = self.label(at);
+                self.note(&by, &address, glut::team::NoteKind::Answer(0), text);
                 self.send_answer(address, letter);
             }
         }
@@ -1527,9 +1606,88 @@ impl Panes {
             text,
             crate::tell::Mark::Answer(request),
         );
-        if let Some(pane) = self.list.iter_mut().find(|pane| pane.id == asker) {
-            pane.app
-                .deliver_answer(message, may_start, &tr!(held_window_chain, from = "glut"));
+        if let Some(at) = self.list.iter().position(|pane| pane.id == asker) {
+            let to = self.label(at);
+            self.note("glut", &to, glut::team::NoteKind::Unanswered(request), text);
+            self.list[at].app.deliver_answer(
+                message,
+                may_start,
+                &tr!(held_window_chain, from = "glut"),
+            );
+        }
+    }
+
+    /// Keeps `note` in the Team tab's log (#142).
+    fn note(&mut self, from: &str, to: &str, kind: glut::team::NoteKind, text: &str) {
+        let log = Arc::make_mut(&mut self.team_log);
+        log.push(glut::team::Note::now(from, to, kind, text));
+        let excess = log.len().saturating_sub(MOST_NOTES);
+        log.drain(..excess);
+    }
+
+    /// Who came and went since the last frame, this window's panes and the other windows (#142): noted once each.
+    fn note_comings(&mut self, here: &[glut::team::Profile]) {
+        while let Ok(note) = self.late_notes.1.try_recv() {
+            let log = Arc::make_mut(&mut self.team_log);
+            log.push(note);
+            let excess = log.len().saturating_sub(MOST_NOTES);
+            log.drain(..excess);
+        }
+        let known: Vec<(String, String)> = self
+            .list
+            .iter()
+            .zip(here)
+            .map(|(pane, profile)| (pane.id.to_string(), profile.address.clone()))
+            .collect();
+        // The first frame tells nobody's coming: they were there.
+        if self.team_known.is_empty() {
+            self.team_known = known;
+            return;
+        }
+        let came: Vec<String> = known
+            .iter()
+            .filter(|entry| !self.team_known.iter().any(|old| old.0 == entry.0))
+            .map(|(_, name)| name.clone())
+            .collect();
+        let went: Vec<String> = self
+            .team_known
+            .iter()
+            .filter(|old| !known.iter().any(|entry| entry.0 == old.0))
+            .map(|(_, name)| name.clone())
+            .collect();
+        self.team_known = known;
+        for name in came {
+            self.note(&name, "", glut::team::NoteKind::Arrived, "");
+        }
+        for name in went {
+            self.note(&name, "", glut::team::NoteKind::Left, "");
+        }
+    }
+
+    /// Which other windows came since the last look, and which ended (#142, by `ended`): noted once each. The windows
+    /// there at the first look were there before.
+    fn note_windows(&mut self, seen: &[String], ended: &[String]) {
+        let Some(known) = &mut self.windows_known else {
+            self.windows_known = Some(seen.to_vec());
+            return;
+        };
+        let came: Vec<String> = seen
+            .iter()
+            .filter(|name| !known.contains(name))
+            .cloned()
+            .collect();
+        known.extend(came.iter().cloned());
+        let went: Vec<String> = ended
+            .iter()
+            .filter(|name| known.contains(name) && !seen.contains(name))
+            .cloned()
+            .collect();
+        known.retain(|name| !went.contains(name));
+        for name in came {
+            self.note(&name, "", glut::team::NoteKind::Arrived, "");
+        }
+        for name in went {
+            self.note(&name, "", glut::team::NoteKind::Left, "");
         }
     }
 
@@ -1586,6 +1744,12 @@ impl Panes {
                     request: None,
                     answers: Some(nonce),
                 };
+                self.note(
+                    "glut",
+                    &address,
+                    glut::team::NoteKind::Unanswered(0),
+                    &letter.text,
+                );
                 self.send_answer(address, letter);
             }
         }
@@ -1762,9 +1926,29 @@ impl Panes {
             request: None,
             answers: None,
         };
-        let Some(request) = answer.then(|| self.requests.number()) else {
+        let request = answer.then(|| self.requests.number());
+        let sender_label = self.label(source);
+        let kind = request.map_or(glut::team::NoteKind::Message, glut::team::NoteKind::Request);
+        self.note(&sender_label, &address, kind, &letter.text);
+        let late = self.late_notes.0.clone();
+        let failed_note = {
+            let (from, to) = (sender_label.clone(), address.clone());
+            move |reason: &str| {
+                glut::team::Note::now(
+                    &from,
+                    &to,
+                    glut::team::NoteKind::Unanswered(request.unwrap_or(0)),
+                    &format!("did not get there: {reason}"),
+                )
+            }
+        };
+        let Some(request) = request else {
             tokio::spawn(async move {
-                let _ = reply.send(link.send(&address, letter).await);
+                let said = link.send(&address, letter).await;
+                if let Err(reason) = &said {
+                    let _ = late.send(failed_note(reason));
+                }
+                let _ = reply.send(said);
             });
             return;
         };
@@ -1779,8 +1963,9 @@ impl Panes {
         let failed = self.requests.failed();
         tokio::spawn(async move {
             let said = link.send(&address, letter).await;
-            if said.is_err() {
+            if let Err(reason) = &said {
                 let _ = failed.send(nonce);
+                let _ = late.send(failed_note(reason));
             }
             let _ = reply.send(said.map(|said| {
                 format!(
@@ -1939,10 +2124,19 @@ impl Panes {
                 crate::tell::Mark::Answer(request),
             );
             let may_start = self.chain <= MOST_CHAIN;
-            if let Some(asker) = self.list.iter_mut().find(|pane| pane.id == id) {
-                asker
-                    .app
-                    .deliver_answer(message, may_start, &tr!(held_window_chain, from = from));
+            if let Some(asker) = self.list.iter().position(|pane| pane.id == id) {
+                let to = self.label(asker);
+                let kind = if letter.by == By::Notice {
+                    glut::team::NoteKind::Unanswered(request)
+                } else {
+                    glut::team::NoteKind::Answer(request)
+                };
+                self.note(&from, &to, kind, &letter.text);
+                self.list[asker].app.deliver_answer(
+                    message,
+                    may_start,
+                    &tr!(held_window_chain, from = from),
+                );
             }
             return Ok("delivered: the answer reached its asker".into());
         }
@@ -2039,6 +2233,13 @@ impl Panes {
                 delivered
             }
         };
+        if letter.by != By::Notice {
+            let to = self.label(target);
+            let kind = token.map_or(glut::team::NoteKind::Message, |_| {
+                glut::team::NoteKind::Request(0)
+            });
+            self.note(&from, &to, kind, &letter.text);
+        }
         Ok(match delivered {
             Delivered::Now => format!("delivered: {label} starts on it now"),
             Delivered::AfterTurn => format!("delivered: {label} reads it after its current turn"),
@@ -2072,6 +2273,7 @@ impl Panes {
             .filter(|card| !card.off)
             .flat_map(|card| card.seats)
             .collect();
+        self.seats_seen = seats.clone();
         let lines: Vec<String> = seats
             .iter()
             .map(|seat| {
@@ -2102,7 +2304,12 @@ impl Panes {
             })
             .collect();
         // A request to a window that ended is never answered (#142, Q17): its asker hears so.
-        for (asker, request, address) in self.requests.left(&link.take_ended()) {
+        let ended = link.take_ended();
+        if link.looked() {
+            let names: Vec<String> = link.seen().into_iter().map(|card| card.name).collect();
+            self.note_windows(&names, &ended);
+        }
+        for (asker, request, address) in self.requests.left(&ended) {
             self.notice_asker(
                 asker,
                 request,
@@ -5054,6 +5261,27 @@ impl Panes {
     }
 }
 
+/// The most notes the Team tab's log keeps (#142): the oldest go first.
+const MOST_NOTES: usize = 200;
+
+/// A folder's last part, as the Team tab names it.
+fn folder_name(path: &std::path::Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// Whether an agent can take something now, as the Team tab shows it.
+fn team_state(waits_for_owner: bool, working: bool) -> glut::team::State {
+    if waits_for_owner {
+        glut::team::State::WaitsForOwner
+    } else if working {
+        glut::team::State::Busy
+    } else {
+        glut::team::State::Free
+    }
+}
+
 /// One agent as `who` lists it (#142): the line `tell` describes it by, its branch, busy or free, and its own line.
 fn team_line(described: &str, branch: Option<&str>, busy: &str, doing: Option<&str>) -> String {
     let mut line = described.to_owned();
@@ -6666,6 +6894,28 @@ mod tests {
             "the asker got the last reply as the answer"
         );
         assert_eq!(panes.list[1].app.answering, None);
+        // The Team tab saw both (#142), and every pane its profiles.
+        let kinds: Vec<_> = panes
+            .team_log
+            .iter()
+            .map(|note| (note.from.clone(), note.kind))
+            .collect();
+        assert!(
+            kinds.contains(&("pane 1".into(), glut::team::NoteKind::Request(1))),
+            "{kinds:?}"
+        );
+        assert!(
+            kinds.contains(&("pane 2".into(), glut::team::NoteKind::Answer(1))),
+            "{kinds:?}"
+        );
+        panes.sync();
+        let team = &panes.list[1].app.team;
+        assert_eq!(team.len(), 2);
+        assert!(team[1].you && !team[0].you && team[0].address == "pane 1");
+        assert!(std::sync::Arc::ptr_eq(
+            &panes.list[0].app.team_log,
+            &panes.team_log
+        ));
         // A second request, its turn refused by a hook, is answered by Glut.
         let said = requested(&mut panes, first, "and the changelog");
         assert!(said.starts_with("request r2"), "{said}");
