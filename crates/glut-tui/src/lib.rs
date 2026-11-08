@@ -24,6 +24,7 @@ mod glimm;
 mod graphics;
 mod guides;
 mod helpbox;
+mod helpers;
 mod highlight;
 pub mod host;
 mod ide;

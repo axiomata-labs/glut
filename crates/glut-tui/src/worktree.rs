@@ -1158,6 +1158,9 @@ pub struct Taking {
     pub executable: Vec<String>,
     /// The worktree as git's tree id when it was read: what the owner said yes to is what is applied.
     pub now: String,
+    /// A path's name holds what the screen would not show as written (a control, bidi or zero-width character): the
+    /// names above are cleaned, so a rule judging them would judge another name than git writes (#142).
+    pub unclean: bool,
 }
 
 /// Whether `name` is one of the `.env` files the sandbox keeps from every command (`sandbox::scan`'s list).
@@ -1538,6 +1541,10 @@ fn arena_patch(tree: &Tree, start: &str, now: Option<&str>) -> Result<(Vec<u8>, 
         .map(|path| crate::transcript::clean(path))
         .collect();
     refuse_protected(&tree.branch, &refused)?;
+    let unclean = files
+        .iter()
+        .chain(&executable)
+        .any(|path| crate::transcript::clean(path) != *path);
     let clean = |paths: Vec<String>| {
         paths
             .iter()
@@ -1550,6 +1557,7 @@ fn arena_patch(tree: &Tree, start: &str, now: Option<&str>) -> Result<(Vec<u8>, 
             files: clean(files),
             executable: clean(executable),
             now,
+            unclean,
         },
     ))
 }

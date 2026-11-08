@@ -53,7 +53,7 @@ pub mod tools;
 
 pub use config::{
     Budget, Compaction, Effort, Inbox, LOOP_TOOL, ModelEndpoint, PANE_TOOLS, Prices, RefusalLimits,
-    RunConfig,
+    RunConfig, TEAM_TOOLS,
 };
 pub use diagnostics::{LanguageServers, ServerState};
 pub use error::HarnessError;

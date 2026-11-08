@@ -180,7 +180,12 @@ const APPLE_EVENT_TOOLS: [&str; 7] = [
 /// home that goes with the folder, and read nothing of the places it hides (the owner's repository). Shared by a
 /// toolbox and its shell, set by the screen once, never taken back.
 #[derive(Debug, Clone, Default)]
-pub struct Confinement(std::sync::Arc<std::sync::Mutex<Option<Confined>>>);
+pub struct Confinement(
+    std::sync::Arc<std::sync::Mutex<Option<Confined>>>,
+    /// Places no command reads, without the rest of a confinement (#142: a helper's copy hides its lead's repository —
+    /// the copy lies outside it, so the repository's `.env` and keys are no secrets of the copy's folder).
+    std::sync::Arc<std::sync::Mutex<Vec<PathBuf>>>,
+);
 
 /// What a [`Confinement`] holds: the private home as resolved when it was set — never again, so a link the model puts
 /// in its place later widens nothing — and the places its commands may not read.
@@ -237,6 +242,26 @@ impl Confinement {
             .collect();
         *self.0.lock().unwrap_or_else(|poison| poison.into_inner()) =
             Some(Confined { home, hidden });
+    }
+
+    /// Keeps `hidden` from every later command's reads, the folder unconfined otherwise (#142). Added to, never taken
+    /// back.
+    pub fn hide(&self, hidden: Vec<PathBuf>) {
+        let hidden = hidden
+            .into_iter()
+            .map(|path| path.canonicalize().unwrap_or(path));
+        self.1
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .extend(hidden);
+    }
+
+    /// What every command may not read beside its sandbox's own rules.
+    pub fn hidden(&self) -> Vec<PathBuf> {
+        self.1
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone()
     }
 
     /// What it holds, once confined.
@@ -868,6 +893,22 @@ fn regex_escape(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_hidden_place_stays_hidden_without_a_confinement() {
+        let confinement = Confinement::default();
+        assert!(confinement.hidden().is_empty() && confinement.get().is_none());
+        let place = std::env::temp_dir();
+        confinement.hide(vec![place.clone()]);
+        let real = place.canonicalize().unwrap();
+        assert_eq!(confinement.hidden(), vec![real]);
+        assert!(confinement.get().is_none(), "hiding confines nothing");
+        assert_eq!(
+            confinement.clone().hidden().len(),
+            1,
+            "shared with its clones"
+        );
+    }
 
     #[test]
     fn a_moved_glut_home_is_shut_but_a_working_folder_inside_it_stays_writable() {

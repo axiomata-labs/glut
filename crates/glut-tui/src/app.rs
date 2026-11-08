@@ -2734,6 +2734,13 @@ impl App {
             Report::Tell { reply, .. } => {
                 let _ = reply.send(Err("there is no other pane".to_owned()));
             }
+            // #142: only the screen of panes starts helpers or takes their work.
+            Report::Helpers { reply, .. } | Report::TakeWork { reply, .. } => {
+                let _ = reply.send(Err("this screen holds no helpers".to_owned()));
+            }
+            Report::TakePreview { reply, .. } => {
+                let _ = reply.send(Err("this screen holds no helpers".to_owned()));
+            }
             // T37c: `glut_file` asks for a model of an agent's or a skill's own — every provider's list.
             Report::PickModel(reply) => {
                 // A second ask answers the first with none: one list on the screen at a time.

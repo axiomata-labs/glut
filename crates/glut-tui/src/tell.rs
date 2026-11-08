@@ -203,6 +203,8 @@ struct LinkState {
     doing: Option<String>,
     /// An arena's member (T61): contained, it reaches no other pane and sees none — neither tool is offered.
     contained: bool,
+    /// The session may lead helpers (#142): the owner started it, and the screen holds more agents.
+    lead: bool,
 }
 
 impl Link {
@@ -256,6 +258,20 @@ impl Link {
         state.doing = None;
         state.team_here.clear();
         state.team_elsewhere.clear();
+    }
+
+    /// Whether the session may lead helpers (#142), as the screen says before each turn.
+    pub fn set_lead(&self, lead: bool) {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .lead = lead;
+    }
+
+    /// Whether `start_helpers` and `take_work` are offered: never to a contained pane.
+    pub fn may_lead(&self) -> bool {
+        let state = self.state();
+        state.lead && !state.contained
     }
 
     /// What this pane's model said it works on.

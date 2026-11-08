@@ -125,6 +125,17 @@ impl Requests {
         }
     }
 
+    /// Whether `n` more requests may be opened.
+    pub fn room_for(&self, n: usize) -> Result<(), String> {
+        if self.owed.len() + self.asked.len() + n > MOST_OPEN {
+            Err(format!(
+                "{MOST_OPEN} requests would be open in this window: wait for answers first"
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
     /// Owes `back` the answer of the turn of pane `pane` that takes the message marked `token`.
     pub fn owe(&mut self, token: u32, pane: u64, label: String, back: Back) {
         self.owed.push(Owed {

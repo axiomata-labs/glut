@@ -1160,6 +1160,13 @@ impl Offer {
             direct.retain(|spec| !pane_tool(&spec.name));
             behind.retain(|spec| !pane_tool(&spec.name));
         }
+        // #142: a lead's tools only where the run may lead, and never to a subagent.
+        let offers_team = config.team_tools && depth == 0;
+        let team_tool = |name: &str| crate::config::TEAM_TOOLS.contains(&name);
+        if !offers_team {
+            direct.retain(|spec| !team_tool(&spec.name));
+            behind.retain(|spec| !team_tool(&spec.name));
+        }
         // T60a: the loop's end only to a loop's own model.
         let offers_loop = config.loop_tool && depth == 0;
         if !offers_loop {
@@ -2796,6 +2803,17 @@ impl<'a, M: ChatModel> Loop<'a, M> {
                 format!("error: {name} is offered only while the screen is split into panes"),
             ));
         }
+        // #142: nor a lead's tools where this session leads no one.
+        if crate::config::TEAM_TOOLS.contains(&name.as_str())
+            && !self.offer.specs.iter().any(|spec| spec.name == *name)
+        {
+            return Ok((
+                false,
+                format!(
+                    "error: {name} is offered only to a session the owner started, on a screen of panes"
+                ),
+            ));
+        }
         if name == crate::config::LOOP_TOOL
             && !self.offer.specs.iter().any(|spec| spec.name == *name)
         {
@@ -2997,6 +3015,8 @@ impl<'a, M: ChatModel> Loop<'a, M> {
         // A subagent's steps are covered by the snapshot its parent took before the `task` call: one record per run.
         let changes = self.depth == 0
             && (call.function.name == crate::task::NAME
+                // #142: a helper's work taken into the folder changes it as edits do.
+                || call.function.name == crate::config::TEAM_TOOLS[1]
                 || (call.function.name == crate::lsp::NAME
                     && crate::lsp::renames(&call.function.arguments))
                 || match self
@@ -3654,6 +3674,7 @@ impl<'a, M: ChatModel> Loop<'a, M> {
             || name == crate::task::NAME
             || name == planning::EXIT_PLAN
             || crate::config::PANE_TOOLS.contains(&name.as_str())
+            || crate::config::TEAM_TOOLS.contains(&name.as_str())
             || name == crate::config::LOOP_TOOL
         {
             let text = format!("not permitted: a script cannot start {name}");

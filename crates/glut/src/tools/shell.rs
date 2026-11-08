@@ -496,9 +496,13 @@ impl Session {
                 "no command runs without a sandbox here (the owner's /sandbox required is on): {why}"
             ));
         }
-        // An arena's model runs nothing outside the sandbox, whatever was asked.
+        // An arena's model runs nothing outside the sandbox, whatever was asked — nor a command that must not read
+        // places it hides (#142: a helper's copy), which only the sandbox keeps from it.
         if sandbox.is_none() && self.confinement.get().is_some() {
             return Err("an arena's model runs no command outside the sandbox".into());
+        }
+        if sandbox.is_none() && !self.confinement.hidden().is_empty() {
+            return Err("a helper's copy runs no command outside the sandbox: it would read what is hidden from it".into());
         }
         // The owner's profile runs for the snapshot only once a command is going to run.
         let snapshot = self.snapshot().await;
@@ -522,6 +526,7 @@ impl Session {
                     }
                     policy = policy.confined(&confined);
                 }
+                policy.read_denied.extend(self.confinement.hidden());
                 if !online {
                     policy.proxy_port = None;
                 }

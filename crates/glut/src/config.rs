@@ -306,6 +306,11 @@ impl Default for Compaction {
 /// agent) and `who` (the agents there are, what each works on and where — #142).
 pub const PANE_TOOLS: [&str; 2] = ["tell", "who"];
 
+/// The tools a host's screen adds for a lead that starts helpers (#142): `start_helpers` (agents of their own, each
+/// with a first task) and `take_work` (a helper's work from its copy into the lead's folder). Offered only where the
+/// run says so ([`RunConfig::team_tools`]), never in a subagent nor from a script.
+pub const TEAM_TOOLS: [&str; 2] = ["start_helpers", "take_work"];
+
 /// The tool a host's screen adds for a session that runs as a loop (TUI T60a): the model ends the loop with it once
 /// the loop's goal is reached. Like [`PANE_TOOLS`] offered only where the run says so ([`RunConfig::loop_tool`]), never
 /// in a subagent nor from a script.
@@ -355,6 +360,9 @@ pub struct RunConfig {
     /// Whether the run offers [`PANE_TOOLS`] (TUI T36c): the screen around it is split into panes of sessions that
     /// may write to each other. Never to a subagent.
     pub pane_tools: bool,
+    /// Whether the run offers [`TEAM_TOOLS`] (#142): the session may lead helpers — the owner started it, and the
+    /// screen can hold more agents. Never to a subagent.
+    pub team_tools: bool,
     /// Whether the run offers [`LOOP_TOOL`] (TUI T60a): the session runs as a loop of the owner's. Never to a subagent.
     pub loop_tool: bool,
     /// The images the run's prompt carries (T45): the owner's, pasted or `glut run --image`. Never a subagent's.
@@ -489,6 +497,7 @@ impl RunConfig {
             classifier: crate::classifier::Choice::Session,
             glut_files: false,
             pane_tools: false,
+            team_tools: false,
             loop_tool: false,
             prompt_images: Vec::new(),
             images_home: None,

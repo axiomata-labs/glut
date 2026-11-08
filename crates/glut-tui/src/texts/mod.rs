@@ -2333,6 +2333,12 @@ glut::catalog! {
         overlap_file: &'static str,
         /// The Team tab: Glut told an agent of an overlap.
         team_overlap: &'static str,
+        /// A lead started a helper (#142): `{lead}`, `{name}`.
+        helper_started: &'static str,
+        /// Closing a helper whose copy may hold work its lead did not take: `{name}`.
+        helper_close_twice: &'static str,
+        /// A helper closed with its copy: `{name}`.
+        helper_closed: &'static str,
         /// `/sessions`' list.
         windows_title: &'static str,
         /// `/sessions` with no other window.

@@ -65,6 +65,25 @@ pub enum Report {
         answer: bool,
         reply: oneshot::Sender<Result<String, String>>,
     },
+    /// `start_helpers` (#142): the lead's team, to start; the reply says what started where.
+    Helpers {
+        asked: Vec<crate::helpers::Asked>,
+        reply: oneshot::Sender<Result<String, String>>,
+    },
+    /// `take_work`'s first step (#142): what taking the helper's work would bring, for the gate to judge.
+    TakePreview {
+        helper: String,
+        reply: oneshot::Sender<Result<crate::helpers::Preview, String>>,
+    },
+    /// `take_work` (#142): the helper's work as previewed (`now`, its copy's tree then) into the lead's folder, the
+    /// helper closed after if `close`.
+    TakeWork {
+        helper: String,
+        close: bool,
+        now: Option<String>,
+        start: Option<String>,
+        reply: oneshot::Sender<Result<String, String>>,
+    },
     /// The owner's `!cmd` (for the model, `to_model`) or `!!cmd` (for the owner alone) ended.
     Shell {
         /// The stream's block of it.
@@ -505,6 +524,9 @@ pub async fn build(
     let tell = crate::tell::Tell::new(Arc::clone(&pane_link), reports.clone());
     // #142: `who` beside it, the agents there are and what each works on.
     let who = crate::who::Who::new(Arc::clone(&pane_link));
+    // #142: a lead's tools, offered only where the session may lead.
+    let start_helpers = crate::helpers::Start::new(reports.clone());
+    let take_work = crate::helpers::Take::new(reports.clone());
     // T60a: `end_loop` likewise, offered only while the session runs a loop.
     let loop_link = Arc::new(crate::looping::Link::default());
     let end_loop = crate::looping::EndLoop::new(Arc::clone(&loop_link));
@@ -538,6 +560,8 @@ pub async fn build(
     tools.extend([
         Box::new(tell) as Box<dyn glut::Tool>,
         Box::new(who) as Box<dyn glut::Tool>,
+        Box::new(start_helpers) as Box<dyn glut::Tool>,
+        Box::new(take_work) as Box<dyn glut::Tool>,
         Box::new(end_loop) as Box<dyn glut::Tool>,
     ]);
     for entry in refused {
@@ -898,6 +922,7 @@ pub fn turn(
         // T63: a summary the turn made ahead and never put in comes back, for the next message.
         config.hand_on_prepared = true;
         config.pane_tools = parts.pane_link.split();
+        config.team_tools = parts.pane_link.may_lead();
         config.notes = Some(parts.glut_notes.clone());
         config.loop_tool = parts.loop_link.on();
         // A loop's round ends as its loop says, never asked to go on (T73).

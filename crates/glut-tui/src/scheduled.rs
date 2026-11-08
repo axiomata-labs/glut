@@ -1004,7 +1004,12 @@ async fn attempt(home: &Path, plan: &Plan, cancel: glut::Cancel) -> Attempt {
             Report::PickModel(reply) => {
                 let _ = reply.send(None);
             }
-            Report::Tell { reply, .. } => {
+            Report::Tell { reply, .. }
+            | Report::Helpers { reply, .. }
+            | Report::TakeWork { reply, .. } => {
+                let _ = reply.send(Err(tr!(schedule_no_panes).to_owned()));
+            }
+            Report::TakePreview { reply, .. } => {
                 let _ = reply.send(Err(tr!(schedule_no_panes).to_owned()));
             }
             Report::Done(outcome, conversation) => break (outcome, conversation),

@@ -232,7 +232,16 @@ scripts/install-dev.sh           # glut for every terminal: ~/.cargo/bin, linked
   `contain`ed (neither tool offered). Overlaps (`Panes::tell_overlaps`) reach the model only through
   `RunConfig::notes` (`Parts::glut_notes`), which the run takes as `[glut]` lines with the rest unforged — never through
   the owner's inbox; a card's `tree` and `changed` paths are compared, never shown to a model. Only `write_file`/`edit_file` count as a
-  change of a file (a command's writes, `glut_file`, an `lsp` rename do not yet): the tree-and-branch hint covers those.
+  change of a file (a command's writes, `glut_file`, an `lsp` rename do not yet): the tree-and-branch hint covers those. A
+  lead's helpers (`crates/glut-tui/src/helpers.rs`, `Panes::ask_helpers`/`start_helper`/`take_work`) get the lead's
+  mode, granted rules and folders, narrower by their role — never more; only a pane the owner started leads
+  (`tell::Link::may_lead`: no helper, no arena member), never in plan or ask mode, past `BACKGROUND_ASKED` only with
+  the owner's word. A helper's copy is an arena clone (`clone_for_arena` + `mirror`), its work taken only through
+  `worktree::apply` — never a merge of the model's branch, never reading its git folder — on the base pinned when the
+  copy was made, every file first judged by the gate as an `Edit` of the lead's folder (`take_preview`, then
+  `judge_all`, a snapshot before), none outside that folder; the copy's commands never read the lead's repository
+  (`Toolbox::hide`, the read-deny of a confinement without the rest). A lead that plays a role has helpers playing it;
+  a loop's pane leads none.
 - **Glut cleans its own `~/.glut`** (T82, `crates/glut-tui/src/clean.rs`, `glut::clean`): once a day at the start, by
   the owner's terms in `~/.glut/clean.json` (written only by `glut clean keep` / `/clean keep`). A new kind of data
   Glut keeps there gets its line in the report (`clean::ITEMS`, `--json` is read by Axiomata — add, never rename) and

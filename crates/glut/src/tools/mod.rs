@@ -197,6 +197,12 @@ impl Toolbox {
         }
     }
 
+    /// Keeps `hidden` from every command's reads, the box unconfined otherwise (#142: a helper's copy hides its lead's
+    /// repository).
+    pub fn hide(&self, hidden: Vec<std::path::PathBuf>) {
+        self.confinement.hide(hidden);
+    }
+
     /// Puts every call under `gate` (HS3a).
     pub fn set_gate(&mut self, gate: Arc<Gate>) {
         gate.set_beside(self.folders.clone());

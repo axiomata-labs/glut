@@ -24,12 +24,21 @@ follow [Semantic Versioning](https://semver.org/) — while Glut is at 0.x, a mi
 - **Overlaps told**: an agent at work in the same working tree and branch as another at work there, or one that
   changes a file another changed in the last quarter hour, hears it once before its next step as Glut's own note; the
   owner sees it in the stream and the Team tab.
+- **A lead and its helpers**: a session the owner started can lead — `start_helpers` starts helpers in the
+  background, each with a role, a model, its first task (a request whose answer comes back), in the lead's folder or
+  in a copy of the repository of its own (which reads nothing of the lead's repository); `take_work` brings a
+  helper's work over from its copy, checked as an arena's winner is, every file judged as an edit of the lead's
+  folder with a snapshot before, uncommitted, and closes it. A helper has its lead's mode and "always" rules, plays
+  its lead's role if it has one, and starts no helpers; one in a copy gets no MCP server, no folder beside it and no
+  Keychain, and runs only where the sandbox does. Build mode asks once for the whole team, auto starts it, ask and plan mode only
+  propose; past six agents in the background the owner decides.
 - `RunConfig::notes`: an inbox for the host's own `[glut]` notes, taken before the run's next model call beside the
   owner's steering, never shown as the owner's word.
 
 ### Changed
 
-- New public items a host matching or building them exhaustively must add: `RunConfig::notes`, and
+- New public items a host matching or building them exhaustively must add: `RunConfig::notes`,
+  `RunConfig::team_tools` and `glut::TEAM_TOOLS`, and
   `glut::team::NoteKind::Overlap` in the new `glut::team`.
 - `glut::PANE_TOOLS` holds two names now, `tell` and `who` (`[&str; 2]`): a host that adds the screen's tools adds
   both.

@@ -589,6 +589,35 @@ pub struct Pane {
     pub looping: Option<crate::looping::Loop>,
 }
 
+/// A helper a lead asked for (#142), waiting to be built: its lead, what it asked, and the request its first task is.
+#[derive(Debug, Clone)]
+struct Queued {
+    lead: u64,
+    asked: crate::helpers::Asked,
+    request: u32,
+}
+
+/// A helper there is (#142): its session, its lead's, and — in a copy of its own — the tree id its work is measured
+/// from, moved on at each take.
+#[derive(Debug, Clone)]
+struct Helper {
+    id: u64,
+    lead: u64,
+    start: Option<String>,
+    /// The lead's repository's `HEAD` when the copy was made: a take is laid only on the base it was made from.
+    head: Option<String>,
+}
+
+/// A helper being built (#142): its session, what it was asked, its lead's folders beside the working one, whether
+/// its lead's Keychain was open, and what its commands may not read (its lead's repository, for a copy).
+struct HelperBuilding {
+    id: u64,
+    queued: Queued,
+    folders: Vec<glut::folders::Folder>,
+    keychain_open: bool,
+    hidden: Vec<std::path::PathBuf>,
+}
+
 /// A pane whose session is still being built.
 struct Building {
     id: u64,
@@ -681,6 +710,12 @@ pub struct Panes {
     notify_back: Vec<(u64, String)>,
     /// Requests between agents and the answers owed (#142).
     requests: crate::requests::Requests,
+    /// Helpers asked for and not started yet, one built at a time (#142), and the helpers there are: whose, and
+    /// where their copy started from.
+    helper_queue: std::collections::VecDeque<Queued>,
+    helpers: Vec<Helper>,
+    /// The helper whose pane is being built.
+    helper_building: Option<HelperBuilding>,
     /// What passed between the agents, newest last (#142): the Team tab's log, shared with every pane.
     team_log: Arc<Vec<glut::team::Note>>,
     /// The panes and windows known at the last frame, by id or name, and how they are named: who came and went.
@@ -807,6 +842,9 @@ impl Panes {
             sessions_off: false,
             notify_back: Vec::new(),
             requests: crate::requests::Requests::default(),
+            helper_queue: std::collections::VecDeque::new(),
+            helpers: Vec::new(),
+            helper_building: None,
             team_log: Arc::default(),
             team_known: Vec::new(),
             seats_seen: Vec::new(),
@@ -1118,6 +1156,11 @@ impl Panes {
                 .chain(elsewhere.iter().cloned())
                 .collect();
             pane.app.team_log = Arc::clone(&self.team_log);
+            // Only a session the owner started leads helpers (#142, Q16): not a helper, not an arena's member.
+            let helper = self.helpers.iter().any(|helper| helper.id == pane.id);
+            pane.app.parts.pane_link.set_lead(
+                self.may_split && !helper && !members.contains(&pane.id) && pane.looping.is_none(),
+            );
             pane.app.parts.pane_link.set_team_here(
                 team.iter()
                     .filter(|(number, _)| *number != pane.number)
@@ -1141,6 +1184,26 @@ impl Panes {
 
     /// A report of session `id`; one of a pane closed since is nobody's.
     pub fn on_report(&mut self, id: u64, report: Report) {
+        // A lead's team and the work of its helpers are the screen's to start and to take (#142).
+        if let Report::Helpers { asked, reply } = report {
+            let _ = reply.send(self.ask_helpers(id, asked));
+            return;
+        }
+        if let Report::TakePreview { helper, reply } = report {
+            let _ = reply.send(self.take_preview(id, &helper));
+            return;
+        }
+        if let Report::TakeWork {
+            helper,
+            close,
+            now,
+            start,
+            reply,
+        } = report
+        {
+            let _ = reply.send(self.take_work(id, &helper, close, now, start));
+            return;
+        }
         // A model's message to another pane is the screen's to deliver (T36c).
         if let Report::Tell {
             to,
@@ -1692,6 +1755,505 @@ impl Panes {
         }
     }
 
+    /// A lead's `start_helpers` (#142, Q2/Q14/Q16): judged here past the gate — only a session the owner started
+    /// leads, not in plan mode nor in ask mode (they propose a team, the owner starts it), a helper plays its lead's
+    /// role if it has one, and past the window's count of agents only with the owner's word — then queued, each with
+    /// its first task as a request whose answer comes back to the lead.
+    fn ask_helpers(
+        &mut self,
+        lead: u64,
+        asked: Vec<crate::helpers::Asked>,
+    ) -> Result<String, String> {
+        use glut::permissions::Mode;
+        let at = self
+            .list
+            .iter()
+            .position(|pane| pane.id == lead)
+            .ok_or("this pane is closed")?;
+        if self.is_helper(lead) {
+            return Err("a helper starts no helpers: ask your lead with `tell`".into());
+        }
+        if !self.list[at].app.parts.pane_link.may_lead() {
+            return Err("this session leads no helpers here".into());
+        }
+        match self.list[at].app.mode() {
+            Mode::Plan => {
+                return Err("in plan mode a team is proposed, not started: put it in your plan for the owner".into());
+            }
+            Mode::Default | Mode::DontAsk => {
+                return Err(
+                    "in this mode a team is proposed, not started: tell the owner which helpers you would start".into(),
+                );
+            }
+            _ => {}
+        }
+        // A role narrows: a lead that plays one has helpers that play it too, never another (as a loop's agent).
+        let lead_role = self.list[at].app.role.clone();
+        let mut asked = asked;
+        for helper in &mut asked {
+            match (&lead_role, &helper.role) {
+                (Some(ours), Some(theirs)) if ours != theirs => {
+                    return Err(format!(
+                        "you play the role {ours}: your helpers play it too, not {theirs}"
+                    ));
+                }
+                (Some(ours), _) => helper.role = Some(ours.clone()),
+                _ => {}
+            }
+        }
+        let agents = &self.list[at].app.parts.config.agents;
+        for helper in &asked {
+            if let Some(role) = &helper.role
+                && agents.get(role).is_none()
+            {
+                return Err(format!(
+                    "there is no role {role} — the roles: {}",
+                    agents.known()
+                ));
+            }
+            let building = self
+                .building
+                .as_ref()
+                .and_then(|building| building.background.as_deref());
+            let taken = self.list.iter().any(|pane| {
+                pane.name.as_deref() == Some(helper.name.as_str())
+                    || pane.app.role.as_deref() == Some(helper.name.as_str())
+            }) || building == Some(helper.name.as_str())
+                || self
+                    .helper_queue
+                    .iter()
+                    .any(|queued| queued.asked.name == helper.name);
+            if taken {
+                return Err(format!(
+                    "an agent or a role is called {} already",
+                    helper.name
+                ));
+            }
+        }
+        if asked.iter().any(|helper| helper.copy) && !session::sandboxed(&self.list[at].app.parts) {
+            return Err("a helper's copy needs the sandbox, which keeps the lead's repository from it: there is none                         here — use place `here`"
+                .into());
+        }
+        // However often the owner said yes to more, a lead's team stays a team.
+        if self.helpers.len() + self.helper_queue.len() + asked.len() > MOST_HELPERS {
+            return Err(format!(
+                "at most {MOST_HELPERS} helpers run in one window: close some first"
+            ));
+        }
+        let running = self.agents_coming();
+        if running + asked.len() > BACKGROUND_ASKED && !self.background_sure {
+            return Err(format!(
+                "{} agents would run in the background: past {BACKGROUND_ASKED} the owner decides — ask them, or \
+                 close a helper first",
+                running + asked.len()
+            ));
+        }
+        self.requests.room_for(asked.len())?;
+        // Starting a team is a message between models too: a lead and its helpers answering each other end with the
+        // chain.
+        self.chain += 1;
+        let lead_label = self.label(at);
+        let mut said = Vec::new();
+        for helper in asked {
+            let request = self.requests.number();
+            let place = if helper.copy {
+                "in a copy of its own"
+            } else {
+                "in your folder"
+            };
+            said.push(format!("{} (request r{request}, {place})", helper.name));
+            self.note(
+                &lead_label,
+                &helper.name,
+                glut::team::NoteKind::Request(request),
+                &helper.task,
+            );
+            self.helper_queue.push_back(Queued {
+                lead,
+                asked: helper,
+                request,
+            });
+        }
+        Ok(format!(
+            "starting {}: each one's answer to its first task comes back to you as a message marked \
+             answers=\"r<n>\" — go on with your own part meanwhile.",
+            said.join(", ")
+        ))
+    }
+
+    /// Whether session `id` is a helper (#142).
+    fn is_helper(&self, id: u64) -> bool {
+        self.helpers.iter().any(|helper| helper.id == id)
+    }
+
+    /// The agents in the background there are and coming: the owner's and the helpers, those queued and the one
+    /// being built — what the window's count holds.
+    fn agents_coming(&self) -> usize {
+        let building = self
+            .building
+            .as_ref()
+            .is_some_and(|building| building.background.is_some());
+        self.owners_background() + self.helper_queue.len() + usize::from(building)
+    }
+
+    /// Builds the next helper (#142): a background agent with its lead's mode, "always" rules, folders and Keychain,
+    /// its role narrowing them, on the model asked for; in a copy of the repository of its own if asked — mirrored
+    /// from the lead's folder as an arena's model's is, its work measured from there, the lead's repository hidden
+    /// from its commands.
+    fn start_helper(&mut self, queued: Queued, host: &Arc<dyn Host>) {
+        let Some(at) = self.list.iter().position(|pane| pane.id == queued.lead) else {
+            return;
+        };
+        let fail = |panes: &mut Panes, reason: String| {
+            panes.notice_asker(
+                queued.lead,
+                queued.request,
+                &format!("helper {} could not start: {reason}", queued.asked.name),
+            );
+        };
+        let number = (1..=u8::MAX)
+            .find(|number| self.list.iter().all(|pane| pane.number != *number))
+            .unwrap_or(u8::MAX);
+        let app = &self.list[at].app;
+        // A copy of its own holds nothing of the lead's repository, and reaches none of it: no MCP server (they run
+        // outside the sandbox), no folder beside it, no Keychain (#142, security audit).
+        let copy = queued.asked.copy;
+        let servers = if copy {
+            Servers::None
+        } else {
+            self.servers.clone()
+        };
+        let mut launch = launch_beside(app, servers);
+        launch.gate.mode = Some(app.mode());
+        launch.gate.allow = app.sender().granted;
+        if queued.asked.model.is_some() || queued.asked.provider.is_some() {
+            launch.engine = crate::host::EngineChoice::Providers {
+                provider: Some(
+                    queued
+                        .asked
+                        .provider
+                        .clone()
+                        .unwrap_or_else(|| app.engine.provider.clone()),
+                ),
+                model: queued.asked.model.clone(),
+            };
+        }
+        let folders = if copy {
+            Vec::new()
+        } else {
+            app.parts.tools.folders().list()
+        };
+        let keychain_open = !copy && app.parts.tools.keychain().is_open();
+        let mut start = None;
+        let mut head = None;
+        let mut hidden = Vec::new();
+        let mut left_out = Vec::new();
+        let tree = if queued.asked.copy {
+            let repo = match crate::worktree::repo_of(&app.parts.config.cwd) {
+                Ok(Some(repo)) => repo,
+                Ok(None) => return fail(self, "this folder is no git repository".into()),
+                Err(reason) => return fail(self, reason),
+            };
+            let home = app.parts.home.clone();
+            let branch = format!("glut/helper-{}", queued.asked.name);
+            let tree = match crate::worktree::clone_for_arena(&home, &repo, &branch) {
+                Ok(tree) => tree,
+                Err(reason) => return fail(self, reason),
+            };
+            match crate::worktree::mirror(&tree)
+                .and_then(|mirrored| Ok((mirrored, crate::worktree::head(&tree.repo)?)))
+            {
+                Ok((mirrored, now)) => {
+                    start = Some(mirrored.start);
+                    head = Some(now);
+                    left_out = mirrored.left_out;
+                }
+                Err(reason) => {
+                    let _ = crate::worktree::remove(&tree, true);
+                    return fail(self, reason);
+                }
+            }
+            // The copy lies outside the lead's repository: that repository's `.env` and keys are no secrets of the
+            // copy's folder, so the helper's commands read none of it (as an arena's model's).
+            hidden = vec![tree.repo.top.clone(), tree.repo.common.clone()];
+            if let Some(main) = tree
+                .repo
+                .common
+                .parent()
+                .filter(|_| tree.repo.common.ends_with(".git"))
+            {
+                hidden.push(main.to_path_buf());
+            }
+            launch.cwd = tree.place.clone();
+            Some(tree)
+        } else {
+            None
+        };
+        if !left_out.is_empty() {
+            let note = format!(
+                "the copy of helper {} leaves out: {}",
+                queued.asked.name,
+                left_out.join(", ")
+            );
+            self.list[at].app.parts.glut_notes.send(note);
+        }
+        let id = self.next_id;
+        self.next_id += 1;
+        let (reports, inlet) = mpsc::unbounded_channel();
+        forward(id, inlet, self.reports.clone());
+        self.building = Some(Building {
+            id,
+            number,
+            resume: false,
+            tree,
+            role: queued.asked.role.clone(),
+            background: Some(queued.asked.name.clone()),
+            restore: None,
+            reports: reports.clone(),
+            looping: None,
+            arena: None,
+        });
+        self.helpers.push(Helper {
+            id,
+            lead: queued.lead,
+            start,
+            head,
+        });
+        self.helper_building = Some(HelperBuilding {
+            id,
+            queued,
+            folders,
+            keychain_open,
+            hidden,
+        });
+        let built = self.built.clone();
+        let host = Arc::clone(host);
+        tokio::spawn(async move {
+            let _ = built.send(session::build(launch, host, reports).await);
+        });
+    }
+
+    /// The helper of session `id` stands (#142): its lead's folders added, its first task in as the lead's request,
+    /// its answer owed to the lead. A lead gone meanwhile leaves no task: the helper goes again, its copy with it.
+    fn helper_ready(&mut self, id: u64, building: HelperBuilding) {
+        let Some(at) = self.list.iter().position(|pane| pane.id == id) else {
+            return;
+        };
+        let queued = building.queued;
+        let Some(lead) = self.list.iter().position(|pane| pane.id == queued.lead) else {
+            let pane = self.list.remove(at);
+            self.helpers.retain(|helper| helper.id != id);
+            if let Some(tree) = &pane.tree {
+                let _ = crate::worktree::remove(tree, true);
+            }
+            return;
+        };
+        for folder in building.folders {
+            let _ = self.list[at].app.parts.tools.folders().add(folder);
+        }
+        let from = self.list[lead].number;
+        let message = crate::tell::wrapped_marked(
+            from,
+            &queued.asked.task,
+            crate::tell::Mark::Request(queued.request),
+        );
+        let sender = self.list[lead].app.sender();
+        let label = self.label(at);
+        let lead_label = self.shown_label(lead);
+        let name = queued.asked.name.clone();
+        match self.list[at]
+            .app
+            .deliver_model(message, true, sender, &tr!(held_enter, pane = from))
+        {
+            Ok(_) => self.requests.owe(
+                queued.request,
+                id,
+                label,
+                crate::requests::Back::Pane {
+                    id: queued.lead,
+                    request: queued.request,
+                },
+            ),
+            Err(reason) => self.notice_asker(
+                queued.lead,
+                queued.request,
+                &format!("helper {name} could not take its task: {reason}"),
+            ),
+        }
+        self.active()
+            .tell(tr!(helper_started, lead = lead_label, name = name));
+    }
+
+    /// The helper `name` of the lead of session `lead`, by its place in the list — not one at work.
+    fn lead_s_helper(&self, lead: u64, name: &str) -> Result<usize, String> {
+        let at = self
+            .list
+            .iter()
+            .position(|pane| {
+                pane.name.as_deref() == Some(name)
+                    && self
+                        .helpers
+                        .iter()
+                        .any(|helper| helper.id == pane.id && helper.lead == lead)
+            })
+            .ok_or_else(|| format!("{name} is no helper of yours"))?;
+        if self.list[at].app.working() {
+            return Err(format!(
+                "{name} is still working: take its work once it has answered"
+            ));
+        }
+        Ok(at)
+    }
+
+    /// What taking helper `name`'s work would bring (#142): its copy's tree now and the files changed since the last
+    /// take, as paths in the lead's folder — a file outside that folder (a lead in a subfolder of the repository), or
+    /// one whose name the screen shows other than git writes it, is none it may take; nor does plan mode take any.
+    fn take_preview(&mut self, lead: u64, name: &str) -> Result<crate::helpers::Preview, String> {
+        let at = self.lead_s_helper(lead, name)?;
+        let lead_at = self
+            .list
+            .iter()
+            .position(|pane| pane.id == lead)
+            .ok_or("this pane is closed")?;
+        if self.list[lead_at].app.mode() == glut::permissions::Mode::Plan {
+            return Err(
+                "plan mode changes nothing: take the work once the plan is approved".into(),
+            );
+        }
+        let Some(tree) = self.list[at].tree.clone() else {
+            return Ok(crate::helpers::Preview::default());
+        };
+        let id = self.list[at].id;
+        let start = self
+            .helpers
+            .iter()
+            .find(|helper| helper.id == id)
+            .and_then(|helper| helper.start.clone())
+            .ok_or("its copy has no start to measure from")?;
+        let now = crate::worktree::snapshot(&tree)?;
+        if now == start {
+            return Ok(crate::helpers::Preview {
+                now: Some(now),
+                start: Some(start),
+                ..Default::default()
+            });
+        }
+        let taking = crate::worktree::taking(&tree, &start, Some(&now))?;
+        if taking.unclean {
+            return Err(format!(
+                "{name} wrote a file whose name holds characters no rule could judge as written: nothing is taken"
+            ));
+        }
+        let cwd = &self.list[lead_at].app.parts.config.cwd;
+        let cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.clone());
+        let top = tree
+            .repo
+            .top
+            .canonicalize()
+            .unwrap_or_else(|_| tree.repo.top.clone());
+        let inside = |path: &String| -> Result<String, String> {
+            top.join(path)
+                .strip_prefix(&cwd)
+                .map(|inside| inside.display().to_string())
+                .map_err(|_| {
+                    format!("{path} lies outside your folder: take it from the repository's top")
+                })
+        };
+        Ok(crate::helpers::Preview {
+            files: taking.files.iter().map(inside).collect::<Result<_, _>>()?,
+            executable: taking
+                .executable
+                .iter()
+                .map(inside)
+                .collect::<Result<_, _>>()?,
+            now: Some(now),
+            start: Some(start),
+        })
+    }
+
+    /// A lead's `take_work` (#142, Q15), past the gate's judgement of every file: its helper's work from its copy —
+    /// exactly the span `shown_start`..`now` the gate was shown — into the lead's folder, uncommitted, as an arena's
+    /// winner is taken (the bytes checked are the bytes applied; a conflict or a moved base takes nothing); then, if
+    /// asked, the helper ends, its copy with it — unless it wrote more since, which would go unjudged.
+    fn take_work(
+        &mut self,
+        lead: u64,
+        name: &str,
+        close: bool,
+        now: Option<String>,
+        shown_start: Option<String>,
+    ) -> Result<String, String> {
+        let at = self.lead_s_helper(lead, name)?;
+        let id = self.list[at].id;
+        let mut said = format!("{name} works in your folder: its changes are there already");
+        if let Some(tree) = self.list[at].tree.clone() {
+            let helper = self
+                .helpers
+                .iter()
+                .find(|helper| helper.id == id)
+                .cloned()
+                .ok_or("no helper")?;
+            let (Some(start), Some(head)) = (helper.start, helper.head) else {
+                return Err("its copy has no start to measure from".into());
+            };
+            let now = now.ok_or("nothing was shown to take")?;
+            if shown_start.as_deref() != Some(start.as_str()) {
+                return Err(format!(
+                    "{name}'s work was taken meanwhile: call take_work again"
+                ));
+            }
+            if now == start {
+                said = format!("{name} changed nothing since the last take");
+            } else {
+                let files = crate::worktree::apply(&tree, &start, &now, &head)?;
+                if let Some(helper) = self.helpers.iter_mut().find(|helper| helper.id == id) {
+                    helper.start = Some(now.clone());
+                }
+                said = format!(
+                    "took {files} changed file(s) of {name} into your folder, not committed — look at them with \
+                     `git diff`"
+                );
+                let lead_label = self
+                    .list
+                    .iter()
+                    .position(|pane| pane.id == lead)
+                    .map_or_else(String::new, |at| self.label(at));
+                self.note(name, &lead_label, glut::team::NoteKind::Message, &said);
+            }
+            if close && crate::worktree::snapshot(&tree).ok().as_deref() != Some(now.as_str()) {
+                return Err(format!(
+                    "{said}; {name} stays open: it changed more since — take that first"
+                ));
+            }
+        }
+        if close {
+            if !self.list[at].background {
+                return Err(format!(
+                    "{said}; {name} stays open: the owner has it on the screen"
+                ));
+            }
+            self.close_helper(at);
+            said.push_str(&format!("; {name} is closed"));
+        }
+        Ok(said)
+    }
+
+    /// Ends the helper at `at` (#142): its session stopped, its copy removed — the keys staying where they are.
+    fn close_helper(&mut self, at: usize) {
+        let keys = self.list[self.active].id;
+        let mut pane = self.list.remove(at);
+        pane.app.stop_turn();
+        self.grid.remove(pane.id);
+        if self.peek == Some(pane.id) {
+            self.peek = None;
+        }
+        self.active = self.at(keys);
+        self.helpers.retain(|helper| helper.id != pane.id);
+        if let Some(tree) = &pane.tree {
+            let _ = crate::worktree::remove(tree, true);
+        }
+    }
+
     /// Overlaps between agents, once a frame (#142, Q6/Q7): an agent at work in the working tree and on the branch of
     /// another at work there (or that changed something lately), or one that just changed a file another changed lately, is told once — its model by a `[glut]` note
     /// before its next step, the owner in its stream and the Team tab.
@@ -1843,6 +2405,12 @@ impl Panes {
     /// closed asker hears nothing more, and the asker of a request nobody will answer hears so — set aside, refused,
     /// behind a turn that did not finish, its pane closed, an hour gone.
     fn settle_requests(&mut self) {
+        // A helper the owner closed is nobody's helper any more; one being built is one still.
+        let building = self.building.as_ref().map(|building| building.id);
+        let list = &self.list;
+        self.helpers.retain(|helper| {
+            Some(helper.id) == building || list.iter().any(|pane| pane.id == helper.id)
+        });
         self.requests.settle_failures();
         let open: Vec<u64> = self.list.iter().map(|pane| pane.id).collect();
         self.requests.forget_asker(&open);
@@ -2622,6 +3190,13 @@ impl Panes {
         }
         self.step_loops(Instant::now());
         self.step_arena(host);
+        // A lead's helpers, one built at a time (#142).
+        if self.building.is_none()
+            && self.restoring.is_none()
+            && let Some(queued) = self.helper_queue.pop_front()
+        {
+            self.start_helper(queued, host);
+        }
         // Between a bench's tasks there is no arena to step: the next task comes once there is room.
         if self.arena.is_none() {
             self.step_bench();
@@ -3214,6 +3789,17 @@ impl Panes {
                     member.state = crate::arena::State::Aborted(crate::transcript::clean(&reason));
                     member.tree = None;
                 }
+                // A helper that never came: its lead hears so, as the answer to its first task (#142).
+                if let Some(helper) = self.helper_building.take()
+                    && helper.id == building.id
+                {
+                    let queued = helper.queued;
+                    self.notice_asker(
+                        queued.lead,
+                        queued.request,
+                        &format!("helper {} could not start: {reason}", queued.asked.name),
+                    );
+                }
                 let failed = tr!(pane_not_started, n = building.number, reason = reason);
                 let said = match gone {
                     Some(gone) => tr!(clause_join, first = failed, second = gone),
@@ -3266,6 +3852,18 @@ impl Panes {
             parts
                 .tools
                 .contain(tree.map(crate::worktree::Tree::private_home), hidden);
+        }
+        // A helper (#142): its lead's Keychain as it is, and its copy's view of the lead's repository closed.
+        if let Some(helper) = &self.helper_building
+            && helper.id == building.id
+        {
+            parts
+                .tools
+                .keychain()
+                .set_session_open(helper.keychain_open);
+            if !helper.hidden.is_empty() {
+                parts.tools.hide(helper.hidden.clone());
+            }
         }
         let disguise = match (building.arena, &self.arena) {
             (Some(at), Some(arena)) if arena.blind => arena.members.get(at).map(|member| {
@@ -3371,6 +3969,11 @@ impl Panes {
                 tree: building.tree,
             });
             self.reorder();
+            if let Some(helper) = self.helper_building.take()
+                && helper.id == building.id
+            {
+                return self.helper_ready(helper.id, helper);
+            }
             if quiet {
                 return;
             }
@@ -4774,7 +5377,8 @@ impl Panes {
         sure: bool,
         host: &Arc<dyn Host>,
     ) {
-        let background = self.owners_background();
+        // The helpers on their way count too (#142).
+        let background = self.agents_coming();
         self.background_sure |= sure;
         if background >= BACKGROUND_ASKED && !self.background_sure {
             let picker = more_picker(background + 1, name, role, place);
@@ -4811,7 +5415,7 @@ impl Panes {
     /// named `loop` or after its role.
     fn start_loop(&mut self, asked: crate::looping::Asked, host: &Arc<dyn Host>) {
         // Loops spend unattended: their own cap, whatever the owner said yes to for `/bg`.
-        let background = self.owners_background();
+        let background = self.agents_coming();
         let loops = self
             .list
             .iter()
@@ -5034,6 +5638,22 @@ impl Panes {
         let label = self.shown_label(at);
         if self.background_member(at) {
             return self.active().tell(tr!(bench_member_close, name = label));
+        }
+        // A helper's copy (#142) is no worktree of the owner's: it ends with the helper — what its lead did not take
+        // goes, after a second word.
+        let id = self.list[at].id;
+        if self.is_helper(id) && self.list[at].tree.is_some() {
+            let number = self.list[at].number;
+            let armed = self
+                .close_armed
+                .is_some_and(|(armed, since)| armed == number && since.elapsed() < ARMED);
+            if !armed {
+                self.close_armed = Some((number, Instant::now()));
+                return self.active().tell(tr!(helper_close_twice, name = label));
+            }
+            self.close_armed = None;
+            self.close_helper(at);
+            return self.active().tell(tr!(helper_closed, name = label));
         }
         if self.list[at].tree.is_some() {
             return self.active().tell(tr!(agent_in_worktree, name = label));
@@ -5419,6 +6039,9 @@ impl Panes {
         (areas, placed)
     }
 }
+
+/// The most helpers one window holds (#142), whatever the owner said yes to for agents in the background.
+const MOST_HELPERS: usize = 12;
 
 /// How long a file another agent changed counts as fresh for an overlap (#142).
 const OVERLAP_FRESH: Duration = Duration::from_secs(15 * 60);
@@ -7106,6 +7729,225 @@ mod tests {
             &panes.list[0].app,
             "answer to r2: pane 2 will not answer: the turn it started was refused"
         ));
+    }
+
+    #[tokio::test]
+    async fn a_lead_starts_helpers_in_build_mode_not_in_ask_their_answers_come_back_and_it_closes_them()
+     {
+        use glut::permissions::{AnswerFuture, AskRequest, Asker, Mode};
+        struct No;
+        impl Asker for No {
+            fn ask<'a>(&'a self, _request: &'a AskRequest) -> AnswerFuture<'a> {
+                Box::pin(async { glut::permissions::Answer::Deny })
+            }
+        }
+        let (mut parts, engine) = session::for_tests();
+        parts.tools.set_gate(Arc::new(glut::Gate::new(
+            glut::RuleSet::default(),
+            Mode::Default,
+            Arc::new(No),
+        )));
+        let (send, reports) = mpsc::unbounded_channel();
+        let first = App::new(Arc::new(parts), engine, send);
+        let (mut panes, _inlets) = Panes::new(first, reports, true, Servers::Owner);
+        let (second_app, _second_reports) = app();
+        panes.list.push(Pane {
+            looping: None,
+            id: 2,
+            number: 2,
+            name: None,
+            background: false,
+            app: second_app,
+            area: Rect::default(),
+            tree: None,
+        });
+        panes.sync();
+        let lead = panes.list[0].id;
+        let mode = |panes: &Panes, mode: Mode| {
+            panes.list[0].app.parts.tools.gate().unwrap().set_mode(mode);
+        };
+        let docs = crate::helpers::Asked {
+            name: "docs".into(),
+            role: None,
+            model: None,
+            provider: None,
+            copy: false,
+            task: "write the docs".into(),
+        };
+        mode(&panes, Mode::Default);
+        let refused = panes.ask_helpers(lead, vec![docs.clone()]).unwrap_err();
+        assert!(refused.contains("proposed, not started"), "{refused}");
+        mode(&panes, Mode::AcceptEdits);
+        // A lead that plays a role has helpers that play it, never another.
+        panes.list[0].app.role = Some("reviewer".into());
+        let mut other = docs.clone();
+        other.role = Some("docs".into());
+        assert!(
+            panes
+                .ask_helpers(lead, vec![other])
+                .unwrap_err()
+                .contains("play it too")
+        );
+        panes.list[0].app.role = None;
+        let mut bad = docs.clone();
+        bad.role = Some("nobody".into());
+        assert!(
+            panes
+                .ask_helpers(lead, vec![bad])
+                .unwrap_err()
+                .contains("no role")
+        );
+        let said = panes.ask_helpers(lead, vec![docs]).unwrap();
+        assert!(
+            said.starts_with("starting docs (request r1, in your folder)"),
+            "{said}"
+        );
+        // Built as start_helper would, without a provider behind it.
+        let queued = panes.helper_queue.pop_front().unwrap();
+        let (sender, _) = mpsc::unbounded_channel();
+        panes.building = Some(Building {
+            looping: None,
+            id: 9,
+            number: 3,
+            resume: false,
+            tree: None,
+            role: None,
+            background: Some("docs".into()),
+            restore: None,
+            reports: sender,
+            arena: None,
+        });
+        panes.helpers.push(Helper {
+            id: 9,
+            lead,
+            start: None,
+            head: None,
+        });
+        panes.helper_building = Some(HelperBuilding {
+            id: 9,
+            queued,
+            folders: Vec::new(),
+            keychain_open: false,
+            hidden: Vec::new(),
+        });
+        panes.on_built(Ok(session::for_tests()));
+        let helper = panes.list.iter().position(|pane| pane.id == 9).unwrap();
+        assert_eq!(
+            panes.list[helper].app.answering,
+            Some(1),
+            "its first task is the request"
+        );
+        panes.sync();
+        assert!(
+            !panes.list[helper].app.parts.pane_link.may_lead(),
+            "a helper leads no one"
+        );
+        assert!(panes.list[0].app.parts.pane_link.may_lead());
+        assert!(
+            panes
+                .ask_helpers(9, Vec::new())
+                .unwrap_err()
+                .contains("starts no helpers")
+        );
+        let mut answered = ended(glut::FinishReason::Answered);
+        if let Report::Done(outcome, _) = &mut answered {
+            outcome.answer = Some("Docs written.".into());
+        }
+        panes.on_report(9, answered);
+        assert!(noted(&panes.list[0].app, "answer to r1: Docs written."));
+        let second = panes.list[1].id;
+        assert!(
+            panes.take_work(second, "docs", true, None, None).is_err(),
+            "not its helper"
+        );
+        let took = panes.take_work(lead, "docs", true, None, None).unwrap();
+        assert!(
+            took.contains("in your folder") && took.ends_with("docs is closed"),
+            "{took}"
+        );
+        assert!(panes.list.iter().all(|pane| pane.id != 9));
+    }
+
+    #[tokio::test]
+    async fn a_helpers_work_in_its_copy_comes_over_checked_and_uncommitted() {
+        let (home, top) = crate::worktree::testing::repo("panes-helper-take");
+        let repo = crate::worktree::repo_of(&top).unwrap().unwrap();
+        let tree = crate::worktree::clone_for_arena(&home, &repo, "glut/helper-tests").unwrap();
+        let start = crate::worktree::mirror(&tree).unwrap().start;
+        // The lead works at the repository's top.
+        let (mut parts, engine) = session::for_tests();
+        parts.config.cwd = top.clone();
+        let (send, reports) = mpsc::unbounded_channel();
+        let first = App::new(Arc::new(parts), engine, send);
+        let (mut panes, _inlets) = Panes::new(first, reports, true, Servers::Owner);
+        panes.sync();
+        let lead = panes.list[0].id;
+        let (helper_app, _helper_reports) = app();
+        panes.list.push(Pane {
+            looping: None,
+            id: 9,
+            number: 3,
+            name: Some("tests".into()),
+            background: true,
+            app: helper_app,
+            area: Rect::default(),
+            tree: Some(tree.clone()),
+        });
+        panes.helpers.push(Helper {
+            id: 9,
+            lead,
+            start: Some(start),
+            head: Some(crate::worktree::head(&repo).unwrap()),
+        });
+        let preview = panes.take_preview(lead, "tests").unwrap();
+        assert!(preview.files.is_empty());
+        let said = panes
+            .take_work(lead, "tests", false, preview.now, preview.start)
+            .unwrap();
+        assert!(said.contains("changed nothing"), "{said}");
+        std::fs::write(tree.place.join("b.txt"), "from the helper\n").unwrap();
+        let preview = panes.take_preview(lead, "tests").unwrap();
+        assert_eq!(
+            preview.files,
+            vec!["b.txt".to_owned()],
+            "what the gate is shown"
+        );
+        let said = panes
+            .take_work(lead, "tests", false, preview.now, preview.start)
+            .unwrap();
+        assert!(
+            said.starts_with("took 1 changed file(s) of tests"),
+            "{said}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(top.join("b.txt")).unwrap(),
+            "from the helper\n"
+        );
+        let status = crate::worktree::testing::plain(&top, &["status", "--porcelain"]).unwrap();
+        assert!(status.contains("?? b.txt"), "uncommitted: {status}");
+        // A link the helper made is never taken.
+        std::os::unix::fs::symlink("/etc/passwd", tree.place.join("link")).unwrap();
+        assert!(panes.take_preview(lead, "tests").is_err());
+        std::fs::remove_file(tree.place.join("link")).unwrap();
+        // A base moved since the copy was made takes nothing.
+        crate::worktree::testing::commit(&top, "c.txt", "moved\n");
+        std::fs::write(tree.place.join("d.txt"), "late\n").unwrap();
+        let preview = panes.take_preview(lead, "tests").unwrap();
+        assert!(
+            panes
+                .take_work(lead, "tests", false, preview.now, preview.start)
+                .is_err()
+        );
+        // The owner's /close ends it after a second word, its copy with it.
+        panes.close_named("tests");
+        assert!(
+            panes.list.iter().any(|pane| pane.id == 9),
+            "a first /close only warns"
+        );
+        panes.close_named("tests");
+        assert!(panes.list.iter().all(|pane| pane.id != 9));
+        assert!(!tree.place.exists(), "its copy goes with it");
+        let _ = std::fs::remove_dir_all(top.parent().unwrap());
     }
 
     #[tokio::test]
