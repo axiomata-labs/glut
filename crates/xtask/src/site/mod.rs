@@ -457,7 +457,7 @@ fn framed(layout: &str, page: &Page, pages: &[Page]) -> String {
     let foot = format!(
         "<footer class=\"foot\">\n<div><h2>{}</h2><a href=\"{}\">{}</a><a href=\"{}\">{}</a>\
          <a href=\"{}\">{}</a><a href=\"{}\">{}</a></div>\n<div><h2>{}</h2><a href=\"{}\">GitHub</a>\
-         <a href=\"{}\">{}</a><a href=\"{}\">{}</a><a href=\"{}\">{}</a></div>\n\
+         <a href=\"{}\">X</a><a href=\"{}\">{}</a><a href=\"{}\">{}</a><a href=\"{}\">{}</a></div>\n\
          <div><h2>{}</h2><a href=\"{}\">{}</a><a href=\"{}\">{}</a></div>\n<p class=\"fine\">{}</p>\n</footer>",
         words.docs,
         link("docs/getting-started.html"),
@@ -470,6 +470,7 @@ fn framed(layout: &str, page: &Page, pages: &[Page]) -> String {
         words.security,
         words.project,
         links::GITHUB,
+        links::X,
         link("docs/changelog.html"),
         words.changelog,
         link("docs/contributing.html"),

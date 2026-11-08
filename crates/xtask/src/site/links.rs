@@ -7,6 +7,9 @@ use std::path::Path;
 /// Where the repository is read by people without a checkout.
 pub const GITHUB: &str = "https://github.com/axiomata-labs/glut";
 
+/// The owner's account on X, where Glut's news are posted.
+pub const X: &str = "https://x.com/GlutDev";
+
 /// The manual's sources, one folder per language, in the repository.
 pub const MANUAL_DIR: &str = "crates/glut-tui/manual";
 
