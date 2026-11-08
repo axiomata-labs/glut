@@ -936,6 +936,32 @@ impl Panes {
                 )
             })
             .collect();
+        // What `who` says of each (#142): the description's facts, and what changes from turn to turn.
+        let branches: Vec<Option<String>> = self
+            .list
+            .iter_mut()
+            .map(|pane| {
+                let cwd = pane.app.parts.config.cwd.clone();
+                pane.app.branch.name(&cwd).map(glut::permissions::printable)
+            })
+            .collect();
+        let team: Vec<(u8, String)> = described
+            .iter()
+            .zip(&self.list)
+            .zip(&branches)
+            .map(|(((number, line), pane), branch)| {
+                let app = &pane.app;
+                (
+                    *number,
+                    team_line(
+                        line,
+                        branch.as_deref(),
+                        busy_word(app.waits_for_owner(), app.working()),
+                        app.parts.pane_link.doing().as_deref(),
+                    ),
+                )
+            })
+            .collect();
         // The Agents tab of every pane lists the agents in the background (T36e), each a card (T69).
         let background: Vec<crate::agents::Behind> = self
             .list
@@ -996,7 +1022,16 @@ impl Panes {
         {
             self.chain = 0;
         }
+        let members: Vec<u64> = self
+            .arena
+            .iter()
+            .flat_map(|arena| arena.members.iter().filter_map(|member| member.pane))
+            .collect();
         for (at, pane) in self.list.iter_mut().enumerate() {
+            // An arena's member reaches no other pane and sees none (T61).
+            if members.contains(&pane.id) {
+                pane.app.parts.pane_link.contain();
+            }
             pane.app.drop_answered_ask();
             pane.app.track_state();
             pane.app.background = background.clone();
@@ -1004,6 +1039,12 @@ impl Panes {
                 pane.number,
                 described
                     .iter()
+                    .filter(|(number, _)| *number != pane.number)
+                    .map(|(_, line)| line.clone())
+                    .collect(),
+            );
+            pane.app.parts.pane_link.set_team_here(
+                team.iter()
                     .filter(|(number, _)| *number != pane.number)
                     .map(|(_, line)| line.clone())
                     .collect(),
@@ -1602,17 +1643,28 @@ impl Panes {
                         .map_or_else(String::new, |link| link.name()),
                     off: self.sessions_off,
                     // A window that takes nothing from outside tells nothing of its panes either.
-                    seats: (0..self.list.len())
-                        .filter(|_| !self.sessions_off)
+                    seats: (0..if self.sessions_off {
+                        0
+                    } else {
+                        self.list.len()
+                    })
                         .map(|at| {
-                            let app = &self.list[at].app;
+                            let address = self.address(at);
+                            let app = &mut self.list[at].app;
+                            let cwd = app.parts.config.cwd.clone();
+                            let branch = app
+                                .branch
+                                .name(&cwd)
+                                .and_then(crate::sessions::branch_field);
                             Seat {
-                                address: self.address(at),
-                                project: app.parts.config.cwd.display().to_string(),
+                                address,
+                                project: cwd.display().to_string(),
                                 model: app.engine.model_name().to_owned(),
                                 mode: app.mode().name().to_owned(),
                                 role: app.role.clone(),
                                 works: app.working(),
+                                branch,
+                                doing: app.parts.pane_link.doing(),
                             }
                         })
                         .collect(),
@@ -1735,11 +1787,14 @@ impl Panes {
         // Who asked about a pane that closed hears nothing more.
         let open: Vec<u64> = self.list.iter().map(|pane| pane.id).collect();
         self.notify_back.retain(|(id, _)| open.contains(id));
-        let lines: Vec<String> = link
+        let seats: Vec<crate::sessions::Seat> = link
             .seen()
             .into_iter()
             .filter(|card| !card.off)
             .flat_map(|card| card.seats)
+            .collect();
+        let lines: Vec<String> = seats
+            .iter()
             .map(|seat| {
                 // Nothing that changes from turn to turn (working or not): the description stays as the cache keeps it.
                 format!(
@@ -1754,6 +1809,19 @@ impl Panes {
                 )
             })
             .collect();
+        // What `who` says of each (#142): the same facts, and what changes.
+        let team: Vec<String> = seats
+            .iter()
+            .zip(&lines)
+            .map(|(seat, line)| {
+                team_line(
+                    line,
+                    seat.branch.as_deref(),
+                    busy_word(false, seat.works),
+                    seat.doing.as_deref(),
+                )
+            })
+            .collect();
         let window = Some(link.name());
         let addresses: Vec<String> = (0..self.list.len()).map(|at| self.address(at)).collect();
         for (pane, address) in self.list.iter_mut().zip(addresses) {
@@ -1761,6 +1829,7 @@ impl Panes {
                 .parts
                 .pane_link
                 .set_sessions(window.clone(), lines.clone());
+            pane.app.parts.pane_link.set_team_elsewhere(team.clone());
             pane.app.address = Some(address);
         }
     }
@@ -4698,6 +4767,32 @@ impl Panes {
     }
 }
 
+/// One agent as `who` lists it (#142): the line `tell` describes it by, its branch, busy or free, and its own line.
+fn team_line(described: &str, branch: Option<&str>, busy: &str, doing: Option<&str>) -> String {
+    let mut line = described.to_owned();
+    if let Some(branch) = branch {
+        line.push_str(&format!(", branch {branch}"));
+    }
+    line.push_str(", ");
+    line.push_str(busy);
+    if let Some(doing) = doing {
+        line.push_str(", ");
+        line.push_str(&crate::who::quoted_doing(doing));
+    }
+    line
+}
+
+/// Whether an agent can take something now, as `who` says it.
+fn busy_word(waits_for_owner: bool, working: bool) -> &'static str {
+    if waits_for_owner {
+        "waits for its owner"
+    } else if working {
+        "busy"
+    } else {
+        "free"
+    }
+}
+
 /// Where a new pane in a git repository works: this folder, or a worktree whose branch the owner may rename first
 /// (the command goes into the input).
 fn where_picker(
@@ -4911,6 +5006,24 @@ fn listed(words: &[String]) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn who_lists_an_agent_by_its_facts_then_its_own_words() {
+        assert_eq!(
+            team_line(
+                "pane 2: reviewer",
+                Some("main"),
+                busy_word(false, true),
+                Some("the \"footer\"")
+            ),
+            "pane 2: reviewer, branch main, busy, works on (its own words): \"the 'footer'\""
+        );
+        assert_eq!(
+            team_line("pane 3: x", None, busy_word(true, true), None),
+            "pane 3: x, waits for its owner"
+        );
+        assert_eq!(busy_word(false, false), "free");
+    }
+
     use super::*;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent};
     use tokio::sync::oneshot;

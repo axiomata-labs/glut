@@ -89,6 +89,13 @@ pub struct Seat {
     pub mode: String,
     pub role: Option<String>,
     pub works: bool,
+    /// The branch of its folder's repository, or a detached `HEAD`'s short id (#142): another window's older Glut
+    /// sends none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// What its model said it works on, through `who` (#142): the model's words, not a fact.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub doing: Option<String>,
 }
 
 /// A window as it answers "who are you".
@@ -353,6 +360,11 @@ fn checked(mut card: Card) -> Option<Card> {
         {
             return None;
         }
+        // A branch is a fact of the other window's, but its name is anyone's: one printable word, cut — never a
+        // reason to pass the whole card by.
+        seat.branch = seat.branch.as_deref().and_then(branch_field);
+        // The other window's model wrote it: held to what this window lets its own set.
+        seat.doing = seat.doing.as_deref().and_then(crate::who::doing_line);
         // Only the folder's name travels into a model's description, never the whole path.
         seat.project = Path::new(&seat.project)
             .file_name()
@@ -360,6 +372,17 @@ fn checked(mut card: Card) -> Option<Card> {
             .unwrap_or_default();
     }
     Some(card)
+}
+
+/// A branch's name as a card carries it (#142): printable, without spaces, at most [`MOST_FIELD`] characters; `None`
+/// for one that is empty after that.
+pub fn branch_field(branch: &str) -> Option<String> {
+    let word: String = glut::permissions::printable(branch)
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .take(MOST_FIELD)
+        .collect();
+    (!word.is_empty()).then_some(word)
 }
 
 /// Whether `address` is a window's name, or one and a pane's number or name behind a `/`.
@@ -585,6 +608,38 @@ mod tests {
         for bad in ["", "-x", "a/b", "a b", "ä", &"x".repeat(41)] {
             assert!(check_name(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn a_seat_is_bounded_and_an_older_ones_reads() {
+        let old = r#"{"address":"w-ab","project":"/x/p","model":"m","mode":"default","role":null,"works":true}"#;
+        let seat: Seat = serde_json::from_str(old).unwrap();
+        assert_eq!((seat.branch.clone(), seat.doing.clone()), (None, None));
+        let mut long = seat.clone();
+        long.branch = Some(format!("a b\u{1b}{}", "x".repeat(300)));
+        long.doing = Some(format!("line\none {}", "y".repeat(300)));
+        let card = checked(Card {
+            name: "w-ab".into(),
+            off: false,
+            seats: vec![long],
+        })
+        .expect("a long branch keeps the card");
+        let seat = &card.seats[0];
+        let branch = seat.branch.as_deref().unwrap();
+        assert!(branch.starts_with("ab") && branch.chars().count() == MOST_FIELD);
+        assert!(!branch.contains('\u{1b}'));
+        let doing = seat.doing.as_deref().unwrap();
+        assert!(doing.starts_with("line one ") && doing.chars().count() == crate::who::MOST_DOING);
+        assert_eq!(seat.project, "p");
+        assert!(
+            !serde_json::to_string(&Seat {
+                branch: None,
+                doing: None,
+                ..seat.clone()
+            })
+            .unwrap()
+            .contains("branch")
+        );
     }
 
     #[test]

@@ -4014,6 +4014,8 @@ impl App {
             "clear" => {
                 // A loop that ended belongs to the conversation that goes.
                 self.loop_ended = None;
+                // So does what the model told the other agents it works on (#142).
+                self.parts.pane_link.set_doing(None);
                 self.forget_warm();
                 self.forget_prepared();
                 self.forget_masks();

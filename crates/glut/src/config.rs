@@ -302,8 +302,9 @@ impl Default for Compaction {
 }
 
 /// The tools a host's screen adds for sessions side by side (TUI T36c): offered only where the run says so
-/// ([`RunConfig::pane_tools`]) and never in a subagent — whatever the toolbox holds.
-pub const PANE_TOOLS: [&str; 1] = ["tell"];
+/// ([`RunConfig::pane_tools`]) and never in a subagent — whatever the toolbox holds: `tell` (a message to another
+/// agent) and `who` (the agents there are, what each works on and where — #142).
+pub const PANE_TOOLS: [&str; 2] = ["tell", "who"];
 
 /// The tool a host's screen adds for a session that runs as a loop (TUI T60a): the model ends the loop with it once
 /// the loop's goal is reached. Like [`PANE_TOOLS`] offered only where the run says so ([`RunConfig::loop_tool`]), never

@@ -498,6 +498,8 @@ pub async fn build(
     // T36c: `tell` is in every screen session's toolbox, offered only while the screen is split.
     let pane_link = Arc::new(crate::tell::Link::default());
     let tell = crate::tell::Tell::new(Arc::clone(&pane_link), reports.clone());
+    // #142: `who` beside it, the agents there are and what each works on.
+    let who = crate::who::Who::new(Arc::clone(&pane_link));
     // T60a: `end_loop` likewise, offered only while the session runs a loop.
     let loop_link = Arc::new(crate::looping::Link::default());
     let end_loop = crate::looping::EndLoop::new(Arc::clone(&loop_link));
@@ -530,6 +532,7 @@ pub async fn build(
     .map_err(|err| err.to_string())?;
     tools.extend([
         Box::new(tell) as Box<dyn glut::Tool>,
+        Box::new(who) as Box<dyn glut::Tool>,
         Box::new(end_loop) as Box<dyn glut::Tool>,
     ]);
     for entry in refused {

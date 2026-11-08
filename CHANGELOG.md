@@ -3,6 +3,19 @@
 All notable changes to Glut. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions
 follow [Semantic Versioning](https://semver.org/) — while Glut is at 0.x, a minor version may change what it does.
 
+## [Unreleased]
+
+### Added
+
+- **Who is here**: the models get a tool `who` beside `tell` — every other agent of this window and of the other Glut
+  windows, with its role, model, mode, folder, branch, whether it is busy, and the line it set for what it works on
+  (its own words). A model sets its own line with `who {"doing": …}`.
+
+### Changed
+
+- `glut::PANE_TOOLS` holds two names now, `tell` and `who` (`[&str; 2]`): a host that adds the screen's tools adds
+  both.
+
 ## [0.1.0] — 2026-11-08
 
 The first public release. Glut grew for about a month inside a larger project before it became an application of

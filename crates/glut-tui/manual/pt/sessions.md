@@ -5,3 +5,5 @@ Escrever às outras janelas do Glut desta máquina.
 /sessions on — e de novo
 
 Uma mensagem do dono de lá entra logo; a de um modelo de lá só se trabalhar no modo do pane a que chega, senão espera acima da entrada: ⏎ deixa-a entrar, Esc descarta-a. Nenhuma é a sua palavra ao modelo daqui. Só o Glut fala com as outras janelas — um comando do modelo nunca as alcança.
+
+Os modelos também se veem: a ferramenta `who` lista cada agente aqui e nas outras janelas — papel, modelo, pasta, branch, ocupado ou livre — e a linha que cada um definiu sobre o que faz, com as suas próprias palavras.

@@ -607,7 +607,7 @@ pub fn tool_hue(name: &str) -> Option<Color> {
         "bash" | "bash_output" | "kill_shell" | "codemode" => at(1),
         "web_fetch" | "web_search" => at(2),
         name if name.starts_with("mcp__") => at(2),
-        "task" | "tell" => at(3),
+        "task" | "tell" | "who" => at(3),
         _ => return None,
     })
 }

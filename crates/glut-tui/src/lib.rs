@@ -72,6 +72,7 @@ mod vi;
 mod view;
 mod warm;
 mod watch;
+mod who;
 mod worktree;
 
 pub use acp::serve as acp_serve;

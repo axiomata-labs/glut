@@ -57,7 +57,7 @@ On other systems the call does nothing. `glut-tui`'s `main.rs` does exactly this
   compaction threshold.
 - From `config`: `RunConfig`, `ModelEndpoint`, `Effort`, `Budget`, `Prices`, `Compaction`, `RefusalLimits` and
   `Inbox`, which make up a run's settings. Also `PANE_TOOLS` and `LOOP_TOOL`, the names of the screen-only tools
-  (`tell`, `end_loop`).
+  (`tell`, `who`, `end_loop`).
 - From `model`: `ChatModel`, `Model`, `OpenAiCompat`, `Message`, `ToolCall`, `ToolSpec`, `Reply`, `Usage` and `Piece`,
   which cover models and the conversation.
 - From `tools`: `Tool`, `ToolFuture` and `Toolbox`, the tools and the box that holds them.
@@ -110,7 +110,7 @@ a host most often sets:
 - `subagents`, `agents`, `models`: whether `task` is offered, the named agents (`agents::Catalog`), and what builds an
   agent's own model (`agents::Models`).
 - `codemode`, `mcp_behind_code`, `todos`, `diagnostics`, `servers`, `classifier`, `masks`, `inbox`.
-- `pane_tools`, `loop_tool`: offer the screen's own tools (`tell`, `end_loop`) that the host has added to the toolbox.
+- `pane_tools`, `loop_tool`: offer the screen's own tools (`tell`, `who`, `end_loop`) that the host has added to the toolbox.
 
 ### Models
 
