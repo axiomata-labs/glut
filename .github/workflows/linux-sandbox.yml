@@ -1,8 +1,8 @@
 # The Linux sandbox on a real x86_64 kernel (T94): Docker on the owner's Mac runs arm64 only, and x86_64 there is a
 # translation that proves nothing about a seccomp filter. Runs the sandbox's tests on every push to main.
 #
-# Axiomata-Foundation is private: the secret FOUNDATION_TOKEN (a fine-grained token that may read it) lets the run
-# check it out; without the secret the run is skipped with a note, never red.
+# Axiomata-Foundation is checked out beside this repository (a private one needs the secret FOUNDATION_TOKEN); where it
+# cannot be read the run is skipped with a note, never red.
 name: Linux sandbox (x86_64)
 
 on:
@@ -23,8 +23,9 @@ jobs:
         env:
           FOUNDATION_TOKEN: ${{ secrets.FOUNDATION_TOKEN }}
         run: |
-          if [ -z "$FOUNDATION_TOKEN" ]; then
-            echo "::notice::FOUNDATION_TOKEN is not set: Axiomata-Foundation cannot be read, the run is skipped."
+          if [ -z "$FOUNDATION_TOKEN" ] \
+            && ! git ls-remote https://github.com/axiomata-labs/Axiomata-Foundation HEAD >/dev/null 2>&1; then
+            echo "::notice::Axiomata-Foundation cannot be read (private, no FOUNDATION_TOKEN): the run is skipped."
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
       - if: steps.token.outputs.skip != 'true'
@@ -37,7 +38,7 @@ jobs:
         with:
           repository: axiomata-labs/Axiomata-Foundation
           path: Axiomata-Foundation
-          token: ${{ secrets.FOUNDATION_TOKEN }}
+          token: ${{ secrets.FOUNDATION_TOKEN || github.token }}
           persist-credentials: false
       - if: steps.token.outputs.skip != 'true'
         uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable

@@ -1,9 +1,9 @@
 # Every push and pull request: the gate (fmt, clippy, the tests) on macOS and Linux, and the website built with every
 # internal link and anchor checked; a push to main then puts the site onto glut-ai.com (secret SITE_DEPLOY_KEY).
 #
-# Axiomata-Foundation (the guarded file service) is a git dependency. While it is private, the secret FOUNDATION_TOKEN
-# (a fine-grained token that may read it) checks it out beside this repository; once it is public, cargo fetches it
-# itself. Where neither works the run is skipped with a note, never red.
+# Axiomata-Foundation (the guarded file service) is a git dependency, checked out beside this repository and patched in
+# by path as on the owner's machine, so Cargo.lock holds for both (a private Foundation needs the secret
+# FOUNDATION_TOKEN). Where it cannot be read the run is skipped with a note, never red.
 name: CI
 
 on:
@@ -41,7 +41,7 @@ jobs:
           if [ -n "$FOUNDATION_TOKEN" ]; then
             echo "use=checkout" >> "$GITHUB_OUTPUT"
           elif git ls-remote https://github.com/axiomata-labs/Axiomata-Foundation HEAD >/dev/null 2>&1; then
-            echo "use=git" >> "$GITHUB_OUTPUT"
+            echo "use=checkout" >> "$GITHUB_OUTPUT"
           else
             echo "::notice::Axiomata-Foundation cannot be read (private, no FOUNDATION_TOKEN): the run is skipped."
             echo "use=none" >> "$GITHUB_OUTPUT"
@@ -56,7 +56,7 @@ jobs:
         with:
           repository: axiomata-labs/Axiomata-Foundation
           path: Axiomata-Foundation
-          token: ${{ secrets.FOUNDATION_TOKEN }}
+          token: ${{ secrets.FOUNDATION_TOKEN || github.token }}
           persist-credentials: false
       - if: steps.foundation.outputs.use == 'checkout'
         name: Foundation from the checkout beside, as on the owner's machine
@@ -104,7 +104,7 @@ jobs:
           if [ -n "$FOUNDATION_TOKEN" ]; then
             echo "use=checkout" >> "$GITHUB_OUTPUT"
           elif git ls-remote https://github.com/axiomata-labs/Axiomata-Foundation HEAD >/dev/null 2>&1; then
-            echo "use=git" >> "$GITHUB_OUTPUT"
+            echo "use=checkout" >> "$GITHUB_OUTPUT"
           else
             echo "::notice::Axiomata-Foundation cannot be read (private, no FOUNDATION_TOKEN): the run is skipped."
             echo "use=none" >> "$GITHUB_OUTPUT"
@@ -119,7 +119,7 @@ jobs:
         with:
           repository: axiomata-labs/Axiomata-Foundation
           path: Axiomata-Foundation
-          token: ${{ secrets.FOUNDATION_TOKEN }}
+          token: ${{ secrets.FOUNDATION_TOKEN || github.token }}
           persist-credentials: false
       - if: steps.foundation.outputs.use == 'checkout'
         run: |

@@ -73,29 +73,19 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
-      - id: foundation
-        env:
-          FOUNDATION_TOKEN: ${{ secrets.FOUNDATION_TOKEN }}
-        run: |
-          if [ -n "$FOUNDATION_TOKEN" ]; then
-            echo "use=checkout" >> "$GITHUB_OUTPUT"
-          else
-            echo "use=git" >> "$GITHUB_OUTPUT"
-          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: glut
           persist-credentials: false
           ref: ${{ needs.version.outputs.tag }}
-      - if: steps.foundation.outputs.use == 'checkout'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: axiomata-labs/Axiomata-Foundation
           path: Axiomata-Foundation
-          token: ${{ secrets.FOUNDATION_TOKEN }}
+          token: ${{ secrets.FOUNDATION_TOKEN || github.token }}
           persist-credentials: false
-      - if: steps.foundation.outputs.use == 'checkout'
-        run: |
+      # The Foundation beside, patched in by path as on the owner's machine: Cargo.lock holds as it is.
+      - run: |
           mkdir -p glut/.cargo
           printf '[patch."https://github.com/axiomata-labs/Axiomata-Foundation"]\naxiomata-files = { path = "../Axiomata-Foundation/crates/axiomata-files" }\n' \
             > glut/.cargo/config.toml
