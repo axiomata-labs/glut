@@ -84,14 +84,14 @@ Every scene is a real run; [the website](https://glut-ai.com) replays ten of the
 As of 2026-11-05, from each tool's own documentation — the [full comparison](docs/comparison.md) has nine tools, the
 sources, and where the others are ahead.
 
-| | Glut | Claude Code | Codex CLI | opencode | Aider |
+| | Glut | Claude Code | Codex CLI | opencode | pi |
 |---|---|---|---|---|---|
 | Models | any vendor, local | Claude only | OpenAI, local | any vendor, local | any vendor, local |
-| OS sandbox for commands | on by default | opt-in | on by default | none | none |
+| OS sandbox for commands | on by default | opt-in | on by default | none | none, a container advised |
 | Network of commands | proxy asks per host | proxy, allow-list | off; optional proxy | none | none |
-| Tool output | never cut | cut, rest in a file | token budget | cut, rest in a file | asks before adding |
+| Tool output | never cut | cut, rest in a file | token budget | cut, rest in a file | cut, rest in a file |
 | Models side by side | arena, test bench | — | — | — | — |
-| Licence | MIT / Apache-2.0 | proprietary | Apache-2.0 | MIT | Apache-2.0 |
+| Licence | MIT / Apache-2.0 | proprietary | Apache-2.0 | MIT | MIT |
 
 ## Install
 
