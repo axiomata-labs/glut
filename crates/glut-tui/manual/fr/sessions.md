@@ -11,3 +11,5 @@ Les modèles se voient aussi : leur outil `who` liste chaque agent ici et dans l
 Un modèle peut demander quelque chose à un autre, ici ou dans une autre fenêtre : le tour que sa demande y lance lui répond — la dernière réponse de ce tour lui revient comme réponse, pendant qu'il continue autre chose. Un agent occupé la prend dès la fin de son tour ; celui qui ne peut pas le dit. Si personne ne répondra — tu as écarté la demande avec Esc, le pane a été fermé, la fenêtre s'est terminée — Glut le dit au demandeur.
 
 Tu vois tout dans l'onglet Équipe (⌃X T) : chaque agent ici et dans les autres fenêtres — occupé, libre ou en attente de toi, sa branche et sa ligne — et ce qui est passé entre eux : messages, demandes, réponses, et qui est arrivé ou parti.
+
+Là où deux agents se gênent, Glut le leur dit : un agent au travail dans le même arbre de travail et sur la même branche qu'un autre qui y travaille, ou un agent qui modifie un fichier qu'un autre a modifié dans le dernier quart d'heure, l'apprend une fois avant son prochain pas — et tu vois la note dans son flux et dans l'onglet Équipe.

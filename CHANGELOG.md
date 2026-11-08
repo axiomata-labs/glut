@@ -21,8 +21,16 @@ follow [Semantic Versioning](https://semver.org/) — while Glut is at 0.x, a mi
   you, its branch and its own line — and what passed between them: messages, requests, answers, Glut's word that
   none comes, who came and went. Its shapes are the library's (`glut::team::Profile`, `Note`), for any screen.
 
+- **Overlaps told**: an agent at work in the same working tree and branch as another at work there, or one that
+  changes a file another changed in the last quarter hour, hears it once before its next step as Glut's own note; the
+  owner sees it in the stream and the Team tab.
+- `RunConfig::notes`: an inbox for the host's own `[glut]` notes, taken before the run's next model call beside the
+  owner's steering, never shown as the owner's word.
+
 ### Changed
 
+- New public items a host matching or building them exhaustively must add: `RunConfig::notes`, and
+  `glut::team::NoteKind::Overlap` in the new `glut::team`.
 - `glut::PANE_TOOLS` holds two names now, `tell` and `who` (`[&str; 2]`): a host that adds the screen's tools adds
   both.
 

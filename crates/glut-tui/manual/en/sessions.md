@@ -11,3 +11,5 @@ The models see each other too: their tool `who` lists every agent here and in th
 A model can ask another for something, here or in another window: the turn its request starts there answers it — that turn's last reply comes back to it as the answer, while it goes on with other work. A busy agent takes it once its turn ends; one that cannot do it says so. If nobody will answer — you set the request aside with Esc, the pane closed, the window ended — Glut tells the asker.
 
 You see it all in the Team tab (⌃X T): every agent here and in the other windows — busy, free or waiting for you, its branch and its line — and what passed between them: messages, requests, answers, and who came and went.
+
+Where two agents get in each other's way, Glut tells them: an agent at work in the same working tree and on the same branch as another at work there, or one that changes a file another changed in the last quarter hour, hears it once before its next step — and you see the note in its stream and in the Team tab.

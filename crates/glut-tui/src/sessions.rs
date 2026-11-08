@@ -34,6 +34,10 @@ const MOST_SEATS: usize = 16;
 const MOST_FIELD: usize = 80;
 /// How often a window looks which others are there, for `tell`'s description and `/sessions`.
 pub const LOOK_EVERY: Duration = Duration::from_secs(10);
+/// The longest path a card carries (#142): a tree's top, a file changed — and how many files changed one seat
+/// carries, the newest: a card stays far below [`MOST_LINE`] with every seat full.
+pub const MOST_PATH: usize = 512;
+pub const MOST_PATHS: usize = 16;
 /// The longest name a window may be given.
 const MOST_NAME: usize = 40;
 
@@ -102,6 +106,13 @@ pub struct Seat {
     /// What its model said it works on, through `who` (#142): the model's words, not a fact.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub doing: Option<String>,
+    /// The top of its working tree (#142), to tell two agents changing the same files: compared, never shown to a
+    /// model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tree: Option<String>,
+    /// The files it changed lately, whole paths, newest last (#142): compared, never shown to a model.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub changed: Vec<String>,
 }
 
 /// A window as it answers "who are you".
@@ -405,6 +416,11 @@ fn checked(mut card: Card) -> Option<Card> {
         seat.branch = seat.branch.as_deref().and_then(branch_field);
         // The other window's model wrote it: held to what this window lets its own set.
         seat.doing = seat.doing.as_deref().and_then(crate::who::doing_line);
+        // Paths only compared: the newest few, of a sane length.
+        seat.changed.retain(|path| path.len() <= MOST_PATH);
+        let excess = seat.changed.len().saturating_sub(MOST_PATHS);
+        seat.changed.drain(..excess);
+        seat.tree = seat.tree.take().filter(|tree| tree.len() <= MOST_PATH);
         // Only the folder's name travels into a model's description, never the whole path.
         seat.project = Path::new(&seat.project)
             .file_name()

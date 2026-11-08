@@ -423,6 +423,9 @@ pub struct RunConfig {
     /// A host keeps one for a whole conversation (clone it into each turn's config): a new one numbers anew, and a
     /// placeholder of an earlier turn is then no longer written back.
     pub masks: Option<crate::masks::Masks>,
+    /// Glut's own word from the host (#142: another agent changed the file this one just changed): taken with the
+    /// inbox before the run's next model call, at depth 0 only, each a `[glut]` line — never the owner's word.
+    pub notes: Option<Inbox>,
 }
 
 /// Messages for a run under way, from whoever started it (the TUI's Enter while Glut works). Shared: the sender keeps
@@ -509,6 +512,7 @@ impl RunConfig {
             budget: Budget::default(),
             masks: Some(crate::masks::Masks::default()),
             inbox: None,
+            notes: None,
         }
     }
 }

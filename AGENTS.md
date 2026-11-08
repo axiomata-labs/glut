@@ -229,7 +229,10 @@ scripts/install-dev.sh           # glut for every terminal: ~/.cargo/bin, linked
   (Esc, `/clear`, a hook's refusal, an unfinished turn before it, a closed pane, a window whose process ended, an
   hour) must answer the asker through `Unanswered` — a new path that drops a request must too. `who`'s facts are
   Glut's; a model's `doing` line is bounded (`who::doing_line`) and shown as its words; an arena's member is
-  `contain`ed (neither tool offered).
+  `contain`ed (neither tool offered). Overlaps (`Panes::tell_overlaps`) reach the model only through
+  `RunConfig::notes` (`Parts::glut_notes`), which the run takes as `[glut]` lines with the rest unforged — never through
+  the owner's inbox; a card's `tree` and `changed` paths are compared, never shown to a model. Only `write_file`/`edit_file` count as a
+  change of a file (a command's writes, `glut_file`, an `lsp` rename do not yet): the tree-and-branch hint covers those.
 - **Glut cleans its own `~/.glut`** (T82, `crates/glut-tui/src/clean.rs`, `glut::clean`): once a day at the start, by
   the owner's terms in `~/.glut/clean.json` (written only by `glut clean keep` / `/clean keep`). A new kind of data
   Glut keeps there gets its line in the report (`clean::ITEMS`, `--json` is read by Axiomata — add, never rename) and

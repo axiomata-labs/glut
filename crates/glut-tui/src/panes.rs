@@ -1086,6 +1086,7 @@ impl Panes {
             self.chain = 0;
         }
         self.settle_requests();
+        self.tell_overlaps();
         let members: Vec<u64> = self
             .arena
             .iter()
@@ -1691,6 +1692,153 @@ impl Panes {
         }
     }
 
+    /// Overlaps between agents, once a frame (#142, Q6/Q7): an agent at work in the working tree and on the branch of
+    /// another at work there (or that changed something lately), or one that just changed a file another changed lately, is told once — its model by a `[glut]` note
+    /// before its next step, the owner in its stream and the Team tab.
+    fn tell_overlaps(&mut self) {
+        // Told only to a model at work in a turn, which can reach the others (not plan mode, not an arena's member).
+        let tellable = |app: &App| {
+            app.turn_runs()
+                && app.mode() != glut::permissions::Mode::Plan
+                && app.parts.pane_link.split()
+        };
+        if !self
+            .list
+            .iter()
+            .any(|pane| tellable(&pane.app) || !pane.app.changed_new.is_empty())
+        {
+            return;
+        }
+        struct Other {
+            id: Option<u64>,
+            label: String,
+            shown: String,
+            tree: Option<String>,
+            branch: Option<String>,
+            busy: bool,
+            changed: Vec<(String, Option<Duration>)>,
+        }
+        // The branch read first: reading it looks at the tree again too.
+        let branches: Vec<Option<String>> = self
+            .list
+            .iter_mut()
+            .map(|pane| {
+                let cwd = pane.app.parts.config.cwd.clone();
+                pane.app
+                    .branch
+                    .name(&cwd)
+                    .and_then(crate::sessions::branch_field)
+            })
+            .collect();
+        let mut others: Vec<Other> = (0..self.list.len())
+            .zip(branches)
+            .map(|(at, branch)| {
+                let app = &self.list[at].app;
+                Other {
+                    id: Some(self.list[at].id),
+                    label: self.label(at),
+                    shown: self.shown_label(at),
+                    tree: app.branch.tree().map(|tree| tree.display().to_string()),
+                    branch,
+                    busy: app.working(),
+                    changed: app
+                        .changed
+                        .iter()
+                        .filter(|(_, at)| at.elapsed() < OVERLAP_FRESH)
+                        .map(|(path, at)| (path.display().to_string(), Some(at.elapsed())))
+                        .collect(),
+                }
+            })
+            .collect();
+        others.extend(self.seats_seen.iter().map(|seat| {
+            Other {
+                id: None,
+                label: seat.address.clone(),
+                shown: seat.address.clone(),
+                tree: seat.tree.clone(),
+                branch: seat.branch.clone(),
+                busy: seat.works,
+                changed: seat
+                    .changed
+                    .iter()
+                    .map(|path| (path.clone(), None))
+                    .collect(),
+            }
+        }));
+        let mut told: Vec<(usize, String, String)> = Vec::new();
+        for at in 0..self.list.len() {
+            let id = self.list[at].id;
+            let new = std::mem::take(&mut self.list[at].app.changed_new);
+            let mine = &others[at];
+            let cwd = self.list[at].app.parts.config.cwd.clone();
+            if !tellable(&self.list[at].app) {
+                continue;
+            }
+            // The same working tree and branch matters while this agent works: then it may write where the other does.
+            if let (Some(tree), Some(branch)) = (&mine.tree, &mine.branch) {
+                for other in others.iter().filter(|other| other.id != Some(id)) {
+                    // Only one at work there, or one that changed something lately: a pane at rest changes nothing.
+                    let at_work = other.busy || !other.changed.is_empty();
+                    if at_work
+                        && other.tree.as_ref() == Some(tree)
+                        && other.branch.as_ref() == Some(branch)
+                    {
+                        // Keyed by the pane, not its name: a pane closed and another of its number is told anew.
+                        let who = other.id.map_or(other.label.clone(), |id| id.to_string());
+                        let key = format!("tree {who} {branch}");
+                        if self.list[at].app.overlaps_told.insert(key) {
+                            told.push((
+                                at,
+                                format!(
+                                    "{} also works in this working tree, on branch {branch}: what you change and what \
+                                     it changes land in the same files. See with `who` what it works on, and agree with \
+                                     `tell` before you change the same files.",
+                                    other.label
+                                ),
+                                tr!(overlap_tree, other = other.shown, branch = branch),
+                            ));
+                        }
+                    }
+                }
+            }
+            for path in new {
+                let path = path.display().to_string();
+                for other in others.iter().filter(|other| other.id != Some(id)) {
+                    let Some((_, ago)) = other.changed.iter().find(|(changed, _)| *changed == path)
+                    else {
+                        continue;
+                    };
+                    let who = other.id.map_or(other.label.clone(), |id| id.to_string());
+                    let key = format!("file {who} {path}");
+                    if !self.list[at].app.overlaps_told.insert(key) {
+                        continue;
+                    }
+                    let shown = std::path::Path::new(&path)
+                        .strip_prefix(&cwd)
+                        .map_or(path.clone(), |inside| inside.display().to_string());
+                    let ago = ago.map_or(String::new(), |ago| {
+                        format!(" {} min ago", ago.as_secs() / 60)
+                    });
+                    told.push((
+                        at,
+                        format!(
+                            "{shown}, which you just changed, was changed by {} too{ago}: read its change before you \
+                             build on yours, and tell it with `tell` if your work and its collide.",
+                            other.label
+                        ),
+                        tr!(overlap_file, file = shown, other = other.shown),
+                    ));
+                }
+            }
+        }
+        for (at, model, owner) in told {
+            self.list[at].app.parts.glut_notes.send(model.clone());
+            self.list[at].app.transcript.note(owner, Tone::Heed);
+            let label = self.label(at);
+            self.note("glut", &label, glut::team::NoteKind::Overlap, &model);
+        }
+    }
+
     /// The requests' books, once a frame (#142): a request that never reached its window waits for nothing, a
     /// closed asker hears nothing more, and the asker of a request nobody will answer hears so — set aside, refused,
     /// behind a turn that did not finish, its pane closed, an hour gone.
@@ -2079,6 +2227,17 @@ impl Panes {
                                 works: app.working(),
                                 branch,
                                 doing: app.parts.pane_link.doing(),
+                                tree: app.branch.tree().map(|tree| tree.display().to_string()),
+                                changed: {
+                                    let mut changed: Vec<String> = recent(&app.changed)
+                                        .map(|path| path.display().to_string())
+                                        .filter(|path| path.len() <= crate::sessions::MOST_PATH)
+                                        .collect();
+                                    let excess =
+                                        changed.len().saturating_sub(crate::sessions::MOST_PATHS);
+                                    changed.drain(..excess);
+                                    changed
+                                },
                             }
                         })
                         .collect(),
@@ -5261,6 +5420,17 @@ impl Panes {
     }
 }
 
+/// How long a file another agent changed counts as fresh for an overlap (#142).
+const OVERLAP_FRESH: Duration = Duration::from_secs(15 * 60);
+
+/// The files of `changed` changed within [`OVERLAP_FRESH`].
+fn recent(changed: &[(std::path::PathBuf, Instant)]) -> impl Iterator<Item = &std::path::PathBuf> {
+    changed
+        .iter()
+        .filter(|(_, at)| at.elapsed() < OVERLAP_FRESH)
+        .map(|(path, _)| path)
+}
+
 /// The most notes the Team tab's log keeps (#142): the oldest go first.
 const MOST_NOTES: usize = 200;
 
@@ -6936,6 +7106,59 @@ mod tests {
             &panes.list[0].app,
             "answer to r2: pane 2 will not answer: the turn it started was refused"
         ));
+    }
+
+    #[tokio::test]
+    async fn an_agent_changing_a_file_another_changed_lately_is_told_once() {
+        let (mut panes, _inlets) = split();
+        panes.sync();
+        let file = panes.list[0].app.parts.config.cwd.join("src/a.rs");
+        panes.list[1]
+            .app
+            .changed
+            .push((file.clone(), Instant::now()));
+        // A pane at rest is told nothing: no turn would read it.
+        panes.list[0].app.changed_new.push(file.clone());
+        panes.sync();
+        assert!(panes.list[0].app.parts.glut_notes.is_empty());
+        panes.list[0].app.send("go on".into());
+        panes.list[0]
+            .app
+            .changed
+            .push((file.clone(), Instant::now()));
+        panes.list[0].app.changed_new.push(file.clone());
+        panes.sync();
+        let notes = panes.list[0].app.parts.glut_notes.take();
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(
+            notes[0].starts_with(
+                "src/a.rs, which you just changed, was changed by pane 2 too 0 min ago"
+            ),
+            "{}",
+            notes[0]
+        );
+        assert!(noted(&panes.list[0].app, "src/a.rs"));
+        assert!(
+            panes
+                .team_log
+                .iter()
+                .any(|note| note.kind == glut::team::NoteKind::Overlap)
+        );
+        assert!(
+            panes.list[1].app.parts.glut_notes.is_empty(),
+            "the other changed it first"
+        );
+        // Once: the same file again tells nothing new.
+        panes.list[0].app.changed_new.push(file);
+        panes.sync();
+        assert!(panes.list[0].app.parts.glut_notes.is_empty());
+        // A note left when the turn ends goes with it, and /clear forgets what was changed and told.
+        panes.list[0].app.parts.glut_notes.send("late");
+        let first = panes.list[0].id;
+        panes.on_report(first, ended(glut::FinishReason::Answered));
+        assert!(panes.list[0].app.parts.glut_notes.is_empty());
+        panes.list[0].app.command("clear");
+        assert!(panes.list[0].app.changed.is_empty() && panes.list[0].app.overlaps_told.is_empty());
     }
 
     #[tokio::test]

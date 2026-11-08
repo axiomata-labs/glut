@@ -252,6 +252,9 @@ pub struct Parts {
     pub pane_link: Arc<crate::tell::Link>,
     /// What the screen tells this session's `end_loop` about the loop it runs, if any (T60a).
     pub loop_link: Arc<crate::looping::Link>,
+    /// Glut's own word for the model from the screen (#142: another agent changed the same file), taken before its
+    /// next model call.
+    pub glut_notes: glut::Inbox,
 }
 
 /// The model the session talks to now.
@@ -568,6 +571,7 @@ pub async fn build(
         memory,
         pane_link,
         loop_link,
+        glut_notes: glut::Inbox::default(),
     };
     let engine = match launch.engine {
         EngineChoice::Providers { provider, model } => {
@@ -894,6 +898,7 @@ pub fn turn(
         // T63: a summary the turn made ahead and never put in comes back, for the next message.
         config.hand_on_prepared = true;
         config.pane_tools = parts.pane_link.split();
+        config.notes = Some(parts.glut_notes.clone());
         config.loop_tool = parts.loop_link.on();
         // A loop's round ends as its loop says, never asked to go on (T73).
         config.nudge = nudge && parts.loop_link.left().is_none();
@@ -1697,6 +1702,7 @@ pub fn for_tests() -> (Parts, Engine) {
         memory: None,
         pane_link: Arc::new(crate::tell::Link::default()),
         loop_link: Arc::new(crate::looping::Link::default()),
+        glut_notes: glut::Inbox::default(),
     };
     let engine = Engine {
         provider: "test".into(),

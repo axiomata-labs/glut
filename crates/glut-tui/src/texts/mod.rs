@@ -2327,6 +2327,12 @@ glut::catalog! {
         team_arrived: &'static str,
         /// An agent or a window went.
         team_left: &'static str,
+        /// An overlap Glut told the model of: `{other}` works in the same working tree on `{branch}`.
+        overlap_tree: &'static str,
+        /// An overlap Glut told the model of: `{file}` was changed by `{other}` too.
+        overlap_file: &'static str,
+        /// The Team tab: Glut told an agent of an overlap.
+        team_overlap: &'static str,
         /// `/sessions`' list.
         windows_title: &'static str,
         /// `/sessions` with no other window.

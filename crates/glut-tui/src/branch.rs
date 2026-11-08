@@ -17,6 +17,7 @@ const SHORT_ID: usize = 7;
 pub struct Branch {
     checked: Option<Instant>,
     name: Option<String>,
+    tree: Option<std::path::PathBuf>,
 }
 
 impl Branch {
@@ -24,19 +25,40 @@ impl Branch {
     pub fn name(&mut self, cwd: &Path) -> Option<&str> {
         if self.checked.is_none_or(|at| at.elapsed() >= RECHECK) {
             self.checked = Some(Instant::now());
-            self.name = head_of(cwd);
+            self.tree = tree_of(cwd);
+            // One walk up: the tree's `.git` is the one `HEAD` is read through.
+            self.name = self
+                .tree
+                .as_deref()
+                .and_then(|tree| head_in(&tree.join(".git")));
         }
         self.name.as_deref()
     }
+
+    /// The working tree's top the branch was last read for (#142): the folder holding the nearest `.git`, a folder or
+    /// a worktree's file — two agents with the same one change the same files.
+    pub fn tree(&self) -> Option<&Path> {
+        self.tree.as_deref()
+    }
 }
 
-/// What `HEAD` names for the repository holding `cwd`: the nearest `.git` up from it, a folder or — in a worktree or
-/// a submodule — a file pointing to one.
+/// The top of the working tree holding `cwd`: the nearest folder up from it with a `.git`, its links resolved — two
+/// windows that name it differently (`/tmp`, `/private/tmp`) name one tree.
+fn tree_of(cwd: &Path) -> Option<std::path::PathBuf> {
+    let top = cwd.ancestors().find(|dir| dir.join(".git").exists())?;
+    Some(std::fs::canonicalize(top).unwrap_or_else(|_| top.to_path_buf()))
+}
+
+/// What `HEAD` names for the repository holding `cwd`, through its working tree's `.git`.
+#[cfg(test)]
 fn head_of(cwd: &Path) -> Option<String> {
-    let git = cwd
-        .ancestors()
-        .map(|dir| dir.join(".git"))
-        .find(|git| git.exists())?;
+    head_in(&tree_of(cwd)?.join(".git"))
+}
+
+/// What `HEAD` names for the repository whose `.git` is `git`: a folder or — in a worktree or a submodule — a file
+/// pointing to one.
+fn head_in(git: &Path) -> Option<String> {
+    let git = git.to_path_buf();
     let dir = if git.is_dir() {
         git
     } else {
@@ -86,6 +108,24 @@ fn read_small(path: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_working_tree_is_the_nearest_folder_with_a_git() {
+        let top = std::fs::canonicalize(std::env::temp_dir())
+            .unwrap()
+            .join(format!("glut-tree-{}", std::process::id()));
+        let inner = top.join("a/b");
+        std::fs::create_dir_all(&inner).unwrap();
+        std::fs::create_dir_all(top.join(".git")).unwrap();
+        assert_eq!(tree_of(&inner).as_deref(), Some(top.as_path()));
+        std::fs::write(top.join("a/.git"), "gitdir: elsewhere").unwrap();
+        assert_eq!(
+            tree_of(&inner).as_deref(),
+            Some(top.join("a").as_path()),
+            "a worktree is its own"
+        );
+        let _ = std::fs::remove_dir_all(&top);
+    }
 
     #[test]
     fn a_head_names_its_branch_or_a_detached_commit_and_nothing_else() {

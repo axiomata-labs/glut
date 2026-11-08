@@ -74,6 +74,24 @@ pub enum Delivered {
     OnEnter,
 }
 
+/// `path` without `.` and `..`, read as written (#142: the same file named two ways is one).
+fn lexical(path: &std::path::Path) -> std::path::PathBuf {
+    let mut whole = std::path::PathBuf::new();
+    for part in path.components() {
+        match part {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                whole.pop();
+            }
+            other => whole.push(other),
+        }
+    }
+    whole
+}
+
+/// The most files a pane remembers it changed (#142).
+pub const MOST_CHANGED: usize = 32;
+
 /// A question of the gate on the screen.
 /// The editor's diff of a question of the gate (T64c): its id, when it opened, and the question it shows.
 struct OpenDiff {
@@ -533,6 +551,12 @@ pub struct App {
     seen_turns: usize,
     /// Messages of another pane's model for after the turn under way, with what their sender could do (T36c).
     waiting_models: Vec<(String, Sender)>,
+    /// The files this pane's agent changed lately, newest last, and those the screen has not looked at yet (#142):
+    /// another agent changing one of them hears so.
+    pub changed: Vec<(std::path::PathBuf, Instant)>,
+    pub changed_new: Vec<std::path::PathBuf>,
+    /// The overlaps this pane's model was told of (#142), each once.
+    pub overlaps_told: std::collections::HashSet<String>,
     /// The agents as this pane sees them, and what passed between them (#142): the Team tab's, filled by the screen.
     pub team: Vec<glut::team::Profile>,
     /// What passed between the agents, newest last: the screen's one log, shared.
@@ -800,6 +824,9 @@ impl App {
             declined: Vec::new(),
             team: Vec::new(),
             team_log: Arc::default(),
+            changed: Vec::new(),
+            changed_new: Vec::new(),
+            overlaps_told: std::collections::HashSet::new(),
             separators,
             separators_from,
             frame: 0,
@@ -1176,12 +1203,24 @@ impl App {
             }
             Event::ToolResult { id, ok, .. } => {
                 let change = self.changes.remove(id);
-                if let (true, Some((_, arguments)), Some(bridge)) = (*ok, change, &self.ide) {
-                    let path = serde_json::from_str::<serde_json::Value>(&arguments)
+                let path = change.filter(|_| *ok).and_then(|(_, arguments)| {
+                    serde_json::from_str::<serde_json::Value>(&arguments)
                         .ok()
-                        .and_then(|args| args.get("path")?.as_str().map(str::to_owned));
-                    if let Some(path) = path {
-                        let (bridge, full) = (Arc::clone(bridge), self.parts.config.cwd.join(path));
+                        .and_then(|args| args.get("path")?.as_str().map(str::to_owned))
+                });
+                if let Some(path) = path {
+                    // Spelled one way only (`./a.rs`, `src/../a.rs`, a link in the folder's path): two agents'
+                    // changes of one file are compared as one path.
+                    let joined = lexical(&self.parts.config.cwd.join(path));
+                    let full = std::fs::canonicalize(&joined).unwrap_or(joined);
+                    // What this agent changed lately, for the others to hear of an overlap (#142).
+                    self.changed.retain(|(old, _)| *old != full);
+                    self.changed.push((full.clone(), Instant::now()));
+                    let excess = self.changed.len().saturating_sub(MOST_CHANGED);
+                    self.changed.drain(..excess);
+                    self.changed_new.push(full.clone());
+                    if let Some(bridge) = &self.ide {
+                        let bridge = Arc::clone(bridge);
                         tokio::spawn(async move { bridge.changed(&[full]).await });
                     }
                 }
@@ -2466,6 +2505,8 @@ impl App {
             }
             Report::Ide(Err(reason)) => self.transcript.note(reason, Tone::Fault),
             Report::Done(outcome, conversation) => {
+                // A note on an overlap that came after the turn's last step is about a turn that ended (#142).
+                self.parts.glut_notes.take();
                 // A change of this turn that never ran is no change to show in a later one (T64c).
                 self.changes.clear();
                 // The images the turn's tools showed, under their calls (T46).
@@ -4031,7 +4072,7 @@ impl App {
     }
 
     /// One of the session's own commands (`/model`, `/context` …).
-    fn command(&mut self, line: &str) {
+    pub(crate) fn command(&mut self, line: &str) {
         let (name, rest) = line.split_once(' ').unwrap_or((line, ""));
         let rest = rest.trim();
         // A new or another conversation is no turn to go on with (T73b).
@@ -4053,8 +4094,13 @@ impl App {
             "clear" => {
                 // A loop that ended belongs to the conversation that goes.
                 self.loop_ended = None;
-                // So does what the model told the other agents it works on (#142).
+                // So does what the model told the other agents it works on, and what it changed and was told of
+                // (#142).
                 self.parts.pane_link.set_doing(None);
+                self.parts.glut_notes.take();
+                self.changed.clear();
+                self.changed_new.clear();
+                self.overlaps_told.clear();
                 self.forget_warm();
                 self.forget_prepared();
                 self.forget_masks();

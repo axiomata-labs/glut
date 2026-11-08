@@ -60,6 +60,9 @@ pub enum NoteKind {
     Arrived,
     /// An agent or a window went.
     Left,
+    /// Glut told an agent that another works where it does: the same branch of the same working tree, or the same
+    /// file changed lately.
+    Overlap,
 }
 
 /// One thing that passed between agents, as the screen's log keeps it.

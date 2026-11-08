@@ -2215,6 +2215,7 @@ fn team_lines(
             NoteKind::Unanswered(n) => (tr!(team_unanswered, n = number(n)), theme::fault()),
             NoteKind::Arrived => (tr!(team_arrived).to_owned(), theme::quiet()),
             NoteKind::Left => (tr!(team_left).to_owned(), theme::quiet()),
+            NoteKind::Overlap => (tr!(team_overlap).to_owned(), theme::glow()),
         };
         let when = note
             .at
