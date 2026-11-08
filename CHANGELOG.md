@@ -3,7 +3,7 @@
 All notable changes to Glut. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions
 follow [Semantic Versioning](https://semver.org/) — while Glut is at 0.x, a minor version may change what it does.
 
-## [0.1.0] — unreleased
+## [0.1.0] — 2026-11-08
 
 The first public release. Glut grew for about a month inside a larger project before it became an application of
 its own; this release brings together:
