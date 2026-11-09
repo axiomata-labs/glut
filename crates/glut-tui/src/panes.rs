@@ -1161,6 +1161,13 @@ impl Panes {
             pane.app.parts.pane_link.set_lead(
                 self.may_split && !helper && !members.contains(&pane.id) && pane.looping.is_none(),
             );
+            pane.app.parts.pane_link.set_awaits(
+                self.requests.awaits(pane.id)
+                    || self
+                        .helper_queue
+                        .iter()
+                        .any(|queued| queued.lead == pane.id),
+            );
             pane.app.parts.pane_link.set_team_here(
                 team.iter()
                     .filter(|(number, _)| *number != pane.number)

@@ -925,8 +925,9 @@ pub fn turn(
         config.team_tools = parts.pane_link.may_lead();
         config.notes = Some(parts.glut_notes.clone());
         config.loop_tool = parts.loop_link.on();
-        // A loop's round ends as its loop says, never asked to go on (T73).
-        config.nudge = nudge && parts.loop_link.left().is_none();
+        // A loop's round ends as its loop says, never asked to go on (T73); nor is a turn while an answer it asked
+        // for is still to come — that answer starts the next turn (#142).
+        config.nudge = nudge && parts.loop_link.left().is_none() && !parts.pane_link.awaits();
         config.remind = remind;
         config.diagnostics = lsp;
         config.todo_list = todos;

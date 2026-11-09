@@ -185,6 +185,14 @@ impl Requests {
         nonce
     }
 
+    /// Whether the pane `asker` waits for an answer: one owed it here, or one from another window.
+    pub fn awaits(&self, asker: u64) -> bool {
+        self.owed
+            .iter()
+            .any(|owed| matches!(owed.back, Back::Pane { id, .. } if id == asker))
+            || self.asked.iter().any(|asked| asked.pane == asker)
+    }
+
     /// The asking pane and its number for the request whose random number is `nonce`, taken off the books: only a
     /// request a pane here sent and still waits on.
     pub fn answered(&mut self, nonce: u64) -> Option<(u64, u32)> {
@@ -318,6 +326,32 @@ mod tests {
         assert_eq!(closed.len(), 1);
         assert_eq!(closed[0].token, other);
         assert!(requests.room().is_ok());
+    }
+
+    #[test]
+    fn a_pane_awaits_while_an_answer_is_owed_it_here_or_from_a_window() {
+        let mut requests = Requests::default();
+        assert!(!requests.awaits(1));
+        let token = requests.number();
+        requests.owe(
+            token,
+            2,
+            "pane 2".into(),
+            Back::Pane {
+                id: 1,
+                request: token,
+            },
+        );
+        assert!(
+            requests.awaits(1) && !requests.awaits(2),
+            "the asker awaits, not the one that answers"
+        );
+        requests.take(token, 2);
+        assert!(!requests.awaits(1));
+        let nonce = requests.asked(3, 1, "docs-xy/2".into());
+        assert!(requests.awaits(1));
+        requests.answered(nonce);
+        assert!(!requests.awaits(1));
     }
 
     #[test]

@@ -210,6 +210,9 @@ struct LinkState {
     contained: bool,
     /// The session may lead helpers (#142): the owner started it, and the screen holds more agents.
     lead: bool,
+    /// An answer to a request of this session's is still to come (#142): it starts a turn by itself, so a turn is
+    /// not urged on by its open list meanwhile.
+    awaits: bool,
 }
 
 impl Link {
@@ -274,6 +277,18 @@ impl Link {
     }
 
     /// Whether `start_helpers` and `take_work` are offered: never to a contained pane.
+    pub fn set_awaits(&self, awaits: bool) {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .awaits = awaits;
+    }
+
+    /// Whether an answer to a request of this session's is still to come (#142).
+    pub fn awaits(&self) -> bool {
+        self.state().awaits
+    }
+
     pub fn may_lead(&self) -> bool {
         let state = self.state();
         state.lead && !state.contained
