@@ -996,6 +996,7 @@ usi e rinomine",
     no_subagent_yet: "ancora nessun subagente: Glut ne avvia uno con lo strumento task per una parte del lavoro",
     subagents_title: "Subagenti — ⏎ ne apre uno",
     held_enter: "Invio qui lascia proseguire il messaggio del pane {pane}",
+    held_answer: "una risposta a una richiesta propria — Invio qui la fa entrare, Esc la scarta",
     held_why: "trattenuto: {why}",
     cache_ping: "cache: tenuta calda rileggendola mentre la sessione riposa (fino a 30 min)",
     cache_hour: "cache: Anthropic la tiene un’ora (ogni scrittura costa il doppio); gli altri provider vengono \

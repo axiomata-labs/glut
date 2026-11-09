@@ -960,6 +960,9 @@ glut::catalog! {
         subagents_title: &'static str,
         /// Why a model's message is held: the owner's Enter lets it go, `{pane}` its sender.
         held_enter: &'static str,
+        /// Why an answer to the pane's own request waits for the owner's Enter (#142): something of the owner's is
+        /// open.
+        held_answer: &'static str,
         /// Under a held message: `{why}`.
         held_why: &'static str,
         /// The cache kept by reading.

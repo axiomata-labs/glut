@@ -976,6 +976,7 @@ einen",
     no_subagent_yet: "noch kein Subagent: Glut startet einen mit seinem Werkzeug task für ein eigenes Stück Arbeit",
     subagents_title: "Subagenten — ⏎ öffnet einen",
     held_enter: "Enter hier lässt die Nachricht von Pane {pane} weitergehen",
+    held_answer: "eine Antwort auf eine eigene Anfrage — Enter hier lässt sie herein, Esc verwirft sie",
     held_why: "zurückgehalten: {why}",
     cache_ping: "Cache: warm gehalten, indem er gelesen wird, während die Session ruht (bis zu 30 Min.)",
     cache_hour: "Cache: Anthropic hält ihn eine Stunde (jedes Schreiben kostet doppelt); andere Provider werden \

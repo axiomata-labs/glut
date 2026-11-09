@@ -845,6 +845,7 @@ pub const TEXTS: Texts = Texts {
     no_subagent_yet: "还没有子代理：Glut 会用 task 工具为一部分工作启动子代理",
     subagents_title: "子代理 — ⏎ 打开一个",
     held_enter: "在此按 Enter 放行 Pane {pane} 的消息",
+    held_answer: "对自己请求的回答 — 在此按 Enter 接收，Esc 丢弃",
     held_why: "已搁置：{why}",
     cache_ping: "缓存：会话空闲时通过读取保温（最多 30 分钟）",
     cache_hour: "缓存：Anthropic 保留一小时（每次写入费用加倍）；其他提供商通过读取保持",

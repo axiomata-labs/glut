@@ -1593,32 +1593,27 @@ impl Panes {
             crate::requests::Back::Pane { id, request },
         );
         Ok(format!(
-            "request r{request}, {said}. Its answer comes back to you as a message marked answers=\"r{request}\": go \
-             on with other work meanwhile."
+            "request r{request}, {said}. Its answer comes back to you as a message marked answers=\"r{request}\"; \
+             {}",
+            crate::tell::WAIT_FOR_ANSWER
         ))
     }
 
     /// The answer `text` of the pane at `at` to the request `owed` (#142): to the asking pane here, or to its window.
     /// It may start a turn there whatever the asker's mode — the asker asked for it, as a subagent's result comes
-    /// back to its parent, and the turn runs on the asker's own rights —, within the chain of messages without the
-    /// owner.
+    /// back to its parent, and the turn runs on the asker's own rights. It adds nothing to the chain of messages
+    /// without the owner and is never held by it: each request is answered once, and the requests count.
     fn answer(&mut self, at: usize, owed: crate::requests::Owed, text: &str) {
         use crate::requests::Back;
-        self.chain += 1;
         match owed.back {
             Back::Pane { id, request } => {
                 let from = self.list[at].number;
                 let message =
                     crate::tell::wrapped_marked(from, text, crate::tell::Mark::Answer(request));
-                let may_start = self.chain <= MOST_CHAIN;
                 if let Some(asker) = self.list.iter().position(|pane| pane.id == id) {
                     let (by, to) = (self.label(at), self.label(asker));
                     self.note(&by, &to, glut::team::NoteKind::Answer(request), text);
-                    self.list[asker].app.deliver_answer(
-                        message,
-                        may_start,
-                        &tr!(held_enter, pane = from),
-                    );
+                    self.list[asker].app.deliver_answer(message);
                 }
             }
             Back::Window { address, nonce } => {
@@ -1660,10 +1655,9 @@ impl Panes {
         });
     }
 
-    /// Glut's word to the asking pane `asker` that its request `request` gets no answer: `text`.
+    /// Glut's word to the asking pane `asker` that its request `request` gets no answer: `text` — owed like an
+    /// answer, so outside the chain too.
     fn notice_asker(&mut self, asker: u64, request: u32, text: &str) {
-        self.chain += 1;
-        let may_start = self.chain <= MOST_CHAIN;
         let message = crate::tell::wrapped_session_marked(
             "glut",
             crate::sessions::By::Notice,
@@ -1673,11 +1667,7 @@ impl Panes {
         if let Some(at) = self.list.iter().position(|pane| pane.id == asker) {
             let to = self.label(at);
             self.note("glut", &to, glut::team::NoteKind::Unanswered(request), text);
-            self.list[at].app.deliver_answer(
-                message,
-                may_start,
-                &tr!(held_window_chain, from = "glut"),
-            );
+            self.list[at].app.deliver_answer(message);
         }
     }
 
@@ -1831,7 +1821,8 @@ impl Panes {
             }
         }
         if asked.iter().any(|helper| helper.copy) && !session::sandboxed(&self.list[at].app.parts) {
-            return Err("a helper's copy needs the sandbox, which keeps the lead's repository from it: there is none                         here — use place `here`"
+            return Err("a helper's copy needs the sandbox, which keeps the lead's repository from it: there is none \
+                        here — use place `here`"
                 .into());
         }
         // However often the owner said yes to more, a lead's team stays a team.
@@ -1848,9 +1839,16 @@ impl Panes {
                 running + asked.len()
             ));
         }
+        // Starting a team is a message between models too, and the one that ends a lead and its helpers starting each
+        // other again and again: their answers are owed and never held, so the chain is kept here.
+        if self.chain >= MOST_CHAIN {
+            return Err(
+                "the agents have written to each other often without the owner: ask the owner before starting more \
+                 helpers"
+                    .into(),
+            );
+        }
         self.requests.room_for(asked.len())?;
-        // Starting a team is a message between models too: a lead and its helpers answering each other end with the
-        // chain.
         self.chain += 1;
         let lead_label = self.label(at);
         let mut said = Vec::new();
@@ -1876,8 +1874,9 @@ impl Panes {
         }
         Ok(format!(
             "starting {}: each one's answer to its first task comes back to you as a message marked \
-             answers=\"r<n>\" — go on with your own part meanwhile.",
-            said.join(", ")
+             answers=\"r<n>\"; {}",
+            said.join(", "),
+            crate::tell::WAIT_FOR_ANSWER
         ))
     }
 
@@ -2447,7 +2446,6 @@ impl Panes {
                 let Some(link) = self.link.as_ref() else {
                     return;
                 };
-                self.chain += 1;
                 let letter = crate::sessions::Letter {
                     from: link.name(),
                     to: String::new(),
@@ -2686,7 +2684,8 @@ impl Panes {
             let _ = reply.send(said.map(|said| {
                 format!(
                     "request r{request}, {said}. Its answer comes back to you as a message marked \
-                     answers=\"r{request}\": go on with other work meanwhile."
+                     answers=\"r{request}\"; {}",
+                    crate::tell::WAIT_FOR_ANSWER
                 )
             }));
         });
@@ -2843,14 +2842,13 @@ impl Panes {
                 .requests
                 .answered(nonce)
                 .ok_or_else(|| format!("no request here waits for an answer from {from}"))?;
-            self.chain = self.chain.max(letter.chain).saturating_add(1);
+            // Owed to an open nonce and taken once: outside the chain, as an answer here is.
             let message = crate::tell::wrapped_session_marked(
                 &from,
                 letter.by,
                 &letter.text,
                 crate::tell::Mark::Answer(request),
             );
-            let may_start = self.chain <= MOST_CHAIN;
             if let Some(asker) = self.list.iter().position(|pane| pane.id == id) {
                 let to = self.label(asker);
                 let kind = if letter.by == By::Notice {
@@ -2859,11 +2857,7 @@ impl Panes {
                     glut::team::NoteKind::Answer(request)
                 };
                 self.note(&from, &to, kind, &letter.text);
-                self.list[asker].app.deliver_answer(
-                    message,
-                    may_start,
-                    &tr!(held_window_chain, from = from),
-                );
+                self.list[asker].app.deliver_answer(message);
             }
             return Ok("delivered: the answer reached its asker".into());
         }
@@ -7732,6 +7726,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_answer_is_held_neither_by_the_chain_nor_by_rights_the_asker_gained_meanwhile() {
+        let (mut panes, _inlets) = split();
+        panes.sync();
+        let (first, second) = (panes.list[0].id, panes.list[1].id);
+        let said = requested(&mut panes, first, "count the lines");
+        assert!(said.starts_with("request r1"), "{said}");
+        // The models wrote to each other long without the owner: the answer is owed all the same.
+        panes.chain = MOST_CHAIN + 3;
+        let mut answered = ended(glut::FinishReason::Answered);
+        if let Report::Done(outcome, _) = &mut answered {
+            outcome.answer = Some("14 lines.".into());
+        }
+        panes.on_report(second, answered);
+        assert!(
+            noted(&panes.list[0].app, "answer to r1: 14 lines."),
+            "past the chain"
+        );
+        assert!(panes.list[0].app.held.is_empty());
+        assert_eq!(panes.chain, MOST_CHAIN + 3, "an answer adds nothing to it");
+        // Behind a turn's end: a message of a pane that may do less than this one is held, the answer behind it goes
+        // first — though the asker may do more by now than when it asked.
+        let plain = crate::tell::wrapped_marked(2, "fyi", crate::tell::Mark::Plain);
+        let answer = crate::tell::wrapped_marked(2, "docs done", crate::tell::Mark::Answer(7));
+        let app = &mut panes.list[0].app;
+        app.waiting_models
+            .push((plain, crate::app::Sender::nothing()));
+        app.waiting_models
+            .push((answer.clone(), crate::app::Sender::nothing()));
+        panes.on_report(first, ended(glut::FinishReason::Answered));
+        assert!(
+            noted(&panes.list[0].app, "docs done"),
+            "the answer started a turn"
+        );
+        assert!(panes.list[0].app.held.is_empty(), "not held as wider");
+        // After a turn that did not finish, a waiting answer waits for the owner's Enter, shown — never for nobody.
+        panes.list[0].app.waiting_models.clear();
+        panes.list[0]
+            .app
+            .waiting_models
+            .push((answer, crate::app::Sender::nothing()));
+        panes.on_report(first, ended(glut::FinishReason::Cancelled));
+        assert!(panes.list[0].app.waiting_models.is_empty());
+        assert_eq!(panes.list[0].app.held.len(), 1);
+    }
+
+    #[tokio::test]
     async fn a_lead_starts_helpers_in_build_mode_not_in_ask_their_answers_come_back_and_it_closes_them()
      {
         use glut::permissions::{AnswerFuture, AskRequest, Asker, Mode};
@@ -7797,6 +7837,16 @@ mod tests {
                 .unwrap_err()
                 .contains("no role")
         );
+        // Past the chain a lead starts no more helpers on its own: their answers are never held, so a lead and its
+        // helpers starting each other again and again end here.
+        panes.chain = MOST_CHAIN;
+        assert!(
+            panes
+                .ask_helpers(lead, vec![docs.clone()])
+                .unwrap_err()
+                .contains("ask the owner")
+        );
+        panes.chain = 0;
         let said = panes.ask_helpers(lead, vec![docs]).unwrap();
         assert!(
             said.starts_with("starting docs (request r1, in your folder)"),

@@ -37,6 +37,11 @@ follow [Semantic Versioning](https://semver.org/) — while Glut is at 0.x, a mi
 
 ### Changed
 
+- **An answer always gets through** (agents that work together): an answer, or Glut's word that none comes, starts
+  the asker's next turn even after a long exchange without the owner, and even when the owner allowed the asker
+  something "always" while it waited — it asked. A model that asked another agent, or started helpers, is no longer
+  urged to go on by its open task list, and is told to end its turn rather than wait, sleep or check on the answer.
+  A lead starts no more helpers on its own after a long exchange without the owner.
 - New public items a host matching or building them exhaustively must add: `RunConfig::notes`,
   `RunConfig::team_tools` and `glut::TEAM_TOOLS`, and
   `glut::team::NoteKind::Overlap` in the new `glut::team`.

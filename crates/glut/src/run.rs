@@ -500,6 +500,7 @@ async fn run_inner<M: ChatModel>(
         list_settled: false,
         updating_todos: false,
         nudged: false,
+        awaits_answer: false,
         last_batch: None,
         refused_before_batch: 0,
         same_steps: 0,
@@ -914,6 +915,9 @@ struct Loop<'a, M: ChatModel> {
     list_settled: bool,
     /// Whether the run already asked its model to go on (T73): once per run.
     nudged: bool,
+    /// Whether the run asked another agent for an answer that comes back (#142: `tell` with `answer`,
+    /// `start_helpers`): that answer starts the next turn, so the run is not asked to go on meanwhile.
+    awaits_answer: bool,
     /// The last step's calls, by tool and arguments (T73b): the same set again is not run.
     last_batch: Option<Vec<(String, String)>>,
     /// The refusals counted when the last step began: a step the gate refused in is not guarded against.
@@ -2426,6 +2430,9 @@ impl<'a, M: ChatModel> Loop<'a, M> {
             return Ok(text);
         }
         let (ok, output) = self.execute(call, sink).await?;
+        if ok && asks_back(call) {
+            self.awaits_answer = true;
+        }
         let refused = std::mem::take(&mut self.refused_now);
         let from_subagent = std::mem::take(&mut self.subagent_refusals);
         self.perform_after(call, ok, output, refused, from_subagent, sink)
@@ -2750,6 +2757,10 @@ impl<'a, M: ChatModel> Loop<'a, M> {
     /// a next step — `None` when it is done as it says, asked once already, in plan mode, asking the owner, or off.
     fn nudge(&self) -> Option<(NudgeKind, String)> {
         if !self.config.nudge || self.nudged || self.depth > 0 {
+            return None;
+        }
+        // An answer of another agent is on its way and starts the next turn (#142): going on now would only wait.
+        if self.awaits_answer {
             return None;
         }
         // No step left to take it in — the limit, the budget or the time: the answer stands as it is.
@@ -4469,6 +4480,18 @@ fn covers(parts: &[crate::tools::Part], output: &str) -> bool {
     at == output.len()
 }
 
+/// Whether `call` asks another agent for an answer that comes back as a turn of its own (#142): `start_helpers`, or
+/// `tell` with `answer` set.
+fn asks_back(call: &ToolCall) -> bool {
+    let name = call.function.name.as_str();
+    if name == crate::config::TEAM_TOOLS[0] {
+        return true;
+    }
+    name == crate::config::PANE_TOOLS[0]
+        && serde_json::from_str::<serde_json::Value>(&call.function.arguments)
+            .is_ok_and(|args| args.get("answer").and_then(serde_json::Value::as_bool) == Some(true))
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;
@@ -4833,6 +4856,59 @@ mod tests {
         fn call(&self, _arguments: Value, _context: crate::tools::CallContext) -> ToolFuture<'_> {
             Box::pin(async move { Ok("told".to_owned()) })
         }
+    }
+
+    #[test]
+    fn starting_helpers_and_a_tell_with_answer_ask_back_and_nothing_else_does() {
+        let call = |name: &str, arguments: &str| ToolCall {
+            id: "c".into(),
+            kind: "function".into(),
+            function: FunctionCall {
+                name: name.into(),
+                arguments: arguments.into(),
+            },
+        };
+        assert!(asks_back(&call(crate::config::TEAM_TOOLS[0], "{}")));
+        assert!(asks_back(&call(
+            crate::config::PANE_TOOLS[0],
+            r#"{"answer":true}"#
+        )));
+        assert!(!asks_back(&call(
+            crate::config::PANE_TOOLS[0],
+            r#"{"answer":false}"#
+        )));
+        assert!(!asks_back(&call(crate::config::PANE_TOOLS[0], "not json")));
+        assert!(!asks_back(&call(crate::config::TEAM_TOOLS[1], "{}")));
+    }
+
+    #[tokio::test]
+    async fn a_run_that_asked_another_agent_for_an_answer_is_not_asked_to_go_on() {
+        let ends = |tell: &'static str| async move {
+            let mut tools = Toolbox::new();
+            tools.extend([Box::new(PaneTool) as Box<dyn Tool>]);
+            let mut config = RunConfig::new("/w");
+            config.pane_tools = true;
+            let model = Script::new(vec![
+                Ok(calls(&[("c1", crate::planning::TODO, OPEN_LIST)])),
+                Ok(calls(&[("c2", crate::config::PANE_TOOLS[0], tell)])),
+                Ok(text("waiting for pane 2")),
+                Ok(text("still waiting")),
+            ]);
+            let mut events = Vec::new();
+            run(&config, &model, &tools, "go", &mut events, &Cancel::new()).await;
+            nudges(&events)
+        };
+        assert!(
+            ends(r#"{"pane":"2","text":"count","answer":true}"#)
+                .await
+                .is_empty(),
+            "the answer starts the next turn"
+        );
+        assert_eq!(
+            ends(r#"{"pane":"2","text":"fyi"}"#).await,
+            [NudgeKind::OpenItems],
+            "a plain message brings nothing back"
+        );
     }
 
     #[test]

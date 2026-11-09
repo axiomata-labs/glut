@@ -982,6 +982,7 @@ definiciones, usos y renombres",
     no_subagent_yet: "aún no hay subagentes: Glut inicia uno con su herramienta task para una parte del trabajo",
     subagents_title: "Subagentes — ⏎ abre uno",
     held_enter: "Intro aquí deja seguir el mensaje del pane {pane}",
+    held_answer: "una respuesta a una petición propia — Intro aquí la deja entrar, Esc la descarta",
     held_why: "retenido: {why}",
     cache_ping: "caché: se mantiene caliente leyéndola mientras la sesión descansa (hasta 30 min)",
     cache_hour: "caché: Anthropic la guarda una hora (cada escritura cuesta el doble); a los demás proveedores se \

@@ -550,7 +550,7 @@ pub struct App {
     /// How many turns had started when the state was last seen: a queued message's turn begins with no rest between.
     seen_turns: usize,
     /// Messages of another pane's model for after the turn under way, with what their sender could do (T36c).
-    waiting_models: Vec<(String, Sender)>,
+    pub(crate) waiting_models: Vec<(String, Sender)>,
     /// The files this pane's agent changed lately, newest last, and those the screen has not looked at yet (#142):
     /// another agent changing one of them hears so.
     pub changed: Vec<(std::path::PathBuf, Instant)>,
@@ -1839,6 +1839,13 @@ impl App {
             let (requests, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut self.waiting_models)
                 .into_iter()
                 .partition(|(message, _)| crate::tell::request_of(message).is_some());
+            // An answer waits for the owner's Enter, shown, rather than for a turn nobody starts (#142).
+            let (answers, rest): (Vec<_>, Vec<_>) = rest
+                .into_iter()
+                .partition(|(message, _)| is_answer(message));
+            for (message, _) in answers {
+                self.hold(message, tr!(held_answer));
+            }
             self.waiting_models = rest;
             self.declined.extend(
                 requests
@@ -1851,8 +1858,15 @@ impl App {
         // or it would run into the same wall.
         // T36c: another model's message first — if this pane is still no wider than its sender was.
         if answered && !self.waiting_models.is_empty() {
-            let (message, sender) = self.waiting_models.remove(0);
-            if self.no_wider_than(&sender) {
+            // An answer goes first and runs on this pane's own rights whatever it was granted meanwhile (#142): it
+            // asked. Behind a message held as wider it would wait for nobody.
+            let next = self
+                .waiting_models
+                .iter()
+                .position(|(message, _)| is_answer(message))
+                .unwrap_or(0);
+            let (message, sender) = self.waiting_models.remove(next);
+            if is_answer(&message) || self.no_wider_than(&sender) {
                 self.send(message);
             } else {
                 self.hold(message, tr!(held_wider));
@@ -7492,21 +7506,18 @@ impl App {
         Ok(Delivered::OnEnter)
     }
 
-    /// An answer to this pane's own request (#142), or Glut's word that none comes: it goes in like another model's
-    /// message, but on this pane's own rights — it asked — and never refused for a full list: it is owed.
-    pub fn deliver_answer(&mut self, message: String, may_start: bool, why: &str) {
+    /// An answer to this pane's own request (#142), or Glut's word that none comes: it starts a turn on this pane's
+    /// own rights — it asked —, after the turn under way, never refused for a full list nor held behind other
+    /// models' messages: it is owed. It waits for the owner's Enter only where the owner has something open — a
+    /// picker, words of theirs queued after a stop — or Glut is busy otherwise (a compaction, a switch).
+    pub fn deliver_answer(&mut self, message: String) {
         let sender = self.sender();
-        let free = !self.working()
-            && self.picker.is_none()
-            && self.queue.is_empty()
-            && self.held.is_empty()
-            && self.waiting_models.is_empty();
-        if may_start && self.steering.is_some() {
+        if self.steering.is_some() {
             self.waiting_models.push((message, sender));
-        } else if may_start && free {
+        } else if !self.working() && self.picker.is_none() && self.queue.is_empty() {
             self.send(message);
         } else {
-            self.hold(message, why);
+            self.hold(message, tr!(held_answer));
         }
     }
 
@@ -9338,6 +9349,12 @@ fn extends_selection(key: KeyEvent) -> bool {
             key.code,
             KeyCode::Left | KeyCode::Right | KeyCode::Home | KeyCode::End
         )
+}
+
+/// Whether `message` is an answer to a request of this pane's, or Glut's word that none comes (#142): only Glut
+/// writes that mark.
+fn is_answer(message: &str) -> bool {
+    matches!(crate::tell::mark_of(message), crate::tell::Mark::Answer(_))
 }
 
 #[cfg(test)]

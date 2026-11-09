@@ -227,11 +227,12 @@ impl Tool for Start {
                  for the same code; the copy leaves out secret files, links and very large files, and its helper \
                  has no MCP servers, no folders beside it and no Keychain; bring its work over with `take_work` \
                  when it is done. The first task is a request: each helper's last reply to it \
-                 comes back to you as a message marked answers=\"r<n>\", so go on with your own part meanwhile. \
+                 comes back to you as a message marked answers=\"r<n>\"; {wait} \
                  Afterwards reach a helper with `tell` and its name; it stays until you close it with `take_work` or \
                  the owner does. A helper starts no helpers of its own. Only in build and auto mode — in ask and plan \
                  mode propose the team to the owner instead; past six agents in the background (the owner's with \
-                 yours) the owner decides. At most {MOST_AT_ONCE} in one call."
+                 yours) the owner decides. At most {MOST_AT_ONCE} in one call.",
+                wait = crate::tell::WAIT_FOR_ANSWER
             ),
             parameters: json!({
                 "type": "object",

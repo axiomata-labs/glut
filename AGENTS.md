@@ -222,10 +222,11 @@ scripts/install-dev.sh           # glut for every terminal: ~/.cargo/bin, linked
   with `answer` marks the message `request="<token>"` in the wrapping's opening tag (only Glut writes it; `<` in the
   text is escaped); the turn that starts from it sets `App::answering`, and `Panes::on_report` takes that token
   *before* the app handles `Done` (which may start the next request) and sends `outcome.answer` back — only the
-  token's own pane (`Requests::take(token, pane)`). An answer may start a turn in the asker whatever its mode (the
-  asker asked, as a subagent's result returns; the turn runs on the asker's rights), within `MOST_CHAIN` — keep the
-  request itself under the "no wider" rule of `tell`. Between windows a request travels by a random `nonce`, never
-  the asker's count; an `answers` letter is taken only for an open nonce. Every way a request can end unanswered
+  token's own pane (`Requests::take(token, pane)`). An answer may start a turn in the asker whatever its mode (the asker
+  asked, as a subagent's result returns; the turn runs on the asker's rights), outside `MOST_CHAIN` and whatever the
+  asker was granted since (each request is answered once; the requests count) — keep the request itself under the "no
+  wider" rule of `tell`. Between windows a request travels by a random `nonce`, never the asker's count; an `answers`
+  letter is taken only for an open nonce. Every way a request can end unanswered
   (Esc, `/clear`, a hook's refusal, an unfinished turn before it, a closed pane, a window whose process ended, an
   hour) must answer the asker through `Unanswered` — a new path that drops a request must too. `who`'s facts are
   Glut's; a model's `doing` line is bounded (`who::doing_line`) and shown as its words; an arena's member is
@@ -236,7 +237,8 @@ scripts/install-dev.sh           # glut for every terminal: ~/.cargo/bin, linked
   lead's helpers (`crates/glut-tui/src/helpers.rs`, `Panes::ask_helpers`/`start_helper`/`take_work`) get the lead's
   mode, granted rules and folders, narrower by their role — never more; only a pane the owner started leads
   (`tell::Link::may_lead`: no helper, no arena member), never in plan or ask mode, past `BACKGROUND_ASKED` only with
-  the owner's word. A helper's copy is an arena clone (`clone_for_arena` + `mirror`), its work taken only through
+  the owner's word, and none past `MOST_CHAIN` (the answers are never held, so the chain ends a lead and its helpers
+  starting each other). A helper's copy is an arena clone (`clone_for_arena` + `mirror`), its work taken only through
   `worktree::apply` — never a merge of the model's branch, never reading its git folder — on the base pinned when the
   copy was made, every file first judged by the gate as an `Edit` of the lead's folder (`take_preview`, then
   `judge_all`, a snapshot before), none outside that folder; the copy's commands never read the lead's repository

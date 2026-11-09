@@ -999,6 +999,7 @@ code",
     no_subagent_yet: "pas encore de sous-agent : Glut en lance un avec son outil task pour une partie du travail",
     subagents_title: "Sous-agents — ⏎ en ouvre un",
     held_enter: "Entrée ici laisse passer le message du pane {pane}",
+    held_answer: "une réponse à une demande de ce pane — Entrée ici la laisse entrer, Échap la rejette",
     held_why: "retenu : {why}",
     cache_ping: "cache : gardé au chaud en le relisant pendant que la session se repose (jusqu’à 30 min)",
     cache_hour: "cache : Anthropic le garde une heure (chaque écriture coûte le double) ; les autres fournisseurs \

@@ -916,6 +916,7 @@ pub const TEXTS: Texts = Texts {
     no_subagent_yet: "まだサブエージェントはいません: Glut は作業の一部に task ツールでサブエージェントを起動します",
     subagents_title: "サブエージェント — ⏎ で開く",
     held_enter: "ここで Enter を押すと Pane {pane} のメッセージを進めます",
+    held_answer: "自分の依頼への回答 — ここで Enter を押すと受け取り、Esc で破棄します",
     held_why: "保留中: {why}",
     cache_ping: "キャッシュ: セッション休止中に読み直して保温（最大 30 分）",
     cache_hour: "キャッシュ: Anthropic は 1 時間保持（書き込みごとに 2 倍の費用）; 他のプロバイダーは読み直して保持",
