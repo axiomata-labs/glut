@@ -2211,14 +2211,21 @@ impl Panes {
             if now == start {
                 said = format!("{name} changed nothing since the last take");
             } else {
-                let files = crate::worktree::apply(&tree, &start, &now, &head)?;
+                let taking = crate::worktree::apply(&tree, &start, &now, &head)?;
                 if let Some(helper) = self.helpers.iter_mut().find(|helper| helper.id == id) {
                     helper.start = Some(now.clone());
                 }
                 said = format!(
-                    "took {files} changed file(s) of {name} into your folder, not committed — look at them with \
-                     `git diff`"
+                    "took {} changed file(s) of {name} into your folder, not committed — look at them with `git \
+                     diff`",
+                    taking.files.len()
                 );
+                if !taking.left_out.is_empty() {
+                    said.push_str(&format!(
+                        "; left in its copy, as a build's leftovers your repository keeps none of: {}",
+                        taking.left_out.join(", ")
+                    ));
+                }
                 let lead_label = self
                     .list
                     .iter()
@@ -2342,12 +2349,15 @@ impl Panes {
             if !tellable(&self.list[at].app) {
                 continue;
             }
-            // The same working tree and branch matters while this agent works: then it may write where the other does.
+            // The same working tree and branch matters while this agent works: then it may write where the other does
+            // — once one of the two changed a file there lately: two that only read are in nobody's way (#170).
             if let (Some(tree), Some(branch)) = (&mine.tree, &mine.branch) {
                 for other in others.iter().filter(|other| other.id != Some(id)) {
                     // Only one at work there, or one that changed something lately: a pane at rest changes nothing.
                     let at_work = other.busy || !other.changed.is_empty();
+                    let writes = !mine.changed.is_empty() || !other.changed.is_empty();
                     if at_work
+                        && writes
                         && other.tree.as_ref() == Some(tree)
                         && other.branch.as_ref() == Some(branch)
                     {
@@ -4922,7 +4932,7 @@ impl Panes {
         else {
             return self.active().tell(tr!(arena_take_usage));
         };
-        match crate::worktree::apply(&tree, &start, &now, &head) {
+        match crate::worktree::apply(&tree, &start, &now, &head).map(|taking| taking.files.len()) {
             Ok(files) => {
                 if let Some(arena) = &mut self.arena {
                     arena.taken = Some(at);

@@ -42,6 +42,11 @@ follow [Semantic Versioning](https://semver.org/) — while Glut is at 0.x, a mi
   something "always" while it waited — it asked. A model that asked another agent, or started helpers, is no longer
   urged to go on by its open task list, and is told to end its turn rather than wait, sleep or check on the answer.
   A lead starts no more helpers on its own after a long exchange without the owner.
+- **Fewer questions when agents work together**: `xargs` running a plain reader (`find … -print0 | xargs -0 wc -l`,
+  `… | xargs cat`) counts as reading, like the reader itself; a helper's work taken with `take_work` leaves out what a
+  build left (`__pycache__`, `*.pyc`, `node_modules`, `target`, `.pytest_cache`, `dist`) where the repository keeps
+  nothing of that kind, and says so; and two agents on the same branch of one working tree hear of each other only
+  once one of them changed a file there.
 - New public items a host matching or building them exhaustively must add: `RunConfig::notes`,
   `RunConfig::team_tools` and `glut::TEAM_TOOLS`, and
   `glut::team::NoteKind::Overlap` in the new `glut::team`.

@@ -814,6 +814,10 @@ impl RuleSet {
             .iter()
             .chain(&self.ask)
             .any(|rule| rule.kind == RuleKind::Read);
+        // `xargs` opens files by names it reads, which no rule can be matched against (#169).
+        if any_read_rule && words.first().map(String::as_str) == Some("xargs") {
+            return Some("the command reads files by names a rule cannot see");
+        }
         let paths = words.iter().skip(1).chain(redirected).filter_map(|word| {
             match word.strip_prefix('-') {
                 Some(option) => option.split_once('=').map(|(_, value)| value),
@@ -3900,12 +3904,22 @@ mod tests {
                 "grep x < .env",
                 "grep --file=.env x",
                 "git show HEAD:.env",
+                // xargs opens files by names no rule sees (#169).
+                "find . -type f | xargs cat",
             ] {
                 assert!(
                     gate.judge("bash", &bash(held)).await.is_err(),
                     "{mode:?}: a rule holds {held} back"
                 );
             }
+            let found = gate
+                .judge("bash", &bash("find /etc -type f | xargs cat"))
+                .await;
+            assert_eq!(
+                found.is_ok(),
+                mode == Mode::Auto,
+                "{mode:?}: the lister's path is judged"
+            );
             let outside = gate.judge("bash", &bash("cat ~/.zshenv")).await;
             assert_eq!(
                 outside.is_ok(),
@@ -3913,6 +3927,14 @@ mod tests {
                 "{mode:?}: outside the folder only auto reads freely"
             );
         }
+        // Without a read rule xargs over listed names in the folder reads freely (#169).
+        let plain = Gate::new(RuleSet::default(), Mode::Default, asker.clone());
+        assert!(
+            plain
+                .judge("bash", &bash("find . -type f -print0 | xargs -0 wc -l"))
+                .await
+                .is_ok()
+        );
         let dont_ask = Gate::new(RuleSet::default(), Mode::DontAsk, asker.clone());
         assert!(
             dont_ask.judge("bash", &bash("ls")).await.is_err(),

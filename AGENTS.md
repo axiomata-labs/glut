@@ -278,6 +278,10 @@ scripts/install-dev.sh           # glut for every terminal: ~/.cargo/bin, linked
 - **What a command *is* decides beside the rules** (TUI1e, `crates/glut/src/permissions/kinds.rs`): a command whose
   every part is a listed reader (`ls`, `grep`, `sed -n 1,9p`, `git status`, …) runs in every mode like `read_file`;
   in `auto` everything sandboxed runs but a `kinds::heavy` one (`rm -rf`, `git push`, `sudo`, …). A new reader needs
-  every option that writes or runs something refused (`find -exec`, `rg --pre`, `sort -o`, `git diff --output`).
+  every option that writes or runs something refused (`find -exec`, `rg --pre`, `sort -o`, `git diff --output`). `xargs`
+  (#169) runs only `XARGS_READERS` — programs no handed word can make write — behind options that only split its
+  input, and only after parts that list names out of paths they show (`kinds::names_shown`: no file's contents, no
+  typed words, no `<`), never where a Read rule exists — the names it opens pass no folder check and no rule. Never
+  widen either list by a program with a writing option or one that prints what it read.
   "Always" is the owner's pick of a scope (`Answer::AllowWithin`: exact, `prog sub *`, `prog *`), never a widening
   Glut chooses; reading parts ride along without a rule, except under an `allowed-tools` narrowing.

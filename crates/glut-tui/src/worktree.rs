@@ -1161,6 +1161,82 @@ pub struct Taking {
     /// A path's name holds what the screen would not show as written (a control, bidi or zero-width character): the
     /// names above are cleaned, so a rule judging them would judge another name than git writes (#142).
     pub unclean: bool,
+    /// What a build left behind and is not taken (#171): one line per kind, `__pycache__ (3 files)`.
+    pub left_out: Vec<String>,
+}
+
+/// What builds and test runs leave in a folder, never taken where the repository keeps nothing of that kind (#171):
+/// a name the screen shows, the pathspec git leaves it out by, and whether a path is one.
+const LEFT_BEHIND: [(&str, &str); 6] = [
+    ("__pycache__", ":(exclude,glob)**/__pycache__/**"),
+    ("*.pyc", ":(exclude,glob)**/*.pyc"),
+    ("node_modules", ":(exclude,glob)**/node_modules/**"),
+    ("target", ":(exclude,glob)**/target/**"),
+    (".pytest_cache", ":(exclude,glob)**/.pytest_cache/**"),
+    ("dist", ":(exclude,glob)**/dist/**"),
+];
+
+/// Whether `path` is of the kind `name` of [`LEFT_BEHIND`]: a file ending so, or one inside a folder of that name —
+/// in any case, as git's pathspec may match on a volume that folds case (`Dist/` is a `dist` the repository keeps).
+fn left_behind(name: &str, path: &str) -> bool {
+    let path = path.to_lowercase();
+    let path = path.as_str();
+    match name.strip_prefix('*') {
+        Some(ending) => path.ends_with(ending),
+        None => {
+            let parts: Vec<&str> = path.split('/').collect();
+            parts[..parts.len().saturating_sub(1)].contains(&name)
+        }
+    }
+}
+
+/// The kinds of [`LEFT_BEHIND`] a change from `start` to `now` adds files of while `start` holds none of them — what
+/// a build left, not what the project keeps —, each with its count.
+fn left_out(
+    tree: &Tree,
+    start: &str,
+    now: &str,
+) -> Result<Vec<(&'static str, &'static str, usize)>, String> {
+    let names = |args: &[&str]| -> Result<Vec<String>, String> {
+        let out = git_alone(&tree.objects_pin(), args, None)?;
+        Ok(out
+            .split(|byte| *byte == 0)
+            .filter(|entry| !entry.is_empty())
+            .map(|entry| String::from_utf8_lossy(entry).into_owned())
+            .collect())
+    };
+    let added = names(&[
+        "diff",
+        "--name-only",
+        "--no-renames",
+        "--diff-filter=A",
+        "-z",
+        "--end-of-options",
+        start,
+        now,
+    ])?;
+    if !LEFT_BEHIND
+        .iter()
+        .any(|(name, _)| added.iter().any(|path| left_behind(name, path)))
+    {
+        return Ok(Vec::new());
+    }
+    let kept = names(&[
+        "ls-tree",
+        "-r",
+        "--name-only",
+        "-z",
+        "--end-of-options",
+        start,
+    ])?;
+    Ok(LEFT_BEHIND
+        .iter()
+        .filter(|(name, _)| !kept.iter().any(|path| left_behind(name, path)))
+        .filter_map(|(name, spec)| {
+            let count = added.iter().filter(|path| left_behind(name, path)).count();
+            (count > 0).then_some((*name, *spec, count))
+        })
+        .collect())
 }
 
 /// Whether `name` is one of the `.env` files the sandbox keeps from every command (`sandbox::scan`'s list).
@@ -1463,21 +1539,38 @@ fn arena_patch(tree: &Tree, start: &str, now: Option<&str>) -> Result<(Vec<u8>, 
         Some(now) => now.to_owned(),
         None => written(tree)?,
     };
-    let patch = git_alone(
-        &tree.objects_pin(),
-        &[
-            "diff",
-            "--binary",
-            "--no-ext-diff",
-            "--no-textconv",
-            "--no-renames",
-            "--end-of-options",
-            start,
-            &now,
-        ],
-        None,
-    )?;
+    let left = left_out(tree, start, &now)?;
+    let mut args = vec![
+        "diff",
+        "--binary",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-renames",
+        "--end-of-options",
+        start,
+        &now,
+    ];
+    if !left.is_empty() {
+        args.extend(["--", "."]);
+        args.extend(left.iter().map(|(_, spec, _)| *spec));
+    }
+    let left_out: Vec<String> = left
+        .iter()
+        .map(|(name, _, count)| format!("{name} ({count} files)"))
+        .collect();
+    let patch = git_alone(&tree.objects_pin(), &args, None)?;
     if patch.is_empty() {
+        // Only what a build left: nothing to take, and said so.
+        if !left_out.is_empty() {
+            return Ok((
+                patch,
+                Taking {
+                    now,
+                    left_out,
+                    ..Taking::default()
+                },
+            ));
+        }
         return Err(tr!(arena_nothing).into());
     }
     let repo = tree.repo.pin();
@@ -1558,6 +1651,7 @@ fn arena_patch(tree: &Tree, start: &str, now: Option<&str>) -> Result<(Vec<u8>, 
             executable: clean(executable),
             now,
             unclean,
+            left_out,
         },
     ))
 }
@@ -1582,6 +1676,8 @@ pub fn check_copy(
 ) -> Result<(), String> {
     checked(&tree.pin())?;
     let patch = match arena_patch(tree, start, Some(now)) {
+        // Only a build's leftovers changed: nothing to lay over the start.
+        Ok((patch, _)) if patch.is_empty() => None,
         Ok((patch, _)) => Some(patch),
         Err(reason) if reason == tr!(arena_nothing) => None,
         Err(reason) => return Err(reason),
@@ -1684,13 +1780,16 @@ pub fn taking(tree: &Tree, start: &str, now: Option<&str>) -> Result<Taking, Str
 /// # Errors
 ///
 /// What stood in the way, the conflict named.
-pub fn apply(tree: &Tree, start: &str, now: &str, head_then: &str) -> Result<usize, String> {
+pub fn apply(tree: &Tree, start: &str, now: &str, head_then: &str) -> Result<Taking, String> {
     let repo = tree.repo.pin();
     checked(&repo)?;
     if head(&tree.repo)? != head_then {
         return Err(tr!(arena_head_moved).into());
     }
     let (patch, taking) = arena_patch(tree, start, Some(now))?;
+    if patch.is_empty() {
+        return Ok(taking);
+    }
     git_alone(
         &repo,
         &["apply", "--check", "--binary", "-"],
@@ -1698,7 +1797,7 @@ pub fn apply(tree: &Tree, start: &str, now: &str, head_then: &str) -> Result<usi
     )
     .and_then(|_| git_alone(&repo, &["apply", "--binary", "-"], Some(patch)))
     .map_err(|reason| tr!(arena_conflict, reason = reason))?;
-    Ok(taking.files.len())
+    Ok(taking)
 }
 
 /// A repository to try worktrees on, for this module's tests and the panes'.
@@ -1925,7 +2024,10 @@ mod tests {
         assert_eq!(shown.files, ["a.txt", "b.txt", "run.sh"]);
         assert_eq!(shown.executable, ["run.sh"], "said before it is taken");
         assert_eq!(
-            apply(&tree, &mirrored.start, &written(&tree).unwrap(), &head_then).unwrap(),
+            apply(&tree, &mirrored.start, &written(&tree).unwrap(), &head_then)
+                .unwrap()
+                .files
+                .len(),
             3
         );
         assert_eq!(read(top.join("a.txt")), "one changed\nand more\n");
@@ -1946,6 +2048,56 @@ mod tests {
             tr!(arena_head_moved)
         );
         assert!(!home.join(".glut/arena").exists(), "no patch lies anywhere");
+        remove(&tree, true).unwrap();
+        let _ = std::fs::remove_dir_all(top.parent().unwrap());
+    }
+
+    #[test]
+    fn what_a_build_left_is_not_taken_unless_the_repository_keeps_that_kind() {
+        let (home, top) = repo("left-behind");
+        commit(&top, "dist/app.js", "kept\n");
+        let repo = pinned(&top);
+        let head_then = head(&repo).unwrap();
+        let tree = clone_for_arena(&home, &repo, "glut/arena-1").unwrap();
+        let mirrored = mirror(&tree).unwrap();
+        let write = |path: &str, text: &str| {
+            let path = tree.place.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        };
+        // Only what a build left: nothing to take, said so.
+        write("src/__pycache__/a.cpython-313.pyc", "bytes");
+        let shown = taking(&tree, &mirrored.start, None).unwrap();
+        assert!(shown.files.is_empty());
+        assert_eq!(shown.left_out, ["__pycache__ (1 files)", "*.pyc (1 files)"]);
+        // Beside the work: the work is taken, the leftovers stay; a kind the repository keeps (dist) is taken.
+        write("a.txt", "one\nmore\n");
+        write("node_modules/x/index.js", "x");
+        write("dist/app.js", "changed\n");
+        let taken = apply(&tree, &mirrored.start, &written(&tree).unwrap(), &head_then).unwrap();
+        assert_eq!(taken.files, ["a.txt", "dist/app.js"]);
+        assert_eq!(
+            taken.left_out,
+            [
+                "__pycache__ (1 files)",
+                "*.pyc (1 files)",
+                "node_modules (1 files)"
+            ]
+        );
+        assert!(!top.join("src/__pycache__").exists() && !top.join("node_modules").exists());
+        assert_eq!(
+            std::fs::read_to_string(top.join("dist/app.js")).unwrap(),
+            "changed\n"
+        );
+        assert!(left_behind("target", "crates/x/target/debug/a"));
+        assert!(
+            !left_behind("target", "src/target"),
+            "a file named so is no folder"
+        );
+        assert!(
+            left_behind("dist", "Dist/app.js"),
+            "a case the volume folds"
+        );
         remove(&tree, true).unwrap();
         let _ = std::fs::remove_dir_all(top.parent().unwrap());
     }
@@ -1995,7 +2147,10 @@ mod tests {
         // A `HEAD` alone is a file like any other.
         std::fs::write(tree.place.join("HEAD"), "notes\n").unwrap();
         assert_eq!(
-            apply(&tree, &start, &written(&tree).unwrap(), &head_then).unwrap(),
+            apply(&tree, &start, &written(&tree).unwrap(), &head_then)
+                .unwrap()
+                .files
+                .len(),
             1
         );
         remove(&tree, true).unwrap();

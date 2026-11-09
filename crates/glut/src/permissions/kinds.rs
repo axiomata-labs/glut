@@ -50,6 +50,52 @@ const READERS: [&str; 41] = [
     "cksum",
 ];
 
+/// The readers `xargs` may run (#169): each reads and prints whatever words it is handed, since `xargs` adds the
+/// words it reads to the command — a file named `-o out` must not become an option that writes. No `sort`, `find`,
+/// `sed`, `git` or `date`: an option of theirs writes or sets something.
+const XARGS_READERS: [&str; 21] = [
+    "cat",
+    "head",
+    "tail",
+    "wc",
+    "grep",
+    "egrep",
+    "fgrep",
+    "ls",
+    "stat",
+    "du",
+    "md5",
+    "shasum",
+    "sha256sum",
+    "md5sum",
+    "cksum",
+    "basename",
+    "dirname",
+    "realpath",
+    "readlink",
+    "echo",
+    "nl",
+];
+
+/// `xargs`'s options that only split the input or limit a call (#169): alone, or (`-n`, `-L`, `-s`, `-P`, `-d`)
+/// with a value of their own. Not `-I`/`-J`/`-i`/`--replace` (the input could become the program), `-a` (another
+/// input), `-p`/`-o` (the terminal), nor anything unknown.
+const XARGS_FLAGS: [&str; 9] = [
+    "-0",
+    "--null",
+    "-r",
+    "--no-run-if-empty",
+    "-t",
+    "--verbose",
+    "-x",
+    "--exit",
+    "--",
+];
+const XARGS_WITH_VALUE: [&str; 5] = ["-n", "-L", "-s", "-P", "-d"];
+
+/// The most calls `xargs -P` may run at once as a reader: `-P 0` would start as many as it can.
+const XARGS_MOST_PARALLEL: u32 = 16;
+
 /// `find`'s actions that run a program or write a file.
 const FIND_ACTS: [&str; 9] = [
     "-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprint0", "-fprintf", "-fls",
@@ -255,6 +301,106 @@ pub fn reads_only(analysis: &Analysis) -> bool {
             .parts
             .iter()
             .all(|part| part.assignments.is_empty() && reader(&part.words))
+        && names_shown(analysis)
+}
+
+/// Whether every `xargs` reads only names the command shows (#169, security audit 2026-11-10): `xargs` turns what it
+/// reads into the files its reader opens, which no rule and no folder check sees — so only after parts that list
+/// names out of paths they show (`find`, `ls`, `fd`, `git ls-files`, a `sort` of them), never after a file's
+/// contents or words a model typed (`cat list | xargs cat`, `echo /etc/x | xargs cat`).
+fn names_shown(analysis: &Analysis) -> bool {
+    analysis.parts.iter().enumerate().all(|(at, part)| {
+        part.words.first().map(String::as_str) != Some("xargs")
+            // A file redirected in (`xargs cat < list`) hands it its contents as names.
+            || (analysis.reads.is_empty()
+                && analysis.parts[..at].iter().all(|before| lists_names(&before.words)))
+    })
+}
+
+/// Whether a part only lists names of the paths its words show, or sorts such names without naming a file — by an
+/// allowlist of options (security audit 2026-11-10): an option that prints its own text (`find -printf`,
+/// `git ls-files --format`), a link's target (`ls -l`, `find -ls`) or names out of a file (`sort --files0-from`,
+/// `find -files0-from`) would hand `xargs` names nobody judged, and one that follows links lists past them.
+fn lists_names(words: &[String]) -> bool {
+    let Some((first, args)) = words.split_first() else {
+        return false;
+    };
+    // A short-option cluster made of the letters given alone (`-1aR`).
+    let letters = |arg: &str, allowed: &str| {
+        arg.strip_prefix('-').is_some_and(|rest| {
+            !rest.is_empty() && !rest.starts_with('-') && rest.chars().all(|c| allowed.contains(c))
+        })
+    };
+    match first.as_str() {
+        "find" => find_lists(args),
+        "ls" => args
+            .iter()
+            .all(|arg| !arg.starts_with('-') || letters(arg, LS_LETTERS)),
+        "git" => {
+            args.first().map(String::as_str) == Some("ls-files")
+                && args[1..]
+                    .iter()
+                    .all(|arg| !arg.starts_with('-') || LS_FILES_OPTIONS.contains(&arg.as_str()))
+        }
+        "sort" => args.iter().all(|arg| letters(arg, SORT_LETTERS)),
+        _ => false,
+    }
+}
+
+/// `ls`'s options that list names alone: no long listing (it shows a link's target), no following of links.
+const LS_LETTERS: &str = "1aAdRF";
+/// `sort`'s options for names on its input: no file named, no long option (`--files0-from`).
+const SORT_LETTERS: &str = "zurnf";
+/// `git ls-files`'s options that list names alone (no `--format`).
+const LS_FILES_OPTIONS: [&str; 8] = [
+    "-z",
+    "-o",
+    "-c",
+    "-m",
+    "--others",
+    "--cached",
+    "--modified",
+    "--exclude-standard",
+];
+/// `find`'s tests that take a value, and those that stand alone, that only choose among the names it walks.
+const FIND_WITH_VALUE: [&str; 9] = [
+    "-type",
+    "-name",
+    "-iname",
+    "-path",
+    "-ipath",
+    "-maxdepth",
+    "-mindepth",
+    "-newer",
+    "-size",
+];
+const FIND_ALONE: [&str; 11] = [
+    "-prune", "-empty", "-o", "-a", "-not", "!", "-or", "-and", "-print", "-print0", "-true",
+];
+
+/// `find` with start paths first, then only [`FIND_WITH_VALUE`] and [`FIND_ALONE`] (grouping too): no `-printf`,
+/// `-ls`, `-files0-from`, nor `-L`/`-H`/`-follow`.
+fn find_lists(args: &[String]) -> bool {
+    let mut rest = args;
+    while let Some(word) = rest.first() {
+        if word.starts_with('-') || word == "!" || word == "(" {
+            break;
+        }
+        rest = &rest[1..];
+    }
+    while let Some(word) = rest.first() {
+        if FIND_WITH_VALUE.contains(&word.as_str()) {
+            if rest.len() < 2 {
+                return false;
+            }
+            rest = &rest[2..];
+        } else if FIND_ALONE.contains(&word.as_str()) || word == "(" || word == ")" {
+            rest = &rest[1..];
+        } else {
+            return false;
+        }
+    }
+    true
 }
 
 /// Whether one part of a command (its words, assignments apart) only reads: a listed reader without a writing
@@ -263,6 +409,9 @@ pub fn reader(words: &[String]) -> bool {
     let Some(first) = words.first() else {
         return false;
     };
+    if first == "xargs" {
+        return xargs_reads(&words[1..]);
+    }
     // A program named by a path (`./cat`, `target/ls`) may be one the run just wrote: only the one `PATH` finds,
     // named exactly as listed, is a reader.
     if first.contains('/') || is_wrapper(first) {
@@ -309,6 +458,42 @@ pub fn reader(words: &[String]) -> bool {
         "git" => git_reads(words),
         _ => false,
     }
+}
+
+/// `xargs` with options that only split its input, running one of [`XARGS_READERS`] by its plain name (#169):
+/// `find . -type f -print0 | xargs -0 wc -l`.
+fn xargs_reads(args: &[String]) -> bool {
+    let mut rest = args;
+    while let Some(word) = rest.first() {
+        if XARGS_FLAGS.contains(&word.as_str()) {
+            let end = word == "--";
+            rest = &rest[1..];
+            if end {
+                break;
+            }
+        } else if XARGS_WITH_VALUE.contains(&word.as_str()) {
+            let Some(value) = rest.get(1) else {
+                return false;
+            };
+            // A count, or the delimiter: one character, an escape such as `\n`.
+            let count = value.parse::<u32>().ok().filter(|count| *count > 0);
+            let fits = match word.as_str() {
+                "-d" => value.chars().count() <= 2,
+                "-P" => count.is_some_and(|count| count <= XARGS_MOST_PARALLEL),
+                _ => count.is_some(),
+            };
+            if !fits {
+                return false;
+            }
+            rest = &rest[2..];
+        } else if word.starts_with('-') {
+            return false;
+        } else {
+            break;
+        }
+    }
+    rest.first()
+        .is_some_and(|program| XARGS_READERS.contains(&program.as_str()))
 }
 
 /// `sed -n` with scripts made of line numbers and `p` only (`sed -n 200,270p file`): anything else may write (`w`),
@@ -665,6 +850,15 @@ mod tests {
             "git -C crates --no-pager log --oneline",
             "find . -iname \"*handoff*\"",
             "rg -n todo crates",
+            // #169: xargs running a reader that no handed word can turn into a writer.
+            "find . -path ./.git -prune -o -type f -print0 | sort -z | xargs -0 wc -l",
+            "find . -type f -print | xargs cat | wc -l",
+            "ls src | xargs -n 1 wc -l",
+            "ls -1aR src | xargs -n 1 wc -l",
+            "find src \\( -name '*.py' -o -name '*.rs' \\) -not -path './target/*' -print0 | xargs -0 wc -l",
+            "git ls-files -z --others --exclude-standard | sort -z | xargs -0 wc -l",
+            "git ls-files | xargs -n 1 -P 4 grep -l todo",
+            "find src -name '*.py' -print0 | xargs -0 -r -- head -3",
         ] {
             assert!(reads_only(&analyze(command)), "{command}");
         }
@@ -680,7 +874,39 @@ mod tests {
             "git branch -D old",
             "rg --pre=./run x",
             "cat $(which rm)",
-            "xargs grep x",
+            "xargs sort -o out",
+            "xargs -I x grep x",
+            "xargs -J x cat x",
+            "xargs -a list cat",
+            "xargs -p cat",
+            "xargs sh -c ls",
+            "xargs rm",
+            "xargs ./cat",
+            "xargs find . -delete",
+            "xargs git diff",
+            "xargs -n x cat",
+            "xargs -0n1 cat",
+            "xargs",
+            "xargs cat > f",
+            "xargs -P 0 cat",
+            "xargs -n 0 cat",
+            // Names out of a file's contents or typed words: no rule or folder check sees them (audit 2026-11-10).
+            "cat list.txt | xargs cat",
+            "echo xetcxpasswd | tr x '\\057' | xargs cat",
+            "printf /etc/hosts | xargs cat",
+            "sort list.txt | xargs cat",
+            "find . -type f | grep secret | xargs cat",
+            "xargs cat < list.txt",
+            // Listers that print text of their own, a link's target or names out of a file (audit 2026-11-10).
+            "find . -maxdepth 0 -printf '/etc/hosts\\n' | xargs cat",
+            "find . -ls | xargs cat",
+            "find -L . -type f | xargs cat",
+            "find . -files0-from list | xargs cat",
+            "fd --format /etc/hosts | xargs cat",
+            "git ls-files --format=/etc/hosts | xargs cat",
+            "sort --files0-from=data.list | xargs cat",
+            "ls -l | xargs cat",
+            "ls -L | xargs cat",
             "X=1 ls",
             "bash -c ls",
             "cargo test",
