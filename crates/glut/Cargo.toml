@@ -1,6 +1,6 @@
 [package]
 name = "glut"
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 license.workspace = true
 description = "A coding-agent harness as a library: a tool-calling loop over OpenAI-compatible, Anthropic and Responses APIs, with guarded file tools, every command in an OS sandbox, a permission gate and a network proxy."

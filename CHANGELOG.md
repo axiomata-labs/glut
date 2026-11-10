@@ -5,6 +5,8 @@ follow [Semantic Versioning](https://semver.org/) — while Glut is at 0.x, a mi
 
 ## [Unreleased]
 
+## [0.1.1] — 2026-11-10
+
 ### Added
 
 - **What is new, and when a newer Glut is out**: after an update the welcome shows once what is new since the
@@ -82,4 +84,5 @@ its own; this release brings together:
   over sessions, images, export, eight languages, a screen-reader mode.
 - **Editors**: plugins for Neovim, VS Code and JetBrains, and the Agent Client Protocol.
 
+[0.1.1]: https://github.com/axiomata-labs/glut/releases/tag/v0.1.1
 [0.1.0]: https://github.com/axiomata-labs/glut/releases/tag/v0.1.0
