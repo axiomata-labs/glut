@@ -149,7 +149,8 @@ dl.forms dd, dl.commands dd { margin-left: 1.5em; color: var(--dim); }
 pre.example { border-left: 2px solid var(--ember); }
 footer.page { margin-top: 4em; font-size: 0.85rem; color: var(--dim); }
 @media (max-width: 52em) {
-  .frame { grid-template-columns: 1fr; }
+  /* minmax(0, …): a wide code block or table scrolls inside the column instead of widening the page. */
+  .frame { grid-template-columns: minmax(0, 1fr); }
   .side { position: static; }
 }
 
