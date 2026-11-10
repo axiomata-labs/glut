@@ -244,6 +244,12 @@ scripts/install-dev.sh           # glut for every terminal: ~/.cargo/bin, linked
   `judge_all`, a snapshot before), none outside that folder; the copy's commands never read the lead's repository
   (`Toolbox::hide`, the read-deny of a confinement without the rest). A lead that plays a role has helpers playing it;
   a loop's pane leads none.
+- **Glut looks for a newer Glut, it never updates itself** (#158/#159, `crates/glut-tui/src/version.rs`, `news.rs`):
+  only `glut` on its own (`version::on_its_own`, never a host embedding it), at most once a day (the attempt kept
+  before it is made) from `glut-ai.com/latest.txt` — only an `x.y.z` from there reaches the screen —, never in a plan,
+  a loop's round, `glut run`, `glut acp` or the arena, and not where the owner said no (`/update off`,
+  `updateCheck`). The site's deploy writes `latest.txt` only for a release GitHub holds whole. Every release from
+  0.1.1 on has its highlights in `news.rs` in all eight languages (a test reads the changelog).
 - **Glut cleans its own `~/.glut`** (T82, `crates/glut-tui/src/clean.rs`, `glut::clean`): once a day at the start, by
   the owner's terms in `~/.glut/clean.json` (written only by `glut clean keep` / `/clean keep`). A new kind of data
   Glut keeps there gets its line in the report (`clean::ITEMS`, `--json` is read by Axiomata — add, never rename) and

@@ -325,6 +325,11 @@ pub fn build(repo: &Path, out: &Path) -> Result<usize, String> {
     }
     copy_tree(&repo.join("site/static"), &out.join("static"))?;
     copy_recordings(&repo.join("site/recordings"), &out.join("recordings"))?;
+    // #145: `curl -fsSL https://glut-ai.com/install.sh | sh` — the script itself; the binaries stay on GitHub.
+    write(
+        &out.join("install.sh"),
+        &read(&repo.join("scripts/install.sh"))?,
+    )?;
     // Glimm on the site is the terminal's Glimm: its frames and colours read from the program's own sources.
     write(&out.join("static/glimm.js"), &glimm::script(repo)?)?;
     write(&out.join("static/glimm.svg"), &glimm::svg(repo)?)?;

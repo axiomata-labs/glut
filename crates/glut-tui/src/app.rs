@@ -516,6 +516,11 @@ pub struct App {
     held_shown: bool,
     /// Glut's very first start (TUI9c): the welcome shows the first keys until a message or a command goes.
     pub first_start: bool,
+    /// What is new since the version the owner last saw (#158), newest first: shown on the welcome until a message
+    /// or a command goes.
+    pub news: Vec<&'static crate::news::Entry>,
+    /// The welcome drew them: only then they count as seen (`glut -c` opens a session, which has no welcome).
+    pub news_shown: bool,
     /// The last note of a switch gone round (`⇧⇥` the mode, `⌃T` the thinking), and how long the stream was after it:
     /// the next of the same switch replaces it while it is still the last block.
     switch_note: Option<(Switch, usize)>,
@@ -609,6 +614,10 @@ impl App {
         // Only a Glut that never kept a preference starts for the first time (TUI9c): an owner of long standing is
         // not welcomed afresh.
         let first_start = !Prefs::kept(&parts.home);
+        let news = crate::version::unseen(
+            crate::version::Kept::load(&parts.home).seen.as_deref(),
+            first_start,
+        );
         let prefs = Prefs::load(&parts.home);
         let panel = prefs.panel;
         let vi = prefs.vi.unwrap_or(false);
@@ -817,6 +826,8 @@ impl App {
             picture_view: None,
             switch_note: None,
             first_start,
+            news,
+            news_shown: false,
             seen_state: None,
             seen_turns: 0,
             waiting_models: Vec::new(),
@@ -1874,6 +1885,48 @@ impl App {
         } else if answered && !self.queue.is_empty() {
             let next = self.queue.remove(0);
             self.send(next);
+        }
+    }
+
+    /// `/update` (#159): `on|off` switches the daily look for a newer Glut, alone it says what there is and how to
+    /// update this one.
+    fn update_command(&mut self, rest: &str) {
+        match rest {
+            "on" | "off" => {
+                let on = rest == "on";
+                match prefs::set_update_check(&self.parts.home, on) {
+                    Ok(()) if on => {
+                        crate::version::auto(&self.parts.home, true);
+                        self.say(tr!(update_on).to_owned());
+                    }
+                    Ok(()) => {
+                        crate::version::forget_available();
+                        self.say(tr!(update_off).to_owned());
+                    }
+                    Err(reason) => self.transcript.note(reason, Tone::Fault),
+                }
+            }
+            _ => {
+                let state = if crate::version::allowed(&self.parts.home, self.parts.update_check) {
+                    "on"
+                } else {
+                    "off"
+                };
+                let mut said = match crate::version::available() {
+                    Some(version) => tr!(
+                        update_available,
+                        version = version,
+                        commands = crate::version::update_commands(
+                            crate::version::running_exe().as_deref()
+                        )
+                        .join("  ·  ")
+                    ),
+                    None => tr!(update_current, version = crate::version::CURRENT),
+                };
+                said.push('\n');
+                said.push_str(&tr!(update_now, state = state));
+                self.tell(said);
+            }
         }
     }
 
@@ -3756,6 +3809,17 @@ impl App {
             if let Err(reason) = prefs::set_welcomed(&self.parts.home) {
                 self.transcript.note(reason, Tone::Fault);
             }
+            // A first start's news is this build's: none to show after it (#158).
+            let _ = crate::version::mark_seen(&self.parts.home);
+        }
+        // The news were read with the welcome: once (#158).
+        if !self.news.is_empty() && !text.trim().is_empty() {
+            self.news.clear();
+            if self.news_shown
+                && let Err(reason) = crate::version::mark_seen(&self.parts.home)
+            {
+                self.transcript.note(reason, Tone::Fault);
+            }
         }
         // T58: asked once per message; the answer counts for this submit only, whatever stops it.
         let answer = self.secrets_answer.take();
@@ -4422,6 +4486,8 @@ impl App {
                 },
                 _ => self.show_lsp(),
             },
+            "update" => self.update_command(rest),
+            "news" => self.tell(crate::version::news_text()),
             "nudge" => match crate::said::nudge(&self.parts, rest) {
                 Ok(said) if matches!(rest, "on" | "off") => self.say(said),
                 Ok(said) => self.tell(said),
@@ -13027,8 +13093,9 @@ pub(crate) mod tests {
         app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(app.input.text(), "/clear ", "a lone slash runs nothing");
         app.input.clear();
-        // `/session` is part of `/sessions`' name now (T83): a word only of what commands do is `new`.
-        app.input.insert_text("/new");
+        // `/session` is part of `/sessions`' name now (T83), `/new` of `/news`' (#158): a word only of what commands do
+        // is `start`.
+        app.input.insert_text("/start");
         app.on_terminal(key(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(
             app.input.text(),

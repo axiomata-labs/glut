@@ -27,7 +27,7 @@ const MARKER: &str = "cleaned";
 /// The lock one pass at a time holds, in `~/.glut`: two windows starting together sweep once.
 const LOCK: &str = "clean.lock";
 /// The kinds a report lists, in its order: the fixed words of `--json`.
-pub const ITEMS: [&str; 10] = [
+pub const ITEMS: [&str; 11] = [
     "snapshots",
     "journals",
     "sessions",
@@ -37,6 +37,7 @@ pub const ITEMS: [&str; 10] = [
     "lean",
     "quarantine",
     "arena",
+    "version",
     "other",
 ];
 /// A bench task's start repository left behind (a window closed mid-task) goes after this long.
@@ -90,8 +91,13 @@ pub fn clean(home: &Path, keep: &Keep, dry: bool) -> Report {
     quarantine.bytes = glut::clean::size_of(&held);
     quarantine.count = glut::clean::entries_in(&held);
     let arena = arena(home, dry);
+    // #158/#159: what version's news were seen and which is newest — a few bytes, never removed.
+    let kept = glut_dir.join(crate::version::FILE);
+    let mut version = Tally::new("version", None);
+    version.bytes = std::fs::metadata(&kept).map_or(0, |meta| meta.len());
+    version.count = u64::from(kept.is_file());
     let mut items = vec![
-        snapshots, journals, sessions, results, images, exports, lean, quarantine, arena,
+        snapshots, journals, sessions, results, images, exports, lean, quarantine, arena, version,
     ];
     let mut other = Tally::new("other", None);
     other.bytes = total_bytes.saturating_sub(items.iter().map(|item| item.bytes).sum());
@@ -745,6 +751,14 @@ mod tests {
             "a dry run removes nothing"
         );
         assert_eq!(counted.items.len(), ITEMS.len());
+        for lang in glut::lang::Lang::ALL {
+            assert_eq!(
+                crate::texts::of(lang).clean_names.len(),
+                ITEMS.len(),
+                "{}: a name for every kind, in order",
+                lang.code()
+            );
+        }
 
         let done = clean(&home, &Keep::default(), false);
         assert!(done.freeable_bytes > 0);

@@ -613,6 +613,22 @@ glut::catalog! {
         steps_set: &'static str,
         /// `/maxsteps` with no number from 1 to `{most}`.
         steps_bad: &'static str,
+        /// `/update` alone (#159): whether Glut looks for a newer version, `{state}` on or off.
+        update_now: &'static str,
+        /// `/update on`.
+        update_on: &'static str,
+        /// `/update off`.
+        update_off: &'static str,
+        /// `/update` while a newer Glut is out: `{version}`, `{commands}` the ways to update this one.
+        update_available: &'static str,
+        /// `/update` while this Glut is the newest known: `{version}`.
+        update_current: &'static str,
+        /// Above the highlights of a version (#158): `{version}`.
+        news_title: &'static str,
+        /// Under the highlights after an update.
+        news_again: &'static str,
+        /// `/news` where this version has no highlights.
+        news_none: &'static str,
         /// `/nudge` alone: `{nudge}` on or off.
         nudge_now: &'static str,
         /// `/nudge on` (T73).

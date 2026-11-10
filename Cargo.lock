@@ -900,6 +900,7 @@ dependencies = [
  "glut",
  "pulldown-cmark",
  "ratatui",
+ "reqwest",
  "rustix",
  "serde",
  "serde_json",

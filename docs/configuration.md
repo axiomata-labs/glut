@@ -114,6 +114,7 @@ may be at most 256 KiB and hold at most 1,000 rules.
   "notify": { "when": "asks", "after": 20 },
   "loop": { "rounds": 50, "maxUsd": 5, "maxTokens": 5000000 },
   "nudge": true,
+  "updateCheck": true,
   "lsp": true,
   "maxTurns": 100
 }
@@ -138,6 +139,7 @@ may be at most 256 KiB and hold at most 1,000 rules.
 | `loop.maxUsd` | number > 0 | 5 | Most a loop's session may cost, in USD | `/loop budget` |
 | `loop.maxTokens` | integer 1–10⁹ | 5,000,000 | Most tokens a loop on a subscription may use | `/loop tokens` |
 | `nudge` | boolean | `true` | Ask the model once to go on when it stops with its task list open | `/nudge` |
+| `updateCheck` | boolean | `true` | Once a day the terminal UI reads the newest version's number from `https://glut-ai.com/latest.txt` and shows a newer one in the footer; never in a plan, a loop's round, `glut run`, `glut acp` or the arena | `/update` |
 | `lsp` | boolean | `true` | Language servers: errors after an edit and the `lsp` tool | `/lsp` |
 | `maxTurns` | integer 1–1000 | 100 | Most model turns a run (or a turn of the UI) takes | `/maxsteps` |
 
@@ -574,6 +576,7 @@ know are kept as they are.
 | `motion` | string | `full` | `full`, `calm` or `off` | `/motion` |
 | `steps` | integer | settings, else 100 | Most steps a turn takes | `/maxsteps` |
 | `nudge` | boolean | settings, else `true` | Ask the model once to go on | `/nudge` |
+| `updateCheck` | boolean | settings, else `true` | Look once a day for a newer Glut | `/update` |
 | `lsp` | boolean | settings, else `true` | Language servers serve the turns | `/lsp` |
 | `reader` | boolean | `false` | Screen reader mode | `/reader`, `glut --reader` |
 | `theme` | string | `glut` | `glut` or an app theme's name | `/theme` |
@@ -768,6 +771,7 @@ These are Glut's own records. You do not configure them; `glut clean` and `/clea
 | `runs/` | Journals of runs (`<id>.jsonl`), for `glut resume` |
 | `snapshots/` | Snapshots taken before every change, for `glut undo` and `/steps` |
 | `lean.jsonl` | What output compaction saved, for `glut gain` |
+| `version.json` | The version whose news you saw, the newest one Glut heard of and when it last asked (`/news`, `/update`) |
 | `images/` | Images sent to a model, scaled and kept once by content hash |
 | `exports/` | Sessions written out by `/export` |
 | `handoffs/` | Notes written by `/handoff write` |

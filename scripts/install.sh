@@ -1,9 +1,10 @@
 #!/bin/sh
 # Installs glut from a release: the program for this system, checked against the release's SHA-256 checksums, into
-# ~/.local/bin (no password asked). It is the release's `install.sh`, the same file at that release's tag:
+# ~/.local/bin (no password asked). glut-ai.com serves this file, and every release carries it beside its binaries:
 #
+#   curl -fsSL https://glut-ai.com/install.sh | sh
+#   curl -fsSL https://glut-ai.com/install.sh | sh -s -- --version 0.1.0 --to ~/bin
 #   curl -fsSL https://github.com/axiomata-labs/glut/releases/latest/download/install.sh | sh
-#   curl -fsSL https://github.com/axiomata-labs/glut/releases/latest/download/install.sh | sh -s -- --version 0.1.0 --to ~/bin
 #
 # POSIX sh on purpose: it is piped into whatever `sh` the system has.
 set -eu

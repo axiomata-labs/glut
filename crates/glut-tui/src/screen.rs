@@ -89,6 +89,8 @@ pub async fn standalone_switching(
     if let Ok(home) = glut::permissions::settings::home_dir() {
         let _ = crate::clean::auto(&home, |_| {});
     }
+    // #159: only Glut on its own looks for a newer Glut — a host that embeds it updates it its own way.
+    crate::version::on_its_own();
     run_switching(launch, Arc::new(crate::Standalone), open, |_| {}).await
 }
 
@@ -186,6 +188,8 @@ async fn run_switching(
         (None, Some(prompt)) => app.send(prompt),
         (None, None) => {}
     }
+    // #159: once a day, in the background, whether a newer Glut is out — the owner's terminal UI only.
+    crate::version::auto(&app.parts.home, app.parts.update_check);
     let (mut panes, mut inlets) = Panes::new(app, from_session, host.may_split(), servers);
     // `glut -c` goes on with the folder's newest session, and offers the panes kept with it (TUI9e) — not when a
     // first message, a pick or a lost turn has the first word.

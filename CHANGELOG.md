@@ -7,6 +7,13 @@ follow [Semantic Versioning](https://semver.org/) — while Glut is at 0.x, a mi
 
 ### Added
 
+- **What is new, and when a newer Glut is out**: after an update the welcome shows once what is new since the
+  version you saw last (`/news` shows it again), in your language; once a day the terminal UI reads the newest
+  version's number from `glut-ai.com/latest.txt` and shows a newer one quietly in the footer (`↑ 0.1.2`) — `/update`
+  says the command that updates this Glut by how it was installed, `/update off` or `"updateCheck": false` stops the
+  look. Never in a plan, a loop's round, `glut run`, `glut acp` or the arena; Glut never updates itself.
+- **The install script on glut-ai.com**: `curl -fsSL https://glut-ai.com/install.sh | sh`; the binaries still come
+  from GitHub's releases, and the script beside each release stays as the second way.
 - **Who is here**: the models get a tool `who` beside `tell` — every other agent of this window and of the other Glut
   windows, with its role, model, mode, folder, branch, whether it is busy, and the line it set for what it works on
   (its own words). A model sets its own line with `who {"doing": …}`.
@@ -47,6 +54,8 @@ follow [Semantic Versioning](https://semver.org/) — while Glut is at 0.x, a mi
   build left (`__pycache__`, `*.pyc`, `node_modules`, `target`, `.pytest_cache`, `dist`) where the repository keeps
   nothing of that kind, and says so; and two agents on the same branch of one working tree hear of each other only
   once one of them changed a file there.
+- New public fields a host building these structs must fill: `Settings::update_check`, `Loaded::update_check` and
+  `BuiltGate::update_check` (the owner's `updateCheck`); `glut clean --json` lists a new item `version`.
 - New public items a host matching or building them exhaustively must add: `RunConfig::notes`,
   `RunConfig::team_tools` and `glut::TEAM_TOOLS`, and
   `glut::team::NoteKind::Overlap` in the new `glut::team`.

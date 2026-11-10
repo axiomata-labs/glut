@@ -95,6 +95,10 @@ pub struct Prefs {
     /// Whether Glut asks the model once to go on (T73, `/nudge`); `None`: `nudge` of the settings, else on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nudge: Option<bool>,
+    /// Whether Glut looks once a day for a newer version (#159, `/update`); `None`: `updateCheck` of the settings,
+    /// else on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update_check: Option<bool>,
     /// Whether the language servers serve the turns (T62, `/lsp`); `None`: `lsp` of the settings, else on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lsp: Option<bool>,
@@ -385,6 +389,17 @@ pub fn set_motion(home: &Path, motion: crate::motion::Motion) -> Result<(), Stri
 pub fn set_steps(home: &Path, steps: u32) -> Result<(), String> {
     let mut prefs = Prefs::read(home)?;
     prefs.steps = Some(steps);
+    prefs.save(home)
+}
+
+/// Keeps whether Glut looks once a day for a newer version (`/update`, #159).
+///
+/// # Errors
+///
+/// A message when the file cannot be read (it is not written over) or written.
+pub fn set_update_check(home: &Path, on: bool) -> Result<(), String> {
+    let mut prefs = Prefs::read(home)?;
+    prefs.update_check = Some(on);
     prefs.save(home)
 }
 

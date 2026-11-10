@@ -2295,6 +2295,8 @@ pub struct BuiltGate {
     pub loops: settings::LoopSection,
     /// Whether runs ask their model once to go on (T73).
     pub nudge: bool,
+    /// The owner's `updateCheck` (#159), else on.
+    pub update_check: bool,
     /// Whether the language servers serve the runs (T62).
     pub lsp: bool,
     /// The owner's `maxTurns` (T73b).
@@ -2393,6 +2395,7 @@ pub fn build_gate(
         notify: loaded.notify,
         loops: loaded.loops,
         nudge: loaded.nudge,
+        update_check: loaded.update_check,
         lsp: loaded.lsp,
         max_turns: loaded.max_turns,
     })
@@ -3522,6 +3525,7 @@ mod tests {
             notify: settings::NotifySection::default(),
             loops: settings::LoopSection::default(),
             nudge: true,
+            update_check: true,
             lsp: true,
             max_turns: None,
         };

@@ -26,7 +26,7 @@
 </p>
 
 ```sh
-curl -fsSL https://github.com/axiomata-labs/glut/releases/latest/download/install.sh | sh
+curl -fsSL https://glut-ai.com/install.sh | sh
 ```
 
 ![A real run: asked to read .env and push, Glut fixes the failing tests; the sandbox refuses the .env read, the gate stops the push, and every judgement shows in the side panel](docs/images/demo.gif)
@@ -97,7 +97,7 @@ sources, and where the others are ahead.
 
 ```sh
 # macOS and Linux, a prebuilt program (checksums verified):
-curl -fsSL https://github.com/axiomata-labs/glut/releases/latest/download/install.sh | sh
+curl -fsSL https://glut-ai.com/install.sh | sh
 
 # Homebrew:
 brew install axiomata-labs/tap/glut

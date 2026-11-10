@@ -147,6 +147,9 @@ struct File {
     /// owner's only.
     #[serde(default)]
     nudge: Option<bool>,
+    /// Whether the terminal UI looks once a day for a newer Glut (#159); the owner's only.
+    #[serde(default, rename = "updateCheck")]
+    update_check: Option<bool>,
     /// Whether the language servers serve the runs (T62): an edit's errors and the `lsp` tool; `false` turns both
     /// off. The owner's only.
     #[serde(default)]
@@ -359,6 +362,8 @@ pub struct Settings {
     pub loops: Option<LoopSection>,
     /// `nudge` as written (T73); only the owner's is read.
     pub nudge: Option<bool>,
+    /// `updateCheck` as written (#159); only the owner's is read.
+    pub update_check: Option<bool>,
     /// `lsp` as written (T62); only the owner's is read.
     pub lsp: Option<bool>,
     /// `maxTurns` as written (T73b); only the owner's is read.
@@ -490,6 +495,7 @@ fn settings_of(
         notify: file.notify,
         loops: file.loops,
         nudge: file.nudge,
+        update_check: file.update_check,
         lsp: file.lsp,
         max_turns: file.max_turns,
     })
@@ -529,6 +535,8 @@ pub struct Loaded {
     pub loops: LoopSection,
     /// Whether runs ask their model once to go on (T73): the owner's `nudge`, else on.
     pub nudge: bool,
+    /// Whether the terminal UI looks once a day for a newer Glut (#159): the owner's `updateCheck`, else on.
+    pub update_check: bool,
     /// Whether the language servers serve the runs (T62): the owner's `lsp`, else on.
     pub lsp: bool,
     /// The owner's `maxTurns` (T73b); `None`: the default.
@@ -729,6 +737,7 @@ pub fn load(home: &Path, project: &Path, trusted: bool) -> Result<Loaded, Harnes
             .and_then(|section| section.auto)
             .unwrap_or(true),
         nudge: user.nudge.unwrap_or(true),
+        update_check: user.update_check.unwrap_or(true),
         lsp: user.lsp.unwrap_or(true),
         max_turns: user.max_turns,
         context_windows: user.context_window,

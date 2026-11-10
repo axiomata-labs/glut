@@ -35,6 +35,8 @@ tokio = { workspace = true, features = ["net", "io-std"] }
 clap.workspace = true
 serde.workspace = true
 chrono.workspace = true
+# Once a day the newest version's number from glut-ai.com (#159): the same client and TLS as the library's.
+reqwest = { workspace = true, features = ["rustls-tls", "rustls-tls-native-roots"] }
 serde_json.workspace = true
 unicode-width.workspace = true
 # `html` for `/export`'s page (T54): its writer and escaping, one small crate of the same authors more.

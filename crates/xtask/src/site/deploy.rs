@@ -58,6 +58,11 @@ pub fn deploy(repo: &Path, out: &Path, key: Option<PathBuf>) -> Result<(), Strin
         return Err(format!("no deploy key at {}", key.display()));
     }
     check(repo, out)?;
+    // #159: what Glut's update notice reads — only a release GitHub holds whole.
+    let latest = latest_release()?;
+    std::fs::write(out.join("latest.txt"), format!("{latest}\n"))
+        .map_err(|err| format!("cannot write latest.txt: {err}"))?;
+    println!("site: latest.txt says {latest}");
     // Packed whole before the server hears of it: a tar that dies halfway must never reach the server as a site cut
     // short that still unpacks.
     let archive = std::env::temp_dir().join(format!("glut-site-{}.tar.gz", std::process::id()));
@@ -87,6 +92,63 @@ pub fn deploy(repo: &Path, out: &Path, key: Option<PathBuf>) -> Result<(), Strin
         ));
     }
     Ok(())
+}
+
+/// The repository whose releases the binaries come from.
+const RELEASES: &str = "axiomata-labs/glut";
+/// What a release must hold before Glut may name it: every binary `install.sh` fetches, the script and the sums.
+const RELEASE_ASSETS: [&str; 6] = [
+    "glut-aarch64-apple-darwin.tar.gz",
+    "glut-x86_64-apple-darwin.tar.gz",
+    "glut-aarch64-unknown-linux-musl.tar.gz",
+    "glut-x86_64-unknown-linux-musl.tar.gz",
+    "install.sh",
+    "SHA256SUMS",
+];
+
+/// The newest release on GitHub (no draft, no pre-release) that holds every one of [`RELEASE_ASSETS`], as a bare
+/// version (`0.1.1`), through `gh`. A deploy that cannot tell stops: the site never names a version nobody can
+/// install, and never goes without the file the update notice reads.
+fn latest_release() -> Result<String, String> {
+    let out = Command::new("gh")
+        .args([
+            "api",
+            &format!("repos/{RELEASES}/releases/latest"),
+            "--jq",
+            "[.tag_name, (.assets | map(.name) | join(\" \"))] | join(\"\\n\")",
+        ])
+        .output()
+        .map_err(|err| format!("cannot start gh to read the latest release: {err}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "gh could not read the latest release: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let (tag, assets) = text.trim().split_once('\n').unwrap_or((text.trim(), ""));
+    released(tag, &assets.split(' ').collect::<Vec<_>>())
+}
+
+/// The version of release `tag` holding `assets`, when it holds every one of [`RELEASE_ASSETS`].
+fn released(tag: &str, assets: &[&str]) -> Result<String, String> {
+    let version = tag.strip_prefix('v').unwrap_or(tag);
+    let parts: Vec<&str> = version.split('.').collect();
+    if parts.len() != 3 || parts.iter().any(|part| part.parse::<u64>().is_err()) {
+        return Err(format!("the latest release's tag {tag:?} is no version"));
+    }
+    let missing: Vec<&str> = RELEASE_ASSETS
+        .iter()
+        .filter(|asset| !assets.contains(asset))
+        .copied()
+        .collect();
+    if !missing.is_empty() {
+        return Err(format!(
+            "release {tag} lacks {}: not deployed — wait until its build finished",
+            missing.join(", ")
+        ));
+    }
+    Ok(version.to_owned())
 }
 
 /// `tar` packing `out`'s contents into `archive`, without the build's own marker.
@@ -132,6 +194,18 @@ fn ssh_args(key: &Path, known_hosts: &Path) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_release_holding_every_binary_is_named() {
+        assert_eq!(released("v0.1.1", &RELEASE_ASSETS).unwrap(), "0.1.1");
+        let err = released("v0.1.1", &RELEASE_ASSETS[..4]).unwrap_err();
+        assert!(
+            err.contains("install.sh") && err.contains("SHA256SUMS"),
+            "{err}"
+        );
+        assert!(released("nightly", &RELEASE_ASSETS).is_err());
+        assert!(released("v0.2.0-rc1", &RELEASE_ASSETS).is_err());
+    }
 
     #[test]
     fn the_server_is_reached_with_the_key_and_the_pinned_host_keys_alone() {

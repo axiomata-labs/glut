@@ -102,7 +102,7 @@ const fn command(
 }
 
 /// Every command, grouped by topic in [`Topic::ALL`]'s order, the most used first inside a topic.
-pub const COMMANDS: [Command; 69] = [
+pub const COMMANDS: [Command; 71] = [
     command(Topic::Session, "clear", "", "start a new session"),
     command(
         Topic::Session,
@@ -472,6 +472,19 @@ pub const COMMANDS: [Command; 69] = [
         "on|off",
         "whether Glut asks the model to go on at a turn's end, to keep to its task list, and to write one when it \
          works without one",
+    ),
+    command(
+        Topic::Settings,
+        "update",
+        "[on|off]",
+        "whether Glut looks once a day for a newer version (at glut-ai.com) and shows it in the footer — /update \
+         alone shows the command that updates this Glut",
+    ),
+    command(
+        Topic::Settings,
+        "news",
+        "",
+        "what is new in this version, as shown once after an update",
     ),
     command(
         Topic::Settings,

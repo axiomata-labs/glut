@@ -274,6 +274,8 @@ pub struct Parts {
     /// Glut's own word for the model from the screen (#142: another agent changed the same file), taken before its
     /// next model call.
     pub glut_notes: glut::Inbox,
+    /// The owner's `updateCheck` (#159): whether the screen looks once a day for a newer Glut.
+    pub update_check: bool,
 }
 
 /// The model the session talks to now.
@@ -596,6 +598,7 @@ pub async fn build(
         pane_link,
         loop_link,
         glut_notes: glut::Inbox::default(),
+        update_check: built.update_check,
     };
     let engine = match launch.engine {
         EngineChoice::Providers { provider, model } => {
@@ -1729,6 +1732,7 @@ pub fn for_tests() -> (Parts, Engine) {
         pane_link: Arc::new(crate::tell::Link::default()),
         loop_link: Arc::new(crate::looping::Link::default()),
         glut_notes: glut::Inbox::default(),
+        update_check: false,
     };
     let engine = Engine {
         provider: "test".into(),

@@ -1044,6 +1044,35 @@ fn draw_welcome(frame: &mut Frame, app: &mut App, area: Rect) {
             )));
         }
     }
+    // #158: once after an update, what is new — until the first message or command.
+    // Wrapped to the screen, each in the language read now; drawn, they count as seen with the next message.
+    let width = usize::from(area.width.saturating_sub(4)).max(20);
+    for entry in app.news.clone() {
+        lines.push(Line::default());
+        lines.push(Line::from(Span::styled(
+            tr!(news_title, version = entry.version),
+            theme::strong(),
+        )));
+        for line in crate::news::lines(entry, glut::lang::current()) {
+            for (at, part) in crate::transcript::wrap(line, width.saturating_sub(2))
+                .into_iter()
+                .enumerate()
+            {
+                let lead = if at == 0 { "• " } else { "  " };
+                lines.push(Line::from(Span::styled(
+                    format!("{lead}{part}"),
+                    theme::quiet(),
+                )));
+            }
+        }
+        app.news_shown = true;
+    }
+    if !app.news.is_empty() {
+        lines.push(Line::from(Span::styled(
+            crate::motion::spoken(tr!(news_again)).into_owned(),
+            theme::glow(),
+        )));
+    }
     // T44: started where no session was kept yet, the newest projects — `/projects` picks one, no key of its own.
     let home = app.parts.home.clone();
     let now = chrono::Utc::now();
@@ -1755,6 +1784,10 @@ fn draw_keys(frame: &mut Frame, app: &App, area: Rect, branch: Option<String>, c
             theme::c().syntax.keyword,
             3,
         ));
+    }
+    // #159: a newer Glut is out — quiet, and the first to go where the line is short.
+    if let Some(version) = crate::version::available() {
+        segments.push(Segment::hued(format!("↑ {version}"), theme::c().quiet, 4));
     }
     let scopes = app
         .ask
