@@ -157,7 +157,10 @@ jobs:
         working-directory: glut
         # The runners' key of its own is `restrict`ed on the server (no forwarding, no terminal); the server's host keys
         # are pinned in site/deploy/known_hosts. A site with a broken link is never sent: the deploy checks first. Built
-        # by the step above already, so no build script runs while the key lies there.
+        # by the step above already, so no build script runs while the key lies there. `gh` reads the latest release
+        # for latest.txt with the run's own read-only token.
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: cargo run -p xtask --locked -- site deploy --out "$RUNNER_TEMP/site" --key "${{ steps.deploy-key.outputs.key }}"
       - if: always() && steps.deploy-key.outputs.key != ''
         run: rm -f "${{ steps.deploy-key.outputs.key }}"
