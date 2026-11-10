@@ -1785,9 +1785,13 @@ fn draw_keys(frame: &mut Frame, app: &App, area: Rect, branch: Option<String>, c
             3,
         ));
     }
-    // #159: a newer Glut is out — quiet, and the first to go where the line is short.
+    // #159: a newer Glut is out — marked, so it is seen, and kept longer than the branch where the line is short.
     if let Some(version) = crate::version::available() {
-        segments.push(Segment::hued(format!("↑ {version}"), theme::c().quiet, 4));
+        segments.push(Segment::marked(
+            tr!(update_footer, version = version),
+            theme::c().glow,
+            2,
+        ));
     }
     let scopes = app
         .ask

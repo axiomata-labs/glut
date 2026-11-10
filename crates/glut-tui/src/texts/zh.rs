@@ -2101,6 +2101,7 @@ pub const TEXTS: Texts = Texts {
     ask_keychain: "使用钥匙串",
     ask_unsandboxed: "沙箱之外",
     ask_unsandboxed_line: "在没有沙箱的情况下运行：除了你的回答，没有任何东西约束它 — 最多允许一次",
+    update_footer: "↑ {version} 可更新",
     keychain_footer: "🔑 开放",
     ide_connected: "已连接到 {ide} — 你在那里的工作会随消息一起发送",
     ide_rename_here: "此次重命名涉及的文件多于编辑器能以 diff 显示的数量——请在 Glut 中回答",

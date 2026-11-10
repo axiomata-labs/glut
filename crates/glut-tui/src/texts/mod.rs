@@ -2176,6 +2176,8 @@ glut::catalog! {
         ask_unsandboxed: &'static str,
         /// Under such a command on the card.
         ask_unsandboxed_line: &'static str,
+        /// The footer's note that a newer Glut is out (#159): `{version}`.
+        update_footer: &'static str,
         /// The footer while the Keychain is open to every command.
         keychain_footer: &'static str,
         /// The connection to the owner's editor (T64c, `/ide`).

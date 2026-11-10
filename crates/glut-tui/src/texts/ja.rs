@@ -2205,6 +2205,7 @@ pub const TEXTS: Texts = Texts {
     ask_keychain: "キーチェーン付き",
     ask_unsandboxed: "サンドボックスの外",
     ask_unsandboxed_line: "サンドボックスなしで実行されます：あなたの答え以外に止めるものはありません — 許可は最大1回",
+    update_footer: "↑ {version} 利用可能",
     keychain_footer: "🔑 開",
     ide_connected: "{ide} に接続しました — そこで作業中のものがメッセージに付きます",
     ide_rename_here: "この名前変更はエディタが diff で示せるより多くのファイルに及びます — Glut で答えてください",
