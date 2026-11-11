@@ -747,7 +747,7 @@ impl Model {
     }
 }
 
-/// Glut's name in every model call (`glut/0.1.0`).
+/// Glut's name in every model call (`glut/<version>`).
 const USER_AGENT: &str = concat!("glut/", env!("CARGO_PKG_VERSION"));
 /// The header OpenCode's gateway asks a client to name its session by.
 const OPENCODE_SESSION: &str = "x-opencode-session";

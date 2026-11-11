@@ -6,6 +6,7 @@ project shop
 beside stock
 home fresh
 allow "Bash(python3 *)"
+on "Glut asks" "mcp__stock" key 1
 on "Glut asks" key y
 run glut --provider anthropic --model claude-sonnet-5-5 --lang en
 wait 20 "⏎ send"

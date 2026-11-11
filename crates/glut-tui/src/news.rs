@@ -175,6 +175,23 @@ pub const NEWS: &[Entry] = &[
 mod tests {
     use super::*;
 
+    /// Where the README and the library's page name the version, it is this one: a release that forgets them
+    /// fails here (they said 0.1.0 through 0.1.1).
+    #[test]
+    fn the_readme_and_the_librarys_page_name_this_version() {
+        let version = env!("CARGO_PKG_VERSION");
+        let readme = include_str!("../../../README.md");
+        assert!(
+            readme.contains(&format!("**Status: {version}, early.**")),
+            "README.md's status line names another version than {version}"
+        );
+        let library = include_str!("../../../docs/library.md");
+        assert!(
+            library.contains(&format!("The crate is at version `{version}`")),
+            "docs/library.md names another version than {version}"
+        );
+    }
+
     /// Every release of the changelog from 0.1.1 on has its highlights here, in every language.
     #[test]
     fn every_release_has_its_news_in_every_language() {

@@ -16,7 +16,7 @@
 <div class="wrap">
   <section class="hero">
     <div>
-      <p class="hud"><b>[glut 0.1.0]</b> · written in Rust · macOS · Linux · open source</p>
+      <p class="hud"><b>[glut {{version}}]</b> · written in Rust · macOS · Linux · open source</p>
       <h1 class="display">A coding agent<br>that keeps<br>its hands <em>inside<br>the sandbox.</em></h1>
       <p class="lead"><strong>Glut runs in your terminal, works with whatever model you choose, and runs every command it
         writes in an OS sandbox</strong> (Seatbelt on macOS, bubblewrap on Linux) — behind a gate that asks before anything
@@ -128,14 +128,15 @@
       <div class="wall" data-reveal>
         <div class="panel" aria-hidden="true">
           <div class="bar"><i></i><i></i><i></i></div>
-          <pre><span class="ask">? run a command</span>
-  git push origin main
+          <pre><span class="ask">Glut asks: bash · ask</span>
 
-  <span class="you">y</span> once · <span class="you">n</span> refuse
-  or allow for this session:
-    this command
-    git push *
-    git *</pre>
+  <b>git push origin main</b>
+
+ <span class="you">y</span>  allow this once
+ <span class="you">1</span>  this session: git push origin main
+ <span class="you">2</span>  this session: git push *
+ <span class="you">3</span>  this session: git *
+ <span class="you">n</span>  refuse</pre>
         </div>
         <article class="step">
           <p class="hud"><b>02</b> / 04</p>
@@ -212,9 +213,10 @@ that holds the key puts the key back.</span></pre>
         <p>One task, two to four models, blind by default, each in a confined copy of your repository. Take the winner.</p>
       </article>
       <article class="card" data-reveal>
-        <p class="hud"><span>talk</span><b>[03]</b></p>
-        <h3>Agents that write to each other.</h3>
-        <p>Within a window and across Glut windows — without ever lending each other a right.</p>
+        <p class="hud"><span>together</span><b>[03]</b></p>
+        <h3>Agents that work together.</h3>
+        <p>They see who else is working and where, ask each other and get the answer back — within a window and across
+          Glut windows. A lead starts helpers, each in the sandbox, none with more rights than its lead.</p>
       </article>
       <article class="card" data-reveal>
         <p class="hud"><span>while you sleep</span><b>[04]</b></p>
@@ -295,25 +297,25 @@ that holds the key puts the key back.</span></pre>
     </div>
     <div class="cards">
       <article class="card" data-reveal>
-        <p class="hud"><span>together</span><b>[01]</b></p>
-        <h3>Agents that work together.</h3>
-        <p>Agents hand each other tasks, wait for one another and pass their results on — across panes and windows, each
-          on a model of its own.</p>
-      </article>
-      <article class="card" data-reveal>
-        <p class="hud"><span>windows</span><b>[02]</b></p>
+        <p class="hud"><span>windows</span><b>[01]</b></p>
         <h3>Native on Windows.</h3>
         <p>Today Glut runs in WSL2 with its Linux sandbox; a native build gets a sandbox of Windows' own.</p>
       </article>
       <article class="card" data-reveal>
-        <p class="hud"><span>plugins</span><b>[03]</b></p>
+        <p class="hud"><span>plugins</span><b>[02]</b></p>
         <h3>Plugins.</h3>
         <p>Skills, agents, commands, hooks and MCP servers in one repository, added with one command and your yes.</p>
       </article>
       <article class="card" data-reveal>
-        <p class="hud"><span>desktop</span><b>[04]</b></p>
+        <p class="hud"><span>desktop</span><b>[03]</b></p>
         <h3>A window of its own.</h3>
         <p>A native desktop app over the same core — the terminal stays.</p>
+      </article>
+      <article class="card" data-reveal>
+        <p class="hud"><span>auto</span><b>[04]</b></p>
+        <h3>A stricter auto.</h3>
+        <p>Today a command in <code>auto</code> may reach any host. Next, Glut asks about a host it does not know, and
+          about an MCP tool that writes.</p>
       </article>
     </div>
     <p class="note">No dates; <a href="{{root}}docs/comparison.html#where-others-are-ahead">where others are ahead</a> says why these come first.</p>

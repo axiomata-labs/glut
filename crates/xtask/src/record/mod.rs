@@ -25,8 +25,9 @@ const MARKER: &str = "glut-demo";
 /// At most one screen per this many milliseconds: Glimm's animation alone would otherwise make thousands.
 const FRAME_EVERY: Duration = Duration::from_millis(40);
 
-/// How long a reader looks at a question before a trigger answers it.
-const READS_FOR: Duration = Duration::from_millis(2500);
+/// How long a reader looks at a question before a trigger answers it: long enough to read what is asked and every
+/// choice under it (owner, 2026-11-11: at 2.5 s, shortened with the model's time, a card was gone before it was seen).
+const READS_FOR: Duration = Duration::from_millis(4000);
 
 /// How many bytes of one read are kept for the next, so a question to the terminal split between them is found.
 const CARRY: usize = 16;
@@ -66,11 +67,16 @@ pub fn record(repo: &Path, name: &str) -> Result<(), String> {
     // The owner's keys and sign-ins as the take is given them, to tell afterwards which it renewed.
     let given = stored_secrets(&Path::new(&home).join(".glut").join(CREDENTIALS));
     let glut_home = if scene.fresh_home {
+        let manifest = std::fs::read_to_string(repo.join("crates/glut-tui/Cargo.toml"))
+            .map_err(|err| format!("cannot read glut-tui's manifest: {err}"))?;
+        let version = crate::site::manifest_version(&manifest)
+            .ok_or("crates/glut-tui/Cargo.toml names no version")?;
         let fresh = fresh_home(
             Path::new(&home),
             &scene.allow,
             &scene.settings,
             scene.ghostty,
+            &version,
         )?;
         for set in &scene.tasks {
             let source = repo.join("site/demo/arena").join(set);
@@ -113,6 +119,7 @@ pub fn record(repo: &Path, name: &str) -> Result<(), String> {
         last: Instant::now(),
         kept: None,
         ended: false,
+        asking: false,
         carry: Vec::new(),
         graphics: Graphics::default(),
         images: std::collections::HashMap::new(),
@@ -125,6 +132,7 @@ pub fn record(repo: &Path, name: &str) -> Result<(), String> {
                 reads: trigger.reads.unwrap_or(READS_FOR),
                 seen: None,
                 answered: false,
+                card: None,
             })
             .collect(),
     };
@@ -217,6 +225,8 @@ struct Take {
     last: Instant,
     kept: Option<Instant>,
     ended: bool,
+    /// Whether a question stands that a trigger has yet to answer: the clock then runs as the real one does.
+    asking: bool,
     /// The end of the last read, searched again with the next.
     carry: Vec<u8>,
     /// The pictures the program drew through the terminal, and their images' places in the film by their number.
@@ -235,6 +245,44 @@ struct Trigger {
     /// When the text came up this time.
     seen: Option<Instant>,
     answered: bool,
+    /// The question's card this trigger reads or has answered, as it stood when it came up: another card in its
+    /// place, with no screen between that lacks the text, is a new question.
+    card: Option<String>,
+}
+
+/// The question card whose title holds `text`: the card's own columns, from its corner `┌` to `┐`, and its rows down
+/// to its lower edge `└` — a pane beside it (another Glut window in tmux, Glimm moving in it) is no part of the
+/// question. `None` where `text` stands in no card: in the transcript, or with no edge under it.
+fn card_of(shown: &str, text: &str) -> Option<String> {
+    let mut rows = shown.lines().skip_while(|row| !row.contains(text));
+    let first = rows.next()?;
+    let before = first[..first.find(text)?].chars().count();
+    let title: Vec<char> = first.chars().collect();
+    let left = title[..before].iter().rposition(|c| *c == '┌')?;
+    let right = title[left..]
+        .iter()
+        .position(|c| *c == '┐')
+        .map_or(title.len(), |at| left + at + 1);
+    let within = |row: &str| -> String {
+        let part: String = row.chars().skip(left).take(right - left).collect();
+        part.trim_end().to_owned()
+    };
+    let mut card = vec![within(first)];
+    for row in rows {
+        let part = within(row);
+        let edge = part.starts_with('└');
+        card.push(part);
+        if edge {
+            return Some(card.join("\n"));
+        }
+    }
+    None
+}
+
+/// How many times faster than the real clock the recording's runs: `faster` inside a `wait … xN`, but never while
+/// a question stands — the model's time is shortened, the reader's is not.
+fn pace(asking: bool, faster: f64) -> f64 {
+    if asking { 1.0 } else { faster }
 }
 
 impl Take {
@@ -340,7 +388,8 @@ impl Take {
             }
         }
         let now = Instant::now();
-        self.clock += now.duration_since(self.last).as_secs_f64() * 1000.0 / faster;
+        self.clock +=
+            now.duration_since(self.last).as_secs_f64() * 1000.0 / pace(self.asking, faster);
         self.last = now;
         self.keep_now(false);
         let shown = Film::text(self.parser.screen());
@@ -353,8 +402,18 @@ impl Take {
                 .iter()
                 .all(|text| shown.contains(text.as_str()))
             {
-                (trigger.seen, trigger.answered) = (None, false);
+                (trigger.seen, trigger.answered, trigger.card) = (None, false, None);
                 continue;
+            }
+            // Another question's card in the place of the one this trigger was reading or had answered: read anew,
+            // by every trigger alike, so the first in the script's order still answers it. Where the text stands in
+            // no card (left in the transcript once the card closed), nothing is new.
+            let card = trigger.texts.first().and_then(|text| card_of(&shown, text));
+            if card.is_some() && trigger.card.is_some() && trigger.card != card {
+                (trigger.seen, trigger.answered) = (None, false);
+            }
+            if trigger.seen.is_none() {
+                trigger.card.clone_from(&card);
             }
             let seen = *trigger.seen.get_or_insert(now);
             if !answered && !trigger.answered && seen.elapsed() >= trigger.reads {
@@ -363,6 +422,10 @@ impl Take {
                 terminal.send(&trigger.keys)?;
             }
         }
+        self.asking = self
+            .triggers
+            .iter()
+            .any(|trigger| trigger.seen.is_some() && !trigger.answered);
         if answered {
             for trigger in self.triggers.iter_mut().filter(|trigger| !trigger.answered) {
                 trigger.seen = trigger.seen.map(|_| now);
@@ -466,7 +529,8 @@ fn answer(question: &str, screen: &vt100::Screen) -> Vec<u8> {
     }
 }
 
-/// The pause after each typed character: 35 to 95 ms, varied the same way in every take.
+/// The pause after each typed character: 18 to 52 ms, varied the same way in every take — a quick typist's pace
+/// (owner, 2026-11-11: at 35 to 95 ms a prompt took longer to type than to read).
 struct Pace(u32);
 
 impl Pace {
@@ -475,7 +539,7 @@ impl Pace {
         self.0 ^= self.0 << 13;
         self.0 ^= self.0 >> 17;
         self.0 ^= self.0 << 5;
-        Duration::from_millis(35 + u64::from(self.0 % 61))
+        Duration::from_millis(18 + u64::from(self.0 % 35))
     }
 }
 
@@ -518,6 +582,7 @@ fn fresh_home(
     allow: &[String],
     settings: &serde_json::Map<String, serde_json::Value>,
     ghostty: bool,
+    version: &str,
 ) -> Result<PathBuf, String> {
     let fresh = home.join(DEMO_DIR).join(".home");
     if fresh.exists() {
@@ -563,6 +628,13 @@ fn fresh_home(
         // Ghostty draws Powerline's separators itself, the site's font has none: the footer stays as in every scene.
         std::fs::write(glut.join("prefs.json"), r#"{"footer":"plain"}"#)
             .map_err(|err| format!("cannot write the take's prefs: {err}"))?;
+        // A kept preference makes this no first start, and Glut would open with what is new since 0.1.0: the take
+        // has seen this version's news, so its scene starts as every other does.
+        std::fs::write(
+            glut.join("version.json"),
+            serde_json::json!({ "seen": version }).to_string(),
+        )
+        .map_err(|err| format!("cannot write the take's seen version: {err}"))?;
     }
     Ok(fresh)
 }
@@ -827,6 +899,48 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_question_is_its_card_and_stands_at_the_readers_pace() {
+        let first = "● working\n┌ Glut asks: mcp__stock__products · build ──┐\n│  stock/products   │\n│ y  allow this \
+                     once │\n└──────┘\n›";
+        let second = first.replace("products", "stock_level");
+        let card = card_of(first, "Glut asks").unwrap();
+        assert!(card.starts_with("┌ Glut asks: mcp__stock__products"));
+        assert!(
+            card.ends_with("└──────┘"),
+            "down to the card's edge, no further"
+        );
+        assert_ne!(
+            card_of(&second, "Glut asks"),
+            Some(card),
+            "the next question right behind it is another card"
+        );
+        assert_eq!(card_of("nothing here", "Glut asks"), None);
+        assert_eq!(
+            card_of("a\n● it said: Glut asks: x\n└─┘", "Glut asks"),
+            None,
+            "the words in the transcript are no card"
+        );
+        assert_eq!(
+            card_of("┌ Glut asks: bash ─┐\n│ make │", "Glut asks"),
+            None,
+            "no lower edge: not a whole card"
+        );
+        // Two panes side by side: what moves in the other one is no part of the question.
+        let beside = |other: &str| {
+            format!(
+                "{other} ┃ ┌ Glut asks: bash ─┐\n{other} ┃ │  make test      │\n{other} ┃ └────────────────┘"
+            )
+        };
+        assert_eq!(
+            card_of(&beside("▗▄▖"), "Glut asks"),
+            card_of(&beside("▟▘▛"), "Glut asks")
+        );
+        assert!(card_of(&beside("▗▄▖"), "Glut asks").is_some());
+        assert_eq!(pace(false, 3.0), 3.0, "the model's time is shortened");
+        assert_eq!(pace(true, 3.0), 1.0, "the reader's is not");
+    }
+
+    #[test]
     fn a_sign_in_the_take_renewed_goes_back_unless_the_owner_renewed_it_too() {
         let base = std::env::temp_dir().join(format!("xtask-renewals-{}", std::process::id()));
         let (home, fresh) = (base.join("home"), base.join("fresh"));
@@ -876,6 +990,7 @@ mod tests {
             last: Instant::now(),
             kept: None,
             ended: false,
+            asking: false,
             carry: Vec::new(),
             graphics: Graphics::default(),
             images: std::collections::HashMap::new(),
@@ -904,6 +1019,7 @@ mod tests {
             last: Instant::now(),
             kept: None,
             ended: false,
+            asking: false,
             carry: Vec::new(),
             graphics: Graphics::default(),
             images: std::collections::HashMap::new(),
@@ -932,7 +1048,7 @@ mod tests {
     fn typing_varies_but_stays_human() {
         let mut pace = Pace(1);
         let pauses: Vec<u128> = (0..50).map(|_| pace.next().as_millis()).collect();
-        assert!(pauses.iter().all(|ms| (35..=95).contains(ms)));
+        assert!(pauses.iter().all(|ms| (18..=52).contains(ms)));
         assert!(pauses.windows(2).any(|pair| pair[0] != pair[1]));
     }
 }

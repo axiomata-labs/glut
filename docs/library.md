@@ -5,7 +5,7 @@ it runs the tool-calling loop and reports every step as an `Event`. The program 
 This page covers what another program needs in order to do the same. The crate structure is described in
 [`architecture.md`](architecture.md), and the security model in [`security.md`](security.md).
 
-This page describes the code as it stands. The crate is at version `0.1.0`, and its API is not stable yet.
+This page describes the code as it stands. The crate is at version `0.1.2`, and its API is not stable yet.
 
 ## Adding the dependency
 

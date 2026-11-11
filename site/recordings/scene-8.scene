@@ -20,11 +20,11 @@ key enter
 wait 30 "@prices.py#L6-8"
 pause 1.2
 key backtab
-pause 0.8
+pause 2.0
 key backtab
-pause 0.8
+pause 2.0
 key backtab
-pause 1.2
+pause 2.2
 type "raise a ValueError when percent is outside 0 to 100, then run the tests"
 pause 0.6
 key enter

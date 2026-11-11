@@ -283,10 +283,15 @@ pub fn build(repo: &Path, out: &Path) -> Result<usize, String> {
 
         // The hand-written pages of `site/pages/<lang>/`, each with its twin in the other language when it has one.
         let hand = repo.join("site/pages").join(lang.code());
+        let version = manifest_version(&read(&repo.join("crates/glut-tui/Cargo.toml"))?)
+            .ok_or("crates/glut-tui/Cargo.toml names no version")?;
         for name in files(&hand, "html")? {
             let path = format!("{}{name}", lang.folder());
-            // A hand-written page links the site's files from its top through `{{root}}`.
-            let body = read(&hand.join(&name))?.replace("{{root}}", &root(&path));
+            // A hand-written page links the site's files from its top through `{{root}}`, and names Glut's version
+            // through `{{version}}` — the manifest's, so no release leaves an old number on the home page.
+            let body = read(&hand.join(&name))?
+                .replace("{{root}}", &root(&path))
+                .replace("{{version}}", &version);
             let twin = Lang::ALL
                 .into_iter()
                 .find(|other| *other != lang)
@@ -653,6 +658,15 @@ fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// The version a manifest's package carries: its first `version = "…"` line.
+pub(crate) fn manifest_version(manifest: &str) -> Option<String> {
+    manifest
+        .lines()
+        .find_map(|line| line.strip_prefix("version = \""))
+        .and_then(|rest| rest.strip_suffix('"'))
+        .map(str::to_owned)
+}
+
 fn read(path: &Path) -> Result<String, String> {
     std::fs::read_to_string(path).map_err(|err| format!("cannot read {}: {err}", path.display()))
 }
@@ -697,6 +711,14 @@ fn sources_state(repo: &Path) -> (Option<std::time::SystemTime>, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_manifests_version_is_its_packages() {
+        let manifest = "[package]\nname = \"glut-tui\"\nversion = \"0.1.2\"\n\n[dependencies]\n\
+                        glut = { version = \"0.1.0\", path = \"../glut\" }\n";
+        assert_eq!(manifest_version(manifest).as_deref(), Some("0.1.2"));
+        assert_eq!(manifest_version("[package]\nname = \"x\"\n"), None);
+    }
 
     fn repo() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")

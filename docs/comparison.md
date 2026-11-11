@@ -20,7 +20,7 @@ Aider 0.86 (last tagged release; its main branch has moved on since), Cursor CLI
 | Network of commands | proxy asks per host | proxy, allow-list | off; optional proxy | partly | none | none | blocked; allow-list | none | name list only | none ⁸ |
 | Files put back | before every change, `/rewind` ³ | per prompt ⁴ | git advised | opt-in ⁴ | per step ⁵ | a git commit per edit | `/rewind` | not documented | not documented | an example extension |
 | Tool output | never cut ⁶ | cut, rest in a file | token budget | cut at 40k chars | cut, rest in a file | asks before adding | not documented | cut, rest in a file | cut, rest in a file | cut, rest in a file |
-| Several agents | panes, background agents, subagents — each its own model and provider | subagents; teams (experimental) | subagents | subagents | subagents | one | subagents | subagents | task agents | one (tmux; an example extension) |
+| Several agents | panes, background agents, subagents, a lead with helpers — each its own model and provider | subagents; teams (experimental) | subagents | subagents | subagents | one | subagents | subagents | task agents | one (tmux; an example extension) |
 | Models side by side | arena, test bench | — | — | — | — | — | best-of-n (IDE) | — | — | — |
 | Recurring work, local | `/loop`, plans (launchd, systemd) | `/loop`, desktop tasks | — (app only) | — | schedules (experimental) | — | — (cloud) | cron recipes | — | — |
 | Editors | Neovim, VS Code, JetBrains, ACP | VS Code, JetBrains | VS Code, JetBrains, Xcode | VS Code, ACP | VS Code, ACP | file watching | ACP | ACP, VS Code (exp.) | — | — |
@@ -59,7 +59,7 @@ nothing of it; [Around the conversation](#around-the-conversation) names the sou
 
 ## Where others are ahead
 
-Glut is young (0.1.0) and has one maintainer. Things the others do that Glut does not:
+Glut is young and has one maintainer. Things the others do that Glut does not:
 
 - **Windows.** Codex CLI has a native Windows sandbox, Gemini CLI, Crush and pi run on Windows, Claude Code and Cursor
   CLI install there. Glut runs on macOS and Linux, on Windows only in WSL2 (the Linux build and its sandbox).

@@ -41,7 +41,7 @@ Ollama or LM Studio, and two dozen more. It reads and edits your project, runs y
 every step in a terminal UI made for long sessions: several agents side by side, an arena that pits models against
 each other, plans that run while you sleep, and your editor at hand.
 
-> **Status: 0.1.0, early.** Glut is used every day by its author and is solid on macOS; Linux is tested in
+> **Status: 0.1.2, early.** Glut is used every day by its author and is solid on macOS; Linux is tested in
 > containers. Expect rough edges, and please [report them](https://github.com/axiomata-labs/glut/issues).
 
 ## Why Glut

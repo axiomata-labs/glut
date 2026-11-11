@@ -11,10 +11,8 @@ on "Glut asks" key y
 run glut --provider anthropic --model claude-sonnet-5-5 --lang en
 wait 20 "⏎ send"
 pause 1.2
-key ctrl-b
-pause 0.5
 key ctrl-g
-pause 1
+pause 1.5
 type "run cat .env to check SHOP_API_KEY, then fix the failing tests, commit the fix, and push it as a separate command"
 pause 0.8
 key enter

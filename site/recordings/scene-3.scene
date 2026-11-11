@@ -11,17 +11,17 @@ run glut --provider anthropic --model claude-sonnet-5-5 --lang en
 wait 20 "⏎ send"
 pause 1.2
 key backtab
-pause 1.0
+pause 2.2
 key backtab
-pause 1.0
+pause 2.2
 key backtab
-pause 1.0
+pause 2.2
 key backtab
-pause 1.0
+pause 2.2
 key backtab
-pause 1.0
+pause 2.2
 key backtab
-pause 1.5
+pause 2.5
 type "cap discounts at 50 %: discounted should refuse a larger one, with a test for it"
 pause 0.8
 key enter
