@@ -5,12 +5,17 @@ follow [Semantic Versioning](https://semver.org/) — while Glut is at 0.x, a mi
 
 ## [Unreleased]
 
+## [0.1.2] — 2026-11-13
+
 ### Changed
 
 - **A question reads at a glance**: what Glut asks about stands apart and in bold, with why it asks under it ("it
   deletes recursively", a rule of yours) and the mode in the card's title; the scopes for the session stand under
   each other (`this session: git push *`), after one "allow this once". For library users: `Gate::asked_reason()`
   and `permissions::ASKED_IN_AUTO` are new; nothing else changed.
+- **Ubuntu's AppArmor step is spelled out**: Ubuntu 23.10 and later refuse the namespaces bubblewrap needs, so Glut
+  starts there without a sandbox (and asks before every command). The install guide now holds the profile for `bwrap`
+  to copy, tested on Ubuntu 24.04, and the install script prints it where AppArmor refuses the sandbox.
 
 ## [0.1.1] — 2026-11-10
 

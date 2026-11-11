@@ -857,7 +857,7 @@ dependencies = [
 
 [[package]]
 name = "glut"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "axiomata-files",
  "chrono",
@@ -891,7 +891,7 @@ dependencies = [
 
 [[package]]
 name = "glut-tui"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "axiomata-files",
  "chrono",

@@ -1,6 +1,6 @@
 [package]
 name = "glut-tui"
-version = "0.1.1"
+version = "0.1.2"
 edition.workspace = true
 license.workspace = true
 description = "Glut, a coding agent for the terminal: every command sandboxed, a gate that asks before what matters, any model — panes, an arena, plans, editors."
@@ -22,7 +22,7 @@ doc = false
 dev-keys = ["glut/dev-keys"]
 
 [dependencies]
-glut = { version = "0.1.1", path = "../glut" }
+glut = { version = "0.1.2", path = "../glut" }
 # The folder's files for the `@` finder, walked as the file tools walk them (`.gitignore` kept).
 axiomata-files.workspace = true
 # An owner's `!cmd` in a process group of its own, stopped as a whole (as Glut's shell tool does).
