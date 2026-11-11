@@ -14224,7 +14224,7 @@ pub(crate) mod tests {
             ),
         ];
         let mut html = String::from(
-            "<body style=\"background:#111;color:#ddd;font-family:sans-serif;padding:16px\">\n",
+            "<meta charset=\"utf-8\">\n<body style=\"background:#111;color:#ddd;font-family:sans-serif;padding:16px\">\n",
         );
         for (title, mode, request, reason, (width, height)) in cards {
             let (mut parts, engine) = session::for_tests();
