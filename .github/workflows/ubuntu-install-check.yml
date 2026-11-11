@@ -1,0 +1,57 @@
+# Installs glut on a stock Ubuntu as a stranger would, before the Show HN: from glut-ai.com's script, bubblewrap from
+# apt, nothing lifted. Ubuntu 23.10 and later refuse unprivileged user namespaces through AppArmor, which Docker on a
+# Mac does not show; this runs on a real Ubuntu kernel. Then the profile install.md points to, and the sandbox again.
+name: Ubuntu install check
+
+on:
+  push:
+    branches: [check/ubuntu-install]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  stranger:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: the machine as it comes
+        run: |
+          cat /etc/os-release | grep PRETTY_NAME
+          uname -rm
+          echo "apparmor_restrict_unprivileged_userns=$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)"
+          ls /etc/apparmor.d | grep -i -E 'bwrap|userns' || echo "no bwrap profile in /etc/apparmor.d"
+      - name: install.sh from glut-ai.com, as the README says
+        run: curl -fsSL https://glut-ai.com/install.sh | sh
+      - name: bubblewrap from apt, as install.md says
+        run: sudo apt-get update -q && sudo apt-get install -y -q bubblewrap
+      - name: the sandbox on a stock Ubuntu
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          glut --version
+          glut sandbox show
+          echo "--- bwrap itself"
+          bwrap --ro-bind / / --unshare-user --unshare-pid true && echo "bwrap: ok" || echo "bwrap: refused"
+      - name: the AppArmor profile for bwrap (Ubuntu's documented one)
+        run: |
+          sudo tee /etc/apparmor.d/bwrap > /dev/null <<'EOF'
+          abi <abi/4.0>,
+          include <tunables/global>
+
+          profile bwrap /usr/bin/bwrap flags=(unconfined) {
+            userns,
+
+            include if exists <local/bwrap>
+          }
+          EOF
+          sudo apparmor_parser -r /etc/apparmor.d/bwrap
+      - name: the sandbox with the profile
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          glut sandbox show
+          echo "--- bwrap itself"
+          bwrap --ro-bind / / --unshare-user --unshare-pid true && echo "bwrap: ok" || echo "bwrap: refused"
