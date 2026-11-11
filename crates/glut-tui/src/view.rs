@@ -15,6 +15,14 @@ use crate::{glimm, select, session, theme};
 const INPUT_ROWS: usize = 8;
 /// The most rows of its target an ask shows.
 const ASK_ROWS: usize = 12;
+/// How far what an ask is about stands in from the card's edge: apart from the choices under it.
+const ASK_INDENT: usize = 2;
+/// The rows of a long target an ask keeps from its end: where a harmless start hides what a command really does.
+const ASK_TAIL: usize = 2;
+/// The most of the gate's reason an ask card shows: one sentence, never a text of its own.
+const ASK_WHY_CHARS: usize = 160;
+/// The most rows the reason takes under what is asked.
+const ASK_WHY_ROWS: usize = 2;
 /// The most rows the `/` list shows (T85): a handful to choose from, the rest ↑↓ or a letter away.
 const SUGGESTION_ROWS: usize = 10;
 /// The `/` list's widest: a name and a few words.
@@ -477,34 +485,107 @@ fn draw_in(frame: &mut Frame, app: &mut App, area: Rect, chrome: &Chrome) {
         .filter(|_| !plan_asking && form_lines.is_none())
         .map(|open| {
             let most = usize::from(area.height / 3).clamp(3, ASK_ROWS);
-            let width = usize::from(area.width.saturating_sub(4));
+            let width = usize::from(area.width.saturating_sub(4)).saturating_sub(ASK_INDENT);
             if open.request.keychain {
-                keychain_rows(open, width, most)
-            } else if open.request.unsandboxed {
-                // The command would run with nothing of the sandbox around it: said under it, every time.
-                let shown = format!("{}\n{}", open.request.target, tr!(ask_unsandboxed_line));
-                asked_rows(&shown, width, most)
-            } else if let Some(note) = &open.request.note {
-                // T52: what the second model said, under the command it judged.
-                let shown = format!("{}\n{}", open.request.target, tr!(ask_judged, note = note));
-                asked_rows(&shown, width, most)
+                let mut target = keychain_rows(open, width, most);
+                // A command longer than its window ends in the row saying where the window stands.
+                let under = (open.rows > open.window)
+                    .then(|| target.pop())
+                    .flatten()
+                    .map(|row| vec![(row, true)])
+                    .unwrap_or_default();
+                // A 🔑 card stays as tall as it was: every row it counts as shown is one it has the room to draw.
+                return AskRows {
+                    target,
+                    under,
+                    why: Vec::new(),
+                    airy: false,
+                    roomy: false,
+                };
+            }
+            // What must stand under what is asked — a run outside the sandbox, every time; else what the second model
+            // said (T52) — shares the card's rows with it, as one text: a long command gives way, never the line.
+            let said = if open.request.unsandboxed {
+                Some((tr!(ask_unsandboxed_line).to_owned(), false))
             } else {
-                asked_rows(&open.request.target, width, most)
+                open.request
+                    .note
+                    .as_ref()
+                    .map(|note| (tr!(ask_judged, note = note), true))
+            };
+            let (target, under) = match said {
+                Some((line, quietly)) => {
+                    let together = format!("{}\n{line}", open.request.target);
+                    let mut rows = asked_rows(&together, width, most);
+                    let own = wrap(&line, width).len();
+                    // Cut short, the rows end in the text's tail: that much of the line at most.
+                    let cut_short = rows.len() < wrap(&together, width).len();
+                    let own = if cut_short { own.min(ASK_TAIL) } else { own };
+                    let under = rows
+                        .split_off(rows.len().saturating_sub(own))
+                        .into_iter()
+                        .map(|row| (row, quietly))
+                        .collect();
+                    (rows, under)
+                }
+                None => (asked_rows(&open.request.target, width, most), Vec::new()),
+            };
+            // Why the gate asks, where that is more than the mode: shown only where the pane has the room.
+            let why = open
+                .reason
+                .as_deref()
+                .and_then(asked_why)
+                .map(|reason| {
+                    let mut rows = wrap(&tr!(ask_why, reason = reason), width);
+                    if rows.len() > ASK_WHY_ROWS {
+                        rows.truncate(ASK_WHY_ROWS);
+                        if let Some(last) = rows.last_mut() {
+                            *last = crate::transcript::cut(&format!("{last}…"), width);
+                        }
+                    }
+                    rows
+                })
+                .unwrap_or_default();
+            AskRows {
+                target,
+                under,
+                why,
+                airy: false,
+                roomy: true,
             }
         });
+    let mut ask_rows = ask_rows;
+    let waiting = waiting_lines(app, usize::from(area.width));
+    let (side_lines, side_height) = side_rows(app, area);
     // The target, then a row per choice: once, each scope, refuse.
+    let height_of = |rows: &AskRows, scopes: usize| (rows.len() + 2 + scopes.min(9)) as u16 + 2;
+    let scopes = app
+        .ask
+        .as_ref()
+        .filter(|_| !plan_asking)
+        .map(|open| open.request.scopes.len());
+    // The reason and the empty rows around what is asked are extras: given only from the rows the pane has beyond
+    // the input, the card itself and a few rows of the stream — a short pane's card is as tall as it always was, so
+    // its last choice is never cut.
+    if let (Some(rows), Some(scopes)) = (&mut ask_rows, scopes) {
+        let reason = std::mem::take(&mut rows.why);
+        let needed =
+            input_height + height_of(rows, scopes) + side_height + waiting.len() as u16 + LIVE_ROOM;
+        let mut spare = usize::from(area.height.saturating_sub(needed));
+        if rows.roomy && reason.len() <= spare {
+            spare -= reason.len();
+            rows.why = reason;
+        }
+        rows.airy = rows.roomy && spare >= 2;
+    }
     let ask_height = ask_rows
         .as_ref()
-        .zip(app.ask.as_ref().filter(|_| !plan_asking))
-        .map_or(0, |(rows, open)| {
-            (rows.len() + 2 + open.request.scopes.len().min(9)) as u16 + 2
-        });
+        .zip(scopes)
+        .map_or(0, |(rows, scopes)| height_of(rows, scopes));
     let ask_height = match &form_lines {
         Some(lines) => lines.len() as u16 + 2,
         None => ask_height,
     };
-    let waiting = waiting_lines(app, usize::from(area.width));
-    let (side_lines, side_height) = side_rows(app, area);
     // A short pane keeps its rows for the stream and the input (T75): the line needs room beyond them — the header,
     // the keys' row and a few rows of the stream.
     let room = input_height + ask_height + side_height + waiting.len() as u16 + LIVE_ROOM;
@@ -1314,8 +1395,47 @@ fn mark_stream(frame: &mut Frame, app: &App, area: Rect) {
     }
 }
 
-fn draw_ask(frame: &mut Frame, app: &App, area: Rect, rows: Vec<String>) {
+/// What an ask card shows above its choices.
+struct AskRows {
+    /// What is asked about — the command, the path, the host —, wrapped.
+    target: Vec<String>,
+    /// What must be said under it, and whether quietly: the second model's word is, the warning of a run outside
+    /// the sandbox is not.
+    under: Vec<(String, bool)>,
+    /// Why the gate asks, where the pane has the room for it.
+    why: Vec<String>,
+    /// An empty row above and below, where the pane has the room.
+    airy: bool,
+    /// Whether this card takes the reason and the empty rows at all: a 🔑 card does not.
+    roomy: bool,
+}
+
+impl AskRows {
+    fn len(&self) -> usize {
+        self.target.len() + self.under.len() + self.why.len() + if self.airy { 2 } else { 0 }
+    }
+}
+
+/// Why a question is asked, as its card says it: the gate's reason without what the card's title says already. The
+/// mode alone is no reason worth a row. One line, and bounded: a reason may hold a path the command named, and a line
+/// break in it would draw a row of its own, looking like a second word on the question.
+fn asked_why(reason: &str) -> Option<String> {
+    let reason = reason
+        .strip_suffix(glut::permissions::ASKED_IN_AUTO)
+        .unwrap_or(reason);
+    let only_the_mode = reason
+        .strip_prefix("mode ")
+        .is_some_and(|mode| !mode.contains(' '));
+    let one_line = glut::permissions::printable(&crate::transcript::clean(reason));
+    let one_line = one_line.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!only_the_mode && !one_line.is_empty())
+        .then(|| crate::transcript::cut(&one_line, ASK_WHY_CHARS))
+}
+
+fn draw_ask(frame: &mut Frame, app: &App, area: Rect, rows: AskRows) {
     let Some(open) = &app.ask else { return };
+    // The mode beside the tool: in `auto` a question is rare, and says so.
+    let mode = session::mode_label(app.mode());
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(theme::glow())
@@ -1323,7 +1443,7 @@ fn draw_ask(frame: &mut Frame, app: &App, area: Rect, rows: Vec<String>) {
             match &open.request.from {
                 // T40: beside others a subagent's ask says whose it is.
                 Some(from) => format!(
-                    " ⬡ {} ",
+                    " ⬡ {} · {mode} ",
                     tr!(
                         agent_asks_tool,
                         name = crate::transcript::cut(&crate::transcript::clean(from), 40),
@@ -1331,7 +1451,7 @@ fn draw_ask(frame: &mut Frame, app: &App, area: Rect, rows: Vec<String>) {
                     )
                 ),
                 None => format!(
-                    " {} ",
+                    " {} · {mode} ",
                     tr!(
                         glut_asks_tool,
                         tool = crate::transcript::clean(&open.request.tool)
@@ -1347,10 +1467,33 @@ fn draw_ask(frame: &mut Frame, app: &App, area: Rect, rows: Vec<String>) {
             },
             theme::glow(),
         ));
-    let mut lines: Vec<Line> = rows
-        .into_iter()
-        .map(|row| Line::from(Span::raw(row)))
-        .collect();
+    let indent = " ".repeat(ASK_INDENT);
+    let bold = Style::default().add_modifier(Modifier::BOLD);
+    let mut lines: Vec<Line> = Vec::new();
+    if rows.airy {
+        lines.push(Line::default());
+    }
+    lines.extend(
+        rows.target
+            .into_iter()
+            .map(|row| Line::from(Span::styled(format!("{indent}{row}"), bold))),
+    );
+    lines.extend(rows.under.into_iter().map(|(row, quietly)| {
+        let style = if quietly {
+            theme::quiet()
+        } else {
+            Style::default()
+        };
+        Line::from(Span::styled(format!("{indent}{row}"), style))
+    }));
+    lines.extend(
+        rows.why
+            .into_iter()
+            .map(|row| Line::from(Span::styled(format!("{indent}{row}"), theme::quiet()))),
+    );
+    if rows.airy {
+        lines.push(Line::default());
+    }
     let key = |key: String| {
         Span::styled(
             format!(" {key}  "),
@@ -1422,7 +1565,7 @@ fn asked_rows(target: &str, width: usize, most: usize) -> Vec<String> {
     if rows.len() <= most {
         return rows;
     }
-    let tail = 2;
+    let tail = ASK_TAIL;
     let head = most.saturating_sub(tail + 1).max(1);
     let mut shown: Vec<String> = rows[..head].to_vec();
     shown.push(tr!(more_rows, n = rows.len() - head - tail));
@@ -2844,7 +2987,7 @@ mod tests {
         );
     }
 
-    use super::{asked_rows, footer_name, marked, panel_state, panel_width, tab_titles};
+    use super::{asked_rows, asked_why, footer_name, marked, panel_state, panel_width, tab_titles};
     use crate::meter::tokens;
     use crate::theme;
     use ratatui::text::Line;
@@ -2940,6 +3083,31 @@ mod tests {
             ]
         );
         assert_eq!(asked_rows("ls -la", 40, 6), ["ls -la"]);
+        // The card's reason: the gate's words without what the title says, and never the mode alone.
+        assert_eq!(
+            asked_why("git clean deletes untracked files: asked even in auto mode").as_deref(),
+            Some("git clean deletes untracked files")
+        );
+        assert_eq!(
+            asked_why("rule Bash(make *)").as_deref(),
+            Some("rule Bash(make *)")
+        );
+        assert_eq!(asked_why("mode default"), None);
+        assert_eq!(asked_why("mode accept_edits"), None);
+        assert_eq!(
+            asked_why("mode auto; Glut's own files are always asked").as_deref(),
+            Some("mode auto; Glut's own files are always asked")
+        );
+        assert_eq!(asked_why(" "), None);
+        assert_eq!(
+            asked_why(
+                "the command writes /tmp/a\nsecond model: only reads, outside the working folder"
+            )
+            .as_deref(),
+            Some("the command writes /tmp/a second model: only reads, outside the working folder"),
+            "one line: a path's line break draws no row of its own"
+        );
+        assert!(asked_why(&"x".repeat(900)).unwrap().chars().count() <= 160);
         assert_eq!(panel_width(90), 32, "never narrower than its minimum");
         assert_eq!(panel_width(210), 70, "a third of the screen");
     }

@@ -109,6 +109,8 @@ struct OpenDiff {
 
 pub struct OpenAsk {
     pub request: AskRequest,
+    /// Why the gate asks, in its own words, where it said so: the card shows it under what is asked.
+    pub reason: Option<String>,
     reply: oneshot::Sender<Answer>,
     /// When the card came up: keys before [`ASK_SETTLE`] has passed do not answer it.
     opened: Instant,
@@ -2490,8 +2492,11 @@ impl App {
                     );
                 }
                 let request_for_diff = request.clone();
+                // The gate holds its reason while its question is open: read now, the card keeps it.
+                let reason = self.parts.tools.gate().and_then(|gate| gate.asked_reason());
                 self.ask = Some(OpenAsk {
                     request,
+                    reason,
                     reply,
                     opened: Instant::now(),
                     scroll: 0,
@@ -12522,6 +12527,149 @@ pub(crate) mod tests {
             .map(|item| item.label.clone())
             .collect();
         assert_eq!(shown, ["⬡ find the callers", "  ⬡ deeper"]);
+    }
+
+    /// The rows of one frame as text, top to bottom.
+    fn drawn_rows(app: &mut App) -> Vec<String> {
+        rows_at(app, 80, 24)
+    }
+
+    /// [`drawn_rows`] on a screen of another size.
+    fn rows_at(app: &mut App, width: u16, height: u16) -> Vec<String> {
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|frame| crate::view::draw(frame, app))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
+    /// The ask card: what is asked stands in from the edge between empty rows and in bold, the gate's reason under
+    /// it, the mode in the title, and every scope after the same words — one under the other.
+    #[test]
+    fn an_ask_card_sets_what_is_asked_apart_says_why_and_lines_the_scopes_up() {
+        let (mut app, _reports) = app();
+        let (reply, _answer) = oneshot::channel();
+        app.on_report(Report::Ask(
+            AskRequest {
+                tool: "bash".into(),
+                target: "rm -r build".into(),
+                scopes: vec!["rm -r build".into(), "rm *".into()],
+                from: None,
+                keychain: false,
+                unsandboxed: false,
+                note: None,
+            },
+            reply,
+        ));
+        assert_eq!(
+            app.ask.as_ref().unwrap().reason,
+            None,
+            "no question is open at the gate: nothing to say"
+        );
+        app.ask.as_mut().unwrap().reason =
+            Some("it deletes recursively: asked even in auto mode".into());
+        let rows = drawn_rows(&mut app);
+        let at = |words: &str| {
+            rows.iter()
+                .position(|row| row.contains(words))
+                .unwrap_or_else(|| panic!("no row says {words:?}:\n{}", rows.join("\n")))
+        };
+        let title = at("Glut asks: bash · ask");
+        let asked = at("│  rm -r build ");
+        assert_eq!(asked, title + 2, "an empty row above what is asked");
+        assert_eq!(at("│  why: it deletes recursively "), asked + 1);
+        let once = at(" y  allow this once");
+        assert_eq!(once, asked + 3, "an empty row under the reason");
+        let narrow = at(" 1  this session: rm -r build");
+        let wide = at(" 2  this session: rm *");
+        assert_eq!((narrow, wide), (once + 1, once + 2));
+        let column = |row: &str| row.chars().take_while(|c| *c != 'r').count();
+        assert_eq!(
+            column(&rows[narrow]),
+            column(&rows[wide]),
+            "the scopes stand under each other"
+        );
+        assert_eq!(at(" n  refuse"), wide + 1);
+        let bold = ratatui::style::Modifier::BOLD;
+        let terminal = drawn(&mut app);
+        let buffer = terminal.backend().buffer();
+        let column = rows[asked].chars().take_while(|c| *c != 'r').count() as u16;
+        assert!(
+            buffer[(column, asked as u16)].modifier.contains(bold),
+            "what is asked is bold"
+        );
+        // The mode alone is no reason worth a row.
+        app.ask.as_mut().unwrap().reason = Some("mode accept_edits".into());
+        let rows = drawn_rows(&mut app);
+        assert!(!rows.iter().any(|row| row.contains("why:")), "{rows:?}");
+    }
+
+    /// The reason and the empty rows are extras: a short pane's card has neither and keeps every choice, the last
+    /// one too; what the second model said stays under a long command whatever the room. (Below 18 rows a card
+    /// with a long command and three scopes never fitted whole: the keys' row names the choices there.)
+    #[test]
+    fn a_short_panes_ask_card_takes_no_extras_and_keeps_its_last_choice() {
+        let (mut app, _reports) = app();
+        let (reply, _answer) = oneshot::channel();
+        let long: String = (1..=30)
+            .map(|n| format!("line{n}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        app.on_report(Report::Ask(
+            AskRequest {
+                tool: "bash".into(),
+                target: long,
+                scopes: vec!["a".into(), "b *".into(), "c *".into()],
+                from: None,
+                keychain: false,
+                unsandboxed: false,
+                note: Some("judge: writes".into()),
+            },
+            reply,
+        ));
+        app.ask.as_mut().unwrap().reason =
+            Some("it deletes recursively: asked even in auto mode".into());
+        for height in [18, 19, 20, 22, 24, 30] {
+            let rows = rows_at(&mut app, 80, height);
+            let said = |words: &str| rows.iter().any(|row| row.contains(words));
+            let all = rows.join("\n");
+            assert!(said(" n  refuse"), "{height} rows: the last choice\n{all}");
+            assert!(said(" 3  this session: c *"), "{height} rows\n{all}");
+            assert!(said("line30"), "{height} rows: the command's end\n{all}");
+            assert!(
+                said("second model: judge: writes"),
+                "{height} rows: the second model's word\n{all}"
+            );
+            assert!(said("└"), "{height} rows: the card's lower edge\n{all}");
+        }
+        let short = rows_at(&mut app, 80, 18);
+        assert!(!short.iter().any(|row| row.contains("why:")), "{short:?}");
+        let title = short
+            .iter()
+            .position(|row| row.contains("Glut asks"))
+            .unwrap();
+        assert!(
+            short[title + 1].contains("line1"),
+            "no empty row: {short:?}"
+        );
+        let tall = rows_at(&mut app, 80, 50);
+        let title = tall
+            .iter()
+            .position(|row| row.contains("Glut asks"))
+            .unwrap();
+        assert!(
+            tall.iter()
+                .any(|row| row.contains("why: it deletes recursively"))
+        );
+        assert!(!tall[title + 1].contains("line1"), "an empty row: {tall:?}");
     }
 
     /// The plan's ask as the harness sends it, after the call that carried the whole plan.

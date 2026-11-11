@@ -118,7 +118,9 @@ glut::catalog! {
         glut_asks_tool: &'static str,
         /// An ask's first choice.
         allow_once: &'static str,
-        /// An ask's choice of a scope for the session: `{scope}`, drawn in bold where it stands.
+        /// An ask's choice of a scope for the session: `{scope}` last, drawn in bold, so that the scopes of a card
+        /// stand under each other. It says how long, not "allow" again — the first choice says that (owner,
+        /// 2026-11-11), and never "always": the scope ends with the session.
         allow_scope: &'static str,
         /// An ask's last choice.
         refuse: &'static str,
@@ -607,6 +609,8 @@ glut::catalog! {
         classifier_usage: &'static str,
         /// What the second model said, under an ask's command: `{note}`.
         ask_judged: &'static str,
+        /// Why the gate asks, under what an ask is about: `{reason}`, the gate's own words.
+        ask_why: &'static str,
         /// `/maxsteps` alone: `{n}`.
         steps_now: &'static str,
         /// `/maxsteps` kept `{n}`.

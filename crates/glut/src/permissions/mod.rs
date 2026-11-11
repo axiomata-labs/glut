@@ -956,16 +956,16 @@ pub struct OwnersText {
 }
 
 /// What an open question shows, set for as long as it is open: cleared when it ends, however it ends.
-struct Shown<'a>(&'a Mutex<Option<serde_json::Value>>);
+struct Shown<'a, T>(&'a Mutex<Option<T>>);
 
-impl<'a> Shown<'a> {
-    fn set(slot: &'a Mutex<Option<serde_json::Value>>, value: Option<serde_json::Value>) -> Self {
+impl<'a, T> Shown<'a, T> {
+    fn set(slot: &'a Mutex<Option<T>>, value: Option<T>) -> Self {
         *slot.lock().unwrap_or_else(|poison| poison.into_inner()) = value;
         Shown(slot)
     }
 }
 
-impl Drop for Shown<'_> {
+impl<T> Drop for Shown<'_, T> {
     fn drop(&mut self) {
         *self.0.lock().unwrap_or_else(|poison| poison.into_inner()) = None;
     }
@@ -1208,6 +1208,8 @@ pub struct Gate {
     /// The whole arguments of the call the open question is about (T91), while it is open: an edit's diff in the
     /// editor needs its text, which the call's event carries cut. Never an event's, a journal's or the model's.
     asked_arguments: Mutex<Option<serde_json::Value>>,
+    /// Why the open question is asked, in the gate's own words — for the screen alone, while it is open.
+    asked_reason: Mutex<Option<String>>,
     /// What a rename's open question shows (T91): each file as it would leave it, set only by
     /// [`Gate::judge_all_showing`] — never from a call's arguments, which the model writes.
     asked_rename: Mutex<Option<serde_json::Value>>,
@@ -1270,6 +1272,7 @@ impl Gate {
             asker,
             asking: tokio::sync::Mutex::new(()),
             asked_arguments: Mutex::new(None),
+            asked_reason: Mutex::new(None),
             asked_rename: Mutex::new(None),
             owners_text: Mutex::new(None),
             owners_answer: Mutex::new(None),
@@ -1756,6 +1759,16 @@ impl Gate {
             .clone()
     }
 
+    /// Why the open question is asked, while one is open: the rule, the mode or what the command is ("git push
+    /// publishes: asked even in auto mode"). For the card the owner reads — it never reaches an event beyond the
+    /// judgement's own reason, nor the model.
+    pub fn asked_reason(&self) -> Option<String> {
+        self.asked_reason
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone()
+    }
+
     /// Gives the owner's own text for the edit the open question is about, before it is answered (T91: changed on a
     /// diff's right side in the editor). Taken only with an allowing answer, and only while a question is open.
     pub fn answer_with_text(&self, owners: OwnersText) {
@@ -1878,6 +1891,7 @@ impl Gate {
                 let answer = {
                     // Cleared when the question ends, answered or dropped with its run.
                     let _shown = Shown::set(&self.asked_arguments, arguments.cloned());
+                    let _why = Shown::set(&self.asked_reason, Some(reason.clone()));
                     self.asker.ask(&request).await
                 };
                 let owners = take();
@@ -2212,10 +2226,10 @@ impl Gate {
             {
                 (Verdict::Allow, format!("{why}, in the arena's own folder"))
             }
-            Some(why) => (Verdict::Ask, format!("{why}: asked even in auto mode")),
+            Some(why) => (Verdict::Ask, format!("{why}{ASKED_IN_AUTO}")),
             None if protected => (
                 Verdict::Ask,
-                "the command names a protected path: asked even in auto mode".into(),
+                format!("the command names a protected path{ASKED_IN_AUTO}"),
             ),
             None => (Verdict::Allow, "mode auto".into()),
         })
@@ -2247,6 +2261,8 @@ impl Gate {
 
 /// How the reason begins where a second model let a command run as only reading (T52): a host marks such a call.
 pub const JUDGED_READING: &str = "judged to only read by";
+/// What a reason ends with where `auto` asks all the same: a card that names the mode shows the reason without it.
+pub const ASKED_IN_AUTO: &str = ": asked even in auto mode";
 
 /// Why a reading command is not free in every mode: it reads out of the working folder.
 const READS_OUTSIDE: &str = "the command reads outside the working folder";
@@ -2790,6 +2806,54 @@ mod tests {
         assert_eq!(gate.asked_arguments(), None, "gone once answered");
         assert!(gate.judge("write_file", &edit).await.is_ok());
         assert_eq!(asker.1.lock().unwrap().pop(), Some(None));
+    }
+
+    /// Answers yes and keeps the reason the gate held while each ask was open.
+    struct SeesReason(
+        std::sync::OnceLock<std::sync::Weak<Gate>>,
+        Mutex<Vec<Option<String>>>,
+    );
+
+    impl Asker for SeesReason {
+        fn ask<'a>(&'a self, _request: &'a AskRequest) -> AnswerFuture<'a> {
+            let held = self
+                .0
+                .get()
+                .and_then(std::sync::Weak::upgrade)
+                .and_then(|gate| gate.asked_reason());
+            self.1.lock().unwrap().push(held);
+            Box::pin(async { Answer::Allow })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_questions_reason_is_held_only_while_it_is_open() {
+        let asker = Arc::new(SeesReason(
+            std::sync::OnceLock::new(),
+            Mutex::new(Vec::new()),
+        ));
+        let gate = Arc::new(Gate::new(
+            rules(&[], &["Bash(make *)"], &[]),
+            Mode::Auto,
+            asker.clone(),
+        ));
+        asker.0.set(Arc::downgrade(&gate)).unwrap();
+        assert!(gate.judge("bash", &bash("rm -r build")).await.is_ok());
+        assert_eq!(
+            asker.1.lock().unwrap().pop(),
+            Some(Some(
+                "it deletes recursively: asked even in auto mode".to_owned()
+            )),
+            "what the command is"
+        );
+        assert_eq!(gate.asked_reason(), None, "gone once answered");
+        assert!(gate.judge("bash", &bash("make install")).await.is_ok());
+        assert_eq!(
+            asker.1.lock().unwrap().pop(),
+            Some(Some("rule Bash(make *)".to_owned())),
+            "the owner's rule"
+        );
+        assert_eq!(gate.asked_reason(), None);
     }
 
     /// Answers yes and keeps whether each ask was for the Keychain.

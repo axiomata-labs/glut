@@ -164,8 +164,9 @@ scripts/install-dev.sh           # glut for every terminal: ~/.cargo/bin, linked
   allowing answer, as the gate's `owners_answer` keyed by that call's exact arguments — taken once by the toolbox,
   as an edit of the whole file the diff showed (so a file changed meanwhile is not overwritten) and only through a
   tool the run offers; the model's note about it is masked and quoted. The gate's `asked_arguments` (a call's whole
-  arguments, for the screen) and `asked_rename` (set only by `judge_all_showing`, never from a model's call) live
-  while their question is open and never reach an event, a journal or the model.
+  arguments, for the screen), `asked_reason` (why it asks, in its own words, for the card) and `asked_rename` (set
+  only by `judge_all_showing`, never from a model's call) live while their question is open and never reach an
+  event, a journal or the model.
 - **The TUI never lets a key answer a question it did not show** (`crates/glut-tui/src/app.rs` `on_ask_key`): plain
   keys only, no repeat, nothing in the first 400 ms; a turn that ends drops its open card; an ask shows the head and
   the tail of a long target. Model and tool text goes through `transcript::wrap`/`clean` (control characters as
