@@ -530,10 +530,12 @@ fn draw_in(frame: &mut Frame, app: &mut App, area: Rect, chrome: &Chrome) {
                 }
                 None => (asked_rows(&open.request.target, width, most), Vec::new()),
             };
-            // Why the gate asks, where that is more than the mode: shown only where the pane has the room.
+            // Why the gate asks, where that is more than the mode: shown only where the pane has the room. A run
+            // outside the sandbox has said its reason already, in the title and the line under the command.
             let why = open
                 .reason
                 .as_deref()
+                .filter(|_| !open.request.unsandboxed)
                 .and_then(asked_why)
                 .map(|reason| {
                     let mut rows = wrap(&tr!(ask_why, reason = reason), width);

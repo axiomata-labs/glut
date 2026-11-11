@@ -12612,6 +12612,64 @@ pub(crate) mod tests {
         assert!(!rows.iter().any(|row| row.contains("why:")), "{rows:?}");
     }
 
+    /// The card's reason is the one its gate holds while the question is open — read when the card opens, gone from
+    /// the gate once it is answered.
+    #[tokio::test]
+    async fn an_open_ask_shows_the_reason_its_gate_holds() {
+        /// Hands every ask to the test, which shows it and answers on the screen.
+        struct Forwards(mpsc::UnboundedSender<(AskRequest, oneshot::Sender<Answer>)>);
+        impl glut::permissions::Asker for Forwards {
+            fn ask<'a>(&'a self, request: &'a AskRequest) -> glut::permissions::AnswerFuture<'a> {
+                let (reply, answer) = oneshot::channel();
+                let _ = self.0.send((request.clone(), reply));
+                Box::pin(async move { answer.await.unwrap_or(Answer::Deny) })
+            }
+        }
+        let (asks, mut asked) = mpsc::unbounded_channel();
+        let (mut parts, engine) = session::for_tests();
+        let gate = Arc::new(glut::Gate::new(
+            glut::RuleSet::default(),
+            glut::Mode::Auto,
+            Arc::new(Forwards(asks)),
+        ));
+        parts.tools.set_gate(gate.clone());
+        let (send, _reports) = mpsc::unbounded_channel();
+        let mut app = App::new(Arc::new(parts), engine, send);
+        let judging = tokio::spawn({
+            let gate = gate.clone();
+            async move {
+                let heavy = glut::Access::Bash {
+                    command: "rm -r build".into(),
+                    folder: String::new(),
+                    unsandboxed: false,
+                    sandboxed: true,
+                };
+                gate.judge("bash", &heavy).await
+            }
+        });
+        let (request, reply) = asked.recv().await.unwrap();
+        app.on_report(Report::Ask(request, reply));
+        assert_eq!(
+            app.ask.as_ref().unwrap().reason.as_deref(),
+            Some("it deletes recursively: asked even in auto mode")
+        );
+        let rows = drawn_rows(&mut app);
+        assert!(
+            rows.iter()
+                .any(|row| row.contains("why: it deletes recursively ")),
+            "{rows:?}"
+        );
+        assert!(
+            rows.iter()
+                .any(|row| row.contains("Glut asks: bash · auto")),
+            "{rows:?}"
+        );
+        app.ask.as_mut().unwrap().opened = Instant::now() - ASK_SETTLE * 2;
+        app.on_terminal(key(KeyCode::Char('n'), KeyModifiers::NONE));
+        assert!(judging.await.unwrap().is_err(), "refused on the screen");
+        assert_eq!(gate.asked_reason(), None, "gone with the question");
+    }
+
     /// The reason and the empty rows are extras: a short pane's card has neither and keeps every choice, the last
     /// one too; what the second model said stays under a long command whatever the room. (Below 18 rows a card
     /// with a long command and three scopes never fitted whole: the keys' row names the choices there.)
@@ -14011,6 +14069,189 @@ pub(crate) mod tests {
                 .draw(|frame| crate::view::draw(frame, &mut app))
                 .unwrap();
         }
+    }
+
+    /// The ask card's preview: every kind of question as the owner meets it, in German, written as HTML to
+    /// `GLUT_PREVIEW` — `GLUT_PREVIEW=/tmp/x.html cargo test -p glut-tui preview_asks -- --ignored`.
+    #[test]
+    #[ignore = "writes a preview for the owner to look at"]
+    fn preview_asks() {
+        use glut::permissions::Mode;
+        let Ok(out) = std::env::var("GLUT_PREVIEW") else {
+            return;
+        };
+        crate::theme::set("glut");
+        glut::lang::set_for_thread(Some(glut::lang::Lang::De));
+        let ask = |tool: &str, target: &str, scopes: &[&str]| AskRequest {
+            tool: tool.into(),
+            target: target.into(),
+            scopes: scopes.iter().map(|scope| (*scope).to_owned()).collect(),
+            from: None,
+            keychain: false,
+            unsandboxed: false,
+            note: None,
+        };
+        let long: String = (1..=14)
+            .map(|n| format!("cargo test -p crate-{n} -- --nocapture &&"))
+            .chain(["git push origin main".to_owned()])
+            .collect::<Vec<_>>()
+            .join("\n");
+        /// A card of the preview: its title, the mode, the request, the gate's reason, and the screen's size.
+        type Card<'a> = (&'a str, Mode, AskRequest, Option<&'a str>, (u16, u16));
+        let cards: Vec<Card> = vec![
+            (
+                "Ein Befehl im Modus ask (der Modus allein ist kein Grund)",
+                Mode::Default,
+                ask("bash", "make test", &["make test", "make *"]),
+                Some("mode default"),
+                (100, 24),
+            ),
+            (
+                "Ein schwerer Befehl in auto",
+                Mode::Auto,
+                ask("bash", "rm -r build", &["rm -r build", "rm *"]),
+                Some("it deletes recursively: asked even in auto mode"),
+                (100, 24),
+            ),
+            (
+                "Eine Kette: drei Reichweiten",
+                Mode::AcceptEdits,
+                ask(
+                    "bash",
+                    "cargo fmt && cargo test -p glut",
+                    &[
+                        "cargo fmt, cargo test -p glut",
+                        "cargo fmt *, cargo test *",
+                        "cargo *",
+                    ],
+                ),
+                Some("mode accept_edits"),
+                (100, 24),
+            ),
+            (
+                "Deine eigene Regel fragt",
+                Mode::Auto,
+                ask("bash", "make install", &["make install", "make *"]),
+                Some("rule Bash(make *)"),
+                (100, 24),
+            ),
+            (
+                "Ein geschützter Pfad in auto",
+                Mode::Auto,
+                ask("bash", "cp ci/config.toml .cargo/config.toml", &[]),
+                Some("the command names a protected path: asked even in auto mode"),
+                (100, 24),
+            ),
+            (
+                "Das zweite Modell hat etwas gesagt",
+                Mode::Default,
+                AskRequest {
+                    note: Some("deepseek-v4.1-flash: runs the test suite".into()),
+                    ..ask("bash", "for f in tests/*.sh; do sh $f; done", &[])
+                },
+                Some("mode default"),
+                (100, 24),
+            ),
+            (
+                "Ohne Sandbox",
+                Mode::AcceptEdits,
+                AskRequest {
+                    unsandboxed: true,
+                    ..ask("bash", "docker compose up -d", &[])
+                },
+                Some("the command asks to run outside the sandbox"),
+                (100, 24),
+            ),
+            (
+                "Mit Schlüsselbund",
+                Mode::Auto,
+                AskRequest {
+                    keychain: true,
+                    ..ask(
+                        "bash",
+                        "git push origin main",
+                        &["git push origin main", "git push *"],
+                    )
+                },
+                Some("git push would get the Keychain: asked in every mode"),
+                (100, 24),
+            ),
+            (
+                "Eine Datei ändern",
+                Mode::Default,
+                ask(
+                    "edit_file",
+                    "src/parser/date.rs",
+                    &["src/parser/date.rs", "src/parser/**"],
+                ),
+                Some("mode default"),
+                (100, 24),
+            ),
+            (
+                "Ein Netzwerk-Host",
+                Mode::Default,
+                ask("network", "api.github.com", &["api.github.com"]),
+                Some("mode default"),
+                (100, 24),
+            ),
+            (
+                "Ein Subagent fragt",
+                Mode::AcceptEdits,
+                AskRequest {
+                    from: Some("find the callers".into()),
+                    ..ask(
+                        "bash",
+                        "npm run build",
+                        &["npm run build", "npm run *", "npm *"],
+                    )
+                },
+                Some("mode accept_edits"),
+                (100, 24),
+            ),
+            (
+                "Ein langer Befehl: Anfang, Auslassung, Ende",
+                Mode::Auto,
+                ask("bash", &long, &[]),
+                Some("git push publishes: asked even in auto mode"),
+                (100, 30),
+            ),
+            (
+                "Ein kleines Fenster (80 × 18): ohne Grund und Leerzeilen",
+                Mode::Auto,
+                ask("bash", &long, &["rm -r build", "rm *", "git *"]),
+                Some("it deletes recursively: asked even in auto mode"),
+                (80, 18),
+            ),
+        ];
+        let mut html = String::from(
+            "<body style=\"background:#111;color:#ddd;font-family:sans-serif;padding:16px\">\n",
+        );
+        for (title, mode, request, reason, (width, height)) in cards {
+            let (mut parts, engine) = session::for_tests();
+            parts.tools.set_gate(Arc::new(glut::Gate::new(
+                glut::RuleSet::default(),
+                mode,
+                Arc::new(glut::permissions::Nobody),
+            )));
+            let (send, _reports) = mpsc::unbounded_channel();
+            let mut app = App::new(Arc::new(parts), engine, send);
+            let (reply, _answer) = oneshot::channel();
+            app.on_report(Report::Ask(request, reply));
+            if let Some(open) = app.ask.as_mut() {
+                open.reason = reason.map(str::to_owned);
+            }
+            let mut terminal =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
+            terminal
+                .draw(|frame| crate::view::draw(frame, &mut app))
+                .unwrap();
+            html.push_str(&format!(
+                "<h3>{title}</h3>\n{}\n",
+                buffer_html(terminal.backend().buffer())
+            ));
+        }
+        glut::lang::set_for_thread(None);
+        std::fs::write(out, html).unwrap();
     }
 
     /// T85's preview: the `/` list as the owner opens it, in German, written as HTML to `GLUT_PREVIEW`.
