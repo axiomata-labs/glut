@@ -96,8 +96,9 @@
     const lines = [...boot.querySelectorAll("[data-line]")];
     const count = boot.querySelector(".boot-count");
     const started = performance.now();
-    // Short enough not to keep a visitor from the page: the owner likes the screen, a second of it (2026-11-11).
-    const length = 1000;
+    // Long enough to read its six lines, short enough not to keep a visitor from the page (owner, 2026-11-11:
+    // 2.2 s was long, one second as good as none).
+    const length = 1600;
     let done = false;
     const end = () => {
       if (done) return;
