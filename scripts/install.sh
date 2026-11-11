@@ -128,3 +128,26 @@ if [ "$(uname -s)" = "Linux" ] && ! command -v bwrap >/dev/null 2>&1; then
   echo
   echo "Glut's sandbox on Linux needs bubblewrap (bwrap): sudo apt install bubblewrap, dnf install bubblewrap …"
 fi
+
+# Ubuntu 23.10 and later refuse unprivileged user namespaces through AppArmor, bwrap's too, unless a profile allows
+# it. Said whether bwrap is installed yet or not: the apt line above is then only the first of two steps.
+if [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null)" = "1" ] \
+  && ! { command -v bwrap >/dev/null 2>&1 && bwrap --ro-bind / / --unshare-user true >/dev/null 2>&1; }; then
+  echo
+  echo "Ubuntu's AppArmor keeps bubblewrap from making a sandbox. These lines give bwrap alone the right"
+  echo "(https://glut-ai.com/docs/install.html#linux):"
+  echo
+  cat <<'PROFILE'
+sudo tee /etc/apparmor.d/bwrap > /dev/null <<'EOF'
+abi <abi/4.0>,
+include <tunables/global>
+
+profile bwrap /usr/bin/bwrap flags=(unconfined) {
+  userns,
+
+  include if exists <local/bwrap>
+}
+EOF
+sudo apparmor_parser -r /etc/apparmor.d/bwrap
+PROFILE
+fi

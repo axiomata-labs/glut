@@ -71,9 +71,26 @@ sudo dnf install bubblewrap        # Fedora
 sudo apk add bubblewrap            # Alpine
 ```
 
-On **Ubuntu 23.10 and later**, AppArmor refuses unprivileged user namespaces by default. Glut says so when it starts;
-give `bwrap` a profile that allows them (`/etc/apparmor.d/bwrap`, see Ubuntu's documentation on restricted
-unprivileged user namespaces), or set `kernel.apparmor_restrict_unprivileged_userns=0`.
+On **Ubuntu 23.10 and later**, AppArmor refuses unprivileged user namespaces by default, so bubblewrap cannot make a
+sandbox there; Glut says so when it starts. Give `bwrap` alone the right with an AppArmor profile (tested on Ubuntu
+24.04):
+
+```sh
+sudo tee /etc/apparmor.d/bwrap > /dev/null <<'EOF'
+abi <abi/4.0>,
+include <tunables/global>
+
+profile bwrap /usr/bin/bwrap flags=(unconfined) {
+  userns,
+
+  include if exists <local/bwrap>
+}
+EOF
+sudo apparmor_parser -r /etc/apparmor.d/bwrap
+```
+
+Every other program keeps Ubuntu's restriction. Setting `kernel.apparmor_restrict_unprivileged_userns=0` works too,
+but lifts it for all of them.
 
 Without a working sandbox Glut still starts, but every command it would run asks you first — and `/sandbox required
 on` refuses them outright.

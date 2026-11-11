@@ -1,6 +1,6 @@
-# Installs glut on a stock Ubuntu as a stranger would, before the Show HN: from glut-ai.com's script, bubblewrap from
-# apt, nothing lifted. Ubuntu 23.10 and later refuse unprivileged user namespaces through AppArmor, which Docker on a
-# Mac does not show; this runs on a real Ubuntu kernel. Then the profile install.md points to, and the sandbox again.
+# Installs glut on a stock Ubuntu as a stranger would, before the Show HN: this branch's install script, bubblewrap
+# from apt, nothing lifted. Ubuntu 23.10 and later refuse unprivileged user namespaces through AppArmor, which Docker
+# on a Mac does not show; this runs on a real Ubuntu kernel. Then the profile exactly as docs/install.md spells it.
 name: Ubuntu install check
 
 on:
@@ -19,39 +19,33 @@ jobs:
         os: [ubuntu-24.04, ubuntu-24.04-arm]
     runs-on: ${{ matrix.os }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: the machine as it comes
         run: |
-          cat /etc/os-release | grep PRETTY_NAME
+          grep PRETTY_NAME /etc/os-release
           uname -rm
           echo "apparmor_restrict_unprivileged_userns=$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)"
-          ls /etc/apparmor.d | grep -i -E 'bwrap|userns' || echo "no bwrap profile in /etc/apparmor.d"
-      - name: install.sh from glut-ai.com, as the README says
-        run: curl -fsSL https://glut-ai.com/install.sh | sh
-      - name: bubblewrap from apt, as install.md says
+      - name: install.sh with no bubblewrap yet — names apt and the profile
+        run: sh scripts/install.sh | tee out.txt; grep -q "apparmor_parser" out.txt
+      - name: bubblewrap from apt
         run: sudo apt-get update -q && sudo apt-get install -y -q bubblewrap
-      - name: the sandbox on a stock Ubuntu
+      - name: install.sh again — bwrap there, still refused, names the profile
+        run: sh scripts/install.sh | tee out.txt; grep -q "apparmor_parser" out.txt
+      - name: the sandbox on a stock Ubuntu is refused
         run: |
-          export PATH="$HOME/.local/bin:$PATH"
-          glut --version
-          glut sandbox show
-          echo "--- bwrap itself"
-          bwrap --ro-bind / / --unshare-user --unshare-pid true && echo "bwrap: ok" || echo "bwrap: refused"
-      - name: the AppArmor profile for bwrap (Ubuntu's documented one)
+          "$HOME/.local/bin/glut" sandbox show | tee out.txt
+          grep -q "not held by a sandbox" out.txt
+      - name: the profile, copied from docs/install.md as a reader would
         run: |
-          sudo tee /etc/apparmor.d/bwrap > /dev/null <<'EOF'
-          abi <abi/4.0>,
-          include <tunables/global>
-
-          profile bwrap /usr/bin/bwrap flags=(unconfined) {
-            userns,
-
-            include if exists <local/bwrap>
-          }
-          EOF
-          sudo apparmor_parser -r /etc/apparmor.d/bwrap
-      - name: the sandbox with the profile
+          awk '/^```sh$/ { block = ""; inside = 1; next } /^```$/ { if (inside && block ~ /apparmor_parser/) print block; inside = 0; next } inside { block = block $0 "\n" }' \
+            docs/install.md > profile.sh
+          cat profile.sh
+          bash profile.sh
+      - name: the sandbox holds
         run: |
-          export PATH="$HOME/.local/bin:$PATH"
-          glut sandbox show
-          echo "--- bwrap itself"
-          bwrap --ro-bind / / --unshare-user --unshare-pid true && echo "bwrap: ok" || echo "bwrap: refused"
+          "$HOME/.local/bin/glut" sandbox show | tee out.txt
+          grep -q "held in the sandbox (bubblewrap, seccomp)" out.txt
+      - name: install.sh once more — nothing about AppArmor now
+        run: sh scripts/install.sh | tee out.txt; ! grep -q "AppArmor" out.txt
