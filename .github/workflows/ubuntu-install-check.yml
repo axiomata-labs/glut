@@ -1,11 +1,10 @@
-# Installs glut on a stock Ubuntu as a stranger would, before the Show HN: this branch's install script, bubblewrap
-# from apt, nothing lifted. Ubuntu 23.10 and later refuse unprivileged user namespaces through AppArmor, which Docker
-# on a Mac does not show; this runs on a real Ubuntu kernel. Then the profile exactly as docs/install.md spells it.
+# Installs glut on a stock Ubuntu as a stranger would, started by hand before a release (gh workflow run
+# ubuntu-install-check.yml): the checked-out install script, bubblewrap from apt, nothing lifted. Ubuntu 23.10 and
+# later refuse unprivileged user namespaces through AppArmor, which Docker on a Mac does not show; this runs on a real
+# Ubuntu kernel. Then the profile exactly as docs/install.md spells it.
 name: Ubuntu install check
 
 on:
-  push:
-    branches: [check/ubuntu-install]
   workflow_dispatch:
 
 permissions:
